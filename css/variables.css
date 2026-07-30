@@ -1,0 +1,145 @@
+/**
+ * BigQuery Excel Connector Design System
+ * Enterprise Theme Tokens aligned with Microsoft Fluent Design 2.0
+ */
+
+:root {
+  /* ==========================================================================
+     COLOR SYSTEM
+     ========================================================================== */
+  
+  /* Primary Brand Colors */
+  --color-primary: #0066FF;
+  --color-primary-hover: #0052CC;
+  --color-primary-active: #0040A8;
+  --color-primary-subtle: #EBF3FF;
+  --color-primary-border: #B3D1FF;
+
+  /* Neutral Background & Surface Colors */
+  --color-bg: #F5F7FA;
+  --color-surface: #FFFFFF;
+  --color-surface-hover: #F8FAFC;
+  --color-surface-active: #F1F5F9;
+  --color-surface-disabled: #F1F5F9;
+
+  /* Borders & Dividers */
+  --color-border: #E2E8F0;
+  --color-border-subtle: #EDF2F7;
+  --color-border-strong: #CBD5E1;
+  --color-focus-ring: #0066FF;
+
+  /* Typography / Text Colors */
+  --color-text: #1E293B;
+  --color-text-secondary: #64748B;
+  --color-text-tertiary: #94A3B8;
+  --color-text-on-primary: #FFFFFF;
+  --color-text-disabled: #A0AEC0;
+
+  /* Status & Feedback Colors */
+  --color-success: #16A34A;
+  --color-success-bg: #F0FDF4;
+  --color-success-border: #BBF7D0;
+  
+  --color-warning: #F59E0B;
+  --color-warning-bg: #FFFBEB;
+  --color-warning-border: #FDE68A;
+
+  --color-error: #DC2626;
+  --color-error-bg: #FEF2F2;
+  --color-error-border: #FECACA;
+
+  --color-info: #0284C7;
+  --color-info-bg: #F0F9FF;
+  --color-info-border: #BAE6FD;
+
+  /* Data Provider Identity Accent Colors */
+  --color-provider-bigquery: #4285F4;
+  --color-provider-fabric: #0078D4;
+  --color-provider-snowflake: #29B5E8;
+  --color-provider-sap: #008FD3;
+  --color-provider-redshift: #CC292B;
+
+  /* ==========================================================================
+     TYPOGRAPHY SYSTEM
+     ========================================================================== */
+  
+  --font-family-base: 'Inter', 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+  --font-family-mono: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+
+  /* Font Sizes */
+  --font-size-xs: 0.6875rem; /* 11px */
+  --font-size-sm: 0.75rem;   /* 12px */
+  --font-size-md: 0.8125rem; /* 13px - Fluent Default */
+  --font-size-base: 0.875rem;/* 14px */
+  --font-size-lg: 1rem;     /* 16px */
+  --font-size-xl: 1.125rem;  /* 18px */
+  --font-size-2xl: 1.25rem;  /* 20px */
+
+  /* Font Weights */
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Line Heights */
+  --line-height-tight: 1.25;
+  --line-height-normal: 1.4;
+  --line-height-relaxed: 1.5;
+
+  /* ==========================================================================
+     GRID & SPACING SYSTEM (8pt Grid)
+     ========================================================================== */
+  
+  --space-2xs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-base: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 40px;
+
+  /* ==========================================================================
+     RADIUS SYSTEM
+     ========================================================================== */
+  
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* ==========================================================================
+     SHADOWS (Microsoft Fluent Depth System)
+     ========================================================================== */
+  
+  --shadow-fluent-2: 0 1.6px 3.6px 0 rgba(0, 0, 0, 0.132), 0 0.3px 0.9px 0 rgba(0, 0, 0, 0.108);
+  --shadow-fluent-4: 0 3.2px 7.2px 0 rgba(0, 0, 0, 0.132), 0 0.6px 1.8px 0 rgba(0, 0, 0, 0.108);
+  --shadow-fluent-8: 0 6.4px 14.4px 0 rgba(0, 0, 0, 0.132), 0 1.2px 3.6px 0 rgba(0, 0, 0, 0.108);
+  --shadow-fluent-16: 0 12.8px 28.8px 0 rgba(0, 0, 0, 0.132), 0 2.4px 7.2px 0 rgba(0, 0, 0, 0.108);
+
+  /* ==========================================================================
+     LAYOUT MEASUREMENTS & Z-INDEX
+     ========================================================================== */
+  
+  --header-height: 44px;
+  --sidebar-width-collapsed: 48px;
+  --sidebar-width-expanded: 200px;
+  --taskpane-width-target: 450px;
+
+  --z-index-subtle: 1;
+  --z-index-header: 100;
+  --z-index-sidebar: 200;
+  --z-index-dropdown: 500;
+  --z-index-modal: 1000;
+  --z-index-toast: 2000;
+
+  /* ==========================================================================
+     ANIMATION & TRANSITIONS
+     ========================================================================== */
+  
+  --transition-fast: 150ms cubic-bezier(0.33, 1, 0.68, 1);
+  --transition-normal: 250ms cubic-bezier(0.33, 1, 0.68, 1);
+  --transition-slow: 350ms cubic-bezier(0.33, 1, 0.68, 1);
+}

@@ -1,0 +1,103 @@
+/**
+ * BigQuery Excel Connector - Responsive & Taskpane Adaptations
+ * Specific WebView2 (450px target width) & High-DPI Display rules
+ */
+
+/* ==========================================================================
+   1. TASKPANE NARROW WIDTH CONSTRAINTS (<= 450px)
+   ========================================================================== */
+
+@media (max-width: 480px) {
+  :root {
+    --sidebar-width-expanded: 160px;
+  }
+
+  .page-container {
+    padding: var(--space-sm);
+    gap: var(--space-sm);
+  }
+
+  .dashboard-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .btn {
+    padding: 0 var(--space-md);
+  }
+
+  .enterprise-table th, 
+  .enterprise-table td {
+    padding: var(--space-xs) var(--space-sm);
+  }
+
+  .modal-dialog {
+    width: 95%;
+  }
+
+  .toast {
+    min-width: 240px;
+    max-width: 320px;
+  }
+}
+
+/* Very narrow taskpanes (<= 350px) */
+@media (max-width: 350px) {
+  .app-header {
+    padding: 0 var(--space-xs);
+  }
+
+  .app-title {
+    font-size: var(--font-size-sm);
+  }
+
+  .provider-card {
+    padding: var(--space-sm);
+  }
+
+  .provider-icon-wrapper {
+    width: 30px;
+    height: 30px;
+  }
+
+  .metric-value {
+    font-size: var(--font-size-lg);
+  }
+}
+
+
+/* ==========================================================================
+   2. HIGH CONTRAST & ACCESSIBILITY MEDIA OVERRIDES
+   ========================================================================== */
+
+@media (forced-colors: active) {
+  .btn-primary {
+    border: 1px solid CanvasText;
+  }
+  
+  .status-indicator {
+    border: 1px solid CanvasText;
+  }
+}
+
+
+/* ==========================================================================
+   3. WEBVIEW2 / OFFICE EMBEDDED SCROLLBAR STYLING
+   ========================================================================== */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+}
