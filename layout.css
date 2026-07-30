@@ -1,0 +1,375 @@
+/* =========================================================================
+   LAYOUT — Shell estructural de la aplicación
+   =========================================================================
+   El producto vive dentro del task pane de Excel (~450px de ancho).
+   No hay "página": hay UNA aplicación con un shell fijo (App Bar) y un
+   viewport de contenido donde las pantallas se intercambian.
+   El sidebar es un drawer superpuesto (overlay), no una columna persistente:
+   a 450px de ancho una columna fija destruiría el espacio de contenido,
+   igual que ocurre en los paneles estrechos de Power BI o Teams.
+   ========================================================================= */
+
+/* -------------------------------------------------------------------------
+   Reset mínimo y base
+   ------------------------------------------------------------------------- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family-base);
+  font-size: var(--font-size-body);
+  color: var(--color-text);
+  background: var(--color-background);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden; /* el scroll vive dentro del viewport de contenido, no en body */
+}
+
+ul, ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+button {
+  font-family: inherit;
+}
+
+img, svg {
+  display: block;
+  max-width: 100%;
+}
+
+/* Foco visible consistente en toda la app — nunca se elimina, solo se re-estiliza */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* -------------------------------------------------------------------------
+   App Shell — contenedor raíz
+   ------------------------------------------------------------------------- */
+.app-shell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: var(--app-min-width);
+  max-width: var(--app-max-width);
+  height: 100vh;
+  margin: 0 auto;
+  background: var(--color-background);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* -------------------------------------------------------------------------
+   App Bar (header) — identidad + acciones globales, siempre visible
+   ------------------------------------------------------------------------- */
+.app-header {
+  flex: 0 0 var(--header-height);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: var(--header-height);
+  padding: 0 var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  z-index: var(--z-sticky-header);
+}
+
+.app-header__menu-btn {
+  flex: 0 0 auto;
+}
+
+.app-header__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.app-header__mark {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--color-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.app-header__title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: var(--line-height-tight);
+}
+
+.app-header__title-main {
+  font-size: var(--font-size-body-large);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-header__title-sub {
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-header__actions {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
+}
+
+/* -------------------------------------------------------------------------
+   Breadcrumb / contexto de pantalla — bajo el App Bar, opcional por pantalla
+   ------------------------------------------------------------------------- */
+.app-breadcrumb {
+  flex: 0 0 var(--breadcrumb-height);
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  height: var(--breadcrumb-height);
+  padding: 0 var(--space-4);
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-small);
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.app-breadcrumb__item {
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.app-breadcrumb__item:hover {
+  color: var(--color-text);
+}
+
+.app-breadcrumb__item--current {
+  color: var(--color-text);
+  font-weight: var(--font-weight-medium);
+  cursor: default;
+}
+
+.app-breadcrumb__sep {
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+}
+
+/* -------------------------------------------------------------------------
+   Content viewport — única zona con scroll
+   ------------------------------------------------------------------------- */
+.app-viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+.app-viewport::-webkit-scrollbar {
+  width: 8px;
+}
+
+.app-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.app-viewport::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.app-viewport::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+  background-clip: padding-box;
+}
+
+/* -------------------------------------------------------------------------
+   Sistema de pantallas — una sola app, múltiples screens intercambiables
+   ------------------------------------------------------------------------- */
+.screen {
+  display: none;
+  flex-direction: column;
+  min-height: 100%;
+  padding: var(--space-4);
+  animation: screen-enter var(--duration-normal) var(--ease-decelerate);
+}
+
+.screen.is-active {
+  display: flex;
+}
+
+.screen--no-padding {
+  padding: 0;
+}
+
+.screen--centered {
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-8) var(--space-6);
+}
+
+@keyframes screen-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* -------------------------------------------------------------------------
+   Footer de acción — barra fija inferior tipo Power BI ("Conectar", "Aplicar")
+   Presente solo en pantallas que lo requieren.
+   ------------------------------------------------------------------------- */
+.app-footer {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-height: var(--footer-height);
+  padding: var(--space-3) var(--space-4);
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  z-index: var(--z-sticky-header);
+}
+
+.app-footer__meta {
+  flex: 1 1 auto;
+  font-size: var(--font-size-caption);
+  color: var(--color-text-secondary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -------------------------------------------------------------------------
+   Sidebar (drawer) — navegación principal, overlay sobre el contenido
+   ------------------------------------------------------------------------- */
+.sidebar-scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--color-overlay);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-normal) var(--ease-standard);
+  z-index: var(--z-overlay);
+}
+
+.sidebar-scrim.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--sidebar-width);
+  max-width: 84%;
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+  box-shadow: var(--shadow-xl);
+  display: flex;
+  flex-direction: column;
+  transform: translateX(-100%);
+  transition: transform var(--duration-normal) var(--ease-decelerate);
+  z-index: var(--z-drawer);
+}
+
+.sidebar.is-open {
+  transform: translateX(0);
+}
+
+.sidebar__header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: var(--header-height);
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sidebar__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--space-3) var(--space-2);
+}
+
+.sidebar__footer {
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.sidebar__section-label {
+  padding: var(--space-4) var(--space-3) var(--space-1);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--letter-spacing-label);
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+.sidebar__section-label:first-child {
+  padding-top: var(--space-2);
+}
+
+/* -------------------------------------------------------------------------
+   Utilidades de layout genéricas (flex/stack) usadas por todos los componentes
+   ------------------------------------------------------------------------- */
+.stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+}
+
+.spacer {
+  flex: 1 1 auto;
+}

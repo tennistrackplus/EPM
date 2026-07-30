@@ -1,0 +1,162 @@
+/* =========================================================================
+   DESIGN SYSTEM — TOKENS
+   BigQuery Excel Connector — Enterprise Data Platform Add-in
+   =========================================================================
+   Estos tokens son la única fuente de verdad visual del producto.
+   Ningún componente ni pantalla debe usar valores "sueltos": todo se
+   referencia desde aquí. Esto es lo que permite que 20 pantallas distintas
+   se sientan como UNA sola aplicación.
+   ========================================================================= */
+
+:root {
+
+  /* -----------------------------------------------------------------------
+     COLOR — Núcleo de marca
+     ----------------------------------------------------------------------- */
+  --color-primary: #0066FF;
+  --color-primary-hover: #0052CC;
+  --color-primary-pressed: #003D99;
+  --color-primary-subtle: #E8F0FF;   /* fondos tenues (chips activos, filas seleccionadas) */
+  --color-primary-subtle-hover: #D6E4FF;
+
+  /* Superficies y fondo */
+  --color-background: #F5F7FA;       /* fondo del canvas de la app */
+  --color-surface: #FFFFFF;          /* cards, paneles, dialogs */
+  --color-surface-raised: #FFFFFF;   /* superficies elevadas (popover, menu) */
+  --color-surface-sunken: #F8FAFC;   /* filas alternas de tabla, code blocks */
+  --color-overlay: rgba(15, 23, 42, 0.48); /* backdrop de modales/drawers */
+
+  /* Bordes */
+  --color-border: #E2E8F0;
+  --color-border-strong: #CBD5E1;
+  --color-border-focus: #0066FF;
+
+  /* Texto */
+  --color-text: #1E293B;
+  --color-text-secondary: #64748B;
+  --color-text-tertiary: #94A3B8;
+  --color-text-disabled: #CBD5E1;
+  --color-text-inverse: #FFFFFF;
+  --color-text-link: #0066FF;
+
+  /* Estado semántico */
+  --color-success: #16A34A;
+  --color-success-subtle: #E7F7ED;
+  --color-warning: #F59E0B;
+  --color-warning-subtle: #FEF3E2;
+  --color-error: #DC2626;
+  --color-error-subtle: #FDECEC;
+  --color-info: #0066FF;
+  --color-info-subtle: #E8F0FF;
+
+  /* Proveedores de datos — un acento de identidad por conector.
+     Se usan SOLO como acento puntual (icono, borde izq., barra de estado),
+     nunca como color de fondo dominante: la app mantiene una identidad. */
+  --color-provider-bigquery: #4285F4;
+  --color-provider-fabric: #1F7ED0;
+  --color-provider-snowflake: #29B5E8;
+  --color-provider-sap-datasphere: #0FAAFF;
+  --color-provider-sap-cds: #354A5F;
+  --color-provider-redshift: #8C4FFF;
+
+  /* -----------------------------------------------------------------------
+     TIPOGRAFÍA
+     ----------------------------------------------------------------------- */
+  --font-family-base: "Inter", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-family-mono: "Cascadia Code", "Consolas", "SFMono-Regular", monospace;
+
+  --font-size-caption: 11px;
+  --font-size-small: 12px;
+  --font-size-body: 13px;
+  --font-size-body-large: 14px;
+  --font-size-subtitle: 16px;
+  --font-size-title: 18px;
+  --font-size-title-large: 22px;
+  --font-size-display: 26px;
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.2;
+  --line-height-normal: 1.45;
+  --line-height-relaxed: 1.6;
+
+  --letter-spacing-tight: -0.01em;
+  --letter-spacing-normal: 0;
+  --letter-spacing-wide: 0.02em;
+  --letter-spacing-label: 0.04em; /* para eyebrows/labels en mayúsculas */
+
+  /* -----------------------------------------------------------------------
+     ESPACIADO — grid de 8px (con medio paso de 4px para casos de alta densidad)
+     ----------------------------------------------------------------------- */
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* -----------------------------------------------------------------------
+     RADIOS
+     ----------------------------------------------------------------------- */
+  --radius-sm: 8px;   /* inputs, botones, badges, chips */
+  --radius-md: 12px;  /* cards, list items, menus */
+  --radius-lg: 16px;  /* dialogs, paneles grandes, hero cards */
+  --radius-full: 999px; /* pills, avatares, indicadores redondos */
+
+  /* -----------------------------------------------------------------------
+     ELEVACIÓN — sombras muy suaves, nunca dramáticas
+     ----------------------------------------------------------------------- */
+  --shadow-none: none;
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.10), 0 2px 6px rgba(15, 23, 42, 0.05);
+  --shadow-xl: 0 16px 40px rgba(15, 23, 42, 0.14), 0 4px 10px rgba(15, 23, 42, 0.06);
+
+  --shadow-focus-ring: 0 0 0 3px rgba(0, 102, 255, 0.18);
+  --shadow-error-ring: 0 0 0 3px rgba(220, 38, 38, 0.16);
+
+  /* -----------------------------------------------------------------------
+     MOTION — transiciones discretas, consistentes en todo el producto
+     ----------------------------------------------------------------------- */
+  --duration-instant: 100ms;
+  --duration-fast: 150ms;
+  --duration-normal: 220ms;
+  --duration-slow: 320ms;
+
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-decelerate: cubic-bezier(0, 0, 0, 1);
+  --ease-accelerate: cubic-bezier(0.3, 0, 1, 1);
+
+  /* -----------------------------------------------------------------------
+     LAYOUT — dimensiones estructurales del shell de aplicación
+     ----------------------------------------------------------------------- */
+  --app-min-width: 400px;
+  --app-max-width: 480px;
+  --header-height: 52px;
+  --footer-height: 56px;
+  --sidebar-width: 296px;
+  --breadcrumb-height: 36px;
+  --icon-rail-width: 0px; /* reservado; el shell actual usa drawer, no rail persistente */
+
+  /* -----------------------------------------------------------------------
+     Z-INDEX — escala controlada para evitar guerras de apilado
+     ----------------------------------------------------------------------- */
+  --z-base: 0;
+  --z-sticky-header: 100;
+  --z-dropdown: 200;
+  --z-drawer: 300;
+  --z-overlay: 400;
+  --z-modal: 500;
+  --z-toast: 600;
+  --z-tooltip: 700;
+}

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <title>BigQuery Excel Connector</title>
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/layout.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/pages.css">
+  <link rel="stylesheet" href="css/utilities.css">
+  <link rel="stylesheet" href="css/responsive.css">
+</head>
+<body class="ms-FluentBody">
+  <div id="app-root" class="app-shell">
+    
+    <!-- Top Bar Navigation / Header -->
+    <header class="app-header">
+      <div class="app-header-left">
+        <button id="btn-sidebar-toggle" class="btn-icon" aria-label="Toggle Navigation">
+          <svg class="fluent-icon" viewBox="0 0 20 20" width="16" height="16">
+            <path d="M2 4.5C2 4.22386 2.22386 4 2.5 4H17.5C17.7761 4 18 4.22386 18 4.5C18 4.77614 17.7761 5 17.5 5H2.5C2.22386 5 2 4.77614 2 4.5ZM2 9.5C2 9.22386 2.22386 9 2.5 9H17.5C17.7761 9 18 9.22386 18 9.5C18 9.77614 17.7761 10 17.5 10H2.5C2.22386 10 2 9.77614 2 9.5ZM2 14.5C2 14.2238 2.22386 14 2.5 14H17.5C17.7761 14 18 14.2238 18 14.5C18 14.7761 17.7761 15 17.5 15H2.5C2.22386 15 2 14.7761 2 14.5Z" fill="currentColor"/>
+          </svg>
+        </button>
+        <span class="app-title">BigQuery Connector</span>
+      </div>
+      <div class="app-header-right">
+        <div id="connection-status-badge" class="status-indicator status-disconnected" title="Disconnected"></div>
+        <button id="btn-profile-shortcut" class="btn-icon profile-avatar-btn" aria-label="User Profile">
+          <div class="avatar-placeholder">US</div>
+        </button>
+      </div>
+    </header>
+
+    <!-- App Body containing Sidebar and Main Work Area -->
+    <div class="app-container">
+      
+      <!-- Collapsible Navigation Sidebar -->
+      <aside id="app-sidebar" class="app-sidebar sidebar-collapsed">
+        <nav class="sidebar-nav">
+          <button class="nav-item active" data-page="providers" title="Data Providers">
+            <svg class="fluent-icon" viewBox="0 0 20 20" width="20" height="20">
+              <path d="M10 2C5.58172 2 2 3.79086 2 6V14C2 16.2091 5.58172 18 10 18C14.4183 18 18 16.2091 18 14V6C18 3.79086 14.4183 2 10 2ZM16.5 11.4189C15.0213 12.3848 12.6517 13 10 13C7.34833 13 4.97871 12.3848 3.5 11.4189V9.20847C4.89674 10.2882 7.28014 10.9999 10 10.9999C12.7199 10.9999 15.1033 10.2882 16.5 9.20847V11.4189ZM16.5 7.35235C15.0601 8.35824 12.6738 9 10 9C7.32623 9 4.93988 8.35824 3.5 7.35235V6.01239C4.88057 6.96386 7.23668 7.5 10 7.5C12.7633 7.5 15.1194 6.96386 16.5 6.01239V7.35235Z" fill="currentColor"/>
+            </svg>
+            <span class="nav-label">Connectors</span>
+          </button>
+          
+          <button class="nav-item" data-page="workspaces" title="Workspaces">
+            <svg class="fluent-icon" viewBox="0 0 20 20" width="20" height="20">
+              <path d="M3 4C3 2.89543 3.89543 2 5 2H15C16.1046 2 17 2.89543 17 4V16C17 17.1046 16.1046 18 15 18H5C3.89543 18 3 17.1046 3 16V4ZM5 3C4.44772 3 4 3.44772 4 4V7H16V4C16 3.44772 15.5523 3 15 3H5ZM16 8H4V16C4 16.5523 4.44772 17 5 17H15C15.5523 17 16 16.5523 16 16V8Z" fill="currentColor"/>
+            </svg>
+            <span class="nav-label">Workspaces</span>
+          </button>
+
+          <button class="nav-item" data-page="dashboard" title="Dashboard">
+            <svg class="fluent-icon" viewBox="0 0 20 20" width="20" height="20">
+              <path d="M3 5C3 3.89543 3.89543 3 5 3H8C9.10457 3 10 3.89543 10 5V8C10 9.10457 9.10457 10 8 10H5C3.89543 10 3 9.10457 3 8V5ZM12 5C12 3.89543 12.8954 3 14 3H15C16.1046 3 17 3.89543 17 5V14C17 15.1046 16.1046 16 15 16H14C12.8954 16 12 15.1046 12 14V5ZM3 13C3 11.8954 3.89543 11 5 11H8C9.10457 11 10 11.8954 10 13V15C10 16.1046 9.10457 17 8 17H5C3.89543 17 3 16.1046 3 15V13Z" fill="currentColor"/>
+            </svg>
+            <span class="nav-label">Dashboard</span>
+          </button>
+
+          <button class="nav-item" data-page="marketplace" title="Marketplace">
+            <svg class="fluent-icon" viewBox="0 0 20 20" width="20" height="20">
+              <path d="M6.5 2C7.32843 2 8 2.67157 8 3.5V4H12V3.5C12 2.67157 12.6716 2 13.5 2C14.3284 2 15 2.67157 15 3.5V4H16.5C17.3284 4 18 4.67157 18 5.5V16.5C18 17.3284 17.3284 18 16.5 18H3.5C2.67157 18 2 17.3284 2 16.5V5.5C2 4.67157 2.67157 4 3.5 4H5V3.5C5 2.67157 5.67157 2 6.5 2ZM16.5 8H3.5V16.5H16.5V8ZM13.5 3C13.2239 3 13 3.22386 13 3.5V4H14V3.5C14 3.22386 13.7761 3 13.5 3ZM6.5 3C6.22386 3 6 3.22386 6 3.5V4H7V3.5C7 3.22386 6.77614 3 6.5 3Z" fill="currentColor"/>
+            </svg>
+            <span class="nav-label">Marketplace</span>
+          </button>
+        </nav>
+
+        <nav class="sidebar-nav sidebar-nav-bottom">
+          <button class="nav-item" data-page="settings" title="Settings">
+            <svg class="fluent-icon" viewBox="0 0 20 20" width="20" height="20">
+              <path d="M11.4343 2.53503C11.1347 2.21327 10.7101 2 10 2C9.28991 2 8.86532 2.21327 8.56571 2.53503C8.28312 2.83853 8.11867 3.27214 7.97022 3.73809C7.88604 4.00229 7.80496 4.28302 7.7121 4.51656C7.36087 4.38202 7.00031 4.28854 6.63473 4.23847C6.31524 4.02058 5.96916 3.72266 5.58983 3.39603C5.02988 2.91386 4.4379 2.50284 3.74381 2.85802C3.12513 3.17457 2.6372 3.6625 2.32065 4.28118C1.96547 4.97527 2.37649 5.56725 2.85866 6.1272C3.18529 6.50653 3.48321 6.85261 3.7011 7.1721C3.65103 7.53768 3.55755 7.89824 3.42301 8.24947C3.18947 8.34233 2.90874 8.42341 2.64454 8.50759C2.17859 8.65604 1.74498 8.82049 1.44148 9.10308C1.11972 9.40269 0.906448 9.82728 0.906448 10.5374C0.906448 11.2475 1.11972 11.6721 1.44148 11.9717C1.74498 12.2543 2.17859 12.4187 2.64454 12.5672C2.90874 12.6514 3.18947 12.7324 3.42301 12.8253C3.55755 13.1765 3.65103 13.5371 3.7011 13.9027C3.48321 14.2222 3.18529 14.5682 2.85866 14.9476C2.37649 15.5075 1.96547 16.0995 2.32065 16.7936C2.6372 17.4123 3.12513 17.9002 3.74381 18.2167C4.4379 18.5719 5.02988 18.1609 5.58983 17.6787C5.96916 17.3521 6.31524 17.0542 6.63473 16.8363C7.00031 16.8864 7.36087 16.9798 7.7121 17.1144C7.80496 17.3479 7.88604 17.6287 7.97022 17.8929C8.11867 18.3588 8.28312 18.7924 8.56571 19.0959C8.86532 19.4177 9.28991 19.631 10 19.631C10.7101 19.631 11.1347 19.4177 11.4343 19.0959C11.7169 18.7924 11.8813 18.3588 12.0298 17.8929C12.114 17.6287 12.195 17.3479 12.2879 17.1144C12.6391 17.2489 12.9997 17.3424 13.3653 17.3925C13.6848 17.6104 14.0308 17.9083 14.4102 18.2349C14.9701 18.7171 15.5621 19.1281 16.2562 18.7729C16.8749 18.4564 17.3628 17.9685 17.6793 17.3498C18.0345 16.6557 17.6235 16.0637 17.1413 15.5038C16.8147 15.1244 16.5168 14.7784 16.2989 14.4589C16.349 14.0933 16.4424 13.7327 16.577 13.3815C16.8105 13.2886 17.0913 13.2076 17.3555 13.1234C17.8214 12.9749 18.255 12.8105 18.5585 12.5279C18.8803 12.2283 19.0936 11.8037 19.0936 11.0936C19.0936 10.3835 18.8803 9.95892 18.5585 9.65931C18.255 9.37672 17.8214 9.21227 17.3555 9.06382C17.0913 8.97964 16.8105 8.89856 16.577 8.80572C16.4424 8.45449 16.349 8.09393 16.2989 7.72835C16.5168 7.40886 16.8147 7.06278 17.1413 6.68345C17.6235 6.1235 18.0345 5.53152 17.6793 4.83743C17.3628 4.21875 16.8749 3.73082 16.2562 3.41427C15.5621 3.05909 14.9701 3.47011 14.4102 3.95228C14.0308 4.27891 13.6848 4.57683 13.3653 4.79472C12.9997 4.74465 12.6391 4.65117 12.2879 4.51663C12.195 4.28309 12.114 4.00236 12.0298 3.73816C11.8813 3.27221 11.7169 2.8386 11.4343 2.53503ZM10 13.5C11.933 13.5 13.5 11.933 13.5 10C13.5 8.067 11.933 6.5 10 6.5C8.067 6.5 6.5 8.067 6.5 10C6.5 11.933 8.067 13.5 10 13.5Z" fill="currentColor"/>
+            </svg>
+            <span class="nav-label">Settings</span>
+          </button>
+          
+          <button class="nav-item" data-page="help" title="Help & Support">
+            <svg class="fluent-icon" viewBox="0 0 20 20" width="20" height="20">
+              <path d="M10 2C5.58172 2 2 5.58172 2 10C2 14.4183 5.58172 18 10 18C14.4183 18 18 14.4183 18 10C18 5.58172 14.4183 2 10 2ZM10 15C9.44772 15 9 14.5523 9 14C9 13.4477 9.44772 13 10 13C10.5523 13 11 13.4477 11 14C11 14.5523 10.5523 15 10 15ZM10.75 11.2C10.3358 11.4 10 11.75 10 12.25C10 12.6642 9.66421 13 9.25 13C8.83579 13 8.5 12.6642 8.5 12.25C8.5 11.05 9.3 10.35 10.05 9.95C10.75 9.58 11.25 9.12 11.25 8.35C11.25 7.55 10.6 6.9 9.8 6.9C9 6.9 8.35 7.5 8.35 8.2C8.35 8.61421 8.01421 8.95 7.6 8.95C7.18579 8.95 6.85 8.61421 6.85 8.2C6.85 6.7 8.1 5.4 9.8 5.4C11.5 5.4 12.75 6.7 12.75 8.35C12.75 9.65 11.8 10.6 10.75 11.2Z" fill="currentColor"/>
+            </svg>
+            <span class="nav-label">Help</span>
+          </button>
+        </nav>
+      </aside>
+
+      <!-- Main Content Stage Dynamic Mount Point -->
+      <main id="main-content" class="app-stage">
+        <!-- Dynamic Page Container Mount Point -->
+        <div id="page-mount" class="page-container"></div>
+      </main>
+    </div>
+
+    <!-- Global Toast / Notification Host -->
+    <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
+    <!-- Global Dialog / Modal Overlay Host -->
+    <div id="modal-container" class="modal-container" aria-hidden="true"></div>
+
+  </div>
+
+  <!-- JavaScript Entry Point -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
