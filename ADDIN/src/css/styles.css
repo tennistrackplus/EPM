@@ -1,134 +1,148 @@
+/* ==========================================
+   ESTILOS FLUENT UI - TASK PANE OFFICE EXCEL
+   ========================================== */
+
 * {
     box-sizing: border-box;
     margin: 0;
     padding: 0;
-}
-
-body {
     font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-    font-size: 12px;
-    color: #323130;
-    background-color: #ffffff;
-    height: 100vh;
-    overflow: hidden;
     user-select: none;
 }
 
-.panel-container {
+body {
+    background-color: #f8f9fa;
+    color: #242424;
+    font-size: 12px;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.taskpane-container {
     display: flex;
     flex-direction: column;
     height: 100vh;
     padding: 12px;
+    gap: 8px;
 }
 
-.panel-header {
+/* Header */
+.taskpane-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 8px;
 }
 
-.panel-title {
-    font-size: 16px;
+.taskpane-header h2 {
+    font-size: 15px;
     font-weight: 600;
-    color: #201f1e;
+    color: #1b1b1b;
 }
 
-.icon-btn {
+.icon-button {
     background: transparent;
     border: none;
+    color: #616161;
     cursor: pointer;
-    font-size: 14px;
     padding: 4px;
-    border-radius: 2px;
-}
-
-.icon-btn:hover {
-    background-color: #f3f2f1;
-}
-
-.panel-instruction {
-    color: #605e5c;
-    font-size: 11px;
-    line-height: 1.4;
-    margin-bottom: 10px;
-}
-
-.search-box-container {
+    border-radius: 4px;
     display: flex;
     align-items: center;
-    border: 1px solid #8a8886;
-    border-radius: 2px;
-    padding: 2px 6px;
-    margin-bottom: 10px;
-    background-color: #ffffff;
+    justify-content: center;
 }
 
-.search-box-container:focus-within {
-    border-color: #107c41;
+.icon-button:hover {
+    background-color: #e0e0e0;
+    color: #111111;
 }
 
-.search-icon {
+.taskpane-instruction {
     font-size: 11px;
-    color: #605e5c;
-    margin-right: 6px;
+    color: #616161;
+    line-height: 1.3;
 }
 
-.search-box-container input {
-    border: none;
-    outline: none;
-    width: 100%;
-    font-size: 12px;
-    color: #323130;
-}
-
-/* Layout dividido */
-.pivottable-layout {
+/* Body Layout */
+.taskpane-body {
     display: flex;
     flex: 1;
     gap: 10px;
     min-height: 0;
 }
 
-/* Panel Izquierdo: Campos Disponibles */
-.available-fields-panel {
+/* Section Izquierda: Dimensiones */
+.fields-section {
     flex: 1;
-    border: 1px solid #e1dfdd;
+    display: flex;
+    flex-direction: column;
+    background: #ffffff;
+    border: 1px solid #d1d1d1;
+    border-radius: 4px;
+    padding: 6px;
+    min-width: 170px;
+}
+
+.search-input-wrapper {
+    position: relative;
+    margin-bottom: 6px;
+}
+
+.search-icon {
+    position: absolute;
+    left: 7px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #707070;
+    pointer-events: none;
+}
+
+.search-input-wrapper input {
+    width: 100%;
+    padding: 4px 6px 4px 24px;
+    border: 1px solid #d1d1d1;
     border-radius: 2px;
-    padding: 8px;
+    font-size: 12px;
+    outline: none;
+    background-color: #ffffff;
+}
+
+.search-input-wrapper input:focus {
+    border-color: #0078d4;
+}
+
+.fields-tree {
+    flex: 1;
     overflow-y: auto;
-    background-color: #faf9f8;
+    padding-right: 2px;
 }
 
 .dimension-group {
-    margin-bottom: 12px;
+    margin-bottom: 8px;
 }
 
 .dimension-header {
-    font-weight: 700;
-    text-transform: uppercase;
     font-size: 11px;
-    color: #605e5c;
-    padding: 2px 0;
-    border-bottom: 1px solid #edebe9;
-    margin-bottom: 4px;
+    font-weight: 700;
+    color: #424242;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    padding: 4px 2px 2px 2px;
 }
 
 .field-item {
     display: flex;
     align-items: center;
     padding: 4px 6px;
-    margin: 2px 0;
-    background-color: #ffffff;
-    border: 1px solid #e1dfdd;
-    border-radius: 2px;
+    margin: 1px 0;
+    border-radius: 3px;
     cursor: grab;
-    transition: background-color 0.15s ease, border-color 0.15s ease;
+    background-color: #ffffff;
+    border: 1px solid transparent;
+    transition: background-color 0.1s ease;
 }
 
 .field-item:hover {
-    background-color: #f3f2f1;
-    border-color: #c8c6c4;
+    background-color: #f0f0f0;
 }
 
 .field-item.dragging {
@@ -137,92 +151,129 @@ body {
 
 .field-icon {
     margin-right: 6px;
-    font-size: 12px;
-}
-
-.field-icon.hierarchy-icon {
-    color: #107c41;
-    font-weight: bold;
+    font-size: 11px;
+    line-height: 1;
 }
 
 .field-label {
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    font-size: 12px;
+    color: #242424;
 }
 
-/* Panel Derecho: Dropzones */
-.dropzones-panel {
+/* Section Derecha: Zonas / Dropzones */
+.zones-section {
     flex: 1;
     display: flex;
     flex-direction: column;
     gap: 8px;
+    min-width: 180px;
 }
 
-.dropzone-box {
-    flex: 1;
-    border: 1px solid #c8c6c4;
-    border-radius: 2px;
+.zone-card {
+    background: #ffffff;
+    border: 1px solid #d1d1d1;
+    border-radius: 4px;
     display: flex;
     flex-direction: column;
-    background-color: #ffffff;
+    flex: 1;
+    min-height: 80px;
+    transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
-.dropzone-box.drag-over {
-    border: 2px dashed #107c41;
-    background-color: #f2f9f4;
+.zone-card.drag-over {
+    border-color: #0078d4;
+    background-color: #eff6fc;
 }
 
-.dropzone-header {
-    background-color: #f3f2f1;
-    padding: 4px 8px;
-    font-weight: 600;
-    font-size: 11px;
-    color: #323130;
+.zone-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 8px;
+    background-color: #fafafa;
+    border-bottom: 1px solid #ebebeb;
+    border-top-left-radius: 3px;
+    border-top-right-radius: 3px;
+}
+
+.zone-title-group {
     display: flex;
     align-items: center;
-    gap: 6px;
-    border-bottom: 1px solid #e1dfdd;
+    gap: 5px;
+    font-weight: 600;
+    font-size: 12px;
+    color: #323130;
+}
+
+.zone-icon {
+    color: #0078d4;
+}
+
+.asymmetric-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    color: #616161;
+    cursor: pointer;
+}
+
+.asymmetric-checkbox input {
+    cursor: pointer;
+    accent-color: #0078d4;
 }
 
 .dropzone-content {
     flex: 1;
-    padding: 4px;
-    overflow-y: auto;
+    padding: 6px;
     display: flex;
-    flex-direction: column;
+    flex-wrap: wrap;
+    align-content: flex-start;
     gap: 4px;
+    overflow-y: auto;
 }
 
+/* Pills / Etiquetas Arrastradas */
 .dropped-tag {
-    display: flex;
+    background-color: #0078d4;
+    color: #ffffff;
+    padding: 2px 8px;
+    border-radius: 12px;
+    display: inline-flex;
     align-items: center;
-    justify-content: space-between;
-    background-color: #eff6fc;
-    border: 1px solid #0078d4;
-    padding: 3px 6px;
-    border-radius: 2px;
-    cursor: pointer;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: grab;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08);
 }
 
 .dropped-tag:hover {
-    background-color: #deecf9;
+    background-color: #106ebe;
+}
+
+.dropped-tag.dragging {
+    opacity: 0.5;
 }
 
 .dropped-tag-title {
-    font-size: 11px;
-    color: #004e8c;
-    font-weight: 500;
+    pointer-events: none;
 }
 
 .dropped-tag-remove {
     cursor: pointer;
-    color: #a19f9d;
-    margin-left: 6px;
-    font-weight: bold;
+    font-size: 13px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    opacity: 0.8;
 }
 
 .dropped-tag-remove:hover {
-    color: #a80000;
+    opacity: 1;
+    background-color: rgba(255, 255, 255, 0.25);
 }
