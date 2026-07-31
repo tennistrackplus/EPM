@@ -1,0 +1,228 @@
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+body {
+    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+    font-size: 12px;
+    color: #323130;
+    background-color: #ffffff;
+    height: 100vh;
+    overflow: hidden;
+    user-select: none;
+}
+
+.panel-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    padding: 12px;
+}
+
+.panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.panel-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #201f1e;
+}
+
+.icon-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 4px;
+    border-radius: 2px;
+}
+
+.icon-btn:hover {
+    background-color: #f3f2f1;
+}
+
+.panel-instruction {
+    color: #605e5c;
+    font-size: 11px;
+    line-height: 1.4;
+    margin-bottom: 10px;
+}
+
+.search-box-container {
+    display: flex;
+    align-items: center;
+    border: 1px solid #8a8886;
+    border-radius: 2px;
+    padding: 2px 6px;
+    margin-bottom: 10px;
+    background-color: #ffffff;
+}
+
+.search-box-container:focus-within {
+    border-color: #107c41;
+}
+
+.search-icon {
+    font-size: 11px;
+    color: #605e5c;
+    margin-right: 6px;
+}
+
+.search-box-container input {
+    border: none;
+    outline: none;
+    width: 100%;
+    font-size: 12px;
+    color: #323130;
+}
+
+/* Layout dividido */
+.pivottable-layout {
+    display: flex;
+    flex: 1;
+    gap: 10px;
+    min-height: 0;
+}
+
+/* Panel Izquierdo: Campos Disponibles */
+.available-fields-panel {
+    flex: 1;
+    border: 1px solid #e1dfdd;
+    border-radius: 2px;
+    padding: 8px;
+    overflow-y: auto;
+    background-color: #faf9f8;
+}
+
+.dimension-group {
+    margin-bottom: 12px;
+}
+
+.dimension-header {
+    font-weight: 700;
+    text-transform: uppercase;
+    font-size: 11px;
+    color: #605e5c;
+    padding: 2px 0;
+    border-bottom: 1px solid #edebe9;
+    margin-bottom: 4px;
+}
+
+.field-item {
+    display: flex;
+    align-items: center;
+    padding: 4px 6px;
+    margin: 2px 0;
+    background-color: #ffffff;
+    border: 1px solid #e1dfdd;
+    border-radius: 2px;
+    cursor: grab;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.field-item:hover {
+    background-color: #f3f2f1;
+    border-color: #c8c6c4;
+}
+
+.field-item.dragging {
+    opacity: 0.4;
+}
+
+.field-icon {
+    margin-right: 6px;
+    font-size: 12px;
+}
+
+.field-icon.hierarchy-icon {
+    color: #107c41;
+    font-weight: bold;
+}
+
+.field-label {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Panel Derecho: Dropzones */
+.dropzones-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.dropzone-box {
+    flex: 1;
+    border: 1px solid #c8c6c4;
+    border-radius: 2px;
+    display: flex;
+    flex-direction: column;
+    background-color: #ffffff;
+}
+
+.dropzone-box.drag-over {
+    border: 2px dashed #107c41;
+    background-color: #f2f9f4;
+}
+
+.dropzone-header {
+    background-color: #f3f2f1;
+    padding: 4px 8px;
+    font-weight: 600;
+    font-size: 11px;
+    color: #323130;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-bottom: 1px solid #e1dfdd;
+}
+
+.dropzone-content {
+    flex: 1;
+    padding: 4px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.dropped-tag {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background-color: #eff6fc;
+    border: 1px solid #0078d4;
+    padding: 3px 6px;
+    border-radius: 2px;
+    cursor: pointer;
+}
+
+.dropped-tag:hover {
+    background-color: #deecf9;
+}
+
+.dropped-tag-title {
+    font-size: 11px;
+    color: #004e8c;
+    font-weight: 500;
+}
+
+.dropped-tag-remove {
+    cursor: pointer;
+    color: #a19f9d;
+    margin-left: 6px;
+    font-weight: bold;
+}
+
+.dropped-tag-remove:hover {
+    color: #a80000;
+}
