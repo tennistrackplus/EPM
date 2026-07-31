@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Conexión a Fuentes de Datos</title>
+    
+    <!-- Librería JavaScript de Microsoft Office (Obligatoria en el Head) -->
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+
+    <link rel="stylesheet" href="css/styles.css">
+    <style>
+        .login-container {
+            padding: 16px;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+            background-color: #faf9f8;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+
+        .login-header {
+            margin-bottom: 20px;
+            border-bottom: 1px solid #ade600;
+            padding-bottom: 8px;
+        }
+
+        .login-header h2 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #323130;
+            margin: 0 0 4px 0;
+        }
+
+        .login-header p {
+            font-size: 12px;
+            color: #605e5c;
+            margin: 0;
+        }
+
+        .connectors-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .connector-card {
+            background: #ffffff;
+            border: 1px solid #e1dfdd;
+            border-radius: 4px;
+            padding: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            user-select: none;
+        }
+
+        .connector-card:hover {
+            border-color: #0078d4;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            transform: translateY(-1px);
+        }
+
+        .connector-card.selected {
+            border: 2px solid #0078d4;
+            background-color: #eff6fc;
+        }
+
+        .connector-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .connector-icon {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            background-color: #f3f2f1;
+            font-size: 16px;
+            font-weight: bold;
+            color: #323130;
+        }
+
+        .connector-details h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin: 0;
+            color: #323130;
+        }
+
+        .connector-details span {
+            font-size: 11px;
+            color: #605e5c;
+        }
+
+        .badge-status {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            background-color: #f3f2f1;
+            color: #605e5c;
+            font-weight: 500;
+        }
+
+        .action-footer {
+            margin-top: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .btn-connect {
+            background-color: #0078d4;
+            color: #ffffff;
+            border: none;
+            padding: 10px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 13px;
+            cursor: pointer;
+            width: 100%;
+            transition: background-color 0.2s;
+        }
+
+        .btn-connect:hover {
+            background-color: #106ebe;
+        }
+
+        .btn-connect:disabled {
+            background-color: #c8c6c4;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <header class="login-header">
+            <h2>Inicio de Sesión</h2>
+            <p>Selecciona el servicio de datos para conectar:</p>
+        </header>
+
+        <div class="connectors-grid" id="connectorsContainer">
+            
+            <!-- BigQuery -->
+            <div class="connector-card" data-provider="bigquery">
+                <div class="connector-info">
+                    <div class="connector-icon" style="background-color: #e8f0fe; color: #1a73e8;">BQ</div>
+                    <div class="connector-details">
+                        <h3>BigQuery</h3>
+                        <span>Google Cloud Platform</span>
+                    </div>
+                </div>
+                <span class="badge-status">Disponible</span>
+            </div>
+
+            <!-- Amazon -->
+            <div class="connector-card" data-provider="amazon">
+                <div class="connector-info">
+                    <div class="connector-icon" style="background-color: #fff3e0; color: #e65100;">AWS</div>
+                    <div class="connector-details">
+                        <h3>Amazon</h3>
+                        <span>AWS Redshift / S3</span>
+                    </div>
+                </div>
+                <span class="badge-status">Disponible</span>
+            </div>
+
+            <!-- Microsoft Fabric -->
+            <div class="connector-card" data-provider="fabric">
+                <div class="connector-info">
+                    <div class="connector-icon" style="background-color: #e1f5fe; color: #0288d1;">MS</div>
+                    <div class="connector-details">
+                        <h3>Microsoft Fabric</h3>
+                        <span>OneLake / Power BI</span>
+                    </div>
+                </div>
+                <span class="badge-status">Disponible</span>
+            </div>
+
+            <!-- Snowflake -->
+            <div class="connector-card" data-provider="snowflake">
+                <div class="connector-info">
+                    <div class="connector-icon" style="background-color: #e0f7fa; color: #00acc1;">SF</div>
+                    <div class="connector-details">
+                        <h3>Snowflake</h3>
+                        <span>Cloud Data Platform</span>
+                    </div>
+                </div>
+                <span class="badge-status">Disponible</span>
+            </div>
+
+            <!-- SAP Datasphere -->
+            <div class="connector-card" data-provider="datasphere">
+                <div class="connector-info">
+                    <div class="connector-icon" style="background-color: #f3e5f5; color: #7b1fa2;">DS</div>
+                    <div class="connector-details">
+                        <h3>SAP Datasphere</h3>
+                        <span>SAP Business Warehouse</span>
+                    </div>
+                </div>
+                <span class="badge-status">Disponible</span>
+            </div>
+
+            <!-- CDS de S4 -->
+            <div class="connector-card" data-provider="s4cds">
+                <div class="connector-info">
+                    <div class="connector-icon" style="background-color: #efebe9; color: #5d4037;">S4</div>
+                    <div class="connector-details">
+                        <h3>CDS de S4</h3>
+                        <span>SAP S/4HANA CDS Views</span>
+                    </div>
+                </div>
+                <span class="badge-status">Disponible</span>
+            </div>
+
+        </div>
+
+        <div class="action-footer">
+            <button id="btnConnect" class="btn-connect" disabled>Iniciar Conexión</button>
+        </div>
+    </div>
+
+    <script src="js/login.js"></script>
+</body>
+</html>
