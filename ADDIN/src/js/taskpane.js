@@ -48,7 +48,7 @@ const TaskPaneApp = {
             });
         }
 
-        // Configurar Dropzones para WebView2 de Excel
+        // Configurar Dropzones para WebView2
         const zones = document.querySelectorAll(".zone-card, .dropzone-box");
         zones.forEach(zone => {
             zone.addEventListener("dragenter", (e) => e.preventDefault());
