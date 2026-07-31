@@ -1,18 +1,120 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
-  <title>Hola Mundo Panel</title>
-  <link rel="stylesheet" href="taskpane.css" />
-  <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-  <script type="text/javascript" src="taskpane.js"></script>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Campos de tabla dinámica - EPM</title>
+
+    <!-- Office.js API -->
+    <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    
+    <link rel="stylesheet" href="css/styles.css" />
+    <link rel="stylesheet" href="css/modal.css" />
 </head>
-<body>
-  <div id="app-body">
-    <h1>Hola Mundo</h1>
-    <p>Este es un task pane real de Excel, generado con HTML/CSS/JS mediante un Office Add-in.</p>
-    <button id="closeBtn">Cerrar panel</button>
-  </div>
+<body class="ms-Fabric">
+
+    <div class="panel-container">
+        <!-- Header Fluent Style -->
+        <header class="panel-header">
+            <h1 class="panel-title">Campos de tabla dinámica</h1>
+            <div class="panel-actions">
+                <button id="btnRefresh" title="Recargar datos de DIM2" class="icon-btn">🔄</button>
+            </div>
+        </header>
+
+        <p class="panel-instruction">
+            Elige los campos que deseas agregar al informe y arrástralos entre las áreas siguientes:
+        </p>
+
+        <!-- Buscador -->
+        <div class="search-box-container">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="fieldSearch" placeholder="Buscar..." autocomplete="off" />
+        </div>
+
+        <!-- Layout principal dividido en 2 columnas -->
+        <div class="pivottable-layout">
+            
+            <!-- Columna Izquierda: Lista de Campos disponibles -->
+            <div class="available-fields-panel" id="availableFieldsContainer">
+                <!-- Se rellena dinámicamente desde DIM2 -->
+            </div>
+
+            <!-- Columna Derecha: Zonas Drop (Filtros, Filas, Columnas) -->
+            <div class="dropzones-panel">
+                
+                <!-- Zona Filtros -->
+                <div class="dropzone-box" data-zone="filtros">
+                    <div class="dropzone-header">
+                        <span class="zone-icon">🌪️</span>
+                        <span class="zone-title">Filtros</span>
+                    </div>
+                    <div class="dropzone-content" id="zone-filtros"></div>
+                </div>
+
+                <!-- Zona Filas -->
+                <div class="dropzone-box" data-zone="filas">
+                    <div class="dropzone-header">
+                        <span class="zone-icon">☰</span>
+                        <span class="zone-title">Filas</span>
+                    </div>
+                    <div class="dropzone-content" id="zone-filas"></div>
+                </div>
+
+                <!-- Zona Columnas -->
+                <div class="dropzone-box" data-zone="columnas">
+                    <div class="dropzone-header">
+                        <span class="zone-icon">|||</span>
+                        <span class="zone-title">Columnas</span>
+                    </div>
+                    <div class="dropzone-content" id="zone-columnas"></div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Filtros (Oculto por defecto) -->
+    <div id="filterModal" class="modal-overlay hidden">
+        <div class="modal-container">
+            <div class="modal-header">
+                <h2 id="modalTitle">Filtro de campo</h2>
+                <button id="btnCloseModal" class="close-btn">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <div class="modal-search">
+                    <input type="text" id="modalSearchInput" placeholder="Buscar valor..." />
+                </div>
+
+                <div class="modal-options-bar">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="chkSelectAll" checked />
+                        <span>(Seleccionar todo)</span>
+                    </label>
+                    <label class="checkbox-label exclude-option">
+                        <input type="checkbox" id="chkExcludeMode" />
+                        <span>Excluir seleccionados</span>
+                    </label>
+                </div>
+
+                <div class="modal-values-list" id="modalValuesContainer">
+                    <!-- Lista de valores leídos de MET -->
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button id="btnApplyFilter" class="btn btn-primary">Aceptar</button>
+                <button id="btnCancelFilter" class="btn btn-secondary">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts de la aplicación -->
+    <script src="js/excelService.js"></script>
+    <script src="js/filterModal.js"></script>
+    <script src="js/taskpane.js"></script>
+
 </body>
 </html>
