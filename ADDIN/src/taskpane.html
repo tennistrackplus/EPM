@@ -1,120 +1,130 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8" />
-    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Campos de tabla dinámica - EPM</title>
-
-    <!-- Office.js API -->
-    <script type="text/javascript" src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    
-    <link rel="stylesheet" href="css/styles.css" />
-    <link rel="stylesheet" href="css/modal.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TaskPane Add-in</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/modal.css">
 </head>
-<body class="ms-Fabric">
-
-    <div class="panel-container">
-        <!-- Header Fluent Style -->
-        <header class="panel-header">
-            <h1 class="panel-title">Campos de tabla dinámica</h1>
-            <div class="panel-actions">
-                <button id="btnRefresh" title="Recargar datos de DIM2" class="icon-btn">🔄</button>
-            </div>
+<body>
+    <div class="taskpane-container">
+        <!-- Encabezado del Panel -->
+        <header class="taskpane-header">
+            <h2>Campos del informe</h2>
+            <button id="btnRefresh" class="icon-button" title="Actualizar dimensiones">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M13.65 2.35A7.958 7.958 0 008 0C3.58 0 0 3.58 0 8s3.58 8 8 8c3.84 0 7.08-2.71 7.85-6.32h-1.63C13.48 12.37 11.01 14.5 8 14.5 4.41 14.5 1.5 11.59 1.5 8S4.41 1.5 8 1.5c1.79 0 3.41.73 4.59 1.91L10 6h6V0l-2.35 2.35z"/>
+                </svg>
+            </button>
         </header>
 
-        <p class="panel-instruction">
-            Elige los campos que deseas agregar al informe y arrástralos entre las áreas siguientes:
-        </p>
+        <p class="taskpane-instruction">Arrastra los campos a las áreas correspondientes:</p>
 
-        <!-- Buscador -->
-        <div class="search-box-container">
-            <span class="search-icon">🔍</span>
-            <input type="text" id="fieldSearch" placeholder="Buscar..." autocomplete="off" />
-        </div>
-
-        <!-- Layout principal dividido en 2 columnas -->
-        <div class="pivottable-layout">
+        <!-- Layout Principal: Izquierda Selección / Derecha Ejes -->
+        <div class="taskpane-body">
             
-            <!-- Columna Izquierda: Lista de Campos disponibles -->
-            <div class="available-fields-panel" id="availableFieldsContainer">
-                <!-- Se rellena dinámicamente desde DIM2 -->
-            </div>
+            <!-- Panel Izquierdo: Lista de Dimensiones -->
+            <section class="fields-section">
+                <div class="search-input-wrapper">
+                    <svg class="search-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M11.742 10.344a6.5 6.5 0 10-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 001.415-1.414l-3.85-3.85a1.007 1.007 0 00-.115-.1zM12 6.5a5.5 5.5 0 11-11 0 5.5 5.5 0 0111 0z"/>
+                    </svg>
+                    <input type="text" id="fieldSearch" placeholder="Buscar campo..." autocomplete="off">
+                </div>
+                <div id="availableFieldsContainer" class="fields-tree">
+                    <!-- Se rellena dinámicamente -->
+                </div>
+            </section>
 
-            <!-- Columna Derecha: Zonas Drop (Filtros, Filas, Columnas) -->
-            <div class="dropzones-panel">
+            <!-- Panel Derecho: Ejes (Dropzones) -->
+            <section class="zones-section">
                 
                 <!-- Zona Filtros -->
-                <div class="dropzone-box" data-zone="filtros">
-                    <div class="dropzone-header">
-                        <span class="zone-icon">🌪️</span>
-                        <span class="zone-title">Filtros</span>
+                <div class="zone-card" data-zone="filters">
+                    <div class="zone-header">
+                        <div class="zone-title-group">
+                            <svg class="zone-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M1.5 1.5A.5.5 0 012 1h12a.5.5 0 01.354.854L9.5 6.707V13.5a.5.5 0 01-.757.429l-2-1.25A.5.5 0 016.5 12.25V6.707L1.146 1.854A.5.5 0 011.5 1.5z"/>
+                            </svg>
+                            <span>Filtros</span>
+                        </div>
                     </div>
-                    <div class="dropzone-content" id="zone-filtros"></div>
+                    <div class="dropzone-content"></div>
                 </div>
 
                 <!-- Zona Filas -->
-                <div class="dropzone-box" data-zone="filas">
-                    <div class="dropzone-header">
-                        <span class="zone-icon">☰</span>
-                        <span class="zone-title">Filas</span>
+                <div class="zone-card" data-zone="rows">
+                    <div class="zone-header">
+                        <div class="zone-title-group">
+                            <svg class="zone-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M2 3h12a1 1 0 011 1v2a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1zm0 6h12a1 1 0 011 1v2a1 1 0 01-1 1H2a1 1 0 01-1-1v-2a1 1 0 011-1z"/>
+                            </svg>
+                            <span>Filas</span>
+                        </div>
+                        <label class="asymmetric-checkbox" title="Informe asimétrico en filas">
+                            <input type="checkbox" id="chkAsymmetricRows">
+                            <span>Asimétrico</span>
+                        </label>
                     </div>
-                    <div class="dropzone-content" id="zone-filas"></div>
+                    <div class="dropzone-content"></div>
                 </div>
 
                 <!-- Zona Columnas -->
-                <div class="dropzone-box" data-zone="columnas">
-                    <div class="dropzone-header">
-                        <span class="zone-icon">|||</span>
-                        <span class="zone-title">Columnas</span>
+                <div class="zone-card" data-zone="columns">
+                    <div class="zone-header">
+                        <div class="zone-title-group">
+                            <svg class="zone-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M3 2h2a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1zm6 0h2a1 1 0 011 1v10a1 1 0 01-1 1H9a1 1 0 01-1-1V3a1 1 0 011-1z"/>
+                            </svg>
+                            <span>Columnas</span>
+                        </div>
+                        <label class="asymmetric-checkbox" title="Informe asimétrico en columnas">
+                            <input type="checkbox" id="chkAsymmetricCols">
+                            <span>Asimétrico</span>
+                        </label>
                     </div>
-                    <div class="dropzone-content" id="zone-columnas"></div>
+                    <div class="dropzone-content"></div>
                 </div>
 
-            </div>
+            </section>
         </div>
     </div>
 
-    <!-- Modal de Filtros (Oculto por defecto) -->
-    <div id="filterModal" class="modal-overlay hidden">
-        <div class="modal-container">
+    <!-- Modal de Selección de Filtros -->
+    <div id="filterModal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
             <div class="modal-header">
-                <h2 id="modalTitle">Filtro de campo</h2>
-                <button id="btnCloseModal" class="close-btn">&times;</button>
+                <h3 id="modalTitle">Filtrar Campo</h3>
+                <button id="closeModalBtn" class="modal-close-btn">&times;</button>
             </div>
-            
             <div class="modal-body">
-                <div class="modal-search">
-                    <input type="text" id="modalSearchInput" placeholder="Buscar valor..." />
+                <div class="range-selection-box">
+                    <span class="range-title">Selección por Rango:</span>
+                    <div class="range-controls">
+                        <label>Desde: <select id="rangeFromSelect"></select></label>
+                        <label>Hasta: <select id="rangeToSelect"></select></label>
+                        <button id="btnApplyRange" class="btn-secondary">Aplicar Rango</button>
+                    </div>
                 </div>
 
-                <div class="modal-options-bar">
-                    <label class="checkbox-label">
-                        <input type="checkbox" id="chkSelectAll" checked />
-                        <span>(Seleccionar todo)</span>
-                    </label>
-                    <label class="checkbox-label exclude-option">
-                        <input type="checkbox" id="chkExcludeMode" />
-                        <span>Excluir seleccionados</span>
+                <div class="modal-toolbar">
+                    <input type="text" id="modalSearchInput" placeholder="Buscar en la lista...">
+                    <label class="select-all-label">
+                        <input type="checkbox" id="chkSelectAll"> Seleccionar todo
                     </label>
                 </div>
-
-                <div class="modal-values-list" id="modalValuesContainer">
-                    <!-- Lista de valores leídos de MET -->
-                </div>
+                <div id="modalItemsContainer" class="modal-items-list"></div>
             </div>
-
             <div class="modal-footer">
-                <button id="btnApplyFilter" class="btn btn-primary">Aceptar</button>
-                <button id="btnCancelFilter" class="btn btn-secondary">Cancelar</button>
+                <button id="btnCancelModal" class="btn-secondary">Cancelar</button>
+                <button id="btnApplyModal" class="btn-primary">Aceptar</button>
             </div>
         </div>
     </div>
 
-    <!-- Scripts de la aplicación -->
     <script src="js/excelService.js"></script>
     <script src="js/filterModal.js"></script>
     <script src="js/taskpane.js"></script>
-
 </body>
 </html>
