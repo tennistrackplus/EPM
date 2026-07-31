@@ -1,15 +1,15 @@
 /**
- * Lógica principal del TaskPane (Drag & Drop entre zonas, informe asimétrico y carga de interfaz)
+ * Lógica principal del TaskPane compatible con el contenedor WebView2 de Excel Desktop
  */
-document.addEventListener("DOMContentLoaded", () => {
-    if (typeof Office !== "undefined" && Office.onReady) {
-        Office.onReady(() => {
-            TaskPaneApp.init();
-        });
-    } else {
+if (typeof Office !== "undefined") {
+    Office.onReady((info) => {
         TaskPaneApp.init();
-    }
-});
+    });
+} else {
+    document.addEventListener("DOMContentLoaded", () => {
+        TaskPaneApp.init();
+    });
+}
 
 const TaskPaneApp = {
     draggedElementData: null,
@@ -48,9 +48,10 @@ const TaskPaneApp = {
             });
         }
 
-        // Configurar Dropzones (Soporta las clases Fluent UI .zone-card y .dropzone-box)
+        // Configurar Dropzones para WebView2 de Excel
         const zones = document.querySelectorAll(".zone-card, .dropzone-box");
         zones.forEach(zone => {
+            zone.addEventListener("dragenter", (e) => e.preventDefault());
             zone.addEventListener("dragover", (e) => this.handleDragOver(e));
             zone.addEventListener("dragleave", (e) => this.handleDragLeave(e));
             zone.addEventListener("drop", (e) => this.handleDrop(e));
@@ -61,7 +62,7 @@ const TaskPaneApp = {
         const container = document.getElementById("availableFieldsContainer");
         if (!container) return;
 
-        container.innerHTML = "<div style='color: #605e5c;'>Cargando dimensiones...</div>";
+        container.innerHTML = "<div style='color: #605e5c; padding: 4px;'>Cargando dimensiones...</div>";
 
         try {
             const result = await window.ExcelService.readDim2Data();
@@ -75,7 +76,7 @@ const TaskPaneApp = {
             container.innerHTML = "";
 
             if (dimensions.length === 0) {
-                container.innerHTML = "<div style='color: #605e5c;'>No se encontraron campos en DIM2</div>";
+                container.innerHTML = "<div style='color: #605e5c; padding: 4px;'>No se encontraron campos</div>";
                 return;
             }
 
@@ -88,13 +89,11 @@ const TaskPaneApp = {
                 header.innerText = dim.dimension.toLowerCase();
                 group.appendChild(header);
 
-                // 1. Jerarquías
                 dim.hierarchies.forEach(hier => {
                     const item = this.createFieldElement(dim.dimension, hier, true);
                     group.appendChild(item);
                 });
 
-                // 2. Atributos
                 dim.attributes.forEach(att => {
                     const item = this.createFieldElement(dim.dimension, att, false);
                     group.appendChild(item);
@@ -104,7 +103,7 @@ const TaskPaneApp = {
             });
         } catch (err) {
             console.error("Error al cargar dimensiones:", err);
-            container.innerHTML = `<div style='color: #a80000; padding: 4px;'>❌ Error al cargar datos: ${err.message || err}</div>`;
+            container.innerHTML = `<div style='color: #a80000; padding: 4px;'>❌ Error: ${err.message || err}</div>`;
         }
     },
 
@@ -126,6 +125,7 @@ const TaskPaneApp = {
         div.addEventListener("dragstart", (e) => {
             this.draggedElementData = { data: fieldData, sourceTag: null };
             div.classList.add("dragging");
+            e.dataTransfer.effectAllowed = "move";
             e.dataTransfer.setData("text/plain", JSON.stringify(fieldData));
         });
 
@@ -138,6 +138,7 @@ const TaskPaneApp = {
 
     handleDragOver(e) {
         e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
         e.currentTarget.classList.add("drag-over");
     },
 
@@ -150,20 +151,29 @@ const TaskPaneApp = {
         const dropzoneBox = e.currentTarget;
         dropzoneBox.classList.remove("drag-over");
 
+        if (!this.draggedElementData) {
+            try {
+                const rawData = e.dataTransfer.getData("text/plain");
+                if (rawData) {
+                    this.draggedElementData = { data: JSON.parse(rawData), sourceTag: null };
+                }
+            } catch (err) {
+                console.warn("No se pudo leer dataTransfer raw:", err);
+            }
+        }
+
         if (!this.draggedElementData) return;
 
         const { data, sourceTag } = this.draggedElementData;
         const targetContent = dropzoneBox.querySelector(".dropzone-content");
         const zoneId = dropzoneBox.getAttribute("data-zone");
 
-        // Si se arrastra una etiqueta existente desde otra zona
         if (sourceTag) {
             if (sourceTag.parentElement !== targetContent) {
                 sourceTag.remove();
                 this.addTagToZone(targetContent, data, zoneId);
             }
         } else {
-            // Se arrastra desde el panel lateral principal
             this.addTagToZone(targetContent, data, zoneId);
         }
 
@@ -189,11 +199,11 @@ const TaskPaneApp = {
             <span class="dropped-tag-remove">&times;</span>
         `;
 
-        // Permitir arrastrar la etiqueta ya soltada hacia otra zona
         tag.addEventListener("dragstart", (e) => {
             e.stopPropagation();
             this.draggedElementData = { data, sourceTag: tag };
             tag.classList.add("dragging");
+            e.dataTransfer.effectAllowed = "move";
             e.dataTransfer.setData("text/plain", JSON.stringify(data));
         });
 
