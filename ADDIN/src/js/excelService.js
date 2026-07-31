@@ -141,7 +141,7 @@ const ExcelService = {
     },
 
     /**
-     * Lee los valores almacenados en MOCK_DATA para una dimensión y campo específico
+     * Lee los valores almacenados en MOCK_DATA conservando la estructura de nivel si es jerarquía
      */
     async readMetValuesForField(dimName, fieldName, isHierarchy) {
         const dimObj = MOCK_DATA[dimName];
@@ -151,14 +151,16 @@ const ExcelService = {
             const hierarchyItems = dimObj.hierarchies ? dimObj.hierarchies[fieldName] : null;
             if (!hierarchyItems) return [];
             
-            // Retorna la lista de valores únicos de la jerarquía
-            const values = hierarchyItems.map(item => item.value);
-            return Array.from(new Set(values));
+            // Retorna los objetos { level, value } para mantener la estructura jerárquica visual
+            return hierarchyItems;
         } else {
             const attributeItems = dimObj.attributes ? dimObj.attributes[fieldName] : null;
             if (!attributeItems) return [];
             
-            return Array.from(new Set(attributeItems));
+            const uniqueValues = Array.from(new Set(attributeItems));
+            return uniqueValues.map(val => ({ level: 1, value: val }));
         }
     }
 };
+
+window.ExcelService = ExcelService;
