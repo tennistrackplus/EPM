@@ -1,75 +1,63 @@
 /**
- * BigQuery Excel Connector - Login & Auth Controller
- * Handles SSO authentication, OAuth token persistence & session state
+ * Lógica del Task Pane de Login y Selección de Conectores
  */
+if (typeof Office !== "undefined") {
+    Office.onReady(() => {
+        LoginApp.init();
+    });
+} else {
+    document.addEventListener("DOMContentLoaded", () => {
+        LoginApp.init();
+    });
+}
 
-import { Utils } from './utils.js';
-import { Navigation } from './navigation.js';
+const LoginApp = {
+    selectedProvider: null,
 
-export const Login = {
-  currentUser: null,
+    init() {
+        this.bindEvents();
+    },
 
-  init: () => {
-    Login.currentUser = Utils.storage.get('auth_user', null);
-    Login.updateHeaderUI();
-  },
+    bindEvents() {
+        const cards = document.querySelectorAll(".connector-card");
+        const btnConnect = document.getElementById("btnConnect");
 
-  isAuthenticated: () => {
-    return Login.currentUser !== null;
-  },
+        cards.forEach(card => {
+            card.addEventListener("click", () => {
+                // Desmarcar selecciones previas
+                cards.forEach(c => c.classList.remove("selected"));
+                
+                // Marcar tarjeta actual
+                card.classList.add("selected");
+                this.selectedProvider = card.getAttribute("data-provider");
 
-  authenticate: async (email, password) => {
-    // Enterprise Mock SSO Authenticator
-    if (!email || !password) {
-      throw new Error('Please fill in all mandatory credentials.');
+                // Habilitar botón de conexión
+                if (btnConnect) {
+                    btnConnect.disabled = false;
+                    btnConnect.innerText = `Conectar a ${this.getProviderDisplayName(this.selectedProvider)}`;
+                }
+            });
+        });
+
+        if (btnConnect) {
+            btnConnect.addEventListener("click", () => {
+                if (this.selectedProvider) {
+                    console.log("Iniciando flujo de conexión para:", this.selectedProvider);
+                    alert(`Iniciando autenticación para ${this.getProviderDisplayName(this.selectedProvider)}...`);
+                }
+            });
+        }
+    },
+
+    getProviderDisplayName(providerKey) {
+        const names = {
+            bigquery: "BigQuery",
+            amazon: "Amazon",
+            fabric: "Microsoft Fabric",
+            snowflake: "Snowflake",
+            datasphere: "SAP Datasphere",
+            s4cds: "CDS de S4"
+        };
+        return names[providerKey] || providerKey;
     }
-
-    // Simulate network authentication latency
-    await new Promise(resolve => setTimeout(resolve, 800));
-
-    const userProfile = {
-      name: email.split('@')[0].toUpperCase(),
-      email: email,
-      tenant: 'Enterprise License',
-      avatarInitials: email.substring(0, 2).toUpperCase(),
-      token: 'jwt_mock_token_enterprise_' + Date.now()
-    };
-
-    Login.currentUser = userProfile;
-    Utils.storage.set('auth_user', userProfile);
-    Login.updateHeaderUI();
-
-    return userProfile;
-  },
-
-  logout: () => {
-    Login.currentUser = null;
-    Utils.storage.remove('auth_user');
-    Login.updateHeaderUI();
-    Navigation.navigateTo('login');
-    Utils.showToast('Logged out successfully', 'info');
-  },
-
-  updateHeaderUI: () => {
-    const badge = Utils.$('#connection-status-badge');
-    const avatar = Utils.$('.avatar-placeholder');
-
-    if (Login.isAuthenticated()) {
-      if (badge) {
-        badge.className = 'status-indicator status-connected';
-        badge.title = `Connected as ${Login.currentUser.email}`;
-      }
-      if (avatar) {
-        avatar.textContent = Login.currentUser.avatarInitials;
-      }
-    } else {
-      if (badge) {
-        badge.className = 'status-indicator status-disconnected';
-        badge.title = 'Disconnected';
-      }
-      if (avatar) {
-        avatar.textContent = 'G';
-      }
-    }
-  }
 };
