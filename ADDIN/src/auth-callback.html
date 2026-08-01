@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Autenticación BigQuery</title>
+    <!-- Script de Office necesario para comunicar la ventana emergente con el TaskPane -->
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #faf9f8;
+            color: #323130;
+        }
+        .status-box {
+            text-align: center;
+            padding: 24px;
+            background: white;
+            border-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div class="status-box">
+        <h3>Procesando autenticación con Google BigQuery...</h3>
+        <p>Por favor, espera un momento.</p>
+    </div>
+
+    <script>
+        Office.onReady(() => {
+            // Extraer parámetros devolviéndolos desde la URL (Hash de OAuth2 Implicit Grant)
+            const hash = window.location.hash.substring(1);
+            const params = new URLSearchParams(hash || window.location.search);
+
+            const accessToken = params.get("access_token");
+            const expiresIn = params.get("expires_in");
+            const error = params.get("error");
+
+            if (accessToken) {
+                // Enviar el Token de acceso al Task Pane principal
+                Office.context.ui.messageParent(JSON.stringify({
+                    status: "success",
+                    provider: "bigquery",
+                    token: accessToken,
+                    expiresIn: expiresIn
+                }));
+            } else if (error) {
+                // Enviar el error si el usuario cancela o falla
+                Office.context.ui.messageParent(JSON.stringify({
+                    status: "error",
+                    provider: "bigquery",
+                    error: error
+                }));
+            }
+        });
+    </script>
+</body>
+</html>

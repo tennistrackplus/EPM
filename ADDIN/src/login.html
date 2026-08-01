@@ -107,6 +107,11 @@
             font-weight: 500;
         }
 
+        .badge-status.connected {
+            background-color: #dff6dd;
+            color: #107c41;
+        }
+
         .action-footer {
             margin-top: 24px;
             display: flex;
@@ -114,7 +119,7 @@
             gap: 8px;
         }
 
-        .btn-connect {
+        .btn-action {
             background-color: #0078d4;
             color: #ffffff;
             border: none;
@@ -127,11 +132,19 @@
             transition: background-color 0.2s;
         }
 
-        .btn-connect:hover {
+        .btn-action:hover {
             background-color: #106ebe;
         }
 
-        .btn-connect:disabled {
+        .btn-action.disconnect-mode {
+            background-color: #a80000;
+        }
+
+        .btn-action.disconnect-mode:hover {
+            background-color: #840000;
+        }
+
+        .btn-action:disabled {
             background-color: #c8c6c4;
             cursor: not-allowed;
         }
@@ -141,7 +154,7 @@
     <div class="login-container">
         <header class="login-header">
             <h2>Inicio de Sesión</h2>
-            <p>Selecciona el servicio de datos para conectar:</p>
+            <p>Selecciona el servicio de datos para conectar o gestionar sesión:</p>
         </header>
 
         <div class="connectors-grid" id="connectorsContainer">
@@ -155,7 +168,7 @@
                         <span>Google Cloud Platform</span>
                     </div>
                 </div>
-                <span class="badge-status">Disponible</span>
+                <span class="badge-status" id="badge-bigquery">Disponible</span>
             </div>
 
             <!-- Amazon -->
@@ -167,7 +180,7 @@
                         <span>AWS Redshift / S3</span>
                     </div>
                 </div>
-                <span class="badge-status">Disponible</span>
+                <span class="badge-status" id="badge-amazon">Disponible</span>
             </div>
 
             <!-- Microsoft Fabric -->
@@ -179,7 +192,7 @@
                         <span>OneLake / Power BI</span>
                     </div>
                 </div>
-                <span class="badge-status">Disponible</span>
+                <span class="badge-status" id="badge-fabric">Disponible</span>
             </div>
 
             <!-- Snowflake -->
@@ -191,7 +204,7 @@
                         <span>Cloud Data Platform</span>
                     </div>
                 </div>
-                <span class="badge-status">Disponible</span>
+                <span class="badge-status" id="badge-snowflake">Disponible</span>
             </div>
 
             <!-- SAP Datasphere -->
@@ -203,7 +216,7 @@
                         <span>SAP Business Warehouse</span>
                     </div>
                 </div>
-                <span class="badge-status">Disponible</span>
+                <span class="badge-status" id="badge-datasphere">Disponible</span>
             </div>
 
             <!-- CDS de S4 -->
@@ -215,13 +228,13 @@
                         <span>SAP S/4HANA CDS Views</span>
                     </div>
                 </div>
-                <span class="badge-status">Disponible</span>
+                <span class="badge-status" id="badge-s4cds">Disponible</span>
             </div>
 
         </div>
 
         <div class="action-footer">
-            <button id="btnConnect" class="btn-connect" disabled>Iniciar Conexión</button>
+            <button id="btnAction" class="btn-action" disabled>Selecciona una opción</button>
         </div>
     </div>
 
