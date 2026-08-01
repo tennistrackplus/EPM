@@ -25,6 +25,7 @@ const LoginApp = {
     init() {
         this.bindEvents();
         this.checkExistingTokens();
+        this.setupBrowserMessageListener();
     },
 
     bindEvents() {
@@ -61,6 +62,24 @@ const LoginApp = {
     },
 
     /**
+     * Listener para recibir mensajes cuando se ejecuta fuera del entorno de Office (Navegador estándar)
+     */
+    setupBrowserMessageListener() {
+        window.addEventListener("message", (event) => {
+            if (typeof event.data === "string") {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.status) {
+                        this.handleAuthResponse(event.data);
+                    }
+                } catch (e) {
+                    // Ignorar mensajes de otros orígenes
+                }
+            }
+        });
+    },
+
+    /**
      * Revisa al cargar el panel si existen tokens activos y actualiza el estado
      */
     checkExistingTokens() {
@@ -80,7 +99,8 @@ const LoginApp = {
      * Inicia el flujo OAuth 2.0 en ventana emergente para BigQuery
      */
     connectBigQuery() {
-        const redirectUri = location.origin + location.pathname.replace("login.html", "auth-callback.html");
+        // Construcción de la URL del callback en relación al origen actual
+        const redirectUri = new URL("auth-callback.html", window.location.href).href;
         
         const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
             `client_id=${encodeURIComponent(this.googleConfig.clientId)}` +
@@ -89,25 +109,45 @@ const LoginApp = {
             `&scope=${encodeURIComponent(this.googleConfig.scopes)}` +
             "&prompt=consent";
 
-        const dialogOptions = {
-            height: 60,
-            width: 40,
-            displayInIframe: false
-        };
+        // Comprobar si estamos ejecutando dentro del entorno de Microsoft Office
+        const isOfficeEnvironment = typeof Office !== "undefined" && 
+                                   Office.context && 
+                                   Office.context.ui && 
+                                   typeof Office.context.ui.displayDialogAsync === "function";
 
-        Office.context.ui.displayDialogAsync(authUrl, dialogOptions, (asyncResult) => {
-            if (asyncResult.status === Office.AsyncResultStatus.Failed) {
-                console.error("Error al abrir diálogo de autenticación:", asyncResult.error.message);
-                alert("No se pudo abrir la ventana de login: " + asyncResult.error.message);
-                return;
-            }
+        if (isOfficeEnvironment) {
+            const dialogOptions = {
+                height: 60,
+                width: 40,
+                displayInIframe: false
+            };
 
-            this.authDialog = asyncResult.value;
+            Office.context.ui.displayDialogAsync(authUrl, dialogOptions, (asyncResult) => {
+                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                    console.error("Error al abrir diálogo de autenticación:", asyncResult.error.message);
+                    alert("No se pudo abrir la ventana de login. Código: " + asyncResult.error.code + " - " + asyncResult.error.message);
+                    return;
+                }
 
-            this.authDialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
-                this.handleAuthResponse(arg.message);
+                this.authDialog = asyncResult.value;
+
+                this.authDialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+                    this.handleAuthResponse(arg.message);
+                });
             });
-        });
+        } else {
+            // Respaldo para ejecución en navegador estándar fuera de Excel
+            const width = 500;
+            const height = 650;
+            const left = (window.screen.width / 2) - (width / 2);
+            const top = (window.screen.height / 2) - (height / 2);
+            
+            window.open(
+                authUrl,
+                "GoogleAuthWindow",
+                `width=${width},height=${height},top=${top},left=${left}`
+            );
+        }
     },
 
     /**
