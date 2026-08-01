@@ -10,16 +10,26 @@
 
     <link rel="stylesheet" href="css/styles.css">
     <style>
-        .login-container {
-            padding: 16px;
-            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
             background-color: #faf9f8;
-            min-height: 100vh;
+            font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+        }
+
+        .login-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            padding: 16px;
             box-sizing: border-box;
         }
 
         .login-header {
-            margin-bottom: 20px;
+            flex-shrink: 0;
+            margin-bottom: 12px;
             border-bottom: 1px solid #ade600;
             padding-bottom: 8px;
         }
@@ -38,28 +48,32 @@
         }
 
         .connectors-grid {
+            flex: 1;
+            overflow-y: auto;
             display: flex;
             flex-direction: column;
-            gap: 12px;
+            gap: 10px;
+            padding-right: 4px;
+            margin-bottom: 12px;
         }
 
         .connector-card {
             background: #ffffff;
             border: 1px solid #e1dfdd;
             border-radius: 4px;
-            padding: 12px;
+            padding: 10px 12px;
             display: flex;
             align-items: center;
             justify-content: space-between;
             cursor: pointer;
             transition: all 0.2s ease;
             user-select: none;
+            flex-shrink: 0;
         }
 
         .connector-card:hover {
             border-color: #0078d4;
             box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-            transform: translateY(-1px);
         }
 
         .connector-card.selected {
@@ -81,13 +95,13 @@
             justify-content: center;
             border-radius: 4px;
             background-color: #f3f2f1;
-            font-size: 16px;
+            font-size: 14px;
             font-weight: bold;
             color: #323130;
         }
 
         .connector-details h3 {
-            font-size: 14px;
+            font-size: 13px;
             font-weight: 600;
             margin: 0;
             color: #323130;
@@ -113,23 +127,24 @@
         }
 
         .action-footer {
-            margin-top: 24px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
+            flex-shrink: 0;
+            background-color: #faf9f8;
+            padding-top: 8px;
+            border-top: 1px solid #e1dfdd;
         }
 
         .btn-action {
             background-color: #0078d4;
             color: #ffffff;
             border: none;
-            padding: 10px;
+            padding: 12px;
             border-radius: 4px;
             font-weight: 600;
             font-size: 13px;
             cursor: pointer;
             width: 100%;
             transition: background-color 0.2s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
 
         .btn-action:hover {
@@ -146,7 +161,9 @@
 
         .btn-action:disabled {
             background-color: #c8c6c4;
+            color: #605e5c;
             cursor: not-allowed;
+            box-shadow: none;
         }
     </style>
 </head>
@@ -234,7 +251,7 @@
         </div>
 
         <div class="action-footer">
-            <button id="btnAction" class="btn-action" disabled>Selecciona una opción</button>
+            <button id="btnAction" class="btn-action" disabled>1. Selecciona una fuente de datos</button>
         </div>
     </div>
 

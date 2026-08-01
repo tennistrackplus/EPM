@@ -33,8 +33,7 @@
     </div>
 
     <script>
-        Office.onReady(() => {
-            // Extraer parámetros devolviéndolos desde la URL (Hash de OAuth2 Implicit Grant)
+        function processAuth() {
             const hash = window.location.hash.substring(1);
             const params = new URLSearchParams(hash || window.location.search);
 
@@ -42,23 +41,44 @@
             const expiresIn = params.get("expires_in");
             const error = params.get("error");
 
+            let payload = null;
+
             if (accessToken) {
-                // Enviar el Token de acceso al Task Pane principal
-                Office.context.ui.messageParent(JSON.stringify({
+                payload = JSON.stringify({
                     status: "success",
                     provider: "bigquery",
                     token: accessToken,
                     expiresIn: expiresIn
-                }));
+                });
             } else if (error) {
-                // Enviar el error si el usuario cancela o falla
-                Office.context.ui.messageParent(JSON.stringify({
+                payload = JSON.stringify({
                     status: "error",
                     provider: "bigquery",
                     error: error
-                }));
+                });
             }
-        });
+
+            if (payload) {
+                // Si estamos dentro del entorno de Office Add-in
+                if (typeof Office !== "undefined" && Office.context && Office.context.ui && typeof Office.context.ui.messageParent === "function") {
+                    Office.context.ui.messageParent(payload);
+                } else if (window.opener) {
+                    // Respaldo si se abrió mediante un navegador web estándar
+                    window.opener.postMessage(payload, "*");
+                    window.close();
+                }
+            }
+        }
+
+        if (typeof Office !== "undefined") {
+            Office.onReady(() => {
+                processAuth();
+            });
+        } else {
+            document.addEventListener("DOMContentLoaded", () => {
+                processAuth();
+            });
+        }
     </script>
 </body>
 </html>
