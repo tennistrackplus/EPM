@@ -25,7 +25,7 @@ function hidePane(event) {
 }
 
 /**
- * Ejecuta la consulta SQL en BigQuery y vuelca los resultados en la hoja activa comenzando en A1
+ * Ejecuta la consulta SQL en BigQuery y vuelca los resultados en la hoja activa comenzando en A1 de forma optimizada
  * @param {Office.AddinCommands.Event} event
  */
 async function writeHolaInA1(event) {
@@ -42,7 +42,7 @@ async function writeHolaInA1(event) {
         const projectId = "bigqueryexcelconnector";
         const sqlQuery = "select * from `ANALYTICS.DIM_CECO`";
 
-        // Petición a la API de BigQuery
+        // Petición a la API de BigQuery con deshabilitación de Legacy SQL
         const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/queries`, {
             method: "POST",
             headers: {
@@ -67,30 +67,42 @@ async function writeHolaInA1(event) {
             return;
         }
 
+        const fields = data.schema.fields;
+        const fieldsCount = fields.length;
+        const rawRows = data.rows || [];
+        const rowsCount = rawRows.length;
+
         // 1. Extraer los nombres de las columnas (Cabecera)
-        const headers = data.schema.fields.map(field => field.name);
+        const headers = new Array(fieldsCount);
+        for (let i = 0; i < fieldsCount; i++) {
+            headers[i] = fields[i].name;
+        }
 
-        // 2. Extraer los valores de las filas
-        const rows = (data.rows || []).map(row => {
-            return row.f.map(cell => (cell.v !== null ? cell.v : ""));
-        });
+        // 2. Conversión optimizada de datos a matriz 2D
+        const gridData = new Array(rowsCount + 1);
+        gridData[0] = headers;
 
-        // 3. Unir cabeceras y filas en un único array 2D
-        const gridData = [headers, ...rows];
+        for (let i = 0; i < rowsCount; i++) {
+            const rowCells = rawRows[i].f;
+            const rowArray = new Array(fieldsCount);
+            for (let j = 0; j < fieldsCount; j++) {
+                const val = rowCells[j].v;
+                rowArray[j] = val !== null && val !== undefined ? val : "";
+            }
+            gridData[i + 1] = rowArray;
+        }
 
-        // 4. Escribir los resultados en la hoja activa de Excel
+        // 3. Escribir los resultados en Excel optimizando el rendimiento visual
         await Excel.run(async (context) => {
+            // Suspender el redibujado de la pantalla en Excel durante la inserción
+            context.workbook.application.suspendScreenUpdatingUntilNextSync();
+
             const sheet = context.workbook.worksheets.getActiveWorksheet();
+            const totalRows = gridData.length;
 
-            const rowCount = gridData.length;
-            const columnCount = headers.length;
-
-            // Define el rango desde la fila 0, columna 0 (A1) con las dimensiones de la tabla
-            const range = sheet.getRangeByIndexes(0, 0, rowCount, columnCount);
+            // Definir el rango total e inyectar la matriz completa de una sola vez
+            const range = sheet.getRangeByIndexes(0, 0, totalRows, fieldsCount);
             range.values = gridData;
-
-            // Autoajustar el tamaño de las columnas
-            range.format.autofitColumns();
 
             await context.sync();
         });
