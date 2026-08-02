@@ -1,428 +1,267 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Modelo Semántico BigQuery</title>
-  <!-- Office JS -->
-  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-  <!-- FontAwesome Icons -->
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  
-  <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
-    }
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BigQuery EPM - Modelo Semántico</title>
 
-    body {
-      background-color: #f8f9fa;
-      color: #333;
-      padding: 12px;
-      font-size: 13px;
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 15px;
+            background-color: #f4f7f9;
+            color: #333;
+        }
 
-    /* Form Elements */
-    .form-group {
-      margin-bottom: 8px;
-    }
+        h2, h3, h4 {
+            color: #0f4c81;
+            margin-top: 5px;
+            margin-bottom: 15px;
+        }
 
-    .form-label {
-      display: block;
-      font-weight: 600;
-      font-size: 11px;
-      color: #495057;
-      margin-bottom: 3px;
-      text-transform: uppercase;
-      letter-spacing: 0.3px;
-    }
+        .card {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            border: 1px solid #e1e8ed;
+        }
 
-    .form-control, .form-select {
-      width: 100%;
-      padding: 6px 8px;
-      font-size: 12px;
-      border: 1px solid #ced4da;
-      border-radius: 4px;
-      background-color: #fff;
-      transition: border-color 0.15s ease-in-out;
-    }
+        .form-group {
+            margin-bottom: 12px;
+        }
 
-    .form-control:focus, .form-select:focus {
-      outline: none;
-      border-color: #0d6efd;
-      box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.15);
-    }
+        label {
+            display: block;
+            font-size: 11px;
+            font-weight: bold;
+            color: #555;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
 
-    /* Compact Top Selector Box */
-    .config-card {
-      background: #ffffff;
-      border: 1px solid #e3e6f0;
-      border-radius: 6px;
-      padding: 10px;
-      margin-bottom: 10px;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-      flex-shrink: 0;
-    }
+        select, input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #cccccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 13px;
+        }
 
-    .selector-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 6px;
-    }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            font-size: 12px;
+        }
 
-    .selector-grid-full {
-      grid-column: span 2;
-    }
+        th {
+            background-color: #1d5b96;
+            color: white;
+            padding: 8px;
+            text-align: left;
+            font-size: 11px;
+        }
 
-    .table-select-container {
-      display: flex;
-      gap: 6px;
-      align-items: center;
-    }
+        td {
+            padding: 6px 8px;
+            border-bottom: 1px solid #eef2f5;
+        }
 
-    .btn-preview {
-      background-color: #f1f3f5;
-      color: #495057;
-      border: 1px solid #ced4da;
-      padding: 6px 10px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-      white-space: nowrap;
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      transition: all 0.15s ease;
-    }
+        .btn {
+            background-color: #0f4c81;
+            color: white;
+            border: none;
+            padding: 9px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 12px;
+            width: 100%;
+            margin-top: 10px;
+        }
 
-    .btn-preview:hover:not(:disabled) {
-      background-color: #e9ecef;
-      color: #0d6efd;
-      border-color: #0d6efd;
-    }
+        .btn:hover {
+            background-color: #0b3860;
+        }
 
-    .btn-preview:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
+        .btn-secondary {
+            background-color: #6c757d;
+        }
 
-    /* Attributes Area */
-    .attributes-section {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      background: #ffffff;
-      border: 1px solid #e3e6f0;
-      border-radius: 6px;
-      padding: 10px;
-      overflow: hidden;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-    }
+        .btn-secondary:hover {
+            background-color: #545b62;
+        }
 
-    .section-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 8px;
-      padding-bottom: 6px;
-      border-bottom: 1px solid #e9ecef;
-    }
+        .btn-sm {
+            padding: 4px 8px;
+            font-size: 11px;
+            width: auto;
+        }
 
-    .section-title {
-      font-weight: 700;
-      font-size: 12px;
-      color: #212529;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
+        /* Modales */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 100;
+            overflow-y: auto;
+        }
 
-    .badge {
-      background-color: #e7f5ff;
-      color: #1971c2;
-      font-size: 10px;
-      padding: 2px 6px;
-      border-radius: 10px;
-      font-weight: 600;
-    }
+        .modal-content {
+            background-color: #fff;
+            margin: 20px auto;
+            padding: 20px;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 500px;
+        }
 
-    .attributes-table-wrapper {
-      flex: 1;
-      overflow-y: auto;
-      border: 1px solid #dee2e6;
-      border-radius: 4px;
-    }
-
-    .attr-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 11px;
-    }
-
-    .attr-table th {
-      position: sticky;
-      top: 0;
-      background-color: #f1f3f5;
-      color: #495057;
-      text-align: left;
-      padding: 6px 8px;
-      border-bottom: 1px solid #dee2e6;
-      font-weight: 600;
-      z-index: 2;
-    }
-
-    .attr-table td {
-      padding: 5px 8px;
-      border-bottom: 1px solid #e9ecef;
-      vertical-align: middle;
-    }
-
-    .attr-table tr:hover {
-      background-color: #f8f9fa;
-    }
-
-    .attr-table input[type="text"], .attr-table select {
-      padding: 3px 6px;
-      font-size: 11px;
-      height: 24px;
-    }
-
-    /* Actions Bar */
-    .action-bar {
-      margin-top: 10px;
-      display: flex;
-      gap: 8px;
-      flex-shrink: 0;
-    }
-
-    .btn-primary {
-      flex: 1;
-      background-color: #0d6efd;
-      color: white;
-      border: none;
-      padding: 8px;
-      border-radius: 4px;
-      font-weight: 600;
-      font-size: 12px;
-      cursor: pointer;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      gap: 6px;
-      transition: background-color 0.15s ease;
-    }
-
-    .btn-primary:hover {
-      background-color: #0b5ed7;
-    }
-
-    /* Modal for Data Preview */
-    .modal-backdrop {
-      display: none;
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      background: rgba(0, 0, 0, 0.5);
-      z-index: 1000;
-      justify-content: center;
-      align-items: center;
-      padding: 12px;
-    }
-
-    .modal-content {
-      background: #ffffff;
-      border-radius: 8px;
-      width: 100%;
-      max-width: 95%;
-      height: 85vh;
-      display: flex;
-      flex-direction: column;
-      box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-      overflow: hidden;
-    }
-
-    .modal-header {
-      padding: 10px 14px;
-      background: #f8f9fa;
-      border-bottom: 1px solid #dee2e6;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .modal-title {
-      font-size: 13px;
-      font-weight: 700;
-      color: #212529;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .modal-close {
-      background: none;
-      border: none;
-      font-size: 16px;
-      color: #6c757d;
-      cursor: pointer;
-    }
-
-    .modal-body {
-      flex: 1;
-      overflow: auto;
-      padding: 0;
-    }
-
-    .preview-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 11px;
-      white-space: nowrap;
-    }
-
-    .preview-table th {
-      position: sticky;
-      top: 0;
-      background: #e9ecef;
-      color: #212529;
-      padding: 6px 10px;
-      border: 1px solid #dee2e6;
-      font-weight: 600;
-    }
-
-    .preview-table td {
-      padding: 4px 10px;
-      border: 1px solid #dee2e6;
-      max-width: 250px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .preview-table tr:nth-child(even) {
-      background-color: #f8f9fa;
-    }
-
-    /* Helper styles */
-    .text-muted { color: #6c757d; font-size: 11px; }
-    .spinner { animation: spin 1s linear infinite; }
-    @keyframes spin { 100% { transform: rotate(360deg); } }
-  </style>
+        .checkbox-cell {
+            text-align: center;
+        }
+    </style>
 </head>
 <body>
 
-  <!-- Top Configuration Area -->
-  <div class="config-card">
-    
-    <!-- Nombre del Modelo Semántico -->
-    <div class="form-group">
-      <label class="form-label" for="modelNameInput">Nombre del Modelo Semántico</label>
-      <input type="text" id="modelNameInput" class="form-control" placeholder="Ej: Modelo Ventas EPM 2026">
-    </div>
+    <h2>&lt; BigQuery EPM - Modelo Semántico</h2>
 
-    <!-- Jerarquía de BigQuery -->
-    <div class="selector-grid">
-      
-      <!-- 1. Proyecto -->
-      <div class="form-group">
-        <label class="form-label" for="projectSelect">
-          <i class="fa-solid fa-folder"></i> Proyecto
-        </label>
-        <select id="projectSelect" class="form-select">
-          <option value="">Cargando proyectos...</option>
-        </select>
-      </div>
-
-      <!-- 2. Dataset -->
-      <div class="form-group">
-        <label class="form-label" for="datasetSelect">
-          <i class="fa-solid fa-database"></i> Dataset
-        </label>
-        <select id="datasetSelect" class="form-select" disabled>
-          <option value="">Seleccione proyecto...</option>
-        </select>
-      </div>
-
-      <!-- 3. Tabla Hechos + Preview Button -->
-      <div class="form-group selector-grid-full">
-        <label class="form-label" for="tableSelect">
-          <i class="fa-solid fa-table"></i> Tabla de Hechos
-        </label>
-        <div class="table-select-container">
-          <select id="tableSelect" class="form-select" disabled>
-            <option value="">Seleccione dataset...</option>
-          </select>
-          <button id="previewBtn" class="btn-preview" disabled title="Vista previa de los primeros 500 registros">
-            <i class="fa-solid fa-eye"></i> Vista Previa
-          </button>
+    <!-- TABLA DE HECHOS -->
+    <div class="card">
+        <h3>TABLA DE HECHOS</h3>
+        <div class="form-group">
+            <label>PROJECT</label>
+            <input type="text" id="factProject" value="bigqueryexcelconnector" />
         </div>
-      </div>
-
+        <div class="form-group">
+            <label>DATASET</label>
+            <select id="factDataset">
+                <option value="">-- Seleccionar Dataset --</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>TABLE</label>
+            <select id="factTable">
+                <option value="">-- Seleccionar Tabla --</option>
+            </select>
+        </div>
+        <button class="btn btn-secondary" id="btnLoadFields">Cargar Campos</button>
     </div>
-  </div>
 
-  <!-- Main Section: Attributes List -->
-  <div class="attributes-section">
-    <div class="section-header">
-      <span class="section-title">
-        <i class="fa-solid fa-list-check"></i> Atributos y Métricas
-      </span>
-      <span id="fieldCountBadge" class="badge">0 Campos</span>
-    </div>
-
-    <div class="attributes-table-wrapper">
-      <table class="attr-table">
-        <thead>
-          <tr>
-            <th style="width: 25%;">Columna BQ</th>
-            <th style="width: 20%;">Tipo</th>
-            <th style="width: 30%;">Etiqueta</th>
-            <th style="width: 25%;">Rol</th>
-          </tr>
-        </thead>
-        <tbody id="attributesTbody">
-          <tr>
-            <td colspan="4" style="text-align: center; padding: 20px;" class="text-muted">
-              Seleccione una tabla de hechos para cargar los campos automáticamente.
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
-
-  <!-- Actions Bar -->
-  <div class="action-bar">
-    <button id="generateModelBtn" class="btn-primary" disabled>
-      <i class="fa-solid fa-wand-magic-sparkles"></i> Generar Modelo en Excel
-    </button>
-  </div>
-
-  <!-- Modal Data Preview (500 Rows) -->
-  <div id="previewModal" class="modal-backdrop">
-    <div class="modal-content">
-      <div class="modal-header">
-        <span class="modal-title" id="modalTitle">
-          <i class="fa-solid fa-table-cells"></i> Vista Previa de Datos (Primeros 500 registros)
-        </span>
-        <button class="modal-close" id="closeModalBtn">&times;</button>
-      </div>
-      <div class="modal-body">
-        <table class="preview-table">
-          <thead id="previewThead"></thead>
-          <tbody id="previewTbody"></tbody>
+    <!-- LISTA DE CAMPOS -->
+    <div class="card" id="fieldsCard" style="display: none;">
+        <h3>CAMPOS</h3>
+        <table id="fieldsTable">
+            <thead>
+                <tr>
+                    <th>CAMPO</th>
+                    <th>ALIAS / DESCRIPCIÓN</th>
+                    <th>TIPO</th>
+                    <th>ENABLE</th>
+                    <th>ACCIONES</th>
+                </tr>
+            </thead>
+            <tbody id="fieldsTbody">
+            </tbody>
         </table>
-      </div>
-    </div>
-  </div>
 
-  <!-- Script JS Vinculado -->
-  <script src="semantic_model.js"></script>
+        <button class="btn" id="btnGenerateModel" style="margin-top: 20px;">Generar Modelo Semántico en Excel</button>
+    </div>
+
+    <!-- MODAL CONFIGURACIÓN MEDIDA -->
+    <div id="measureModal" class="modal">
+        <div class="modal-content">
+            <h3>Medida: <span id="modalMeasureFieldName"></span></h3>
+            <div class="form-group">
+                <label>ALIAS</label>
+                <input type="text" id="modalMeasureAlias" />
+            </div>
+            <div class="form-group">
+                <label>AGREGACIÓN</label>
+                <select id="modalMeasureAgg">
+                    <option value="SUM">SUM</option>
+                    <option value="COUNT">COUNT</option>
+                    <option value="AVG">AVG</option>
+                    <option value="MIN">MIN</option>
+                    <option value="MAX">MAX</option>
+                    <option value="COUNT_DISTINCT">COUNT_DISTINCT</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>FORMATO</label>
+                <select id="modalMeasureFormat">
+                    <option value="Auto">Auto</option>
+                    <option value="Currency">Moneda (€)</option>
+                    <option value="Integer">Entero</option>
+                    <option value="Decimal">Decimal</option>
+                    <option value="Percent">Porcentaje (%)</option>
+                </select>
+            </div>
+            <button class="btn" id="btnSaveMeasureModal">Guardar Medida</button>
+            <button class="btn btn-secondary" id="btnCloseMeasureModal">Cancelar</button>
+        </div>
+    </div>
+
+    <!-- MODAL CONFIGURACIÓN DIMENSIÓN -->
+    <div id="dimensionModal" class="modal">
+        <div class="modal-content">
+            <h3>Dimensión: <span id="modalDimFieldName"></span></h3>
+            <div class="form-group">
+                <label>ALIAS</label>
+                <input type="text" id="modalDimAlias" />
+            </div>
+
+            <h4>TABLA DE ATRIBUTOS (RELACIÓN)</h4>
+            <div class="form-group">
+                <label>PROJECT</label>
+                <input type="text" id="dimRelProject" value="bigqueryexcelconnector" />
+            </div>
+            <div class="form-group">
+                <label>DATASET</label>
+                <select id="dimRelDataset">
+                    <option value="">-- Seleccionar Dataset --</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>TABLE</label>
+                <select id="dimRelTable">
+                    <option value="">-- Seleccionar Tabla --</option>
+                </select>
+            </div>
+            <button class="btn btn-secondary" id="btnLoadDimAttributes">Cargar Atributos</button>
+
+            <div id="attributesContainer" style="display:none; margin-top: 15px;">
+                <h4>ATRIBUTOS Y JERARQUÍA</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>CAMPO</th>
+                            <th>ALIAS</th>
+                            <th>KEY</th>
+                            <th>ENABLE</th>
+                            <th>HIER1</th>
+                            <th>HIER2</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dimAttributesTbody">
+                    </tbody>
+                </table>
+            </div>
+
+            <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar Dimensión</button>
+            <button class="btn btn-secondary" id="btnCloseDimModal">Cancelar</button>
+        </div>
+    </div>
+
+    <script src="js/semantic_model.js"></script>
 </body>
 </html>
