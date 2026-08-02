@@ -126,6 +126,31 @@
             color: #107c41;
         }
 
+        .toast-message {
+            display: none;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-bottom: 8px;
+            word-break: break-word;
+        }
+
+        .toast-message.visible {
+            display: block;
+        }
+
+        .toast-message.info {
+            background-color: #eff6fc;
+            color: #005a9e;
+            border: 1px solid #c7e0f4;
+        }
+
+        .toast-message.error {
+            background-color: #fde7e9;
+            color: #a80000;
+            border: 1px solid #f3b2b6;
+        }
+
         .action-footer {
             flex-shrink: 0;
             background-color: #faf9f8;
@@ -249,6 +274,8 @@
             </div>
 
         </div>
+
+        <div id="toastMessage" class="toast-message"></div>
 
         <div class="action-footer">
             <button id="btnAction" class="btn-action" disabled>1. Selecciona una fuente de datos</button>
