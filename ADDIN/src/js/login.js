@@ -109,13 +109,15 @@ const LoginApp = {
             `&scope=${encodeURIComponent(this.googleConfig.scopes)}` +
             "&prompt=consent";
 
-        // Comprobar si estamos ejecutando dentro del entorno de Microsoft Office
+        // Comprobación de si estamos ejecutando dentro de Microsoft Office
         const isOfficeEnvironment = typeof Office !== "undefined" && 
                                    Office.context && 
                                    Office.context.ui && 
                                    typeof Office.context.ui.displayDialogAsync === "function";
 
         if (isOfficeEnvironment) {
+            alert("Entorno detectado: Microsoft Office Add-in (Excel). Usando displayDialogAsync.");
+
             const dialogOptions = {
                 height: 60,
                 width: 40,
@@ -136,7 +138,8 @@ const LoginApp = {
                 });
             });
         } else {
-            // Respaldo para ejecución en navegador estándar fuera de Excel
+            alert("Entorno detectado: Navegador web estándar. Usando window.open.");
+
             const width = 500;
             const height = 650;
             const left = (window.screen.width / 2) - (width / 2);
