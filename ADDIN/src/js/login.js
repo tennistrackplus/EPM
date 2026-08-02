@@ -106,9 +106,13 @@ const LoginApp = {
      */
     connectBigQuery() {
         // Validación de protocolo: alertar si se abre directamente desde file://
+
+            this.showAlert("Prueba1", true);
+
+            this.showAlert("Prueba2", true);
         if (window.location.protocol === "file:") {
             console.error("No se puede ejecutar desde file://. Debes usar un servidor web local (ej. Live Server o http://localhost).");
-            this.showAlert("Error: No se puede ejecutar desde un archivo local (file://). Usa Live Server o un servidor HTTP.", true);
+//            this.showAlert("Error: No se puede ejecutar desde un archivo local (file://). Usa Live Server o un servidor HTTP.", true);
             return;
         }
 
@@ -127,9 +131,12 @@ const LoginApp = {
                                    Office.context && 
                                    Office.context.ui && 
                                    typeof Office.context.ui.displayDialogAsync === "function";
+								   
+								               this.showAlert("Prueba3", true);
+
 
         if (isOfficeEnvironment) {
-            this.showAlert("OPEN", true);
+            this.showAlert("EXCEL", true);
 
             console.log("Entorno detectado: Microsoft Office Add-in (Excel). Usando displayDialogAsync.");
 
@@ -154,7 +161,7 @@ const LoginApp = {
             });
         } else {
             console.log("Entorno detectado: Navegador web estándar. Usando window.open.");
-
+            this.showAlert("OPEN", true);
             const width = 500;
             const height = 650;
             const left = (window.screen.width / 2) - (width / 2);
