@@ -129,6 +129,8 @@ const LoginApp = {
                                    typeof Office.context.ui.displayDialogAsync === "function";
 
         if (isOfficeEnvironment) {
+            this.showAlert("OPEN", true);
+
             console.log("Entorno detectado: Microsoft Office Add-in (Excel). Usando displayDialogAsync.");
 
             const dialogOptions = {
@@ -158,6 +160,8 @@ const LoginApp = {
             const left = (window.screen.width / 2) - (width / 2);
             const top = (window.screen.height / 2) - (height / 2);
             alert("OPEN");
+            this.showAlert("OPEN", true);
+
             window.open(
                 authUrl,
                 "GoogleAuthWindow",
