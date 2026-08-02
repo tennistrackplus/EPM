@@ -8,6 +8,7 @@ let currentConfigFieldIndex = null;
 Office.onReady((info) => {
     if (info.host === Office.HostType.Excel) {
         initEvents();
+        loadProjects("factProject");
         loadDatasets("factProject", "factDataset");
     }
 });
@@ -22,6 +23,10 @@ function initEvents() {
     });
 
     document.getElementById("btnLoadFields").addEventListener("click", fetchFactFields);
+
+    document.getElementById("dimRelProject").addEventListener("change", () => {
+        loadDatasets("dimRelProject", "dimRelDataset");
+    });
 
     document.getElementById("dimRelDataset").addEventListener("change", () => {
         loadTables("dimRelProject", "dimRelDataset", "dimRelTable");
@@ -50,6 +55,35 @@ function getAuthToken() {
         return null;
     }
     return token;
+}
+
+async function loadProjects(projectSelectId) {
+    const token = getAuthToken();
+    if (!token) return;
+
+    const projectSelect = document.getElementById(projectSelectId);
+    if (!projectSelect) return;
+
+    projectSelect.innerHTML = '<option value="">Cargando...</option>';
+
+    try {
+        const response = await fetch("https://bigquery.googleapis.com/bigquery/v2/projects", {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        const data = await response.json();
+
+        projectSelect.innerHTML = '<option value="">-- Seleccionar Proyecto --</option>';
+        if (data.projects) {
+            data.projects.forEach(p => {
+                const opt = document.createElement("option");
+                opt.value = p.id || p.projectReference.projectId;
+                opt.textContent = p.id || p.projectReference.projectId;
+                projectSelect.appendChild(opt);
+            });
+        }
+    } catch (err) {
+        console.error("Error al cargar proyectos:", err);
+    }
 }
 
 async function loadDatasets(projectIdInputId, datasetSelectId) {
@@ -192,7 +226,7 @@ function updateFieldAlias(index, val) { fieldsState[index].alias = val; }
 function updateFieldType(index, val) { fieldsState[index].type = val; }
 function updateFieldEnabled(index, val) { fieldsState[index].enabled = val; }
 
-function openConfigModal(index) {
+async function openConfigModal(index) {
     currentConfigFieldIndex = index;
     const field = fieldsState[index];
 
@@ -210,6 +244,8 @@ function openConfigModal(index) {
     } else {
         document.getElementById("modalDimFieldName").textContent = field.name;
         document.getElementById("modalDimAlias").value = field.alias;
+        
+        await loadProjects("dimRelProject");
         document.getElementById("dimRelProject").value = field.relProject || document.getElementById("factProject").value;
         
         loadDatasets("dimRelProject", "dimRelDataset");
