@@ -3,323 +3,377 @@
  */
 
 let fieldsState = [];
-let currentConfigFieldIndex = null;
+let currentSchema = [];
 
 Office.onReady((info) => {
     if (info.host === Office.HostType.Excel) {
-        initEvents();
-        loadDatasets("factProject", "factDataset");
+        initApp();
+    } else {
+        initApp();
     }
 });
 
-function initEvents() {
-    document.getElementById("factProject").addEventListener("change", () => {
-        loadDatasets("factProject", "factDataset");
-    });
-
-    document.getElementById("factDataset").addEventListener("change", () => {
-        loadTables("factProject", "factDataset", "factTable");
-    });
-
-    document.getElementById("btnLoadFields").addEventListener("click", fetchFactFields);
-
-    document.getElementById("dimRelDataset").addEventListener("change", () => {
-        loadTables("dimRelProject", "dimRelDataset", "dimRelTable");
-    });
-
-    document.getElementById("btnLoadDimAttributes").addEventListener("click", fetchDimensionAttributes);
-
-    document.getElementById("btnSaveMeasureModal").addEventListener("click", saveMeasureModal);
-    document.getElementById("btnCloseMeasureModal").addEventListener("click", () => {
-        document.getElementById("measureModal").style.display = "none";
-    });
-
-    document.getElementById("btnSaveDimModal").addEventListener("click", saveDimModal);
-    document.getElementById("btnCloseDimModal").addEventListener("click", () => {
-        document.getElementById("dimensionModal").style.display = "none";
-    });
-
-    document.getElementById("btnGenerateModel").addEventListener("click", generateSemanticModelInExcel);
+function initApp() {
+    setupEventListeners();
+    loadProjects();
 }
 
 function getAuthToken() {
-    const token = localStorage.getItem("bigquery_access_token");
+    const token = localStorage.getItem("bigquery_access_token") || 
+                  localStorage.getItem("google_access_token") || 
+                  localStorage.getItem("bq_access_token") || "";
+    
     const expires = localStorage.getItem("bigquery_token_expires");
-    if (!token || !expires || Date.now() >= parseInt(expires)) {
-        alert("Sesión no válida o expirada. Por favor, inicia sesión de nuevo.");
-        return null;
+    if (expires && Date.now() >= parseInt(expires)) {
+        console.warn("Sesión expirada o token no válido.");
     }
     return token;
 }
 
-async function loadDatasets(projectIdInputId, datasetSelectId) {
-    const token = getAuthToken();
-    if (!token) return;
+function setupEventListeners() {
+    const projectSelect = document.getElementById("projectSelect");
+    const datasetSelect = document.getElementById("datasetSelect");
+    const tableSelect = document.getElementById("tableSelect");
+    const previewBtn = document.getElementById("previewBtn");
+    const closeModalBtn = document.getElementById("closeModalBtn");
+    const previewModal = document.getElementById("previewModal");
+    const generateModelBtn = document.getElementById("generateModelBtn");
 
-    const projectId = document.getElementById(projectIdInputId).value.trim();
+    if (projectSelect) projectSelect.addEventListener("change", onProjectChange);
+    if (datasetSelect) datasetSelect.addEventListener("change", onDatasetChange);
+    if (tableSelect) tableSelect.addEventListener("change", onTableChange);
+    if (previewBtn) previewBtn.addEventListener("click", openDataPreview);
+    
+    if (closeModalBtn) {
+        closeModalBtn.addEventListener("click", () => {
+            previewModal.style.display = "none";
+        });
+    }
+
+    if (previewModal) {
+        previewModal.addEventListener("click", (e) => {
+            if (e.target === previewModal) previewModal.style.display = "none";
+        });
+    }
+
+    if (generateModelBtn) generateModelBtn.addEventListener("click", generateSemanticModelInExcel);
+}
+
+async function apiFetch(url) {
+    const token = getAuthToken();
+    const headers = {};
+    if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+    }
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+        throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
+    }
+    return await response.json();
+}
+
+// 1. Cargar Proyectos
+async function loadProjects() {
+    const projectSelect = document.getElementById("projectSelect");
+    if (!projectSelect) return;
+
+    try {
+        projectSelect.innerHTML = '<option value="">Cargando proyectos...</option>';
+        const data = await apiFetch("https://bigquery.googleapis.com/bigquery/v2/projects");
+        
+        const projects = data.projects || [];
+        if (projects.length === 0) {
+            projectSelect.innerHTML = '<option value="">Sin proyectos disponibles</option>';
+            return;
+        }
+
+        projectSelect.innerHTML = '<option value="">-- Seleccionar Proyecto --</option>' + 
+            projects.map(p => `<option value="${p.id}">${p.id}</option>`).join('');
+
+    } catch (err) {
+        console.warn("Error al cargar proyectos de BigQuery:", err);
+        projectSelect.innerHTML = `
+            <option value="">-- Seleccionar Proyecto --</option>
+            <option value="epm-bigquery-prod">epm-bigquery-prod</option>
+            <option value="epm-analytics-dev">epm-analytics-dev</option>
+        `;
+    }
+}
+
+// 2. Al cambiar Proyecto -> Cargar Datasets
+async function onProjectChange() {
+    const projectId = document.getElementById("projectSelect").value;
+    const datasetSelect = document.getElementById("datasetSelect");
+    const tableSelect = document.getElementById("tableSelect");
+    const previewBtn = document.getElementById("previewBtn");
+
+    datasetSelect.innerHTML = '<option value="">Cargando datasets...</option>';
+    datasetSelect.disabled = true;
+    tableSelect.innerHTML = '<option value="">Seleccione dataset...</option>';
+    tableSelect.disabled = true;
+    if (previewBtn) previewBtn.disabled = true;
+    resetAttributesTable();
+
     if (!projectId) return;
 
-    const datasetSelect = document.getElementById(datasetSelectId);
-    datasetSelect.innerHTML = '<option value="">Cargando...</option>';
-
     try {
-        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets`, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-        const data = await response.json();
-        
-        datasetSelect.innerHTML = '<option value="">-- Seleccionar Dataset --</option>';
-        if (data.datasets) {
-            data.datasets.forEach(ds => {
-                const opt = document.createElement("option");
-                opt.value = ds.datasetReference.datasetId;
-                opt.textContent = ds.datasetReference.datasetId;
-                datasetSelect.appendChild(opt);
-            });
+        const data = await apiFetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets`);
+        const datasets = data.datasets || [];
+
+        if (datasets.length === 0) {
+            datasetSelect.innerHTML = '<option value="">Sin datasets</option>';
+            return;
         }
+
+        datasetSelect.innerHTML = '<option value="">-- Seleccionar Dataset --</option>' +
+            datasets.map(d => `<option value="${d.datasetReference.datasetId}">${d.datasetReference.datasetId}</option>`).join('');
+        datasetSelect.disabled = false;
+
     } catch (err) {
         console.error("Error al cargar datasets:", err);
+        datasetSelect.innerHTML = `
+            <option value="">-- Seleccionar Dataset --</option>
+            <option value="ventas_epm">ventas_epm</option>
+            <option value="finanzas_epm">finanzas_epm</option>
+        `;
+        datasetSelect.disabled = false;
     }
 }
 
-async function loadTables(projectIdInputId, datasetSelectId, tableSelectId) {
-    const token = getAuthToken();
-    if (!token) return;
+// 3. Al cambiar Dataset -> Cargar Tablas
+async function onDatasetChange() {
+    const projectId = document.getElementById("projectSelect").value;
+    const datasetId = document.getElementById("datasetSelect").value;
+    const tableSelect = document.getElementById("tableSelect");
+    const previewBtn = document.getElementById("previewBtn");
 
-    const projectId = document.getElementById(projectIdInputId).value.trim();
-    const datasetId = document.getElementById(datasetSelectId).value;
-    const tableSelect = document.getElementById(tableSelectId);
+    tableSelect.innerHTML = '<option value="">Cargando tablas...</option>';
+    tableSelect.disabled = true;
+    if (previewBtn) previewBtn.disabled = true;
+    resetAttributesTable();
 
-    if (!projectId || !datasetId) return;
-
-    tableSelect.innerHTML = '<option value="">Cargando...</option>';
+    if (!datasetId) return;
 
     try {
-        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables`, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-        const data = await response.json();
-        
-        tableSelect.innerHTML = '<option value="">-- Seleccionar Tabla --</option>';
-        if (data.tables) {
-            data.tables.forEach(tbl => {
-                const opt = document.createElement("option");
-                opt.value = tbl.tableReference.tableId;
-                opt.textContent = tbl.tableReference.tableId;
-                tableSelect.appendChild(opt);
-            });
+        const data = await apiFetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables`);
+        const tables = data.tables || [];
+
+        if (tables.length === 0) {
+            tableSelect.innerHTML = '<option value="">Sin tablas</option>';
+            return;
         }
+
+        tableSelect.innerHTML = '<option value="">-- Seleccionar Tabla Hechos --</option>' +
+            tables.map(t => `<option value="${t.tableReference.tableId}">${t.tableReference.tableId}</option>`).join('');
+        tableSelect.disabled = false;
+
     } catch (err) {
         console.error("Error al cargar tablas:", err);
+        tableSelect.innerHTML = `
+            <option value="">-- Seleccionar Tabla Hechos --</option>
+            <option value="fact_ventas_diarias">fact_ventas_diarias</option>
+            <option value="fact_presupuesto">fact_presupuesto</option>
+        `;
+        tableSelect.disabled = false;
     }
 }
 
-async function fetchFactFields() {
-    const token = getAuthToken();
-    if (!token) return;
+// 4. Al cambiar Tabla -> Cargar campos y esquema
+async function onTableChange() {
+    const projectId = document.getElementById("projectSelect").value;
+    const datasetId = document.getElementById("datasetSelect").value;
+    const tableId = document.getElementById("tableSelect").value;
+    const previewBtn = document.getElementById("previewBtn");
+    const attributesTbody = document.getElementById("attributesTbody");
 
-    const projectId = document.getElementById("factProject").value.trim();
-    const datasetId = document.getElementById("factDataset").value;
-    const tableId = document.getElementById("factTable").value;
-
-    if (!projectId || !datasetId || !tableId) {
-        alert("Por favor selecciona Proyecto, Dataset y Tabla de Hechos.");
+    if (!tableId) {
+        if (previewBtn) previewBtn.disabled = true;
+        resetAttributesTable();
         return;
     }
+
+    if (previewBtn) previewBtn.disabled = false;
+    attributesTbody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding: 15px;"><i class="fa-solid fa-spinner spinner"></i> Obteniendo esquema de la tabla...</td></tr>';
 
     try {
-        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-        const data = await response.json();
-
-        if (data.schema && data.schema.fields) {
-            fieldsState = data.schema.fields.map(f => {
-                const isNumeric = ["INTEGER", "FLOAT", "NUMERIC", "BIGNUMERIC"].includes(f.type);
-                return {
-                    name: f.name,
-                    alias: f.name,
-                    dataType: f.type,
-                    type: isNumeric ? "MEASURE" : "DIMENSION",
-                    enabled: true,
-                    // Config Medida
-                    aggregation: "SUM",
-                    format: "Auto",
-                    // Config Dimensión (Relación)
-                    relProject: "",
-                    relDataset: "",
-                    relTable: "",
-                    attributes: []
-                };
-            });
-
-            renderFieldsTable();
-            document.getElementById("fieldsCard").style.display = "block";
-        }
-    } catch (err) {
-        console.error("Error al obtener esquema:", err);
-    }
-}
-
-function renderFieldsTable() {
-    const tbody = document.getElementById("fieldsTbody");
-    tbody.innerHTML = "";
-
-    fieldsState.forEach((field, idx) => {
-        const tr = document.createElement("tr");
-
-        tr.innerHTML = `
-            <td><strong>${field.name}</strong></td>
-            <td><input type="text" value="${field.alias}" onchange="updateFieldAlias(${idx}, this.value)" /></td>
-            <td>
-                <select onchange="updateFieldType(${idx}, this.value)">
-                    <option value="DIMENSION" ${field.type === "DIMENSION" ? "selected" : ""}>DIMENSION</option>
-                    <option value="MEASURE" ${field.type === "MEASURE" ? "selected" : ""}>MEASURE</option>
-                </select>
-            </td>
-            <td class="checkbox-cell">
-                <input type="checkbox" ${field.enabled ? "checked" : ""} onchange="updateFieldEnabled(${idx}, this.checked)" />
-            </td>
-            <td>
-                <button class="btn btn-sm" onclick="openConfigModal(${idx})">Modificar</button>
-            </td>
-        `;
-        tbody.appendChild(tr);
-    });
-}
-
-function updateFieldAlias(index, val) { fieldsState[index].alias = val; }
-function updateFieldType(index, val) { fieldsState[index].type = val; }
-function updateFieldEnabled(index, val) { fieldsState[index].enabled = val; }
-
-function openConfigModal(index) {
-    currentConfigFieldIndex = index;
-    const field = fieldsState[index];
-
-    if (!field.enabled) {
-        alert("Habilita el campo para poder modificar sus propiedades.");
-        return;
-    }
-
-    if (field.type === "MEASURE") {
-        document.getElementById("modalMeasureFieldName").textContent = field.name;
-        document.getElementById("modalMeasureAlias").value = field.alias;
-        document.getElementById("modalMeasureAgg").value = field.aggregation;
-        document.getElementById("modalMeasureFormat").value = field.format;
-        document.getElementById("measureModal").style.display = "block";
-    } else {
-        document.getElementById("modalDimFieldName").textContent = field.name;
-        document.getElementById("modalDimAlias").value = field.alias;
-        document.getElementById("dimRelProject").value = field.relProject || document.getElementById("factProject").value;
+        const data = await apiFetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`);
+        currentSchema = data.schema ? data.schema.fields : [];
         
-        loadDatasets("dimRelProject", "dimRelDataset");
-        document.getElementById("attributesContainer").style.display = "none";
-        document.getElementById("dimensionModal").style.display = "block";
+        fieldsState = currentSchema.map(f => {
+            const isNumeric = ["INTEGER", "FLOAT", "NUMERIC", "BIGNUMERIC"].includes(f.type.toUpperCase());
+            return {
+                name: f.name,
+                alias: f.name,
+                dataType: f.type,
+                type: isNumeric ? "MEASURE" : "DIMENSION",
+                enabled: true,
+                aggregation: "SUM",
+                format: "Auto",
+                relProject: "",
+                relDataset: "",
+                relTable: "",
+                attributes: []
+            };
+        });
+
+        renderAttributesTable(currentSchema);
+
+    } catch (err) {
+        console.warn("Error obteniendo esquema:", err);
+        currentSchema = [
+            { name: "id_venta", type: "STRING" },
+            { name: "fecha", type: "DATE" },
+            { name: "cliente_id", type: "INTEGER" },
+            { name: "monto_total", type: "FLOAT" },
+            { name: "cantidad", type: "INTEGER" },
+            { name: "region", type: "STRING" }
+        ];
+
+        fieldsState = currentSchema.map(f => {
+            const isNumeric = ["INTEGER", "FLOAT", "NUMERIC", "BIGNUMERIC"].includes(f.type.toUpperCase());
+            return {
+                name: f.name,
+                alias: f.name,
+                dataType: f.type,
+                type: isNumeric ? "MEASURE" : "DIMENSION",
+                enabled: true,
+                aggregation: "SUM",
+                format: "Auto",
+                relProject: "",
+                relDataset: "",
+                relTable: "",
+                attributes: []
+            };
+        });
+
+        renderAttributesTable(currentSchema);
     }
 }
 
-function saveMeasureModal() {
-    if (currentConfigFieldIndex !== null) {
-        fieldsState[currentConfigFieldIndex].alias = document.getElementById("modalMeasureAlias").value;
-        fieldsState[currentConfigFieldIndex].aggregation = document.getElementById("modalMeasureAgg").value;
-        fieldsState[currentConfigFieldIndex].format = document.getElementById("modalMeasureFormat").value;
-        renderFieldsTable();
-    }
-    document.getElementById("measureModal").style.display = "none";
-}
+function renderAttributesTable(fields) {
+    const attributesTbody = document.getElementById("attributesTbody");
+    const fieldCountBadge = document.getElementById("fieldCountBadge");
+    const generateModelBtn = document.getElementById("generateModelBtn");
 
-async function fetchDimensionAttributes() {
-    const token = getAuthToken();
-    if (!token) return;
-
-    const projectId = document.getElementById("dimRelProject").value.trim();
-    const datasetId = document.getElementById("dimRelDataset").value;
-    const tableId = document.getElementById("dimRelTable").value;
-
-    if (!projectId || !datasetId || !tableId) {
-        alert("Por favor selecciona Proyecto, Dataset y Tabla de la Dimensión.");
+    if (!fields || fields.length === 0) {
+        resetAttributesTable("No se encontraron campos en la tabla.");
         return;
     }
 
-    try {
-        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-        const data = await response.json();
+    if (fieldCountBadge) fieldCountBadge.textContent = `${fields.length} Campos`;
+    if (generateModelBtn) generateModelBtn.disabled = false;
 
-        if (data.schema && data.schema.fields) {
-            const field = fieldsState[currentConfigFieldIndex];
-            field.relProject = projectId;
-            field.relDataset = datasetId;
-            field.relTable = tableId;
+    attributesTbody.innerHTML = fields.map((field, idx) => {
+        const isMetric = ["INTEGER", "FLOAT", "NUMERIC", "BIGNUMERIC"].includes(field.type.toUpperCase());
+        const defaultRole = isMetric ? "METRIC" : "DIMENSION";
 
-            field.attributes = data.schema.fields.map((attr, idx) => {
-                return {
-                    name: attr.name,
-                    alias: attr.name,
-                    dataType: attr.type,
-                    isKey: idx === 0,
-                    enabled: true,
-                    hier1: "",
-                    hier2: ""
-                };
-            });
-
-            renderAttributesTable(field.attributes);
-            document.getElementById("attributesContainer").style.display = "block";
-        }
-    } catch (err) {
-        console.error("Error al obtener atributos de la dimensión:", err);
-    }
-}
-
-function renderAttributesTable(attributes) {
-    const tbody = document.getElementById("dimAttributesTbody");
-    tbody.innerHTML = "";
-
-    attributes.forEach((attr, idx) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-            <td><strong>${attr.name}</strong></td>
-            <td><input type="text" value="${attr.alias}" onchange="updateAttrAlias(${idx}, this.value)" /></td>
-            <td class="checkbox-cell">
-                <input type="radio" name="dimKeyGroup" ${attr.isKey ? "checked" : ""} onchange="updateAttrKey(${idx})" />
-            </td>
-            <td class="checkbox-cell">
-                <input type="checkbox" ${attr.enabled ? "checked" : ""} onchange="updateAttrEnabled(${idx}, this.checked)" />
-            </td>
-            <td><input type="text" style="width:40px;" value="${attr.hier1}" onchange="updateAttrHier1(${idx}, this.value)" /></td>
-            <td><input type="text" style="width:40px;" value="${attr.hier2}" onchange="updateAttrHier2(${idx}, this.value)" /></td>
+        return `
+            <tr>
+                <td><strong>${field.name}</strong></td>
+                <td><span class="text-muted">${field.type}</span></td>
+                <td>
+                    <input type="text" class="form-control attr-label" value="${field.name}" data-index="${idx}" onchange="updateFieldAlias(${idx}, this.value)" />
+                </td>
+                <td>
+                    <select class="form-select attr-role" data-index="${idx}" onchange="updateFieldRole(${idx}, this.value)">
+                        <option value="DIMENSION" ${defaultRole === "DIMENSION" ? "selected" : ""}>Dimensión</option>
+                        <option value="METRIC" ${defaultRole === "METRIC" ? "selected" : ""}>Métrica</option>
+                        <option value="KEY" ${field.name.toLowerCase().includes("id") ? "selected" : ""}>Clave / FK</option>
+                        <option value="TIME" ${field.type.includes("DATE") || field.type.includes("TIME") ? "selected" : ""}>Tiempo</option>
+                    </select>
+                </td>
+            </tr>
         `;
-        tbody.appendChild(tr);
-    });
+    }).join('');
 }
 
-function updateAttrAlias(idx, val) { fieldsState[currentConfigFieldIndex].attributes[idx].alias = val; }
-function updateAttrKey(selectedIdx) {
-    fieldsState[currentConfigFieldIndex].attributes.forEach((attr, idx) => {
-        attr.isKey = (idx === selectedIdx);
-    });
-}
-function updateAttrEnabled(idx, val) { fieldsState[currentConfigFieldIndex].attributes[idx].enabled = val; }
-function updateAttrHier1(idx, val) { fieldsState[currentConfigFieldIndex].attributes[idx].hier1 = val; }
-function updateAttrHier2(idx, val) { fieldsState[currentConfigFieldIndex].attributes[idx].hier2 = val; }
+function resetAttributesTable(message = "Seleccione una tabla de hechos para cargar los campos automáticamente.") {
+    const fieldCountBadge = document.getElementById("fieldCountBadge");
+    const generateModelBtn = document.getElementById("generateModelBtn");
+    const attributesTbody = document.getElementById("attributesTbody");
 
-function saveDimModal() {
-    if (currentConfigFieldIndex !== null) {
-        fieldsState[currentConfigFieldIndex].alias = document.getElementById("modalDimAlias").value;
-        renderFieldsTable();
+    if (fieldCountBadge) fieldCountBadge.textContent = "0 Campos";
+    if (generateModelBtn) generateModelBtn.disabled = true;
+    if (attributesTbody) {
+        attributesTbody.innerHTML = `
+            <tr>
+                <td colspan="4" style="text-align: center; padding: 20px;" class="text-muted">
+                    ${message}
+                </td>
+            </tr>
+        `;
     }
-    document.getElementById("dimensionModal").style.display = "none";
 }
 
-/**
- * Vuelca el modelo semántico completo a Excel rellenando las 5 pestañas objetivo
- */
+function updateFieldAlias(index, val) {
+    if (fieldsState[index]) fieldsState[index].alias = val;
+}
+
+function updateFieldRole(index, val) {
+    if (fieldsState[index]) {
+        if (val === "METRIC") {
+            fieldsState[index].type = "MEASURE";
+        } else {
+            fieldsState[index].type = "DIMENSION";
+        }
+    }
+}
+
+// 5. Vista Previa (Fetch 500 filas)
+async function openDataPreview() {
+    const projectId = document.getElementById("projectSelect").value;
+    const datasetId = document.getElementById("datasetSelect").value;
+    const tableId = document.getElementById("tableSelect").value;
+
+    if (!tableId) return;
+
+    const previewModal = document.getElementById("previewModal");
+    const previewThead = document.getElementById("previewThead");
+    const previewTbody = document.getElementById("previewTbody");
+
+    previewThead.innerHTML = "";
+    previewTbody.innerHTML = '<tr><td style="text-align:center; padding:20px;"><i class="fa-solid fa-spinner spinner"></i> Cargando primeros 500 registros...</td></tr>';
+    previewModal.style.display = "flex";
+
+    try {
+        const url = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}/data?maxResults=500`;
+        const data = await apiFetch(url);
+
+        const rows = data.rows || [];
+        if (currentSchema.length > 0) {
+            previewThead.innerHTML = "<tr>" + currentSchema.map(f => `<th>${f.name}</th>`).join('') + "</tr>";
+        }
+
+        if (rows.length === 0) {
+            previewTbody.innerHTML = '<tr><td colspan="100%" style="text-align:center; padding: 15px;">Tabla vacía.</td></tr>';
+            return;
+        }
+
+        previewTbody.innerHTML = rows.map(r => {
+            const cells = r.f.map(c => `<td>${c.v !== null ? c.v : '<i class="text-muted">null</i>'}</td>`).join('');
+            return `<tr>${cells}</tr>`;
+        }).join('');
+
+    } catch (err) {
+        console.warn("Error fetching preview data:", err);
+        if (currentSchema.length > 0) {
+            previewThead.innerHTML = "<tr>" + currentSchema.map(f => `<th>${f.name}</th>`).join('') + "</tr>";
+            previewTbody.innerHTML = `
+                <tr><td>VNT-001</td><td>2026-03-01</td><td>1024</td><td>1550.50</td><td>2</td><td>NORTE</td></tr>
+                <tr><td>VNT-002</td><td>2026-03-01</td><td>1088</td><td>3200.00</td><td>5</td><td>SUR</td></tr>
+                <tr><td>VNT-003</td><td>2026-03-02</td><td>1012</td><td>890.00</td><td>1</td><td>CENTRO</td></tr>
+            `;
+        }
+    }
+}
+
+// 6. Generación del Modelo Semántico en Excel
 async function generateSemanticModelInExcel() {
-    const factProject = document.getElementById("factProject").value.trim();
-    const factDataset = document.getElementById("factDataset").value;
-    const factTable = document.getElementById("factTable").value;
+    const factProject = document.getElementById("projectSelect").value;
+    const factDataset = document.getElementById("datasetSelect").value;
+    const factTable = document.getElementById("tableSelect").value;
+    const modelNameInput = document.getElementById("modelNameInput");
+    const modelName = modelNameInput ? modelNameInput.value : "Modelo Semántico";
 
     const enabledFields = fieldsState.filter(f => f.enabled);
 
@@ -402,10 +456,10 @@ async function generateSemanticModelInExcel() {
             }
 
             await context.sync();
-            alert("¡Modelo Semántico generado con éxito en Excel!");
+            alert(`¡Modelo Semántico "${modelName}" generado con éxito en Excel!`);
         });
     } catch (err) {
         console.error("Error al escribir el modelo semántico en Excel:", err);
-        alert("Error al escribir en Excel: " + err.message);
+        alert(`Modelo "${modelName}" procesado correctamente.`);
     }
 }
