@@ -157,7 +157,7 @@ const LoginApp = {
             const height = 650;
             const left = (window.screen.width / 2) - (width / 2);
             const top = (window.screen.height / 2) - (height / 2);
-            
+            alert("OPEN");
             window.open(
                 authUrl,
                 "GoogleAuthWindow",
