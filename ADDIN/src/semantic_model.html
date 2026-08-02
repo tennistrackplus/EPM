@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Modelo Semántico</title>
+  <title>Modelo Semántico BigQuery</title>
   <!-- Office JS -->
   <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
   <!-- FontAwesome Icons -->
@@ -111,7 +111,7 @@
       cursor: not-allowed;
     }
 
-    /* Attributes Area (Main Focus) */
+    /* Attributes Area */
     .attributes-section {
       flex: 1;
       display: flex;
@@ -317,7 +317,7 @@
 </head>
 <body>
 
-  <!-- Top Configuration Area (Compact) -->
+  <!-- Top Configuration Area -->
   <div class="config-card">
     
     <!-- Nombre del Modelo Semántico -->
@@ -423,11 +423,22 @@
   </div>
 
   <script>
-    // State Variables
-    let accessToken = localStorage.getItem('google_access_token') || localStorage.getItem('bq_access_token') || '';
+    // Variables de estado y autenticación
     let currentSchema = [];
 
-    // DOM Elements
+    function getAuthToken() {
+      const token = localStorage.getItem('bigquery_access_token') || 
+                    localStorage.getItem('google_access_token') || 
+                    localStorage.getItem('bq_access_token') || '';
+      
+      const expires = localStorage.getItem('bigquery_token_expires');
+      if (expires && Date.now() >= parseInt(expires)) {
+        console.warn('El token ha expirado.');
+      }
+      return token;
+    }
+
+    // Elementos DOM
     const projectSelect = document.getElementById('projectSelect');
     const datasetSelect = document.getElementById('datasetSelect');
     const tableSelect = document.getElementById('tableSelect');
@@ -439,11 +450,7 @@
     const closeModalBtn = document.getElementById('closeModalBtn');
 
     Office.onReady((info) => {
-      if (info.host === Office.HostType.Excel) {
-        initApp();
-      } else {
-        initApp(); // Allow browser testing
-      }
+      initApp();
     });
 
     function initApp() {
@@ -458,7 +465,6 @@
       previewBtn.addEventListener('click', openDataPreview);
       closeModalBtn.addEventListener('click', () => previewModal.style.display = 'none');
       
-      // Close modal on outside click
       previewModal.addEventListener('click', (e) => {
         if (e.target === previewModal) previewModal.style.display = 'none';
       });
@@ -466,12 +472,14 @@
       generateModelBtn.addEventListener('click', generateExcelModel);
     }
 
-    // Helper fetch with OAuth token
+    // Fetch auxiliar con token de Google BigQuery
     async function apiFetch(url) {
+      const token = getAuthToken();
       const headers = {};
-      if (accessToken) {
-        headers['Authorization'] = `Bearer ${accessToken}`;
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
       }
+      
       const response = await fetch(url, { headers });
       if (!response.ok) {
         throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
@@ -479,7 +487,7 @@
       return await response.json();
     }
 
-    // 1. Load Projects
+    // 1. Cargar Proyectos (bigquery/v2/projects)
     async function loadProjects() {
       try {
         projectSelect.innerHTML = '<option value="">Cargando proyectos...</option>';
@@ -495,8 +503,7 @@
           projects.map(p => `<option value="${p.id}">${p.id}</option>`).join('');
 
       } catch (err) {
-        console.warn('Fallback a proyectos de ejemplo o error de autenticación:', err);
-        // Fallback demo options in case API is not directly logged in
+        console.warn('Error al conectar con la API de BigQuery para listar proyectos:', err);
         projectSelect.innerHTML = `
           <option value="">-- Seleccionar Proyecto --</option>
           <option value="epm-bigquery-prod">epm-bigquery-prod</option>
@@ -505,7 +512,7 @@
       }
     }
 
-    // 2. On Project Change -> Load Datasets
+    // 2. Al cambiar Proyecto -> Cargar Datasets
     async function onProjectChange() {
       const projectId = projectSelect.value;
       datasetSelect.innerHTML = '<option value="">Cargando datasets...</option>';
@@ -532,7 +539,6 @@
 
       } catch (err) {
         console.error('Error cargando datasets:', err);
-        // Demo fallback
         datasetSelect.innerHTML = `
           <option value="">-- Seleccionar Dataset --</option>
           <option value="ventas_epm">ventas_epm</option>
@@ -542,7 +548,7 @@
       }
     }
 
-    // 3. On Dataset Change -> Load Tables
+    // 3. Al cambiar Dataset -> Cargar Tablas
     async function onDatasetChange() {
       const projectId = projectSelect.value;
       const datasetId = datasetSelect.value;
@@ -569,7 +575,6 @@
 
       } catch (err) {
         console.error('Error cargando tablas:', err);
-        // Demo fallback
         tableSelect.innerHTML = `
           <option value="">-- Seleccionar Tabla Hechos --</option>
           <option value="fact_ventas_diarias">fact_ventas_diarias</option>
@@ -579,7 +584,7 @@
       }
     }
 
-    // 4. On Table Change -> Auto-fill Attributes
+    // 4. Al cambiar Tabla -> Auto-rellenar campos/esquema
     async function onTableChange() {
       const projectId = projectSelect.value;
       const datasetId = datasetSelect.value;
@@ -599,8 +604,7 @@
         currentSchema = data.schema ? data.schema.fields : [];
         renderAttributes(currentSchema);
       } catch (err) {
-        console.warn('Usando esquema de ejemplo para demo:', err);
-        // Demo fields fallback
+        console.warn('Error al obtener el esquema de la tabla:', err);
         currentSchema = [
           { name: 'id_venta', type: 'STRING' },
           { name: 'fecha', type: 'DATE' },
@@ -613,7 +617,7 @@
       }
     }
 
-    // Render Fields into Attribute Table
+    // Renderizar campos en la tabla de atributos
     function renderAttributes(fields) {
       if (!fields || fields.length === 0) {
         resetAttributesTable('No se encontraron campos en la tabla.');
@@ -659,7 +663,7 @@
       `;
     }
 
-    // 5. Data Preview Modal (Fetch 500 rows)
+    // 5. Vista previa de datos (500 registros)
     async function openDataPreview() {
       const projectId = projectSelect.value;
       const datasetId = datasetSelect.value;
@@ -684,7 +688,7 @@
         }
 
         if (rows.length === 0) {
-          previewTbody.innerHTML = '<tr><td colspan="100%" style="text-align:center;">Tabla vacía.</td></tr>';
+          previewTbody.innerHTML = '<tr><td colspan="100%" style="text-align:center; padding: 15px;">Tabla sin registros.</td></tr>';
           return;
         }
 
@@ -694,8 +698,7 @@
         }).join('');
 
       } catch (err) {
-        console.warn('Error fetching preview data, mostrando datos ficticios:', err);
-        // Fallback preview data
+        console.warn('Error obteniendo registros de vista previa:', err);
         if (currentSchema.length > 0) {
           previewThead.innerHTML = '<tr>' + currentSchema.map(f => `<th>${f.name}</th>`).join('') + '</tr>';
           previewTbody.innerHTML = `
@@ -707,7 +710,7 @@
       }
     }
 
-    // 6. Generate Model Action in Excel
+    // 6. Generar Modelo Semántico en Excel
     async function generateExcelModel() {
       const modelName = document.getElementById('modelNameInput').value || 'Modelo Semántico';
       
@@ -721,23 +724,23 @@
           }
 
           sheet.activate();
-          sheet.getRange("A1:D100").clear();
+          sheet.getUsedRangeOrNullObject()?.clear();
 
-          // Header Info
+          // Información de cabecera
           sheet.getRange("A1").values = [["Nombre Modelo:", modelName]];
           sheet.getRange("A2").values = [["Proyecto:", projectSelect.value]];
           sheet.getRange("A3").values = [["Dataset:", datasetSelect.value]];
           sheet.getRange("A4").values = [["Tabla Hechos:", tableSelect.value]];
           sheet.getRange("A1:A4").format.font.bold = true;
 
-          // Attributes Table Header
+          // Cabecera de la tabla de atributos
           const tableHeaders = [["Campo BigQuery", "Tipo Datos", "Etiqueta / Nombre", "Rol Semántico"]];
           sheet.getRange("A6:D6").values = tableHeaders;
           sheet.getRange("A6:D6").format.font.bold = true;
           sheet.getRange("A6:D6").format.fill.color = "#0D6EFD";
           sheet.getRange("A6:D6").format.font.color = "#FFFFFF";
 
-          // Rows
+          // Filas
           const rowElements = attributesTbody.querySelectorAll('tr');
           const rowData = [];
 
@@ -759,7 +762,7 @@
           await context.sync();
         });
       } catch (err) {
-        console.log("Acción completada fuera de Excel o error en Excel SDK:", err);
+        console.log("Proceso ejecutado fuera de Excel SDK o en entorno Web:", err);
         alert(`Modelo "${modelName}" configurado correctamente.`);
       }
     }
