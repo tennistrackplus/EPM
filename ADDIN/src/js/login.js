@@ -135,7 +135,9 @@ const LoginApp = {
 								               this.showAlert("Prueba3", true);
 
 
-        if (isOfficeEnvironment) {
+//        if (isOfficeEnvironment) {
+ 
+  if ( 1 === 1 ) { 
             this.showAlert("EXCEL", true);
 
             console.log("Entorno detectado: Microsoft Office Add-in (Excel). Usando displayDialogAsync.");
