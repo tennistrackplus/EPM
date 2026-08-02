@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BigQuery EPM - Modelo Semántico</title>
+
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 15px;
+            background-color: #f4f7f9;
+            color: #333;
+        }
+
+        h2, h3, h4 {
+            color: #0f4c81;
+            margin-top: 5px;
+            margin-bottom: 15px;
+        }
+
+        .card {
+            background: #ffffff;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            border: 1px solid #e1e8ed;
+        }
+
+        .form-group {
+            margin-bottom: 12px;
+        }
+
+        label {
+            display: block;
+            font-size: 11px;
+            font-weight: bold;
+            color: #555;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        select, input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #cccccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+            font-size: 13px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            font-size: 12px;
+        }
+
+        th {
+            background-color: #1d5b96;
+            color: white;
+            padding: 8px;
+            text-align: left;
+            font-size: 11px;
+        }
+
+        td {
+            padding: 6px 8px;
+            border-bottom: 1px solid #eef2f5;
+        }
+
+        .btn {
+            background-color: #0f4c81;
+            color: white;
+            border: none;
+            padding: 9px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 12px;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .btn:hover {
+            background-color: #0b3860;
+        }
+
+        .btn-secondary {
+            background-color: #6c757d;
+        }
+
+        .btn-secondary:hover {
+            background-color: #545b62;
+        }
+
+        .btn-sm {
+            padding: 4px 8px;
+            font-size: 11px;
+            width: auto;
+        }
+
+        /* Modales */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 100;
+            overflow-y: auto;
+        }
+
+        .modal-content {
+            background-color: #fff;
+            margin: 20px auto;
+            padding: 20px;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 500px;
+        }
+
+        .checkbox-cell {
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <h2>&lt; BigQuery EPM - Modelo Semántico</h2>
+
+    <!-- TABLA DE HECHOS -->
+    <div class="card">
+        <h3>TABLA DE HECHOS</h3>
+        <div class="form-group">
+            <label>PROJECT</label>
+            <input type="text" id="factProject" value="bigqueryexcelconnector" />
+        </div>
+        <div class="form-group">
+            <label>DATASET</label>
+            <select id="factDataset">
+                <option value="">-- Seleccionar Dataset --</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>TABLE</label>
+            <select id="factTable">
+                <option value="">-- Seleccionar Tabla --</option>
+            </select>
+        </div>
+        <button class="btn btn-secondary" id="btnLoadFields">Cargar Campos</button>
+    </div>
+
+    <!-- LISTA DE CAMPOS -->
+    <div class="card" id="fieldsCard" style="display: none;">
+        <h3>CAMPOS</h3>
+        <table id="fieldsTable">
+            <thead>
+                <tr>
+                    <th>CAMPO</th>
+                    <th>ALIAS / DESCRIPCIÓN</th>
+                    <th>TIPO</th>
+                    <th>ENABLE</th>
+                    <th>ACCIONES</th>
+                </tr>
+            </thead>
+            <tbody id="fieldsTbody">
+            </tbody>
+        </table>
+
+        <button class="btn" id="btnGenerateModel" style="margin-top: 20px;">Generar Modelo Semántico en Excel</button>
+    </div>
+
+    <!-- MODAL CONFIGURACIÓN MEDIDA -->
+    <div id="measureModal" class="modal">
+        <div class="modal-content">
+            <h3>Medida: <span id="modalMeasureFieldName"></span></h3>
+            <div class="form-group">
+                <label>ALIAS</label>
+                <input type="text" id="modalMeasureAlias" />
+            </div>
+            <div class="form-group">
+                <label>AGREGACIÓN</label>
+                <select id="modalMeasureAgg">
+                    <option value="SUM">SUM</option>
+                    <option value="COUNT">COUNT</option>
+                    <option value="AVG">AVG</option>
+                    <option value="MIN">MIN</option>
+                    <option value="MAX">MAX</option>
+                    <option value="COUNT_DISTINCT">COUNT_DISTINCT</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>FORMATO</label>
+                <select id="modalMeasureFormat">
+                    <option value="Auto">Auto</option>
+                    <option value="Currency">Moneda (€)</option>
+                    <option value="Integer">Entero</option>
+                    <option value="Decimal">Decimal</option>
+                    <option value="Percent">Porcentaje (%)</option>
+                </select>
+            </div>
+            <button class="btn" id="btnSaveMeasureModal">Guardar Medida</button>
+            <button class="btn btn-secondary" id="btnCloseMeasureModal">Cancelar</button>
+        </div>
+    </div>
+
+    <!-- MODAL CONFIGURACIÓN DIMENSIÓN -->
+    <div id="dimensionModal" class="modal">
+        <div class="modal-content">
+            <h3>Dimensión: <span id="modalDimFieldName"></span></h3>
+            <div class="form-group">
+                <label>ALIAS</label>
+                <input type="text" id="modalDimAlias" />
+            </div>
+
+            <h4>TABLA DE ATRIBUTOS (RELACIÓN)</h4>
+            <div class="form-group">
+                <label>PROJECT</label>
+                <input type="text" id="dimRelProject" value="bigqueryexcelconnector" />
+            </div>
+            <div class="form-group">
+                <label>DATASET</label>
+                <select id="dimRelDataset">
+                    <option value="">-- Seleccionar Dataset --</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>TABLE</label>
+                <select id="dimRelTable">
+                    <option value="">-- Seleccionar Tabla --</option>
+                </select>
+            </div>
+            <button class="btn btn-secondary" id="btnLoadDimAttributes">Cargar Atributos</button>
+
+            <div id="attributesContainer" style="display:none; margin-top: 15px;">
+                <h4>ATRIBUTOS Y JERARQUÍA</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>CAMPO</th>
+                            <th>ALIAS</th>
+                            <th>KEY</th>
+                            <th>ENABLE</th>
+                            <th>HIER1</th>
+                            <th>HIER2</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dimAttributesTbody">
+                    </tbody>
+                </table>
+            </div>
+
+            <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar Dimensión</button>
+            <button class="btn btn-secondary" id="btnCloseDimModal">Cancelar</button>
+        </div>
+    </div>
+
+    <script src="js/semantic_model.js"></script>
+</body>
+</html>
