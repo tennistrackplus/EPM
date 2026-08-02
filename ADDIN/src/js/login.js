@@ -1,16 +1,6 @@
 /**
  * Lógica del Task Pane de Login, Verificación de Sesión y Desconexión
  */
-if (typeof Office !== "undefined") {
-    Office.onReady(() => {
-        LoginApp.init();
-    });
-} else {
-    document.addEventListener("DOMContentLoaded", () => {
-        LoginApp.init();
-    });
-}
-
 const LoginApp = {
     selectedProvider: null,
     authDialog: null,
@@ -26,6 +16,22 @@ const LoginApp = {
         this.bindEvents();
         this.checkExistingTokens();
         this.setupBrowserMessageListener();
+    },
+
+    /**
+     * Muestra notificaciones visuales en el panel sin depender de window.alert (bloqueado por Office.js)
+     */
+    showAlert(msg, isError = false) {
+        console.log("[EPM Add-in]:", msg);
+        const toast = document.getElementById("toastMessage");
+        if (toast) {
+            toast.innerText = msg;
+            toast.className = `toast-message visible ${isError ? "error" : "info"}`;
+            
+            setTimeout(() => {
+                toast.classList.remove("visible");
+            }, 6000);
+        }
     },
 
     bindEvents() {
@@ -54,7 +60,7 @@ const LoginApp = {
                     if (this.selectedProvider === "bigquery") {
                         this.connectBigQuery();
                     } else {
-                        alert(`El conector para ${this.getProviderDisplayName(this.selectedProvider)} estará disponible próximamente.`);
+                        this.showAlert(`El conector para ${this.getProviderDisplayName(this.selectedProvider)} estará disponible próximamente.`);
                     }
                 }
             });
@@ -99,6 +105,13 @@ const LoginApp = {
      * Inicia el flujo OAuth 2.0 en ventana emergente para BigQuery
      */
     connectBigQuery() {
+        // Validación de protocolo: alertar si se abre directamente desde file://
+        if (window.location.protocol === "file:") {
+            console.error("No se puede ejecutar desde file://. Debes usar un servidor web local (ej. Live Server o http://localhost).");
+            this.showAlert("Error: No se puede ejecutar desde un archivo local (file://). Usa Live Server o un servidor HTTP.", true);
+            return;
+        }
+
         // Construcción de la URL del callback en relación al origen actual
         const redirectUri = new URL("auth-callback.html", window.location.href).href;
         
@@ -116,7 +129,7 @@ const LoginApp = {
                                    typeof Office.context.ui.displayDialogAsync === "function";
 
         if (isOfficeEnvironment) {
-            alert("Entorno detectado: Microsoft Office Add-in (Excel). Usando displayDialogAsync.");
+            console.log("Entorno detectado: Microsoft Office Add-in (Excel). Usando displayDialogAsync.");
 
             const dialogOptions = {
                 height: 60,
@@ -127,7 +140,7 @@ const LoginApp = {
             Office.context.ui.displayDialogAsync(authUrl, dialogOptions, (asyncResult) => {
                 if (asyncResult.status === Office.AsyncResultStatus.Failed) {
                     console.error("Error al abrir diálogo de autenticación:", asyncResult.error.message);
-                    alert("No se pudo abrir la ventana de login. Código: " + asyncResult.error.code + " - " + asyncResult.error.message);
+                    this.showAlert("No se pudo abrir la ventana de login. Código: " + asyncResult.error.code + " - " + asyncResult.error.message, true);
                     return;
                 }
 
@@ -138,7 +151,7 @@ const LoginApp = {
                 });
             });
         } else {
-            alert("Entorno detectado: Navegador web estándar. Usando window.open.");
+            console.log("Entorno detectado: Navegador web estándar. Usando window.open.");
 
             const width = 500;
             const height = 650;
@@ -166,10 +179,10 @@ const LoginApp = {
 
                 this.setProviderState("bigquery", true);
                 this.updateActionButton();
-                alert("¡Conexión con Google BigQuery establecida con éxito!");
+                this.showAlert("¡Conexión con Google BigQuery establecida con éxito!");
             } else {
                 console.error("Error en autenticación:", response.error);
-                alert("Error de autenticación: " + (response.error || "Desconocido"));
+                this.showAlert("Error de autenticación: " + (response.error || "Desconocido"), true);
             }
         } catch (err) {
             console.error("Error leyendo respuesta de autenticación:", err);
@@ -192,7 +205,7 @@ const LoginApp = {
 
         this.setProviderState(providerKey, false);
         this.updateActionButton();
-        alert(`Sesión cerrada para ${this.getProviderDisplayName(providerKey)}`);
+        this.showAlert(`Sesión cerrada para ${this.getProviderDisplayName(providerKey)}`);
     },
 
     /**
@@ -245,3 +258,14 @@ const LoginApp = {
         return names[providerKey] || providerKey;
     }
 };
+
+// Inicialización garantizada tras la definición del objeto LoginApp
+if (typeof Office !== "undefined") {
+    Office.onReady(() => {
+        LoginApp.init();
+    });
+} else {
+    document.addEventListener("DOMContentLoaded", () => {
+        LoginApp.init();
+    });
+}
