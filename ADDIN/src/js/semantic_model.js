@@ -8,25 +8,14 @@ let currentConfigFieldIndex = null;
 Office.onReady((info) => {
     if (info.host === Office.HostType.Excel) {
         initEvents();
-        loadProjects("factProject");
-        loadDatasets("factProject", "factDataset");
     }
 });
 
 function initEvents() {
-    document.getElementById("factProject").addEventListener("change", () => {
-        loadDatasets("factProject", "factDataset");
-    });
-
-    document.getElementById("factDataset").addEventListener("change", () => {
-        loadTables("factProject", "factDataset", "factTable");
-    });
+    document.getElementById("btnOpenTreeModal").addEventListener("click", openTreeModal);
+    document.getElementById("btnCloseTreeModal").addEventListener("click", closeTreeModal);
 
     document.getElementById("btnLoadFields").addEventListener("click", fetchFactFields);
-
-    document.getElementById("dimRelProject").addEventListener("change", () => {
-        loadDatasets("dimRelProject", "dimRelDataset");
-    });
 
     document.getElementById("dimRelDataset").addEventListener("change", () => {
         loadTables("dimRelProject", "dimRelDataset", "dimRelTable");
@@ -57,33 +46,179 @@ function getAuthToken() {
     return token;
 }
 
-async function loadProjects(projectSelectId) {
+async function openTreeModal() {
+    document.getElementById("treeModal").style.display = "block";
+    const container = document.getElementById("treeContainer");
+    container.innerHTML = "Cargando proyectos...";
+    await loadProjectsTree(container);
+}
+
+function closeTreeModal() {
+    document.getElementById("treeModal").style.display = "none";
+}
+
+async function loadProjectsTree(container) {
     const token = getAuthToken();
     if (!token) return;
-
-    const projectSelect = document.getElementById(projectSelectId);
-    if (!projectSelect) return;
-
-    projectSelect.innerHTML = '<option value="">Cargando...</option>';
 
     try {
         const response = await fetch("https://bigquery.googleapis.com/bigquery/v2/projects", {
             headers: { "Authorization": `Bearer ${token}` }
         });
         const data = await response.json();
+        container.innerHTML = "";
 
-        projectSelect.innerHTML = '<option value="">-- Seleccionar Proyecto --</option>';
-        if (data.projects) {
+        if (data.projects && data.projects.length > 0) {
+            const ul = document.createElement("ul");
+            ul.className = "tree-list";
             data.projects.forEach(p => {
-                const opt = document.createElement("option");
-                opt.value = p.id || p.projectReference.projectId;
-                opt.textContent = p.id || p.projectReference.projectId;
-                projectSelect.appendChild(opt);
+                const projectId = p.id || p.projectReference.projectId;
+                const li = document.createElement("li");
+                li.className = "tree-item";
+                
+                const header = document.createElement("div");
+                header.className = "tree-header";
+                header.innerHTML = `<span class="tree-toggle">▶</span> 📁 <strong>${projectId}</strong>`;
+                
+                const childrenDiv = document.createElement("div");
+                childrenDiv.className = "tree-children";
+                
+                let loaded = false;
+                header.addEventListener("click", async () => {
+                    const toggleSpan = header.querySelector(".tree-toggle");
+                    if (childrenDiv.classList.contains("open")) {
+                        childrenDiv.classList.remove("open");
+                        toggleSpan.textContent = "▶";
+                    } else {
+                        childrenDiv.classList.add("open");
+                        toggleSpan.textContent = "▼";
+                        if (!loaded) {
+                            childrenDiv.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>Cargando datasets...</div>";
+                            await loadDatasetsTree(projectId, childrenDiv);
+                            loaded = true;
+                        }
+                    }
+                });
+
+                li.appendChild(header);
+                li.appendChild(childrenDiv);
+                ul.appendChild(li);
             });
+            container.appendChild(ul);
+        } else {
+            container.innerHTML = "No se encontraron proyectos.";
         }
     } catch (err) {
-        console.error("Error al cargar proyectos:", err);
+        console.error("Error al cargar árbol de proyectos:", err);
+        container.innerHTML = "Error al cargar proyectos.";
     }
+}
+
+async function loadDatasetsTree(projectId, container) {
+    const token = getAuthToken();
+    if (!token) return;
+
+    try {
+        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets`, {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        const data = await response.json();
+        container.innerHTML = "";
+
+        if (data.datasets && data.datasets.length > 0) {
+            const ul = document.createElement("ul");
+            ul.className = "tree-list";
+            data.datasets.forEach(ds => {
+                const datasetId = ds.datasetReference.datasetId;
+                const li = document.createElement("li");
+                li.className = "tree-item";
+                
+                const header = document.createElement("div");
+                header.className = "tree-header";
+                header.innerHTML = `<span class="tree-toggle">▶</span> 📊 ${datasetId}`;
+                
+                const childrenDiv = document.createElement("div");
+                childrenDiv.className = "tree-children";
+                
+                let loaded = false;
+                header.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    const toggleSpan = header.querySelector(".tree-toggle");
+                    if (childrenDiv.classList.contains("open")) {
+                        childrenDiv.classList.remove("open");
+                        toggleSpan.textContent = "▶";
+                    } else {
+                        childrenDiv.classList.add("open");
+                        toggleSpan.textContent = "▼";
+                        if (!loaded) {
+                            childrenDiv.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>Cargando tablas...</div>";
+                            await loadTablesTree(projectId, datasetId, childrenDiv);
+                            loaded = true;
+                        }
+                    }
+                });
+
+                li.appendChild(header);
+                li.appendChild(childrenDiv);
+                ul.appendChild(li);
+            });
+            container.appendChild(ul);
+        } else {
+            container.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>No hay datasets en este proyecto.</div>";
+        }
+    } catch (err) {
+        console.error("Error al cargar datasets:", err);
+        container.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>Error al cargar datasets.</div>";
+    }
+}
+
+async function loadTablesTree(projectId, datasetId, container) {
+    const token = getAuthToken();
+    if (!token) return;
+
+    try {
+        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables`, {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+        const data = await response.json();
+        container.innerHTML = "";
+
+        if (data.tables && data.tables.length > 0) {
+            const ul = document.createElement("ul");
+            ul.className = "tree-list";
+            data.tables.forEach(tbl => {
+                const tableId = tbl.tableReference.tableId;
+                const li = document.createElement("li");
+                li.className = "tree-item";
+                
+                const itemDiv = document.createElement("div");
+                itemDiv.className = "tree-header table-item";
+                itemDiv.innerHTML = `📋 ${tableId}`;
+                
+                itemDiv.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    selectFactTable(projectId, datasetId, tableId);
+                });
+
+                li.appendChild(itemDiv);
+                ul.appendChild(li);
+            });
+            container.appendChild(ul);
+        } else {
+            container.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>No hay tablas en este dataset.</div>";
+        }
+    } catch (err) {
+        console.error("Error al cargar tablas:", err);
+        container.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>Error al cargar tablas.</div>";
+    }
+}
+
+function selectFactTable(projectId, datasetId, tableId) {
+    document.getElementById("factProject").value = projectId;
+    document.getElementById("factDataset").value = datasetId;
+    document.getElementById("factTable").value = tableId;
+    document.getElementById("factFullConcat").value = `${projectId}.${datasetId}.${tableId}`;
+    closeTreeModal();
 }
 
 async function loadDatasets(projectIdInputId, datasetSelectId) {
@@ -157,7 +292,7 @@ async function fetchFactFields() {
     const tableId = document.getElementById("factTable").value;
 
     if (!projectId || !datasetId || !tableId) {
-        alert("Por favor selecciona Proyecto, Dataset y Tabla de Hechos.");
+        alert("Por favor selecciona una Tabla de Hechos utilizando el botón 'Seleccionar Tabla'.");
         return;
     }
 
@@ -226,7 +361,7 @@ function updateFieldAlias(index, val) { fieldsState[index].alias = val; }
 function updateFieldType(index, val) { fieldsState[index].type = val; }
 function updateFieldEnabled(index, val) { fieldsState[index].enabled = val; }
 
-async function openConfigModal(index) {
+function openConfigModal(index) {
     currentConfigFieldIndex = index;
     const field = fieldsState[index];
 
@@ -244,8 +379,6 @@ async function openConfigModal(index) {
     } else {
         document.getElementById("modalDimFieldName").textContent = field.name;
         document.getElementById("modalDimAlias").value = field.alias;
-        
-        await loadProjects("dimRelProject");
         document.getElementById("dimRelProject").value = field.relProject || document.getElementById("factProject").value;
         
         loadDatasets("dimRelProject", "dimRelDataset");
