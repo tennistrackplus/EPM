@@ -129,6 +129,69 @@
         .checkbox-cell {
             text-align: center;
         }
+
+        /* Estilos Árbol Jerárquico */
+        .tree-container {
+            max-height: 350px;
+            overflow-y: auto;
+            border: 1px solid #cccccc;
+            border-radius: 4px;
+            padding: 10px;
+            background: #ffffff;
+        }
+
+        .tree-list {
+            list-style: none;
+            padding-left: 15px;
+            margin: 0;
+        }
+
+        .tree-container > .tree-list {
+            padding-left: 0;
+        }
+
+        .tree-item {
+            margin-top: 4px;
+        }
+
+        .tree-header {
+            cursor: pointer;
+            user-select: none;
+            padding: 3px 6px;
+            border-radius: 3px;
+            font-size: 12px;
+            display: inline-block;
+            width: 95%;
+        }
+
+        .tree-header:hover {
+            background-color: #eef2f5;
+        }
+
+        .tree-toggle {
+            display: inline-block;
+            width: 14px;
+            font-size: 10px;
+            color: #555;
+        }
+
+        .tree-children {
+            display: none;
+        }
+
+        .tree-children.open {
+            display: block;
+        }
+
+        .table-item {
+            color: #0f4c81;
+            font-weight: 600;
+        }
+
+        .table-item:hover {
+            background-color: #0f4c81;
+            color: #ffffff;
+        }
     </style>
 </head>
 <body>
@@ -139,23 +202,13 @@
     <div class="card">
         <h3>TABLA DE HECHOS</h3>
         <div class="form-group">
-            <label>PROJECT</label>
-            <select id="factProject">
-                <option value="">-- Seleccionar Proyecto --</option>
-            </select>
+            <label>TABLA DE HECHOS SELECCIONADA (PROYECTO . DATASET . TABLA)</label>
+            <input type="text" id="factFullConcat" readonly placeholder="Ninguna tabla seleccionada..." />
+            <input type="hidden" id="factProject" />
+            <input type="hidden" id="factDataset" />
+            <input type="hidden" id="factTable" />
         </div>
-        <div class="form-group">
-            <label>DATASET</label>
-            <select id="factDataset">
-                <option value="">-- Seleccionar Dataset --</option>
-            </select>
-        </div>
-        <div class="form-group">
-            <label>TABLE</label>
-            <select id="factTable">
-                <option value="">-- Seleccionar Tabla --</option>
-            </select>
-        </div>
+        <button class="btn btn-secondary" id="btnOpenTreeModal">Seleccionar Tabla</button>
         <button class="btn btn-secondary" id="btnLoadFields">Cargar Campos</button>
     </div>
 
@@ -177,6 +230,15 @@
         </table>
 
         <button class="btn" id="btnGenerateModel" style="margin-top: 20px;">Generar Modelo Semántico en Excel</button>
+    </div>
+
+    <!-- MODAL SELECCIÓN JERÁRQUICA DE TABLA -->
+    <div id="treeModal" class="modal">
+        <div class="modal-content">
+            <h3>Seleccionar Tabla de BigQuery</h3>
+            <div id="treeContainer" class="tree-container"></div>
+            <button class="btn btn-secondary" id="btnCloseTreeModal" style="margin-top: 15px;">Cancelar</button>
+        </div>
     </div>
 
     <!-- MODAL CONFIGURACIÓN MEDIDA -->
@@ -225,9 +287,7 @@
             <h4>TABLA DE ATRIBUTOS (RELACIÓN)</h4>
             <div class="form-group">
                 <label>PROJECT</label>
-                <select id="dimRelProject">
-                    <option value="">-- Seleccionar Proyecto --</option>
-                </select>
+                <input type="text" id="dimRelProject" value="bigqueryexcelconnector" />
             </div>
             <div class="form-group">
                 <label>DATASET</label>
