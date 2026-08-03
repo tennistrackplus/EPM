@@ -53,6 +53,36 @@
             font-size: 13px;
         }
 
+        /* Estilo SAP Matchcode / Ayuda de Búsqueda */
+        .sap-search-input-group {
+            display: flex;
+            align-items: center;
+        }
+
+        .sap-search-input-group input[type="text"] {
+            border-top-right-radius: 0;
+            border-bottom-right-radius: 0;
+            border-right: none;
+        }
+
+        .sap-search-btn {
+            background-color: #0f4c81;
+            color: #ffffff;
+            border: 1px solid #0f4c81;
+            padding: 7px 12px;
+            border-top-right-radius: 4px;
+            border-bottom-right-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .sap-search-btn:hover {
+            background-color: #0b3860;
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
@@ -124,6 +154,31 @@
             border-radius: 8px;
             width: 90%;
             max-width: 500px;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #e1e8ed;
+            padding-bottom: 8px;
+            margin-bottom: 12px;
+        }
+
+        .modal-header h3 {
+            margin: 0;
+        }
+
+        .modal-close {
+            color: #aaa;
+            font-size: 22px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }
+
+        .modal-close:hover {
+            color: #000;
         }
 
         .checkbox-cell {
@@ -203,13 +258,14 @@
         <h3>TABLA DE HECHOS</h3>
         <div class="form-group">
             <label>TABLA DE HECHOS SELECCIONADA (PROYECTO . DATASET . TABLA)</label>
-            <input type="text" id="factFullConcat" readonly placeholder="Ninguna tabla seleccionada..." />
+            <div class="sap-search-input-group">
+                <input type="text" id="factFullConcat" readonly placeholder="Seleccionar tabla (Ayuda de búsqueda)..." style="cursor: pointer;" />
+                <button type="button" class="sap-search-btn" id="sapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
+            </div>
             <input type="hidden" id="factProject" />
             <input type="hidden" id="factDataset" />
             <input type="hidden" id="factTable" />
         </div>
-        <button class="btn btn-secondary" id="btnOpenTreeModal">Seleccionar Tabla</button>
-        <button class="btn btn-secondary" id="btnLoadFields">Cargar Campos</button>
     </div>
 
     <!-- LISTA DE CAMPOS -->
@@ -235,9 +291,11 @@
     <!-- MODAL SELECCIÓN JERÁRQUICA DE TABLA -->
     <div id="treeModal" class="modal">
         <div class="modal-content">
-            <h3>Seleccionar Tabla de BigQuery</h3>
+            <div class="modal-header">
+                <h3>Seleccionar Tabla de BigQuery</h3>
+                <span class="modal-close" id="btnCloseTreeModal">&times;</span>
+            </div>
             <div id="treeContainer" class="tree-container"></div>
-            <button class="btn btn-secondary" id="btnCloseTreeModal" style="margin-top: 15px;">Cancelar</button>
         </div>
     </div>
 
