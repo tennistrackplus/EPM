@@ -4,59 +4,66 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>BigQuery EPM - Modelo Semántico</title>
+    <title>EPM Data Studio · Modelo semántico</title>
 
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link rel="stylesheet" href="css/theme.css">
     <style>
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            margin: 0;
-            padding: 15px;
-            background-color: #f4f7f9;
-            color: #333;
+            padding: 0;
         }
 
-        h2, h3, h4 {
-            color: #0f4c81;
-            margin-top: 5px;
-            margin-bottom: 15px;
+        .page-content {
+            padding: 14px;
+        }
+
+        h3, h4 {
+            color: var(--text-primary);
+        }
+
+        h3 {
+            font-size: var(--fs-md);
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            margin-bottom: 12px;
+        }
+
+        h4 {
+            font-size: var(--fs-sm);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: var(--text-muted);
+            margin: 16px 0 8px 0;
         }
 
         .card {
-            background: #ffffff;
-            border-radius: 8px;
-            padding: 15px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.05);
-            border: 1px solid #e1e8ed;
+            padding: 16px;
+            margin-bottom: 14px;
         }
 
         .form-group {
             margin-bottom: 12px;
         }
 
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+
         label {
             display: block;
-            font-size: 11px;
-            font-weight: bold;
-            color: #555;
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-muted);
             text-transform: uppercase;
-            margin-bottom: 4px;
+            letter-spacing: 0.4px;
+            margin-bottom: 5px;
         }
 
-        select, input[type="text"] {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #cccccc;
-            border-radius: 4px;
-            box-sizing: border-box;
-            font-size: 13px;
-        }
-
-        /* Estilo SAP Matchcode / Ayuda de Búsqueda */
+        /* Estilo de ayuda de búsqueda (SAP Matchcode) */
         .sap-search-input-group {
             display: flex;
-            align-items: center;
+            align-items: stretch;
         }
 
         .sap-search-input-group input[type="text"] {
@@ -66,72 +73,48 @@
         }
 
         .sap-search-btn {
-            background-color: #0f4c81;
-            color: #ffffff;
-            border: 1px solid #0f4c81;
-            padding: 7px 12px;
-            border-top-right-radius: 4px;
-            border-bottom-right-radius: 4px;
+            background-color: var(--brand-primary);
+            color: var(--text-inverse);
+            border: 1px solid var(--brand-primary);
+            padding: 0 13px;
+            border-top-right-radius: var(--radius-sm);
+            border-bottom-right-radius: var(--radius-sm);
             cursor: pointer;
-            font-size: 13px;
+            font-size: var(--fs-base);
             display: flex;
             align-items: center;
             justify-content: center;
+            transition: background-color var(--transition-fast);
         }
 
         .sap-search-btn:hover {
-            background-color: #0b3860;
+            background-color: var(--brand-primary-hover);
         }
 
         table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-            font-size: 12px;
+            margin-top: 6px;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            overflow: hidden;
         }
 
-        th {
-            background-color: #1d5b96;
-            color: white;
-            padding: 8px;
-            text-align: left;
-            font-size: 11px;
-        }
-
-        td {
-            padding: 6px 8px;
-            border-bottom: 1px solid #eef2f5;
+        th:first-child, td:first-child {
+            padding-left: 12px;
         }
 
         .btn {
-            background-color: #0f4c81;
-            color: white;
-            border: none;
-            padding: 9px 15px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 12px;
             width: 100%;
-            margin-top: 10px;
-        }
-
-        .btn:hover {
-            background-color: #0b3860;
+            margin-top: 12px;
         }
 
         .btn-secondary {
-            background-color: #6c757d;
-        }
-
-        .btn-secondary:hover {
-            background-color: #545b62;
+            background-color: var(--surface-card);
+            color: var(--text-primary);
         }
 
         .btn-sm {
-            padding: 4px 8px;
-            font-size: 11px;
             width: auto;
+            margin-top: 0;
         }
 
         /* Modales */
@@ -142,7 +125,8 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background-color: rgba(0, 0, 0, 0.5);
+            background-color: rgba(15, 27, 51, 0.45);
+            backdrop-filter: blur(1px);
             z-index: 100;
             overflow-y: auto;
         }
@@ -152,21 +136,23 @@
         }
 
         .modal-content {
-            background-color: #fff;
-            margin: 20px auto;
-            padding: 20px;
-            border-radius: 8px;
+            background-color: var(--surface-card);
+            margin: 24px auto;
+            padding: 18px;
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            border: 1px solid var(--border-subtle);
             width: 90%;
-            max-width: 500px;
+            max-width: 480px;
         }
 
         .modal-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid #e1e8ed;
-            padding-bottom: 8px;
-            margin-bottom: 12px;
+            border-bottom: 1px solid var(--border-subtle);
+            padding-bottom: 10px;
+            margin-bottom: 14px;
         }
 
         .modal-header h3 {
@@ -174,34 +160,38 @@
         }
 
         .modal-close {
-            color: #aaa;
-            font-size: 22px;
-            font-weight: bold;
+            color: var(--text-muted);
+            font-size: 20px;
+            font-weight: 400;
             cursor: pointer;
             line-height: 1;
+            width: 26px;
+            height: 26px;
+            border-radius: var(--radius-sm);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color var(--transition-fast), color var(--transition-fast);
         }
 
         .modal-close:hover {
-            color: #000;
+            background-color: var(--gray-100);
+            color: var(--text-primary);
         }
 
-        .checkbox-cell {
-            text-align: center;
-        }
-
-        /* Estilos Árbol Jerárquico */
+        /* Árbol jerárquico de selección de tabla */
         .tree-container {
             max-height: 350px;
             overflow-y: auto;
-            border: 1px solid #cccccc;
-            border-radius: 4px;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
             padding: 10px;
-            background: #ffffff;
+            background: var(--surface-sunken);
         }
 
         .tree-list {
             list-style: none;
-            padding-left: 15px;
+            padding-left: 16px;
             margin: 0;
         }
 
@@ -210,28 +200,28 @@
         }
 
         .tree-item {
-            margin-top: 4px;
+            margin-top: 3px;
         }
 
         .tree-header {
             cursor: pointer;
             user-select: none;
-            padding: 3px 6px;
-            border-radius: 3px;
-            font-size: 12px;
-            display: inline-block;
-            width: 95%;
+            padding: 5px 8px;
+            border-radius: var(--radius-sm);
+            font-size: var(--fs-base);
+            display: block;
+            transition: background-color var(--transition-fast);
         }
 
         .tree-header:hover {
-            background-color: #eef2f5;
+            background-color: var(--gray-100);
         }
 
         .tree-toggle {
             display: inline-block;
             width: 14px;
-            font-size: 10px;
-            color: #555;
+            font-size: 9px;
+            color: var(--text-muted);
         }
 
         .tree-children {
@@ -243,58 +233,78 @@
         }
 
         .table-item {
-            color: #0f4c81;
-            font-weight: 600;
+            color: var(--brand-primary);
+            font-weight: 700;
         }
 
         .table-item:hover {
-            background-color: #0f4c81;
-            color: #ffffff;
+            background-color: var(--brand-primary);
+            color: var(--text-inverse);
         }
     </style>
 </head>
 <body>
 
-    <!-- TABLA DE HECHOS -->
-    <div class="card">
-        <h3>TABLA DE HECHOS</h3>
-        <div class="form-group">
-            <label>TABLA DE HECHOS SELECCIONADA (PROYECTO . DATASET . TABLA)</label>
-            <div class="sap-search-input-group">
-                <input type="text" id="factFullConcat" readonly placeholder="Seleccionar tabla (Ayuda de búsqueda)..." style="cursor: pointer;" />
-                <button type="button" class="sap-search-btn" id="sapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
+    <!-- Barra de marca (idéntica en todas las pantallas del complemento) -->
+    <header class="app-topbar">
+        <div class="app-topbar-brand">
+            <span class="app-logo" aria-hidden="true">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="3" y="12" width="4" height="9" rx="1" fill="currentColor"/>
+                    <rect x="10" y="7" width="4" height="14" rx="1" fill="currentColor"/>
+                    <rect x="17" y="3" width="4" height="18" rx="1" fill="currentColor"/>
+                </svg>
+            </span>
+            <div class="app-topbar-titles">
+                <span class="app-topbar-title">EPM Data Studio</span>
+                <span class="app-topbar-subtitle">Modelo semántico · BigQuery</span>
             </div>
-            <input type="hidden" id="factProject" />
-            <input type="hidden" id="factDataset" />
-            <input type="hidden" id="factTable" />
         </div>
-    </div>
+    </header>
 
-    <!-- LISTA DE CAMPOS -->
-    <div class="card" id="fieldsCard" style="display: none;">
-        <h3>CAMPOS</h3>
-        <table id="fieldsTable">
-            <thead>
-                <tr>
-                    <th>CAMPO</th>
-                    <th>ALIAS / DESCRIPCIÓN</th>
-                    <th>TIPO</th>
-                    <th>ENABLE</th>
-                    <th>ACCIONES</th>
-                </tr>
-            </thead>
-            <tbody id="fieldsTbody">
-            </tbody>
-        </table>
+    <div class="page-content">
 
-        <button class="btn" id="btnGenerateModel" style="margin-top: 20px;">Generar Modelo Semántico en Excel</button>
+        <!-- TABLA DE HECHOS -->
+        <div class="card">
+            <h3>Tabla de hechos</h3>
+            <div class="form-group">
+                <label>Tabla de hechos seleccionada (proyecto . dataset . tabla)</label>
+                <div class="sap-search-input-group">
+                    <input type="text" id="factFullConcat" readonly placeholder="Seleccionar tabla (Ayuda de búsqueda)..." style="cursor: pointer;" />
+                    <button type="button" class="sap-search-btn" id="sapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
+                </div>
+                <input type="hidden" id="factProject" />
+                <input type="hidden" id="factDataset" />
+                <input type="hidden" id="factTable" />
+            </div>
+        </div>
+
+        <!-- LISTA DE CAMPOS -->
+        <div class="card" id="fieldsCard" style="display: none;">
+            <h3>Campos</h3>
+            <table id="fieldsTable">
+                <thead>
+                    <tr>
+                        <th>Campo</th>
+                        <th>Alias / Descripción</th>
+                        <th>Tipo</th>
+                        <th>Enable</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody id="fieldsTbody">
+                </tbody>
+            </table>
+
+            <button class="btn" id="btnGenerateModel">Generar modelo semántico en Excel</button>
+        </div>
     </div>
 
     <!-- MODAL SELECCIÓN JERÁRQUICA DE TABLA -->
     <div id="treeModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>Seleccionar Tabla de BigQuery</h3>
+                <h3>Seleccionar tabla de BigQuery</h3>
                 <span class="modal-close" id="btnCloseTreeModal">&times;</span>
             </div>
             <div id="treeContainer" class="tree-container"></div>
@@ -309,11 +319,11 @@
                 <span class="modal-close" id="btnCloseMeasureModal">&times;</span>
             </div>
             <div class="form-group">
-                <label>ALIAS</label>
+                <label>Alias</label>
                 <input type="text" id="modalMeasureAlias" />
             </div>
             <div class="form-group">
-                <label>AGREGACIÓN</label>
+                <label>Agregación</label>
                 <select id="modalMeasureAgg">
                     <option value="SUM">SUM</option>
                     <option value="COUNT">COUNT</option>
@@ -324,7 +334,7 @@
                 </select>
             </div>
             <div class="form-group">
-                <label>FORMATO</label>
+                <label>Formato</label>
                 <select id="modalMeasureFormat">
                     <option value="Auto">Auto</option>
                     <option value="Currency">Moneda (€)</option>
@@ -333,7 +343,7 @@
                     <option value="Percent">Porcentaje (%)</option>
                 </select>
             </div>
-            <button class="btn" id="btnSaveMeasureModal">Guardar Medida</button>
+            <button class="btn" id="btnSaveMeasureModal">Guardar medida</button>
         </div>
     </div>
 
@@ -345,13 +355,13 @@
                 <span class="modal-close" id="btnCloseDimModal">&times;</span>
             </div>
             <div class="form-group">
-                <label>ALIAS</label>
+                <label>Alias</label>
                 <input type="text" id="modalDimAlias" />
             </div>
 
-            <h4>TABLA DE ATRIBUTOS (RELACIÓN)</h4>
+            <h4>Tabla de atributos (relación)</h4>
             <div class="form-group">
-                <label>TABLA DE DIMENSIÓN SELECCIONADA</label>
+                <label>Tabla de dimensión seleccionada</label>
                 <div class="sap-search-input-group">
                     <input type="text" id="dimRelFullConcat" readonly placeholder="Seleccionar tabla de dimensión..." style="cursor: pointer;" />
                     <button type="button" class="sap-search-btn" id="dimSapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
@@ -362,16 +372,16 @@
             </div>
 
             <div id="attributesContainer" style="display:none; margin-top: 15px;">
-                <h4>ATRIBUTOS Y JERARQUÍA</h4>
+                <h4>Atributos y jerarquía</h4>
                 <table>
                     <thead>
                         <tr>
-                            <th>CAMPO</th>
-                            <th>ALIAS</th>
-                            <th>KEY</th>
-                            <th>ENABLE</th>
-                            <th>HIER1</th>
-                            <th>HIER2</th>
+                            <th>Campo</th>
+                            <th>Alias</th>
+                            <th>Key</th>
+                            <th>Enable</th>
+                            <th>Hier1</th>
+                            <th>Hier2</th>
                         </tr>
                     </thead>
                     <tbody id="dimAttributesTbody">
@@ -379,7 +389,7 @@
                 </table>
             </div>
 
-            <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar Dimensión</button>
+            <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar dimensión</button>
         </div>
     </div>
 

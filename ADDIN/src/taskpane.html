@@ -3,31 +3,50 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TaskPane Add-in</title>
-    
+    <title>EPM Data Studio · Diseño del informe</title>
+
     <!-- Librería JavaScript de Microsoft Office (Requerida en el HEAD) -->
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
 
+    <link rel="stylesheet" href="css/theme.css">
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="css/modal.css">
 </head>
 <body>
     <div class="taskpane-container">
-        <!-- Encabezado del Panel -->
-        <header class="taskpane-header">
+
+        <!-- Barra de marca (idéntica en todas las pantallas del complemento) -->
+        <header class="app-topbar">
+            <div class="app-topbar-brand">
+                <span class="app-logo" aria-hidden="true">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="3" y="12" width="4" height="9" rx="1" fill="currentColor"/>
+                        <rect x="10" y="7" width="4" height="14" rx="1" fill="currentColor"/>
+                        <rect x="17" y="3" width="4" height="18" rx="1" fill="currentColor"/>
+                    </svg>
+                </span>
+                <div class="app-topbar-titles">
+                    <span class="app-topbar-title">EPM Data Studio</span>
+                    <span class="app-topbar-subtitle">Diseño del informe</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Barra de herramientas de la vista -->
+        <div class="view-toolbar">
             <h2>Campos del informe</h2>
             <button id="btnRefresh" class="icon-button" title="Actualizar dimensiones">
                 <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                     <path d="M13.65 2.35A7.958 7.958 0 008 0C3.58 0 0 3.58 0 8s3.58 8 8 8c3.84 0 7.08-2.71 7.85-6.32h-1.63C13.48 12.37 11.01 14.5 8 14.5 4.41 14.5 1.5 11.59 1.5 8S4.41 1.5 8 1.5c1.79 0 3.41.73 4.59 1.91L10 6h6V0l-2.35 2.35z"/>
                 </svg>
             </button>
-        </header>
+        </div>
 
         <p class="taskpane-instruction">Arrastra los campos a las áreas correspondientes:</p>
 
         <!-- Layout Principal -->
         <div class="taskpane-body">
-            
+
             <!-- Panel Izquierdo: Lista de Dimensiones -->
             <section class="fields-section">
                 <div class="search-input-wrapper">
@@ -43,7 +62,7 @@
 
             <!-- Panel Derecho: Ejes (Dropzones) -->
             <section class="zones-section">
-                
+
                 <!-- Zona Filtros -->
                 <div class="zone-card" data-zone="filters">
                     <div class="zone-header">
