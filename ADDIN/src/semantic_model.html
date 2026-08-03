@@ -251,8 +251,6 @@
 </head>
 <body>
 
-    <h2>&lt; BigQuery EPM - Modelo Semántico</h2>
-
     <!-- TABLA DE HECHOS -->
     <div class="card">
         <h3>TABLA DE HECHOS</h3>
@@ -302,7 +300,10 @@
     <!-- MODAL CONFIGURACIÓN MEDIDA -->
     <div id="measureModal" class="modal">
         <div class="modal-content">
-            <h3>Medida: <span id="modalMeasureFieldName"></span></h3>
+            <div class="modal-header">
+                <h3>Medida: <span id="modalMeasureFieldName"></span></h3>
+                <span class="modal-close" id="btnCloseMeasureModal">&times;</span>
+            </div>
             <div class="form-group">
                 <label>ALIAS</label>
                 <input type="text" id="modalMeasureAlias" />
@@ -329,14 +330,16 @@
                 </select>
             </div>
             <button class="btn" id="btnSaveMeasureModal">Guardar Medida</button>
-            <button class="btn btn-secondary" id="btnCloseMeasureModal">Cancelar</button>
         </div>
     </div>
 
     <!-- MODAL CONFIGURACIÓN DIMENSIÓN -->
     <div id="dimensionModal" class="modal">
         <div class="modal-content">
-            <h3>Dimensión: <span id="modalDimFieldName"></span></h3>
+            <div class="modal-header">
+                <h3>Dimensión: <span id="modalDimFieldName"></span></h3>
+                <span class="modal-close" id="btnCloseDimModal">&times;</span>
+            </div>
             <div class="form-group">
                 <label>ALIAS</label>
                 <input type="text" id="modalDimAlias" />
@@ -344,22 +347,15 @@
 
             <h4>TABLA DE ATRIBUTOS (RELACIÓN)</h4>
             <div class="form-group">
-                <label>PROJECT</label>
-                <input type="text" id="dimRelProject" value="bigqueryexcelconnector" />
+                <label>TABLA DE DIMENSIÓN SELECCIONADA</label>
+                <div class="sap-search-input-group">
+                    <input type="text" id="dimRelFullConcat" readonly placeholder="Seleccionar tabla de dimensión..." style="cursor: pointer;" />
+                    <button type="button" class="sap-search-btn" id="dimSapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
+                </div>
+                <input type="hidden" id="dimRelProject" />
+                <input type="hidden" id="dimRelDataset" />
+                <input type="hidden" id="dimRelTable" />
             </div>
-            <div class="form-group">
-                <label>DATASET</label>
-                <select id="dimRelDataset">
-                    <option value="">-- Seleccionar Dataset --</option>
-                </select>
-            </div>
-            <div class="form-group">
-                <label>TABLE</label>
-                <select id="dimRelTable">
-                    <option value="">-- Seleccionar Tabla --</option>
-                </select>
-            </div>
-            <button class="btn btn-secondary" id="btnLoadDimAttributes">Cargar Atributos</button>
 
             <div id="attributesContainer" style="display:none; margin-top: 15px;">
                 <h4>ATRIBUTOS Y JERARQUÍA</h4>
@@ -380,7 +376,6 @@
             </div>
 
             <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar Dimensión</button>
-            <button class="btn btn-secondary" id="btnCloseDimModal">Cancelar</button>
         </div>
     </div>
 
