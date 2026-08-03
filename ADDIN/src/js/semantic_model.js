@@ -251,7 +251,7 @@ function selectFactTable(projectId, datasetId, tableId) {
         document.getElementById("dimRelTable").value = tableId;
         document.getElementById("dimRelFullConcat").value = `${projectId}.${datasetId}.${tableId}`;
         closeTreeModal();
-        fetchDimensionAttributes();
+        fetchDimensionAttributes(true);
     }
 }
 
@@ -362,7 +362,7 @@ function openConfigModal(index) {
 
         if (proj && ds && tbl) {
             document.getElementById("dimRelFullConcat").value = `${proj}.${ds}.${tbl}`;
-            fetchDimensionAttributes();
+            fetchDimensionAttributes(false);
         } else {
             document.getElementById("dimRelFullConcat").value = "";
             document.getElementById("attributesContainer").style.display = "none";
@@ -382,7 +382,7 @@ function saveMeasureModal() {
     document.getElementById("measureModal").style.display = "none";
 }
 
-async function fetchDimensionAttributes() {
+async function fetchDimensionAttributes(forceRefetch = false) {
     const token = getAuthToken();
     if (!token) return;
 
@@ -394,6 +394,14 @@ async function fetchDimensionAttributes() {
         return;
     }
 
+    const field = fieldsState[currentConfigFieldIndex];
+
+    if (!forceRefetch && field.attributes && field.attributes.length > 0 && field.relTable === tableId && field.relProject === projectId && field.relDataset === datasetId) {
+        renderAttributesTable(field.attributes);
+        document.getElementById("attributesContainer").style.display = "block";
+        return;
+    }
+
     try {
         const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`, {
             headers: { "Authorization": `Bearer ${token}` }
@@ -401,12 +409,17 @@ async function fetchDimensionAttributes() {
         const data = await response.json();
 
         if (data.schema && data.schema.fields) {
-            const field = fieldsState[currentConfigFieldIndex];
             field.relProject = projectId;
             field.relDataset = datasetId;
             field.relTable = tableId;
 
+            const existingAttrsMap = new Map((field.attributes || []).map(a => [a.name, a]));
+
             field.attributes = data.schema.fields.map((attr, idx) => {
+                const existing = existingAttrsMap.get(attr.name);
+                if (existing && !forceRefetch) {
+                    return existing;
+                }
                 return {
                     name: attr.name,
                     alias: attr.name,
@@ -441,8 +454,8 @@ function renderAttributesTable(attributes) {
             <td class="checkbox-cell">
                 <input type="checkbox" ${attr.enabled ? "checked" : ""} onchange="updateAttrEnabled(${idx}, this.checked)" />
             </td>
-            <td><input type="text" style="width:40px;" value="${attr.hier1}" onchange="updateAttrHier1(${idx}, this.value)" /></td>
-            <td><input type="text" style="width:40px;" value="${attr.hier2}" onchange="updateAttrHier2(${idx}, this.value)" /></td>
+            <td><input type="text" style="width:40px;" value="${attr.hier1 || ''}" onchange="updateAttrHier1(${idx}, this.value)" /></td>
+            <td><input type="text" style="width:40px;" value="${attr.hier2 || ''}" onchange="updateAttrHier2(${idx}, this.value)" /></td>
         `;
         tbody.appendChild(tr);
     });
