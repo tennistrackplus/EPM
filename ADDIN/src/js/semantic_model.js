@@ -490,14 +490,43 @@ async function generateSemanticModelInExcel() {
     const enabledFields = fieldsState.filter(f => f.enabled);
 
     // 1. MODEL_RELATIONSHIP
-    const relData = [["FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_COLUMN", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_KEY_COLUMN"]];
-    enabledFields.filter(f => f.type === "DIMENSION" && f.relTable).forEach(f => {
-        const keyAttr = f.attributes.find(a => a.isKey);
-        relData.push([
-            factProject, factDataset, factTable, f.name,
-            f.relProject, f.relDataset, f.relTable, keyAttr ? keyAttr.name : ""
-        ]);
-    });
+// 1. MODEL_RELATIONSHIP
+const relData = [[
+    "FILA",
+    "DIMENSION",
+    "FACT_PROJECT",
+    "FACT_DATASET",
+    "FACT_TABLE",
+    "FACT_FIELD",
+    "DIM_PROJECT",
+    "DIM_DATASET",
+    "DIM_TABLE",
+    "DIM_FIELD",
+    "JOIN TYPE"
+]];
+
+fieldsState.forEach((f, idx) => {
+
+    if (!f.enabled || f.type !== "DIMENSION")
+        return;
+
+    const keyAttr = (f.attributes || []).find(a => a.isKey);
+
+    relData.push([
+        idx + 1,
+        f.name,
+        factProject,
+        factDataset,
+        factTable,
+        f.name,
+        f.relProject || factProject,
+        f.relDataset || factDataset,
+        f.relTable || factTable,
+        keyAttr ? keyAttr.name : f.name,
+        "LEFT"
+    ]);
+
+});
 
 // 2. MODEL_DIMENSION
 const dimData = [[
@@ -565,14 +594,64 @@ fieldsState.forEach((f, idx) => {
 });
 
     // 4. MODEL_ATRIBUTES
-    const attrData = [["DIMENSION", "ATTRIBUTE_COLUMN", "ALIAS", "TYPE", "IS_KEY", "ENABLED"]];
-    enabledFields.filter(f => f.type === "DIMENSION").forEach(f => {
-        if (f.attributes && f.attributes.length > 0) {
-            f.attributes.forEach(a => {
-                attrData.push([f.name, a.name, a.alias, a.dataType, a.isKey ? "YES" : "NO", a.enabled ? "YES" : "NO"]);
+// 4. MODEL_ATRIBUTES
+const attrData = [[
+    "FILA",
+    "DIMENSION",
+    "ATRIBUTE",
+    "DIM_PROJECT",
+    "DIM_DATASET",
+    "DIM_TABLE",
+    "DIM_FIELD",
+    "DISPLAY_NAME",
+    "DATA_TYPE"
+]];
+
+fieldsState.forEach((f, idx) => {
+
+    if (!f.enabled || f.type !== "DIMENSION")
+        return;
+
+    // Dimensión con tabla relacionada
+    if (f.attributes && f.attributes.length > 0) {
+
+        f.attributes
+            .filter(a => a.enabled)
+            .forEach(a => {
+
+                attrData.push([
+                    idx + 1,
+                    f.name,
+                    a.name,
+                    f.relProject || factProject,
+                    f.relDataset || factDataset,
+                    f.relTable || factTable,
+                    a.name,
+                    a.alias === a.name ? "" : a.alias,
+                    a.dataType
+                ]);
+
             });
-        }
-    });
+
+    }
+    // Dimensión sin tabla relacionada
+    else {
+
+        attrData.push([
+            idx + 1,
+            f.name,
+            f.name,
+            factProject,
+            factDataset,
+            factTable,
+            f.name,
+            "",
+            f.dataType
+        ]);
+
+    }
+
+});
 
     // 5. MODEL_HIER
     const hierData = [["DIMENSION", "HIERARCHY_LEVEL", "ATTRIBUTE_COLUMN"]];
