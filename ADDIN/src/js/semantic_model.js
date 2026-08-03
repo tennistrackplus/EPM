@@ -12,10 +12,9 @@ Office.onReady((info) => {
 });
 
 function initEvents() {
-    document.getElementById("btnOpenTreeModal").addEventListener("click", openTreeModal);
+    document.getElementById("sapSearchBtn").addEventListener("click", openTreeModal);
+    document.getElementById("factFullConcat").addEventListener("click", openTreeModal);
     document.getElementById("btnCloseTreeModal").addEventListener("click", closeTreeModal);
-
-    document.getElementById("btnLoadFields").addEventListener("click", fetchFactFields);
 
     document.getElementById("dimRelDataset").addEventListener("change", () => {
         loadTables("dimRelProject", "dimRelDataset", "dimRelTable");
@@ -219,6 +218,7 @@ function selectFactTable(projectId, datasetId, tableId) {
     document.getElementById("factTable").value = tableId;
     document.getElementById("factFullConcat").value = `${projectId}.${datasetId}.${tableId}`;
     closeTreeModal();
+    fetchFactFields();
 }
 
 async function loadDatasets(projectIdInputId, datasetSelectId) {
@@ -292,7 +292,7 @@ async function fetchFactFields() {
     const tableId = document.getElementById("factTable").value;
 
     if (!projectId || !datasetId || !tableId) {
-        alert("Por favor selecciona una Tabla de Hechos utilizando el botón 'Seleccionar Tabla'.");
+        alert("Por favor selecciona una Tabla de Hechos.");
         return;
     }
 
