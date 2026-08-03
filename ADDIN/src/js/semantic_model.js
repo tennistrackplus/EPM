@@ -4,6 +4,7 @@
 
 let fieldsState = [];
 let currentConfigFieldIndex = null;
+let currentTreeTarget = "FACT"; // "FACT" o "DIM"
 
 Office.onReady((info) => {
     if (info.host === Office.HostType.Excel) {
@@ -12,15 +13,13 @@ Office.onReady((info) => {
 });
 
 function initEvents() {
-    document.getElementById("sapSearchBtn").addEventListener("click", openTreeModal);
-    document.getElementById("factFullConcat").addEventListener("click", openTreeModal);
+    document.getElementById("sapSearchBtn").addEventListener("click", () => openTreeModal("FACT"));
+    document.getElementById("factFullConcat").addEventListener("click", () => openTreeModal("FACT"));
+
+    document.getElementById("dimSapSearchBtn").addEventListener("click", () => openTreeModal("DIM"));
+    document.getElementById("dimRelFullConcat").addEventListener("click", () => openTreeModal("DIM"));
+
     document.getElementById("btnCloseTreeModal").addEventListener("click", closeTreeModal);
-
-    document.getElementById("dimRelDataset").addEventListener("change", () => {
-        loadTables("dimRelProject", "dimRelDataset", "dimRelTable");
-    });
-
-    document.getElementById("btnLoadDimAttributes").addEventListener("click", fetchDimensionAttributes);
 
     document.getElementById("btnSaveMeasureModal").addEventListener("click", saveMeasureModal);
     document.getElementById("btnCloseMeasureModal").addEventListener("click", () => {
@@ -45,18 +44,28 @@ function getAuthToken() {
     return token;
 }
 
-async function openTreeModal() {
+async function openTreeModal(target = "FACT") {
+    currentTreeTarget = target;
     document.getElementById("treeModal").style.display = "block";
     const container = document.getElementById("treeContainer");
     container.innerHTML = "Cargando proyectos...";
-    await loadProjectsTree(container);
+
+    let autoProject = null;
+    let autoDataset = null;
+
+    if (target === "DIM") {
+        autoProject = document.getElementById("dimRelProject").value || document.getElementById("factProject").value;
+        autoDataset = document.getElementById("dimRelDataset").value || document.getElementById("factDataset").value;
+    }
+
+    await loadProjectsTree(container, autoProject, autoDataset);
 }
 
 function closeTreeModal() {
     document.getElementById("treeModal").style.display = "none";
 }
 
-async function loadProjectsTree(container) {
+async function loadProjectsTree(container, autoProject = null, autoDataset = null) {
     const token = getAuthToken();
     if (!token) return;
 
@@ -70,7 +79,7 @@ async function loadProjectsTree(container) {
         if (data.projects && data.projects.length > 0) {
             const ul = document.createElement("ul");
             ul.className = "tree-list";
-            data.projects.forEach(p => {
+            for (const p of data.projects) {
                 const projectId = p.id || p.projectReference.projectId;
                 const li = document.createElement("li");
                 li.className = "tree-item";
@@ -93,7 +102,7 @@ async function loadProjectsTree(container) {
                         toggleSpan.textContent = "▼";
                         if (!loaded) {
                             childrenDiv.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>Cargando datasets...</div>";
-                            await loadDatasetsTree(projectId, childrenDiv);
+                            await loadDatasetsTree(projectId, childrenDiv, autoDataset);
                             loaded = true;
                         }
                     }
@@ -102,7 +111,15 @@ async function loadProjectsTree(container) {
                 li.appendChild(header);
                 li.appendChild(childrenDiv);
                 ul.appendChild(li);
-            });
+
+                if (autoProject && projectId === autoProject) {
+                    childrenDiv.classList.add("open");
+                    header.querySelector(".tree-toggle").textContent = "▼";
+                    childrenDiv.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>Cargando datasets...</div>";
+                    loaded = true;
+                    loadDatasetsTree(projectId, childrenDiv, autoDataset);
+                }
+            }
             container.appendChild(ul);
         } else {
             container.innerHTML = "No se encontraron proyectos.";
@@ -113,7 +130,7 @@ async function loadProjectsTree(container) {
     }
 }
 
-async function loadDatasetsTree(projectId, container) {
+async function loadDatasetsTree(projectId, container, autoDataset = null) {
     const token = getAuthToken();
     if (!token) return;
 
@@ -127,7 +144,7 @@ async function loadDatasetsTree(projectId, container) {
         if (data.datasets && data.datasets.length > 0) {
             const ul = document.createElement("ul");
             ul.className = "tree-list";
-            data.datasets.forEach(ds => {
+            for (const ds of data.datasets) {
                 const datasetId = ds.datasetReference.datasetId;
                 const li = document.createElement("li");
                 li.className = "tree-item";
@@ -160,7 +177,15 @@ async function loadDatasetsTree(projectId, container) {
                 li.appendChild(header);
                 li.appendChild(childrenDiv);
                 ul.appendChild(li);
-            });
+
+                if (autoDataset && datasetId === autoDataset) {
+                    childrenDiv.classList.add("open");
+                    header.querySelector(".tree-toggle").textContent = "▼";
+                    childrenDiv.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>Cargando tablas...</div>";
+                    loaded = true;
+                    loadTablesTree(projectId, datasetId, childrenDiv);
+                }
+            }
             container.appendChild(ul);
         } else {
             container.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>No hay datasets en este proyecto.</div>";
@@ -213,73 +238,20 @@ async function loadTablesTree(projectId, datasetId, container) {
 }
 
 function selectFactTable(projectId, datasetId, tableId) {
-    document.getElementById("factProject").value = projectId;
-    document.getElementById("factDataset").value = datasetId;
-    document.getElementById("factTable").value = tableId;
-    document.getElementById("factFullConcat").value = `${projectId}.${datasetId}.${tableId}`;
-    closeTreeModal();
-    fetchFactFields();
-}
-
-async function loadDatasets(projectIdInputId, datasetSelectId) {
-    const token = getAuthToken();
-    if (!token) return;
-
-    const projectId = document.getElementById(projectIdInputId).value.trim();
-    if (!projectId) return;
-
-    const datasetSelect = document.getElementById(datasetSelectId);
-    datasetSelect.innerHTML = '<option value="">Cargando...</option>';
-
-    try {
-        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets`, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-        const data = await response.json();
-        
-        datasetSelect.innerHTML = '<option value="">-- Seleccionar Dataset --</option>';
-        if (data.datasets) {
-            data.datasets.forEach(ds => {
-                const opt = document.createElement("option");
-                opt.value = ds.datasetReference.datasetId;
-                opt.textContent = ds.datasetReference.datasetId;
-                datasetSelect.appendChild(opt);
-            });
-        }
-    } catch (err) {
-        console.error("Error al cargar datasets:", err);
-    }
-}
-
-async function loadTables(projectIdInputId, datasetSelectId, tableSelectId) {
-    const token = getAuthToken();
-    if (!token) return;
-
-    const projectId = document.getElementById(projectIdInputId).value.trim();
-    const datasetId = document.getElementById(datasetSelectId).value;
-    const tableSelect = document.getElementById(tableSelectId);
-
-    if (!projectId || !datasetId) return;
-
-    tableSelect.innerHTML = '<option value="">Cargando...</option>';
-
-    try {
-        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables`, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-        const data = await response.json();
-        
-        tableSelect.innerHTML = '<option value="">-- Seleccionar Tabla --</option>';
-        if (data.tables) {
-            data.tables.forEach(tbl => {
-                const opt = document.createElement("option");
-                opt.value = tbl.tableReference.tableId;
-                opt.textContent = tbl.tableReference.tableId;
-                tableSelect.appendChild(opt);
-            });
-        }
-    } catch (err) {
-        console.error("Error al cargar tablas:", err);
+    if (currentTreeTarget === "FACT") {
+        document.getElementById("factProject").value = projectId;
+        document.getElementById("factDataset").value = datasetId;
+        document.getElementById("factTable").value = tableId;
+        document.getElementById("factFullConcat").value = `${projectId}.${datasetId}.${tableId}`;
+        closeTreeModal();
+        fetchFactFields();
+    } else if (currentTreeTarget === "DIM") {
+        document.getElementById("dimRelProject").value = projectId;
+        document.getElementById("dimRelDataset").value = datasetId;
+        document.getElementById("dimRelTable").value = tableId;
+        document.getElementById("dimRelFullConcat").value = `${projectId}.${datasetId}.${tableId}`;
+        closeTreeModal();
+        fetchDimensionAttributes();
     }
 }
 
@@ -379,10 +351,23 @@ function openConfigModal(index) {
     } else {
         document.getElementById("modalDimFieldName").textContent = field.name;
         document.getElementById("modalDimAlias").value = field.alias;
-        document.getElementById("dimRelProject").value = field.relProject || document.getElementById("factProject").value;
         
-        loadDatasets("dimRelProject", "dimRelDataset");
-        document.getElementById("attributesContainer").style.display = "none";
+        const proj = field.relProject || document.getElementById("factProject").value;
+        const ds = field.relDataset || document.getElementById("factDataset").value;
+        const tbl = field.relTable || "";
+
+        document.getElementById("dimRelProject").value = proj;
+        document.getElementById("dimRelDataset").value = ds;
+        document.getElementById("dimRelTable").value = tbl;
+
+        if (proj && ds && tbl) {
+            document.getElementById("dimRelFullConcat").value = `${proj}.${ds}.${tbl}`;
+            fetchDimensionAttributes();
+        } else {
+            document.getElementById("dimRelFullConcat").value = "";
+            document.getElementById("attributesContainer").style.display = "none";
+        }
+
         document.getElementById("dimensionModal").style.display = "block";
     }
 }
@@ -406,7 +391,6 @@ async function fetchDimensionAttributes() {
     const tableId = document.getElementById("dimRelTable").value;
 
     if (!projectId || !datasetId || !tableId) {
-        alert("Por favor selecciona Proyecto, Dataset y Tabla de la Dimensión.");
         return;
     }
 
