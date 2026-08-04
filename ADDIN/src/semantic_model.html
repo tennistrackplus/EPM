@@ -1,195 +1,19 @@
 <!DOCTYPE html>
 <html lang="es">
-
 <head>
-
-    <meta charset="UTF-8">
-    <meta http-equiv="X-UA-Compatible" content="IE=Edge">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EPM Data Studio · Modelo semántico</title>
 
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-
     <link rel="stylesheet" href="css/theme.css">
-
     <style>
+        body {
+            padding: 0;
+        }
 
-/*==================================================
-=            NUEVO DISEÑO MODELO SEMÁNTICO
-==================================================*/
-
-.page-content{
-    padding:16px;
-}
-
-/*--------------------------------------------------
-  Cabecera
---------------------------------------------------*/
-
-.semantic-header{
-    margin-bottom:18px;
-}
-
-.semantic-title h2{
-    margin:0;
-    font-size:22px;
-    font-weight:700;
-    color:var(--text-primary);
-}
-
-.semantic-title span{
-    display:block;
-    margin-top:3px;
-    font-size:12px;
-    color:var(--text-muted);
-}
-
-.semantic-model-selector{
-    margin-top:14px;
-}
-
-.model-toolbar{
-    display:flex;
-    align-items:center;
-    gap:8px;
-}
-
-.model-toolbar select{
-    flex:1;
-    margin:0;
-}
-
-.toolbar-btn{
-    width:34px;
-    height:34px;
-    border:none;
-    border-radius:8px;
-    background:var(--gray-100);
-    cursor:pointer;
-    transition:.2s;
-    font-size:15px;
-}
-
-.toolbar-btn:hover{
-    background:var(--brand-primary);
-    color:white;
-}
-
-.toolbar-btn.danger:hover{
-    background:#d83b3b;
-}
-
-/*--------------------------------------------------
-  Tabla de hechos
---------------------------------------------------*/
-
-.compact-card{
-    background:var(--surface-card);
-    border:1px solid var(--border-subtle);
-    border-radius:12px;
-    padding:12px;
-    margin-bottom:16px;
-    box-shadow:var(--shadow-xs);
-}
-
-.compact-card-title{
-    font-size:11px;
-    font-weight:700;
-    text-transform:uppercase;
-    color:var(--text-muted);
-    margin-bottom:6px;
-}
-
-/*--------------------------------------------------
-  Resumen
---------------------------------------------------*/
-
-.model-summary{
-    display:flex;
-    gap:12px;
-    margin-bottom:18px;
-}
-
-.summary-item{
-    flex:1;
-    background:var(--surface-card);
-    border:1px solid var(--border-subtle);
-    border-radius:12px;
-    padding:12px;
-    text-align:center;
-}
-
-.summary-item span{
-    display:block;
-    font-size:22px;
-    font-weight:700;
-    color:var(--brand-primary);
-}
-
-.summary-item small{
-    display:block;
-    margin-top:3px;
-    color:var(--text-muted);
-    font-size:11px;
-}
-
-/*--------------------------------------------------
-  Campos
---------------------------------------------------*/
-
-.section-header{
-    display:flex;
-    justify-content:space-between;
-    align-items:center;
-    margin-bottom:10px;
-}
-
-.section-header h3{
-    margin:0;
-}
-
-.badge{
-    padding:4px 10px;
-    border-radius:20px;
-    background:var(--gray-100);
-    font-size:11px;
-    font-weight:600;
-}
-
-.fields-footer{
-    margin-top:16px;
-}
-
-/*--------------------------------------------------
-  Tabla
---------------------------------------------------*/
-
-#fieldsTable{
-    margin-top:0;
-}
-
-#fieldsTable th{
-    padding-top:9px;
-    padding-bottom:9px;
-}
-
-#fieldsTable td{
-    padding-top:8px;
-    padding-bottom:8px;
-}
-
-/*--------------------------------------------------
-  Botones
---------------------------------------------------*/
-
-.btn-sm{
-    width:auto;
-    margin:0;
-    padding:6px 12px;
-}
-
-.page-content {
+        .page-content {
             padding: 14px;
         }
 
@@ -417,441 +241,158 @@
             background-color: var(--brand-primary);
             color: var(--text-inverse);
         }
-
     </style>
-
 </head>
-
 <body>
 
-<div class="page-content">
-
-    <!-- ==========================================
-         MODELO SEMÁNTICO
-    =========================================== -->
-
-    <div class="semantic-header">
-
-        <div class="semantic-title">
-            <h2>Modelo semántico</h2>
-            <span>Define la estructura lógica de tu modelo analítico.</span>
-        </div>
-
-        <div class="semantic-model-selector">
-
-            <label>Modelo</label>
-
-            <div class="model-toolbar">
-
-                <select id="semanticModel">
-                    <option>Finance Demo</option>
-                </select>
-
-                <button class="toolbar-btn" id="btnNewModel" title="Nuevo modelo">
-                    ＋
-                </button>
-
-                <button class="toolbar-btn" id="btnRenameModel" title="Renombrar">
-                    ✏
-                </button>
-
-                <button class="toolbar-btn danger" id="btnDeleteModel" title="Eliminar">
-                    🗑
-                </button>
-
+    <!-- Barra de marca (idéntica en todas las pantallas del complemento) -->
+    <header class="app-topbar">
+        <div class="app-topbar-brand">
+            <span class="app-logo" aria-hidden="true">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="3" y="12" width="4" height="9" rx="1" fill="currentColor"/>
+                    <rect x="10" y="7" width="4" height="14" rx="1" fill="currentColor"/>
+                    <rect x="17" y="3" width="4" height="18" rx="1" fill="currentColor"/>
+                </svg>
+            </span>
+            <div class="app-topbar-titles">
+                <span class="app-topbar-title">EPM Data Studio</span>
+                <span class="app-topbar-subtitle">Modelo semántico · BigQuery</span>
             </div>
+        </div>
+    </header>
 
+    <div class="page-content">
+
+        <!-- TABLA DE HECHOS -->
+        <div class="card">
+            <h3>Tabla de hechos</h3>
+            <div class="form-group">
+                <label>Tabla de hechos seleccionada (proyecto . dataset . tabla)</label>
+                <div class="sap-search-input-group">
+                    <input type="text" id="factFullConcat" readonly placeholder="Seleccionar tabla (Ayuda de búsqueda)..." style="cursor: pointer;" />
+                    <button type="button" class="sap-search-btn" id="sapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
+                </div>
+                <input type="hidden" id="factProject" />
+                <input type="hidden" id="factDataset" />
+                <input type="hidden" id="factTable" />
+            </div>
         </div>
 
-    </div>
-
-
-
-    <!-- ==========================================
-         FUENTE DE DATOS
-    =========================================== -->
-
-    <div class="compact-card">
-
-        <div class="compact-card-title">
-            Tabla de hechos
-        </div>
-
-        <div class="sap-search-input-group">
-
-            <input
-                type="text"
-                id="factFullConcat"
-                readonly
-                placeholder="Seleccionar tabla de hechos..."
-                style="cursor:pointer;" />
-
-            <button
-                type="button"
-                class="sap-search-btn"
-                id="sapSearchBtn"
-                title="Seleccionar tabla">
-
-                🔍
-
-            </button>
-
-        </div>
-
-        <input type="hidden" id="factProject" />
-        <input type="hidden" id="factDataset" />
-        <input type="hidden" id="factTable" />
-
-    </div>
-
-
-
-    <!-- ==========================================
-         RESUMEN DEL MODELO
-    =========================================== -->
-
-    <div class="model-summary">
-
-        <div class="summary-item">
-            <span id="summaryDimensions">0</span>
-            <small>Dimensiones</small>
-        </div>
-
-        <div class="summary-item">
-            <span id="summaryMeasures">0</span>
-            <small>Medidas</small>
-        </div>
-
-        <div class="summary-item">
-            <span id="summaryTable">-</span>
-            <small>Tabla</small>
-        </div>
-
-    </div>
-
-
-
-    <!-- ==========================================
-         CAMPOS
-    =========================================== -->
-
-    <div class="card" id="fieldsCard" style="display:none;">
-
-        <div class="section-header">
-
+        <!-- LISTA DE CAMPOS -->
+        <div class="card" id="fieldsCard" style="display: none;">
             <h3>Campos</h3>
-
-            <span id="fieldCountBadge" class="badge">
-                0 campos
-            </span>
-
-        </div>
-
-        <table id="fieldsTable">
-
-            <thead>
-
-                <tr>
-
-                    <th style="width:28%;">Campo</th>
-
-                    <th style="width:30%;">
-                        Alias
-                    </th>
-
-                    <th style="width:18%;">
-                        Tipo
-                    </th>
-
-                    <th style="width:8%;">
-                        ✓
-                    </th>
-
-                    <th style="width:16%;">
-                        Acción
-                    </th>
-
-                </tr>
-
-            </thead>
-
-            <tbody id="fieldsTbody">
-			
-			            </tbody>
-
-        </table>
-
-        <div class="fields-footer">
-
-            <button class="btn" id="btnGenerateModel">
-                💾 Guardar modelo semántico
-            </button>
-
-        </div>
-
-    </div>
-
-</div>
-
-<!-- ==========================================
-     MODAL ÁRBOL BIGQUERY
-========================================== -->
-
-<div id="treeModal" class="modal">
-
-    <div class="modal-content modal-tree">
-
-        <div class="modal-header">
-
-            <h3>Seleccionar tabla</h3>
-
-            <span class="modal-close" id="btnCloseTreeModal">
-                &times;
-            </span>
-
-        </div>
-
-        <div
-            id="treeContainer"
-            class="tree-container">
-
-        </div>
-
-    </div>
-
-</div>
-
-
-
-<!-- ==========================================
-     MODAL MEDIDA
-========================================== -->
-
-<div id="measureModal" class="modal">
-
-    <div class="modal-content">
-
-        <div class="modal-header">
-
-            <h3>
-
-                Medida
-
-                <small id="modalMeasureFieldName"></small>
-
-            </h3>
-
-            <span
-                class="modal-close"
-                id="btnCloseMeasureModal">
-
-                &times;
-
-            </span>
-
-        </div>
-
-
-        <div class="form-group">
-
-            <label>Alias</label>
-
-            <input
-                type="text"
-                id="modalMeasureAlias">
-
-        </div>
-
-
-        <div class="form-group">
-
-            <label>Agregación</label>
-
-            <select id="modalMeasureAgg">
-
-                <option value="SUM">SUM</option>
-
-                <option value="COUNT">COUNT</option>
-
-                <option value="AVG">AVG</option>
-
-                <option value="MIN">MIN</option>
-
-                <option value="MAX">MAX</option>
-
-                <option value="COUNT_DISTINCT">
-                    COUNT DISTINCT
-                </option>
-
-            </select>
-
-        </div>
-
-
-        <div class="form-group">
-
-            <label>Formato</label>
-
-            <select id="modalMeasureFormat">
-
-                <option value="Auto">Automático</option>
-
-                <option value="Currency">
-                    Moneda (€)
-                </option>
-
-                <option value="Integer">
-                    Entero
-                </option>
-
-                <option value="Decimal">
-                    Decimal
-                </option>
-
-                <option value="Percent">
-                    Porcentaje
-                </option>
-
-            </select>
-
-        </div>
-
-        <button
-            class="btn"
-            id="btnSaveMeasureModal">
-
-            Guardar
-
-        </button>
-
-    </div>
-
-</div>
-
-
-
-<!-- ==========================================
-     MODAL DIMENSIÓN
-========================================== -->
-
-<div id="dimensionModal" class="modal">
-
-    <div class="modal-content modal-dimension">
-
-        <div class="modal-header">
-
-            <h3>
-
-                Dimensión
-
-                <small id="modalDimFieldName"></small>
-
-            </h3>
-
-            <span
-                class="modal-close"
-                id="btnCloseDimModal">
-
-                &times;
-
-            </span>
-
-        </div>
-
-
-        <div class="form-group">
-
-            <label>Alias</label>
-
-            <input
-                type="text"
-                id="modalDimAlias">
-
-        </div>
-
-
-        <div class="form-group">
-
-            <label>Tabla de atributos</label>
-
-            <div class="sap-search-input-group">
-
-                <input
-                    type="text"
-                    id="dimRelFullConcat"
-                    readonly
-                    placeholder="Seleccionar tabla de dimensión..."
-                    style="cursor:pointer;">
-
-                <button
-                    type="button"
-                    class="sap-search-btn"
-                    id="dimSapSearchBtn">
-
-                    🔍
-
-                </button>
-
-            </div>
-
-            <input type="hidden" id="dimRelProject">
-            <input type="hidden" id="dimRelDataset">
-            <input type="hidden" id="dimRelTable">
-
-        </div>
-
-
-        <div
-            id="attributesContainer"
-            style="display:none;">
-
-            <h4>Atributos</h4>
-
-            <table>
-
+            <table id="fieldsTable">
                 <thead>
-
                     <tr>
-
                         <th>Campo</th>
-
-                        <th>Alias</th>
-
-                        <th>Key</th>
-
-                        <th>✓</th>
-
-                        <th>H1</th>
-
-                        <th>H2</th>
-
+                        <th>Alias / Descripción</th>
+                        <th>Tipo</th>
+                        <th>Enable</th>
+                        <th>Acciones</th>
                     </tr>
-
                 </thead>
-
-                <tbody id="dimAttributesTbody">
-
+                <tbody id="fieldsTbody">
                 </tbody>
-
             </table>
 
+            <button class="btn" id="btnGenerateModel">Generar modelo semántico en Excel</button>
         </div>
-
-
-        <button
-            class="btn"
-            id="btnSaveDimModal">
-
-            Guardar
-
-        </button>
-
     </div>
 
-</div>
+    <!-- MODAL SELECCIÓN JERÁRQUICA DE TABLA -->
+    <div id="treeModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Seleccionar tabla de BigQuery</h3>
+                <span class="modal-close" id="btnCloseTreeModal">&times;</span>
+            </div>
+            <div id="treeContainer" class="tree-container"></div>
+        </div>
+    </div>
 
-<script src="js/semantic_model.js"></script>
+    <!-- MODAL CONFIGURACIÓN MEDIDA -->
+    <div id="measureModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Medida: <span id="modalMeasureFieldName"></span></h3>
+                <span class="modal-close" id="btnCloseMeasureModal">&times;</span>
+            </div>
+            <div class="form-group">
+                <label>Alias</label>
+                <input type="text" id="modalMeasureAlias" />
+            </div>
+            <div class="form-group">
+                <label>Agregación</label>
+                <select id="modalMeasureAgg">
+                    <option value="SUM">SUM</option>
+                    <option value="COUNT">COUNT</option>
+                    <option value="AVG">AVG</option>
+                    <option value="MIN">MIN</option>
+                    <option value="MAX">MAX</option>
+                    <option value="COUNT_DISTINCT">COUNT_DISTINCT</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Formato</label>
+                <select id="modalMeasureFormat">
+                    <option value="Auto">Auto</option>
+                    <option value="Currency">Moneda (€)</option>
+                    <option value="Integer">Entero</option>
+                    <option value="Decimal">Decimal</option>
+                    <option value="Percent">Porcentaje (%)</option>
+                </select>
+            </div>
+            <button class="btn" id="btnSaveMeasureModal">Guardar medida</button>
+        </div>
+    </div>
 
+    <!-- MODAL CONFIGURACIÓN DIMENSIÓN -->
+    <div id="dimensionModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Dimensión: <span id="modalDimFieldName"></span></h3>
+                <span class="modal-close" id="btnCloseDimModal">&times;</span>
+            </div>
+            <div class="form-group">
+                <label>Alias</label>
+                <input type="text" id="modalDimAlias" />
+            </div>
+
+            <h4>Tabla de atributos (relación)</h4>
+            <div class="form-group">
+                <label>Tabla de dimensión seleccionada</label>
+                <div class="sap-search-input-group">
+                    <input type="text" id="dimRelFullConcat" readonly placeholder="Seleccionar tabla de dimensión..." style="cursor: pointer;" />
+                    <button type="button" class="sap-search-btn" id="dimSapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
+                </div>
+                <input type="hidden" id="dimRelProject" />
+                <input type="hidden" id="dimRelDataset" />
+                <input type="hidden" id="dimRelTable" />
+            </div>
+
+            <div id="attributesContainer" style="display:none; margin-top: 15px;">
+                <h4>Atributos y jerarquía</h4>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Campo</th>
+                            <th>Alias</th>
+                            <th>Key</th>
+                            <th>Enable</th>
+                            <th>Hier1</th>
+                            <th>Hier2</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dimAttributesTbody">
+                    </tbody>
+                </table>
+            </div>
+
+            <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar dimensión</button>
+        </div>
+    </div>
+
+    <script src="js/semantic_model.js"></script>
 </body>
-
 </html>
