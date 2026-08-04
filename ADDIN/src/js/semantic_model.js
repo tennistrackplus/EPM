@@ -303,30 +303,38 @@ async function fetchFactFields() {
 }
 
 function renderFieldsTable() {
-    const tbody = document.getElementById("fieldsTbody");
-    tbody.innerHTML = "";
+
+    const list = document.getElementById("fieldsList");
+    list.innerHTML = "";
 
     fieldsState.forEach((field, idx) => {
-        const tr = document.createElement("tr");
 
-        tr.innerHTML = `
-            <td><strong>${field.name}</strong></td>
-            <td><input type="text" value="${field.alias}" onchange="updateFieldAlias(${idx}, this.value)" /></td>
-            <td>
-                <select onchange="updateFieldType(${idx}, this.value)">
-                    <option value="DIMENSION" ${field.type === "DIMENSION" ? "selected" : ""}>DIMENSION</option>
-                    <option value="MEASURE" ${field.type === "MEASURE" ? "selected" : ""}>MEASURE</option>
-                </select>
-            </td>
-            <td class="checkbox-cell">
-                <input type="checkbox" ${field.enabled ? "checked" : ""} onchange="updateFieldEnabled(${idx}, this.checked)" />
-            </td>
-            <td>
-                <button class="btn btn-sm" onclick="openConfigModal(${idx})">Modificar</button>
-            </td>
+        const row = document.createElement("div");
+        row.className = "field-row";
+
+        row.innerHTML = `
+            <div class="field-badge ${field.type === "MEASURE" ? "measure" : "dimension"}">
+                ${field.type === "MEASURE" ? "MEA" : "DIM"}
+            </div>
+
+            <div class="field-info">
+                <div class="field-name">${field.name}</div>
+                <div class="field-alias">${field.alias}</div>
+            </div>
+
+            <div class="field-arrow">›</div>
         `;
-        tbody.appendChild(tr);
+
+        if (!field.enabled) {
+            row.style.opacity = ".45";
+        }
+
+        row.onclick = () => openConfigModal(idx);
+
+        list.appendChild(row);
+
     });
+
 }
 
 function updateFieldAlias(index, val) { fieldsState[index].alias = val; }
@@ -507,7 +515,8 @@ const relData = [[
 
 fieldsState.forEach((f, idx) => {
 
-    if (!f.enabled || f.type !== "DIMENSION")
+    // Solo dimensiones habilitadas con tabla de relación
+    if (!f.enabled || f.type !== "DIMENSION" || !f.relTable)
         return;
 
     const keyAttr = (f.attributes || []).find(a => a.isKey);
@@ -519,15 +528,14 @@ fieldsState.forEach((f, idx) => {
         factDataset,
         factTable,
         f.name,
-        f.relProject || factProject,
-        f.relDataset || factDataset,
-        f.relTable || factTable,
+        f.relProject,
+        f.relDataset,
+        f.relTable,
         keyAttr ? keyAttr.name : f.name,
         "LEFT"
     ]);
 
 });
-
 // 2. MODEL_DIMENSION
 const dimData = [[
     "FILA",
