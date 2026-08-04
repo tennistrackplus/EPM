@@ -1,7 +1,5 @@
 /**
- * Estructura de datos local (MOCK_DATA) que reemplaza la lectura directa de las hojas DIM2 y MET de Excel.
- * Estructura: Dimension -> attributes -> matriz de valores
- *                        -> hierarchies -> matriz de objetos { level, value }
+ * Estructura de datos local (MOCK_DATA) para lectura de valores de campos (MET).
  */
 const MOCK_DATA = {
     CECO: {
@@ -111,32 +109,52 @@ const MOCK_DATA = {
 };
 
 /**
- * Servicio adaptado para operar en memoria contra MOCK_DATA
+ * Servicio adaptado para leer dimensiones desde la hoja MODEL_ATRIBUTES
  */
 const ExcelService = {
 
     /**
-     * Lee la información estructurada de MOCK_DATA por Dimensiones
+     * Lee la información de Dimensiones y Atributos desde la pestaña MODEL_ATRIBUTES de Excel
      */
     async readDim2Data() {
         try {
-            const dimensionsList = [];
+            return await Excel.run(async (context) => {
+                const sheet = context.workbook.worksheets.getItem("MODEL_ATRIBUTES");
+                const range = sheet.getUsedRange();
+                range.load("values");
 
-            for (const [dimName, dimContent] of Object.entries(MOCK_DATA)) {
-                const hierarchiesList = dimContent.hierarchies ? Object.keys(dimContent.hierarchies) : [];
-                const attributesList = dimContent.attributes ? Object.keys(dimContent.attributes) : [];
+                await context.sync();
 
-                dimensionsList.push({
-                    dimension: dimName,
-                    hierarchies: hierarchiesList,
-                    attributes: attributesList
-                });
-            }
+                const rows = range.values;
+                const dimensionsMap = {};
 
-            return { data: dimensionsList };
+                // Omitir fila 0 (cabeceras)
+                for (let i = 1; i < rows.length; i++) {
+                    const row = rows[i];
+                    const dimName = row[1];  // Columna B: DIMENSION
+                    const attrName = row[2]; // Columna C: ATRIBUTE
+
+                    if (!dimName || !attrName) continue;
+
+                    if (!dimensionsMap[dimName]) {
+                        dimensionsMap[dimName] = {
+                            dimension: dimName,
+                            hierarchies: [],
+                            attributes: []
+                        };
+                    }
+
+                    if (!dimensionsMap[dimName].attributes.includes(attrName)) {
+                        dimensionsMap[dimName].attributes.push(attrName);
+                    }
+                }
+
+                const dimensionsList = Object.values(dimensionsMap);
+                return { data: dimensionsList };
+            });
         } catch (error) {
-            console.error("Error leyendo MOCK_DATA:", error);
-            return { error: "Error al procesar la variable de datos local." };
+            console.error("Error leyendo la hoja MODEL_ATRIBUTES:", error);
+            return { error: "Error al leer los datos de la hoja MODEL_ATRIBUTES." };
         }
     },
 
