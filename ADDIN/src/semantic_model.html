@@ -1,1 +1,857 @@
-<!DOCTYPE html><html><body>Placeholder</body></html>
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>EPM Data Studio · Modelo semántico</title>
+
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+
+    <link rel="stylesheet" href="css/theme.css">
+
+    <style>
+
+/*==================================================
+=            NUEVO DISEÑO MODELO SEMÁNTICO
+==================================================*/
+
+.page-content{
+    padding:16px;
+}
+
+/*--------------------------------------------------
+  Cabecera
+--------------------------------------------------*/
+
+.semantic-header{
+    margin-bottom:18px;
+}
+
+.semantic-title h2{
+    margin:0;
+    font-size:22px;
+    font-weight:700;
+    color:var(--text-primary);
+}
+
+.semantic-title span{
+    display:block;
+    margin-top:3px;
+    font-size:12px;
+    color:var(--text-muted);
+}
+
+.semantic-model-selector{
+    margin-top:14px;
+}
+
+.model-toolbar{
+    display:flex;
+    align-items:center;
+    gap:8px;
+}
+
+.model-toolbar select{
+    flex:1;
+    margin:0;
+}
+
+.toolbar-btn{
+    width:34px;
+    height:34px;
+    border:none;
+    border-radius:8px;
+    background:var(--gray-100);
+    cursor:pointer;
+    transition:.2s;
+    font-size:15px;
+}
+
+.toolbar-btn:hover{
+    background:var(--brand-primary);
+    color:white;
+}
+
+.toolbar-btn.danger:hover{
+    background:#d83b3b;
+}
+
+/*--------------------------------------------------
+  Tabla de hechos
+--------------------------------------------------*/
+
+.compact-card{
+    background:var(--surface-card);
+    border:1px solid var(--border-subtle);
+    border-radius:12px;
+    padding:12px;
+    margin-bottom:16px;
+    box-shadow:var(--shadow-xs);
+}
+
+.compact-card-title{
+    font-size:11px;
+    font-weight:700;
+    text-transform:uppercase;
+    color:var(--text-muted);
+    margin-bottom:6px;
+}
+
+/*--------------------------------------------------
+  Resumen
+--------------------------------------------------*/
+
+.model-summary{
+    display:flex;
+    gap:12px;
+    margin-bottom:18px;
+}
+
+.summary-item{
+    flex:1;
+    background:var(--surface-card);
+    border:1px solid var(--border-subtle);
+    border-radius:12px;
+    padding:12px;
+    text-align:center;
+}
+
+.summary-item span{
+    display:block;
+    font-size:22px;
+    font-weight:700;
+    color:var(--brand-primary);
+}
+
+.summary-item small{
+    display:block;
+    margin-top:3px;
+    color:var(--text-muted);
+    font-size:11px;
+}
+
+/*--------------------------------------------------
+  Campos
+--------------------------------------------------*/
+
+.section-header{
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+    margin-bottom:10px;
+}
+
+.section-header h3{
+    margin:0;
+}
+
+.badge{
+    padding:4px 10px;
+    border-radius:20px;
+    background:var(--gray-100);
+    font-size:11px;
+    font-weight:600;
+}
+
+.fields-footer{
+    margin-top:16px;
+}
+
+/*--------------------------------------------------
+  Tabla
+--------------------------------------------------*/
+
+#fieldsTable{
+    margin-top:0;
+}
+
+#fieldsTable th{
+    padding-top:9px;
+    padding-bottom:9px;
+}
+
+#fieldsTable td{
+    padding-top:8px;
+    padding-bottom:8px;
+}
+
+/*--------------------------------------------------
+  Botones
+--------------------------------------------------*/
+
+.btn-sm{
+    width:auto;
+    margin:0;
+    padding:6px 12px;
+}
+
+.page-content {
+            padding: 14px;
+        }
+
+        h3, h4 {
+            color: var(--text-primary);
+        }
+
+        h3 {
+            font-size: var(--fs-md);
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            margin-bottom: 12px;
+        }
+
+        h4 {
+            font-size: var(--fs-sm);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: var(--text-muted);
+            margin: 16px 0 8px 0;
+        }
+
+        .card {
+            padding: 16px;
+            margin-bottom: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 12px;
+        }
+
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin-bottom: 5px;
+        }
+
+        /* Estilo de ayuda de búsqueda (SAP Matchcode) */
+        .sap-search-input-group {
+            display: flex;
+            align-items: stretch;
+        }
+
+        .sap-search-input-group input[type="text"] {
+            border-top-right-radius: 0;
+            border-bottom-right-radius: 0;
+            border-right: none;
+        }
+
+        .sap-search-btn {
+            background-color: var(--brand-primary);
+            color: var(--text-inverse);
+            border: 1px solid var(--brand-primary);
+            padding: 0 13px;
+            border-top-right-radius: var(--radius-sm);
+            border-bottom-right-radius: var(--radius-sm);
+            cursor: pointer;
+            font-size: var(--fs-base);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color var(--transition-fast);
+        }
+
+        .sap-search-btn:hover {
+            background-color: var(--brand-primary-hover);
+        }
+
+        table {
+            margin-top: 6px;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+        }
+
+        th:first-child, td:first-child {
+            padding-left: 12px;
+        }
+
+        .btn {
+            width: 100%;
+            margin-top: 12px;
+        }
+
+        .btn-secondary {
+            background-color: var(--surface-card);
+            color: var(--text-primary);
+        }
+
+        .btn-sm {
+            width: auto;
+            margin-top: 0;
+        }
+
+        /* Modales */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(15, 27, 51, 0.45);
+            backdrop-filter: blur(1px);
+            z-index: 100;
+            overflow-y: auto;
+        }
+
+        #treeModal {
+            z-index: 200;
+        }
+
+        .modal-content {
+            background-color: var(--surface-card);
+            margin: 24px auto;
+            padding: 18px;
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            border: 1px solid var(--border-subtle);
+            width: 90%;
+            max-width: 480px;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-subtle);
+            padding-bottom: 10px;
+            margin-bottom: 14px;
+        }
+
+        .modal-header h3 {
+            margin: 0;
+        }
+
+        .modal-close {
+            color: var(--text-muted);
+            font-size: 20px;
+            font-weight: 400;
+            cursor: pointer;
+            line-height: 1;
+            width: 26px;
+            height: 26px;
+            border-radius: var(--radius-sm);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color var(--transition-fast), color var(--transition-fast);
+        }
+
+        .modal-close:hover {
+            background-color: var(--gray-100);
+            color: var(--text-primary);
+        }
+
+        /* Árbol jerárquico de selección de tabla */
+        .tree-container {
+            max-height: 350px;
+            overflow-y: auto;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
+            padding: 10px;
+            background: var(--surface-sunken);
+        }
+
+        .tree-list {
+            list-style: none;
+            padding-left: 16px;
+            margin: 0;
+        }
+
+        .tree-container > .tree-list {
+            padding-left: 0;
+        }
+
+        .tree-item {
+            margin-top: 3px;
+        }
+
+        .tree-header {
+            cursor: pointer;
+            user-select: none;
+            padding: 5px 8px;
+            border-radius: var(--radius-sm);
+            font-size: var(--fs-base);
+            display: block;
+            transition: background-color var(--transition-fast);
+        }
+
+        .tree-header:hover {
+            background-color: var(--gray-100);
+        }
+
+        .tree-toggle {
+            display: inline-block;
+            width: 14px;
+            font-size: 9px;
+            color: var(--text-muted);
+        }
+
+        .tree-children {
+            display: none;
+        }
+
+        .tree-children.open {
+            display: block;
+        }
+
+        .table-item {
+            color: var(--brand-primary);
+            font-weight: 700;
+        }
+
+        .table-item:hover {
+            background-color: var(--brand-primary);
+            color: var(--text-inverse);
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+<div class="page-content">
+
+    <!-- ==========================================
+         MODELO SEMÁNTICO
+    =========================================== -->
+
+    <div class="semantic-header">
+
+        <div class="semantic-title">
+            <h2>Modelo semántico</h2>
+            <span>Define la estructura lógica de tu modelo analítico.</span>
+        </div>
+
+        <div class="semantic-model-selector">
+
+            <label>Modelo</label>
+
+            <div class="model-toolbar">
+
+                <select id="semanticModel">
+                    <option>Finance Demo</option>
+                </select>
+
+                <button class="toolbar-btn" id="btnNewModel" title="Nuevo modelo">
+                    ＋
+                </button>
+
+                <button class="toolbar-btn" id="btnRenameModel" title="Renombrar">
+                    ✏
+                </button>
+
+                <button class="toolbar-btn danger" id="btnDeleteModel" title="Eliminar">
+                    🗑
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+
+
+    <!-- ==========================================
+         FUENTE DE DATOS
+    =========================================== -->
+
+    <div class="compact-card">
+
+        <div class="compact-card-title">
+            Tabla de hechos
+        </div>
+
+        <div class="sap-search-input-group">
+
+            <input
+                type="text"
+                id="factFullConcat"
+                readonly
+                placeholder="Seleccionar tabla de hechos..."
+                style="cursor:pointer;" />
+
+            <button
+                type="button"
+                class="sap-search-btn"
+                id="sapSearchBtn"
+                title="Seleccionar tabla">
+
+                🔍
+
+            </button>
+
+        </div>
+
+        <input type="hidden" id="factProject" />
+        <input type="hidden" id="factDataset" />
+        <input type="hidden" id="factTable" />
+
+    </div>
+
+
+
+    <!-- ==========================================
+         RESUMEN DEL MODELO
+    =========================================== -->
+
+    <div class="model-summary">
+
+        <div class="summary-item">
+            <span id="summaryDimensions">0</span>
+            <small>Dimensiones</small>
+        </div>
+
+        <div class="summary-item">
+            <span id="summaryMeasures">0</span>
+            <small>Medidas</small>
+        </div>
+
+        <div class="summary-item">
+            <span id="summaryTable">-</span>
+            <small>Tabla</small>
+        </div>
+
+    </div>
+
+
+
+    <!-- ==========================================
+         CAMPOS
+    =========================================== -->
+
+    <div class="card" id="fieldsCard" style="display:none;">
+
+        <div class="section-header">
+
+            <h3>Campos</h3>
+
+            <span id="fieldCountBadge" class="badge">
+                0 campos
+            </span>
+
+        </div>
+
+        <table id="fieldsTable">
+
+            <thead>
+
+                <tr>
+
+                    <th style="width:28%;">Campo</th>
+
+                    <th style="width:30%;">
+                        Alias
+                    </th>
+
+                    <th style="width:18%;">
+                        Tipo
+                    </th>
+
+                    <th style="width:8%;">
+                        ✓
+                    </th>
+
+                    <th style="width:16%;">
+                        Acción
+                    </th>
+
+                </tr>
+
+            </thead>
+
+            <tbody id="fieldsTbody">
+			
+			            </tbody>
+
+        </table>
+
+        <div class="fields-footer">
+
+            <button class="btn" id="btnGenerateModel">
+                💾 Guardar modelo semántico
+            </button>
+
+        </div>
+
+    </div>
+
+</div>
+
+<!-- ==========================================
+     MODAL ÁRBOL BIGQUERY
+========================================== -->
+
+<div id="treeModal" class="modal">
+
+    <div class="modal-content modal-tree">
+
+        <div class="modal-header">
+
+            <h3>Seleccionar tabla</h3>
+
+            <span class="modal-close" id="btnCloseTreeModal">
+                &times;
+            </span>
+
+        </div>
+
+        <div
+            id="treeContainer"
+            class="tree-container">
+
+        </div>
+
+    </div>
+
+</div>
+
+
+
+<!-- ==========================================
+     MODAL MEDIDA
+========================================== -->
+
+<div id="measureModal" class="modal">
+
+    <div class="modal-content">
+
+        <div class="modal-header">
+
+            <h3>
+
+                Medida
+
+                <small id="modalMeasureFieldName"></small>
+
+            </h3>
+
+            <span
+                class="modal-close"
+                id="btnCloseMeasureModal">
+
+                &times;
+
+            </span>
+
+        </div>
+
+
+        <div class="form-group">
+
+            <label>Alias</label>
+
+            <input
+                type="text"
+                id="modalMeasureAlias">
+
+        </div>
+
+
+        <div class="form-group">
+
+            <label>Agregación</label>
+
+            <select id="modalMeasureAgg">
+
+                <option value="SUM">SUM</option>
+
+                <option value="COUNT">COUNT</option>
+
+                <option value="AVG">AVG</option>
+
+                <option value="MIN">MIN</option>
+
+                <option value="MAX">MAX</option>
+
+                <option value="COUNT_DISTINCT">
+                    COUNT DISTINCT
+                </option>
+
+            </select>
+
+        </div>
+
+
+        <div class="form-group">
+
+            <label>Formato</label>
+
+            <select id="modalMeasureFormat">
+
+                <option value="Auto">Automático</option>
+
+                <option value="Currency">
+                    Moneda (€)
+                </option>
+
+                <option value="Integer">
+                    Entero
+                </option>
+
+                <option value="Decimal">
+                    Decimal
+                </option>
+
+                <option value="Percent">
+                    Porcentaje
+                </option>
+
+            </select>
+
+        </div>
+
+        <button
+            class="btn"
+            id="btnSaveMeasureModal">
+
+            Guardar
+
+        </button>
+
+    </div>
+
+</div>
+
+
+
+<!-- ==========================================
+     MODAL DIMENSIÓN
+========================================== -->
+
+<div id="dimensionModal" class="modal">
+
+    <div class="modal-content modal-dimension">
+
+        <div class="modal-header">
+
+            <h3>
+
+                Dimensión
+
+                <small id="modalDimFieldName"></small>
+
+            </h3>
+
+            <span
+                class="modal-close"
+                id="btnCloseDimModal">
+
+                &times;
+
+            </span>
+
+        </div>
+
+
+        <div class="form-group">
+
+            <label>Alias</label>
+
+            <input
+                type="text"
+                id="modalDimAlias">
+
+        </div>
+
+
+        <div class="form-group">
+
+            <label>Tabla de atributos</label>
+
+            <div class="sap-search-input-group">
+
+                <input
+                    type="text"
+                    id="dimRelFullConcat"
+                    readonly
+                    placeholder="Seleccionar tabla de dimensión..."
+                    style="cursor:pointer;">
+
+                <button
+                    type="button"
+                    class="sap-search-btn"
+                    id="dimSapSearchBtn">
+
+                    🔍
+
+                </button>
+
+            </div>
+
+            <input type="hidden" id="dimRelProject">
+            <input type="hidden" id="dimRelDataset">
+            <input type="hidden" id="dimRelTable">
+
+        </div>
+
+
+        <div
+            id="attributesContainer"
+            style="display:none;">
+
+            <h4>Atributos</h4>
+
+            <table>
+
+                <thead>
+
+                    <tr>
+
+                        <th>Campo</th>
+
+                        <th>Alias</th>
+
+                        <th>Key</th>
+
+                        <th>✓</th>
+
+                        <th>H1</th>
+
+                        <th>H2</th>
+
+                    </tr>
+
+                </thead>
+
+                <tbody id="dimAttributesTbody">
+
+                </tbody>
+
+            </table>
+
+        </div>
+
+
+        <button
+            class="btn"
+            id="btnSaveDimModal">
+
+            Guardar
+
+        </button>
+
+    </div>
+
+</div>
+
+<script src="js/semantic_model.js"></script>
+
+</body>
+
+</html>
