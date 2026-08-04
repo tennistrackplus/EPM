@@ -312,32 +312,44 @@ function renderFieldsTable() {
         const row = document.createElement("div");
         row.className = "field-row";
 
-        row.innerHTML = `
+row.innerHTML = `
 
-            <input
-                class="field-enable"
-                type="checkbox"
-                ${field.enabled ? "checked" : ""}
-                onclick="event.stopPropagation(); updateFieldEnabled(${idx}, this.checked)"
-            />
+    <input
+        class="field-enable"
+        type="checkbox"
+        ${field.enabled ? "checked" : ""}
+        onclick="event.stopPropagation(); updateFieldEnabled(${idx}, this.checked)"
+    />
 
-            <select
-                class="field-type"
-                onclick="event.stopPropagation()"
-                onchange="updateFieldType(${idx}, this.value)"
-            >
-                <option value="MEASURE" ${field.type === "MEASURE" ? "selected" : ""}>MEA</option>
-                <option value="DIMENSION" ${field.type === "DIMENSION" ? "selected" : ""}>DIM</option>
-            </select>
+    <select
+        class="field-type"
+        onclick="event.stopPropagation()"
+        onchange="updateFieldType(${idx}, this.value)"
+    >
+        <option value="MEASURE" ${field.type === "MEASURE" ? "selected" : ""}>MEA</option>
+        <option value="DIMENSION" ${field.type === "DIMENSION" ? "selected" : ""}>DIM</option>
+    </select>
 
-            <div class="field-info">
-                <div class="field-name">${field.name}</div>
-                <div class="field-alias">${field.alias}</div>
-            </div>
+    <div class="field-info">
 
-            <div class="field-arrow">›</div>
+        <input
+            class="field-alias-input"
+            type="text"
+            value="${field.alias}"
+            onclick="event.stopPropagation()"
+            oninput="updateFieldAlias(${idx}, this.value)"
+        />
 
-        `;
+        <div class="field-name">
+            ${field.name}
+        </div>
+
+    </div>
+
+    <div class="field-arrow">›</div>
+
+`;
+
 
         if (!field.enabled) {
             row.style.opacity = ".45";
@@ -461,27 +473,70 @@ async function fetchDimensionAttributes(forceRefetch = false) {
     }
 }
 
+
 function renderAttributesTable(attributes) {
-    const tbody = document.getElementById("dimAttributesTbody");
-    tbody.innerHTML = "";
+
+    const list = document.getElementById("attributesList");
+    list.innerHTML = "";
 
     attributes.forEach((attr, idx) => {
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-            <td><strong>${attr.name}</strong></td>
-            <td><input type="text" value="${attr.alias}" onchange="updateAttrAlias(${idx}, this.value)" /></td>
-            <td class="checkbox-cell">
-                <input type="radio" name="dimKeyGroup" ${attr.isKey ? "checked" : ""} onchange="updateAttrKey(${idx})" />
-            </td>
-            <td class="checkbox-cell">
-                <input type="checkbox" ${attr.enabled ? "checked" : ""} onchange="updateAttrEnabled(${idx}, this.checked)" />
-            </td>
-            <td><input type="text" style="width:40px;" value="${attr.hier1 || ''}" onchange="updateAttrHier1(${idx}, this.value)" /></td>
-            <td><input type="text" style="width:40px;" value="${attr.hier2 || ''}" onchange="updateAttrHier2(${idx}, this.value)" /></td>
+
+        const row = document.createElement("div");
+        row.className = "field-row";
+
+        row.innerHTML = `
+
+            <input
+                class="field-enable"
+                type="checkbox"
+                ${attr.enabled ? "checked" : ""}
+                onclick="event.stopPropagation(); updateAttrEnabled(${idx}, this.checked)"
+            />
+
+            <div class="field-info">
+
+                <input
+                    class="field-alias-input"
+                    type="text"
+                    value="${attr.alias}"
+                    onclick="event.stopPropagation()"
+                    oninput="updateAttrAlias(${idx}, this.value)"
+                />
+
+                <div class="field-name">
+                    ${attr.name}
+                </div>
+
+            </div>
+
+            <label class="field-key">
+
+                <input
+                    type="radio"
+                    name="dimKeyGroup"
+                    ${attr.isKey ? "checked" : ""}
+                    onclick="event.stopPropagation()"
+                    onchange="updateAttrKey(${idx})"
+                >
+
+                <span>Key</span>
+
+            </label>
+
         `;
-        tbody.appendChild(tr);
+
+        if (!attr.enabled) {
+            row.style.opacity = ".45";
+        }
+
+        list.appendChild(row);
+
     });
+
 }
+
+
+
 
 function updateAttrAlias(idx, val) { fieldsState[currentConfigFieldIndex].attributes[idx].alias = val; }
 function updateAttrKey(selectedIdx) {
