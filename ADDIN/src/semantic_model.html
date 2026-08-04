@@ -391,7 +391,77 @@
     flex-shrink:0;
 
 }
+
+
+.field-alias-input{
+
+    width:100%;
+
+    border:none;
+
+    outline:none;
+
+    background:transparent;
+
+    font-size:13px;
+
+    font-weight:600;
+
+    color:var(--text-primary);
+
+    padding:0;
+
+    margin:0;
+
+}
+
+.field-alias-input:focus{
+
+    border-bottom:1px solid var(--brand-primary);
+
+}
+
+.field-name{
+
+    margin-top:3px;
+
+    font-size:12px;
+
+    color:var(--text-muted);
+
+    white-space:nowrap;
+
+    overflow:hidden;
+
+    text-overflow:ellipsis;
+
+}
 		
+
+.field-key{
+
+    display:flex;
+
+    align-items:center;
+
+    gap:6px;
+
+    flex-shrink:0;
+
+    font-size:12px;
+
+    color:var(--text-secondary);
+
+    font-weight:600;
+
+}
+
+.field-key input{
+
+    margin:0;
+
+}
+
     </style>
 </head>
 <body>
@@ -509,23 +579,17 @@
                 <input type="hidden" id="dimRelDataset" />
                 <input type="hidden" id="dimRelTable" />
             </div>
-            <div id="attributesContainer" style="display:none; margin-top: 15px;">
-                <h4>Atributos y jerarquía</h4>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Campo</th>
-                            <th>Alias</th>
-                            <th>Key</th>
-                            <th>Enable</th>
-                            <th>Hier1</th>
-                            <th>Hier2</th>
-                        </tr>
-                    </thead>
-                    <tbody id="dimAttributesTbody">
-                    </tbody>
-                </table>
-            </div>
+
+<div id="attributesContainer" style="display:none; margin-top:15px;">
+
+    <h4>Atributos</h4>
+
+    <div id="attributesList" class="fields-list">
+        <!-- Se rellena dinámicamente -->
+    </div>
+
+</div>
+
             <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar dimensión</button>
         </div>
     </div>
