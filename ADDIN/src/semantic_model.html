@@ -5,29 +5,24 @@
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EPM Data Studio · Modelo semántico</title>
-
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
     <link rel="stylesheet" href="css/theme.css">
     <style>
         body {
             padding: 0;
         }
-
         .page-content {
             padding: 14px;
         }
-
         h3, h4 {
             color: var(--text-primary);
         }
-
         h3 {
             font-size: var(--fs-md);
             font-weight: 700;
             letter-spacing: 0.2px;
             margin-bottom: 12px;
         }
-
         h4 {
             font-size: var(--fs-sm);
             font-weight: 700;
@@ -36,20 +31,20 @@
             color: var(--text-muted);
             margin: 16px 0 8px 0;
         }
-
         .card {
             padding: 16px;
             margin-bottom: 14px;
         }
 
+        .card.compact {
+            padding: 10px 12px;
+        }
         .form-group {
             margin-bottom: 12px;
         }
-
         .form-group:last-child {
             margin-bottom: 0;
         }
-
         label {
             display: block;
             font-size: 10px;
@@ -60,18 +55,78 @@
             margin-bottom: 5px;
         }
 
+        /* ---- Gestión de modelos semánticos (crear / editar / eliminar) ---- */
+        .model-manager-row {
+            display: flex;
+            align-items: stretch;
+            gap: 6px;
+        }
+
+        .model-manager-select {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .model-manager-select select {
+            width: 100%;
+        }
+
+        .model-manager-actions {
+            display: flex;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .icon-btn {
+            width: 30px;
+            height: auto;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border-default);
+            background-color: var(--surface-card);
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1;
+            cursor: pointer;
+            transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+        }
+
+        .icon-btn:hover {
+            background-color: var(--gray-100);
+            color: var(--text-primary);
+            border-color: var(--gray-400);
+        }
+
+        .icon-btn.danger:hover {
+            background-color: var(--color-danger-light);
+            color: var(--color-danger);
+            border-color: #F3C9C6;
+        }
+
+        .card-divider {
+            height: 1px;
+            background-color: var(--border-subtle);
+            margin: 8px 0;
+        }
+
+        /* Compacta: sin labels visibles, solo placeholder + icono */
+        .compact-field-group {
+            margin: 0;
+        }
+
         /* Estilo de ayuda de búsqueda (SAP Matchcode) */
         .sap-search-input-group {
             display: flex;
             align-items: stretch;
         }
-
         .sap-search-input-group input[type="text"] {
             border-top-right-radius: 0;
             border-bottom-right-radius: 0;
             border-right: none;
         }
-
         .sap-search-btn {
             background-color: var(--brand-primary);
             color: var(--text-inverse);
@@ -86,37 +141,30 @@
             justify-content: center;
             transition: background-color var(--transition-fast);
         }
-
         .sap-search-btn:hover {
             background-color: var(--brand-primary-hover);
         }
-
         table {
             margin-top: 6px;
             border: 1px solid var(--border-subtle);
             border-radius: var(--radius-md);
             overflow: hidden;
         }
-
         th:first-child, td:first-child {
             padding-left: 12px;
         }
-
         .btn {
             width: 100%;
             margin-top: 12px;
         }
-
         .btn-secondary {
             background-color: var(--surface-card);
             color: var(--text-primary);
         }
-
         .btn-sm {
             width: auto;
             margin-top: 0;
         }
-
         /* Modales */
         .modal {
             display: none;
@@ -130,11 +178,9 @@
             z-index: 100;
             overflow-y: auto;
         }
-
         #treeModal {
             z-index: 200;
         }
-
         .modal-content {
             background-color: var(--surface-card);
             margin: 24px auto;
@@ -145,7 +191,6 @@
             width: 90%;
             max-width: 480px;
         }
-
         .modal-header {
             display: flex;
             justify-content: space-between;
@@ -154,11 +199,9 @@
             padding-bottom: 10px;
             margin-bottom: 14px;
         }
-
         .modal-header h3 {
             margin: 0;
         }
-
         .modal-close {
             color: var(--text-muted);
             font-size: 20px;
@@ -173,12 +216,10 @@
             justify-content: center;
             transition: background-color var(--transition-fast), color var(--transition-fast);
         }
-
         .modal-close:hover {
             background-color: var(--gray-100);
             color: var(--text-primary);
         }
-
         /* Árbol jerárquico de selección de tabla */
         .tree-container {
             max-height: 350px;
@@ -188,21 +229,17 @@
             padding: 10px;
             background: var(--surface-sunken);
         }
-
         .tree-list {
             list-style: none;
             padding-left: 16px;
             margin: 0;
         }
-
         .tree-container > .tree-list {
             padding-left: 0;
         }
-
         .tree-item {
             margin-top: 3px;
         }
-
         .tree-header {
             cursor: pointer;
             user-select: none;
@@ -212,31 +249,25 @@
             display: block;
             transition: background-color var(--transition-fast);
         }
-
         .tree-header:hover {
             background-color: var(--gray-100);
         }
-
         .tree-toggle {
             display: inline-block;
             width: 14px;
             font-size: 9px;
             color: var(--text-muted);
         }
-
         .tree-children {
             display: none;
         }
-
         .tree-children.open {
             display: block;
         }
-
         .table-item {
             color: var(--brand-primary);
             font-weight: 700;
         }
-
         .table-item:hover {
             background-color: var(--brand-primary);
             color: var(--text-inverse);
@@ -244,7 +275,6 @@
     </style>
 </head>
 <body>
-
     <!-- Barra de marca (idéntica en todas las pantallas del complemento) -->
     <header class="app-topbar">
         <div class="app-topbar-brand">
@@ -261,16 +291,29 @@
             </div>
         </div>
     </header>
-
     <div class="page-content">
 
-        <!-- TABLA DE HECHOS -->
-        <div class="card">
-            <h3>Tabla de hechos</h3>
-            <div class="form-group">
-                <label>Tabla de hechos seleccionada (proyecto . dataset . tabla)</label>
+        <!-- MODELO SEMÁNTICO + TABLA DE HECHOS (misma tarjeta, sin títulos, máxima compacidad) -->
+        <div class="card compact">
+
+            <!-- Gestión de modelos: crear / editar / eliminar -->
+            <div class="model-manager-row">
+                <select id="semanticModelSelect" aria-label="Modelo semántico" title="Modelo semántico">
+                    <option value="">— Sin modelo seleccionado —</option>
+                </select>
+                <div class="model-manager-actions">
+                    <button type="button" class="icon-btn" id="btnNewModel" title="Crear nuevo modelo">+</button>
+                    <button type="button" class="icon-btn" id="btnRenameModel" title="Editar nombre del modelo">✎</button>
+                    <button type="button" class="icon-btn danger" id="btnDeleteModel" title="Eliminar modelo">🗑</button>
+                </div>
+            </div>
+
+            <div class="card-divider"></div>
+
+            <!-- Tabla de hechos -->
+            <div class="compact-field-group">
                 <div class="sap-search-input-group">
-                    <input type="text" id="factFullConcat" readonly placeholder="Seleccionar tabla (Ayuda de búsqueda)..." style="cursor: pointer;" />
+                    <input type="text" id="factFullConcat" readonly placeholder="Tabla de hechos (proyecto.dataset.tabla)" aria-label="Tabla de hechos seleccionada" title="Tabla de hechos seleccionada" style="cursor: pointer;" />
                     <button type="button" class="sap-search-btn" id="sapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
                 </div>
                 <input type="hidden" id="factProject" />
@@ -295,11 +338,9 @@
                 <tbody id="fieldsTbody">
                 </tbody>
             </table>
-
             <button class="btn" id="btnGenerateModel">Generar modelo semántico en Excel</button>
         </div>
     </div>
-
     <!-- MODAL SELECCIÓN JERÁRQUICA DE TABLA -->
     <div id="treeModal" class="modal">
         <div class="modal-content">
@@ -310,7 +351,6 @@
             <div id="treeContainer" class="tree-container"></div>
         </div>
     </div>
-
     <!-- MODAL CONFIGURACIÓN MEDIDA -->
     <div id="measureModal" class="modal">
         <div class="modal-content">
@@ -346,7 +386,6 @@
             <button class="btn" id="btnSaveMeasureModal">Guardar medida</button>
         </div>
     </div>
-
     <!-- MODAL CONFIGURACIÓN DIMENSIÓN -->
     <div id="dimensionModal" class="modal">
         <div class="modal-content">
@@ -358,7 +397,6 @@
                 <label>Alias</label>
                 <input type="text" id="modalDimAlias" />
             </div>
-
             <h4>Tabla de atributos (relación)</h4>
             <div class="form-group">
                 <label>Tabla de dimensión seleccionada</label>
@@ -370,7 +408,6 @@
                 <input type="hidden" id="dimRelDataset" />
                 <input type="hidden" id="dimRelTable" />
             </div>
-
             <div id="attributesContainer" style="display:none; margin-top: 15px;">
                 <h4>Atributos y jerarquía</h4>
                 <table>
@@ -388,11 +425,9 @@
                     </tbody>
                 </table>
             </div>
-
             <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar dimensión</button>
         </div>
     </div>
-
     <script src="js/semantic_model.js"></script>
 </body>
 </html>
