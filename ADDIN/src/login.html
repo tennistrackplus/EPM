@@ -89,19 +89,23 @@
             min-width: 0;
         }
 
-        .connector-icon {
-            width: 34px;
-            height: 34px;
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: var(--radius-md);
-            font-size: var(--fs-sm);
-            font-weight: 700;
-            letter-spacing: 0.2px;
-        }
+.connector-icon {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
 
+.connector-icon img {
+    width: 34px;
+    height: 34px;
+    object-fit: contain;
+    display: block;
+}
         .connector-details {
             min-width: 0;
         }
@@ -233,7 +237,10 @@
                 <!-- BigQuery -->
                 <div class="connector-card" data-provider="bigquery">
                     <div class="connector-info">
-                        <div class="connector-icon" style="background-color: #E8F0FE; color: #1A73E8;">BQ</div>
+<div class="connector-icon">
+    <img src="https://www.vectorlogo.zone/logos/google_bigquery/google_bigquery-icon.svg"
+         alt="BigQuery">
+</div>
                         <div class="connector-details">
                             <h3>BigQuery</h3>
                             <span>Google Cloud Platform</span>
@@ -245,7 +252,10 @@
                 <!-- Amazon -->
                 <div class="connector-card" data-provider="amazon">
                     <div class="connector-info">
-                        <div class="connector-icon" style="background-color: #FFF3E0; color: #E65100;">AWS</div>
+<div class="connector-icon">
+    <img src="https://www.vectorlogo.zone/logos/amazon_aws/amazon_aws-icon.svg"
+         alt="AWS">
+</div>
                         <div class="connector-details">
                             <h3>Amazon</h3>
                             <span>AWS Redshift / S3</span>
@@ -257,7 +267,11 @@
                 <!-- Microsoft Fabric -->
                 <div class="connector-card" data-provider="fabric">
                     <div class="connector-info">
-                        <div class="connector-icon" style="background-color: #E1F5FE; color: #0288D1;">MS</div>
+
+<div class="connector-icon">
+<img src="https://community.fabric.microsoft.com/html/assets/fabric-expo-icon.svg">
+</div>
+
                         <div class="connector-details">
                             <h3>Microsoft Fabric</h3>
                             <span>OneLake / Power BI</span>
@@ -269,7 +283,13 @@
                 <!-- Snowflake -->
                 <div class="connector-card" data-provider="snowflake">
                     <div class="connector-info">
-                        <div class="connector-icon" style="background-color: #E0F7FA; color: #00ACC1;">SF</div>
+
+<div class="connector-icon">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg"
+         alt="SAP Datasphere">
+</div>
+
+
                         <div class="connector-details">
                             <h3>Snowflake</h3>
                             <span>Cloud Data Platform</span>
@@ -281,7 +301,10 @@
                 <!-- SAP Datasphere -->
                 <div class="connector-card" data-provider="datasphere">
                     <div class="connector-info">
-                        <div class="connector-icon" style="background-color: #F3E5F5; color: #7B1FA2;">DS</div>
+<div class="connector-icon">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg"
+         alt="SAP Datasphere">
+</div>
                         <div class="connector-details">
                             <h3>SAP Datasphere</h3>
                             <span>SAP Business Warehouse</span>
@@ -293,7 +316,10 @@
                 <!-- CDS de S4 -->
                 <div class="connector-card" data-provider="s4cds">
                     <div class="connector-info">
-                        <div class="connector-icon" style="background-color: #EFEBE9; color: #5D4037;">S4</div>
+<div class="connector-icon">
+    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg"
+         alt="SAP S/4HANA CDS">
+</div>
                         <div class="connector-details">
                             <h3>CDS de S4</h3>
                             <span>SAP S/4HANA CDS Views</span>
