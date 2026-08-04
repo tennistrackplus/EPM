@@ -313,9 +313,22 @@ function renderFieldsTable() {
         row.className = "field-row";
 
         row.innerHTML = `
-            <div class="field-badge ${field.type === "MEASURE" ? "measure" : "dimension"}">
-                ${field.type === "MEASURE" ? "MEA" : "DIM"}
-            </div>
+
+            <input
+                class="field-enable"
+                type="checkbox"
+                ${field.enabled ? "checked" : ""}
+                onclick="event.stopPropagation(); updateFieldEnabled(${idx}, this.checked)"
+            />
+
+            <select
+                class="field-type"
+                onclick="event.stopPropagation()"
+                onchange="updateFieldType(${idx}, this.value)"
+            >
+                <option value="MEASURE" ${field.type === "MEASURE" ? "selected" : ""}>MEA</option>
+                <option value="DIMENSION" ${field.type === "DIMENSION" ? "selected" : ""}>DIM</option>
+            </select>
 
             <div class="field-info">
                 <div class="field-name">${field.name}</div>
@@ -323,6 +336,7 @@ function renderFieldsTable() {
             </div>
 
             <div class="field-arrow">›</div>
+
         `;
 
         if (!field.enabled) {
