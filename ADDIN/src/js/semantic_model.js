@@ -204,22 +204,31 @@ async function loadSemanticModels()
 
 }
 
+
 async function saveModelHeader()
 {
 
-    if (!currentModel || currentModel.trim() === "") {
-        const select = document.getElementById("semanticModelSelect");
-        const input = document.getElementById("newModelName");
-        if (select && select.value) {
-            currentModel = select.value.trim();
-        } else if (input && input.value) {
-            currentModel = input.value.trim();
-        }
+    // Intentamos obtener el nombre del modelo directamente desde los inputs/select del DOM
+    let modelName = "";
+
+    const selectElem = document.getElementById("semanticModelSelect");
+    const inputElem = document.getElementById("newModelName");
+
+    if (selectElem && selectElem.value && selectElem.value !== "") {
+        modelName = selectElem.value.trim();
+    } else if (inputElem && inputElem.value && inputElem.value.trim() !== "") {
+        modelName = inputElem.value.trim();
+    } else {
+        modelName = currentModel;
     }
 
-    if (!currentModel || currentModel.trim() === "") {
+    // Si tras revisar el DOM y la variable no hay nombre de modelo, cancelamos el guardado para no grabar filas vacías
+    if (!modelName || modelName.trim() === "") {
         return;
     }
+
+    // Actualizamos la variable global para mantener la coherencia
+    currentModel = modelName;
 
     await Excel.run(async(context)=>{
 
@@ -252,15 +261,15 @@ async function saveModelHeader()
             if(i===0)
                 return true;
 
-            return r[0]!==currentModel;
+            return r[0]!==modelName;
 
         });
 
         rows.splice(1, 0, [
 
-            currentModel,
+            modelName,
 
-            "PRO: " + document.getElementById("factProject").value,
+            document.getElementById("factProject").value,
 
             document.getElementById("factDataset").value,
 
@@ -281,6 +290,8 @@ async function saveModelHeader()
     });
 
 }
+
+
 
 async function loadModel(modelName)
 {
@@ -622,7 +633,6 @@ function selectFactTable(projectId, datasetId, tableId) {
         document.getElementById("factFullConcat").value = `${projectId}.${datasetId}.${tableId}`;
         closeTreeModal();
         fetchFactFields();
-        saveModelHeader();
     } else if (currentTreeTarget === "DIM") {
         document.getElementById("dimRelProject").value = projectId;
         document.getElementById("dimRelDataset").value = datasetId;
