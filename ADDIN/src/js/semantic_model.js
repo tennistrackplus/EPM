@@ -217,7 +217,7 @@ async function saveModelHeader()
 
         });
 
-        rows.push([
+        rows.splice(1, 0, [
 
             currentModel,
 
@@ -228,12 +228,6 @@ async function saveModelHeader()
             document.getElementById("factTable").value
 
         ]);
-
-        const header=rows.shift();
-
-        rows.sort((a,b)=>a[0].localeCompare(b[0]));
-
-        rows.unshift(header);
 
         sheet.getUsedRange().clear();
 
@@ -1065,6 +1059,8 @@ fieldsState.forEach((f, idx) => {
     });
 
     try {
+        await saveModelHeader();
+
         await Excel.run(async (context) => {
             const sheetsMap = [
                 { name: "MODEL_RELATIONSHIP", data: relData },
