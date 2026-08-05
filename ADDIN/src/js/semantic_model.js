@@ -879,6 +879,10 @@ function saveDimModal() {
 /**
  * Vuelca el modelo semántico completo a Excel rellenando las 5 pestañas objetivo
  */
+ 
+ 
+// semantic_model_generate.js
+
 async function generateSemanticModelInExcel() {
     const factProject = document.getElementById("factProject").value.trim();
     const factDataset = document.getElementById("factDataset").value;
@@ -886,216 +890,345 @@ async function generateSemanticModelInExcel() {
 
     const enabledFields = fieldsState.filter(f => f.enabled);
 
-    // 1. MODEL_RELATIONSHIP
-// 1. MODEL_RELATIONSHIP
-const relData = [[
-    "FILA",
-    "DIMENSION",
-    "FACT_PROJECT",
-    "FACT_DATASET",
-    "FACT_TABLE",
-    "FACT_FIELD",
-    "DIM_PROJECT",
-    "DIM_DATASET",
-    "DIM_TABLE",
-    "DIM_FIELD",
-    "JOIN TYPE"
-]];
+    // ============================================================
+    // MODEL_RELATIONSHIP
+    // ============================================================
 
-fieldsState.forEach((f, idx) => {
+    const relData = [[
+        "FILA",
+        "DIMENSION",
+        "FACT_PROJECT",
+        "FACT_DATASET",
+        "FACT_TABLE",
+        "FACT_FIELD",
+        "DIM_PROJECT",
+        "DIM_DATASET",
+        "DIM_TABLE",
+        "DIM_FIELD",
+        "JOIN TYPE"
+    ]];
 
-    // Solo dimensiones habilitadas con tabla de relación
-    if (!f.enabled || f.type !== "DIMENSION" || !f.relTable)
-        return;
+    fieldsState.forEach((f, idx) => {
 
-    const keyAttr = (f.attributes || []).find(a => a.isKey);
+        if (!f.enabled || f.type !== "DIMENSION" || !f.relTable)
+            return;
 
-    relData.push([
-        idx + 1,
-        f.name,
-        factProject,
-        factDataset,
-        factTable,
-        f.name,
-        f.relProject,
-        f.relDataset,
-        f.relTable,
-        keyAttr ? keyAttr.name : f.name,
-        "LEFT"
-    ]);
+        const keyAttr = (f.attributes || []).find(a => a.isKey);
 
-});
-// 2. MODEL_DIMENSION
-const dimData = [[
-    "FILA",
-    "DIMENSION",
-    "FACT_PROJECT",
-    "FACT_DATASET",
-    "FACT_TABLE",
-    "FACT_FIELD",
-    "DIM_PROJECT",
-    "DIM_DATASET",
-    "DIM_TABLE",
-    "DIM_FIELD"
-]];
-
-fieldsState.forEach((f, idx) => {
-
-    if (!f.enabled || f.type !== "DIMENSION") return;
-
-    const keyAttr = (f.attributes || []).find(a => a.isKey);
-
-    dimData.push([
-        idx + 1,                    // Posición del campo en la tabla de hechos
-        f.name,
-        factProject,
-        factDataset,
-        factTable,
-        f.name,
-        f.relProject || factProject,
-        f.relDataset || factDataset,
-        f.relTable || factTable,
-        keyAttr ? keyAttr.name : f.name
-    ]);
-
-});
-
-
-// 3. MODEL_MEASURES
-const meaData = [[
-    "FILA",
-    "MEASURE",
-    "FACT_PROJECT",
-    "FACT_DATASET",
-    "FACT_TABLE",
-    "FACT_FIELD",
-    "AGGREGATION",
-    "FORMAT"
-]];
-
-fieldsState.forEach((f, idx) => {
-
-    if (!f.enabled || f.type !== "MEASURE") return;
-
-    meaData.push([
-        idx + 1,                    // Posición del campo en la tabla de hechos
-        f.name,
-        factProject,
-        factDataset,
-        factTable,
-        f.name,
-        f.aggregation,
-        f.format
-    ]);
-
-});
-
-    // 4. MODEL_ATRIBUTES
-// 4. MODEL_ATRIBUTES
-const attrData = [[
-    "FILA",
-    "DIMENSION",
-    "ATRIBUTE",
-    "DIM_PROJECT",
-    "DIM_DATASET",
-    "DIM_TABLE",
-    "DIM_FIELD",
-    "DISPLAY_NAME",
-    "DATA_TYPE"
-]];
-
-fieldsState.forEach((f, idx) => {
-
-    if (!f.enabled || f.type !== "DIMENSION")
-        return;
-
-    // Dimensión con tabla relacionada
-    if (f.attributes && f.attributes.length > 0) {
-
-        f.attributes
-            .filter(a => a.enabled)
-            .forEach(a => {
-
-                attrData.push([
-                    idx + 1,
-                    f.name,
-                    a.name,
-                    f.relProject || factProject,
-                    f.relDataset || factDataset,
-                    f.relTable || factTable,
-                    a.name,
-                    a.alias === a.name ? "" : a.alias,
-                    a.dataType
-                ]);
-
-            });
-
-    }
-    // Dimensión sin tabla relacionada
-    else {
-
-        attrData.push([
+        relData.push([
             idx + 1,
-            f.name,
             f.name,
             factProject,
             factDataset,
             factTable,
             f.name,
-            "",
-            f.dataType
+            f.relProject,
+            f.relDataset,
+            f.relTable,
+            keyAttr ? keyAttr.name : f.name,
+            "LEFT"
         ]);
 
-    }
-
-});
-
-    // 5. MODEL_HIER
-    const hierData = [["DIMENSION", "HIERARCHY_LEVEL", "ATTRIBUTE_COLUMN"]];
-    enabledFields.filter(f => f.type === "DIMENSION").forEach(f => {
-        if (f.attributes) {
-            f.attributes.forEach(a => {
-                if (a.hier1) hierData.push([f.name, `LEVEL_${a.hier1}`, a.name]);
-                if (a.hier2) hierData.push([f.name, `LEVEL_${a.hier2}`, a.name]);
-            });
-        }
     });
 
+    // ============================================================
+    // MODEL_DIMENSION
+    // ============================================================
+
+    const dimData = [[
+        "FILA",
+        "DIMENSION",
+        "FACT_PROJECT",
+        "FACT_DATASET",
+        "FACT_TABLE",
+        "FACT_FIELD",
+        "DIM_PROJECT",
+        "DIM_DATASET",
+        "DIM_TABLE",
+        "DIM_FIELD"
+    ]];
+
+    fieldsState.forEach((f, idx) => {
+
+        if (!f.enabled || f.type !== "DIMENSION") return;
+
+        const keyAttr = (f.attributes || []).find(a => a.isKey);
+
+        dimData.push([
+            idx + 1,
+            f.name,
+            factProject,
+            factDataset,
+            factTable,
+            f.name,
+            f.relProject || factProject,
+            f.relDataset || factDataset,
+            f.relTable || factTable,
+            keyAttr ? keyAttr.name : f.name
+        ]);
+
+    });
+
+    // ============================================================
+    // MODEL_MEASURES
+    // ============================================================
+
+    const meaData = [[
+        "FILA",
+        "MEASURE",
+        "FACT_PROJECT",
+        "FACT_DATASET",
+        "FACT_TABLE",
+        "FACT_FIELD",
+        "AGGREGATION",
+        "FORMAT"
+    ]];
+
+    fieldsState.forEach((f, idx) => {
+
+        if (!f.enabled || f.type !== "MEASURE") return;
+
+        meaData.push([
+            idx + 1,
+            f.name,
+            factProject,
+            factDataset,
+            factTable,
+            f.name,
+            f.aggregation,
+            f.format
+        ]);
+
+    });
+
+    // ============================================================
+    // MODEL_ATRIBUTES
+    // ============================================================
+
+    const attrData = [[
+        "FILA",
+        "DIMENSION",
+        "ATRIBUTE",
+        "DIM_PROJECT",
+        "DIM_DATASET",
+        "DIM_TABLE",
+        "DIM_FIELD",
+        "DISPLAY_NAME",
+        "DATA_TYPE"
+    ]];
+
+    fieldsState.forEach((f, idx) => {
+
+        if (!f.enabled || f.type !== "DIMENSION")
+            return;
+
+        if (f.attributes && f.attributes.length > 0) {
+
+            f.attributes
+                .filter(a => a.enabled)
+                .forEach(a => {
+
+                    attrData.push([
+                        idx + 1,
+                        f.name,
+                        a.name,
+                        f.relProject || factProject,
+                        f.relDataset || factDataset,
+                        f.relTable || factTable,
+                        a.name,
+                        a.alias === a.name ? "" : a.alias,
+                        a.dataType
+                    ]);
+
+                });
+
+        } else {
+
+            attrData.push([
+                idx + 1,
+                f.name,
+                f.name,
+                factProject,
+                factDataset,
+                factTable,
+                f.name,
+                "",
+                f.dataType
+            ]);
+
+        }
+
+    });
+
+    // ============================================================
+    // MODEL_HIER
+    // ============================================================
+
+    const hierData = [[
+        "DIMENSION",
+        "HIERARCHY_LEVEL",
+        "ATTRIBUTE_COLUMN"
+    ]];
+
+    enabledFields
+        .filter(f => f.type === "DIMENSION")
+        .forEach(f => {
+
+            if (f.attributes) {
+
+                f.attributes.forEach(a => {
+
+                    if (a.hier1)
+                        hierData.push([f.name, `LEVEL_${a.hier1}`, a.name]);
+
+                    if (a.hier2)
+                        hierData.push([f.name, `LEVEL_${a.hier2}`, a.name]);
+
+                });
+
+            }
+
+        });
+
+    // ============================================================
+    // ESCRIBIR EN EXCEL
+    // ============================================================
+
     try {
+
         await Excel.run(async (context) => {
-            const sheetsMap = [
-                { name: "MODEL_RELATIONSHIP", data: relData },
-                { name: "MODEL_DIMENSION", data: dimData },
-                { name: "MODEL_MEASURES", data: meaData },
-                { name: "MODEL_ATRIBUTES", data: attrData },
-                { name: "MODEL_HIER", data: hierData }
-            ];
 
             const sheets = context.workbook.worksheets;
+			
+			            const sheetsMap = [
+                { name: "MODEL_RELATIONSHIP", data: relData },
+                { name: "MODEL_DIMENSION",    data: dimData },
+                { name: "MODEL_MEASURES",     data: meaData },
+                { name: "MODEL_ATRIBUTES",    data: attrData },
+                { name: "MODEL_HIER",         data: hierData }
+            ];
+
+            //===========================================================
+            // Escribir todas las hojas como TABLAS de Excel
+            //===========================================================
 
             for (const item of sheetsMap) {
+
                 let sheet = sheets.getItemOrNullObject(item.name);
                 await context.sync();
 
                 if (sheet.isNullObject) {
                     sheet = sheets.add(item.name);
-                } else {
-                    sheet.getUsedRangeOrNullObject().clear();
                 }
 
-                if (item.data.length > 0) {
-                    const rows = item.data.length;
-                    const cols = item.data[0].length;
-                    const range = sheet.getRangeByIndexes(0, 0, rows, cols);
-                    range.values = item.data;
+                const usedRange = sheet.getUsedRangeOrNullObject();
+                usedRange.load("address");
+                await context.sync();
+
+                if (!usedRange.isNullObject) {
+
+                    const oldTables = sheet.tables;
+                    oldTables.load("items/name");
+
+                    await context.sync();
+
+                    oldTables.items.forEach(t => t.delete());
+
+                    usedRange.clear();
                 }
+
+                if (item.data.length === 0)
+                    continue;
+
+                const rows = item.data.length;
+                const cols = item.data[0].length;
+
+                const range = sheet.getRangeByIndexes(
+                    0,
+                    0,
+                    rows,
+                    cols
+                );
+
+                range.values = item.data;
+
+                const table = sheet.tables.add(range, true);
+
+                table.name =
+                    "TBL_" +
+                    item.name
+                        .replace(/[^A-Za-z0-9]/g, "_")
+                        .toUpperCase();
+
+                table.style = "TableStyleMedium2";
+
+                table.getHeaderRowRange().format.autofitColumns();
+                table.getDataBodyRange().format.autofitColumns();
+            }
+
+            //-----------------------------------------------------------
+            // MODEL_FACT (guardar modelo seleccionado)
+            //-----------------------------------------------------------
+
+            const factSheet = sheets.getItem("MODEL_FACT");
+
+            const factTable = factSheet.tables.getItem("TBL_MODEL_FACT");
+
+            const bodyRange = factTable.getDataBodyRangeOrNullObject();
+
+            bodyRange.load("values");
+
+            await context.sync();
+
+            let rowsFact = [];
+
+            if (!bodyRange.isNullObject) {
+                rowsFact = bodyRange.values;
+            }
+
+            const modelName = currentModelName;
+
+            rowsFact = rowsFact.filter(r => r[0] !== modelName);
+
+            rowsFact.push([
+                modelName,
+                factProject,
+                factDataset,
+                factTable
+            ]);
+
+            rowsFact.sort((a, b) =>
+                a[0].localeCompare(b[0])
+            );
+
+            if (!bodyRange.isNullObject) {
+                bodyRange.delete(Excel.DeleteShiftDirection.up);
+            }
+
+            if (rowsFact.length > 0) {
+
+                factTable.rows.add(
+                    null,
+                    rowsFact
+                );
+
             }
 
             await context.sync();
-            alert("¡Modelo Semántico generado con éxito en Excel!");
+
+            alert("Modelo semántico generado correctamente.");
+
         });
+
     } catch (err) {
-        console.error("Error al escribir el modelo semántico en Excel:", err);
-        alert("Error al escribir en Excel: " + err.message);
+
+        console.error(err);
+
+        alert(
+            "Error al generar el modelo: " +
+            err.message
+        );
+
     }
+
 }
