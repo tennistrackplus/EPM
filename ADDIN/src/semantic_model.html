@@ -282,13 +282,21 @@
 }
 
 .field-row{
+
     display:flex;
+
     align-items:center;
-    gap:12px;
-    padding:12px 14px;
+
+    gap:10px;
+
+    padding:10px 14px;
+
     cursor:pointer;
-    transition:background .15s ease;
+
     border-bottom:1px solid var(--border-subtle);
+
+    transition:background .15s;
+
 }
 
 .field-row:last-child{
@@ -325,19 +333,38 @@
 }
 
 .field-info{
+
     flex:1;
+
+    display:flex;
+
+    flex-direction:column;
+
+    justify-content:center;
+
     min-width:0;
+
 }
 
 .field-name{
-    font-size:13px;
-    font-weight:600;
-    color:var(--text-primary);
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-}
 
+    margin-top:2px;
+
+    font-size:11px;
+
+    line-height:16px;
+
+    color:var(--text-muted);
+
+    font-family:Consolas, monospace;
+
+    white-space:nowrap;
+
+    overflow:hidden;
+
+    text-overflow:ellipsis;
+
+}
 .field-alias{
     margin-top:2px;
     font-size:12px;
@@ -357,36 +384,38 @@
 
 .field-enable{
 
-    width:16px;
-    height:16px;
+    width:14px;
+    height:14px;
 
-    margin:0;
+    margin:0 4px 0 0;
 
     flex-shrink:0;
 
     cursor:pointer;
 
+    accent-color:var(--brand-primary);
+
 }
+
 
 .field-type{
 
-    width:68px;
+    width:58px;
+    height:24px;
 
-    height:28px;
-
-    border:1px solid var(--border-default);
+    border:1px solid var(--border-subtle);
 
     border-radius:999px;
 
-    background:white;
+    background:#F8F9FA;
 
-    font-size:11px;
+    color:var(--text-secondary);
+
+    font-size:10px;
 
     font-weight:700;
 
-    cursor:pointer;
-
-    padding:0 8px;
+    padding:0 4px;
 
     flex-shrink:0;
 
@@ -397,21 +426,23 @@
 
     width:100%;
 
+    padding:0;
+
+    margin:0;
+
     border:none;
 
     outline:none;
 
     background:transparent;
 
-    font-size:13px;
+    font-size:14px;
 
     font-weight:600;
 
+    line-height:20px;
+
     color:var(--text-primary);
-
-    padding:0;
-
-    margin:0;
 
 }
 
@@ -472,13 +503,19 @@
         <div class="card compact">
 
             <!-- Gestión de modelos: crear / editar / eliminar -->
-            <div class="model-manager-row">
-                <select id="semanticModelSelect" aria-label="Modelo semántico" title="Modelo semántico">
-                    <option value="">— Sin modelo seleccionado —</option>
-                </select>
+            <div class="model-manager-row">ç
+			
+			
+			
+			<div id="modelSelectorContainer">
+
+    <select id="semanticModelSelect">
+        <option value="">— Sin modelo seleccionado —</option>
+    </select>
+
+</div>
                 <div class="model-manager-actions">
                     <button type="button" class="icon-btn" id="btnNewModel" title="Crear nuevo modelo">+</button>
-                    <button type="button" class="icon-btn" id="btnRenameModel" title="Editar nombre del modelo">✎</button>
                     <button type="button" class="icon-btn danger" id="btnDeleteModel" title="Eliminar modelo">🗑</button>
                 </div>
             </div>
