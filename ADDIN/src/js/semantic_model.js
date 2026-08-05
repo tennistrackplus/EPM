@@ -207,7 +207,22 @@ async function saveModelHeader()
         await context.sync();
 
         let rows=range.values;
-		currentModel = "HOLA";
+		let modelName = "";
+		
+		
+	
+    const selectElem = document.getElementById("semanticModelSelect");
+    const inputElem = document.getElementById("newModelName");
+
+    if (selectElem && selectElem.value && selectElem.value !== "") {
+        modelName = selectElem.value.trim();
+    } else if (inputElem && inputElem.value && inputElem.value.trim() !== "") {
+        modelName = inputElem.value.trim();
+    } else {
+        modelName = currentModel;
+    }
+		
+		currentModel = modelName;
 
         rows=rows.filter((r,i)=>{
 
