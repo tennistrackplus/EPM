@@ -101,7 +101,8 @@ function newModel()
 async function saveNewModel()
 {
 
-    const name=document.getElementById("newModelName").value.trim();
+    const input = document.getElementById("newModelName");
+    const name = input ? input.value.trim() : "";
 
     if(name==="")
         return;
@@ -116,7 +117,12 @@ async function saveNewModel()
 
     await loadSemanticModels();
 
-    document.getElementById("semanticModelSelect").value=name;
+    const select = document.getElementById("semanticModelSelect");
+
+    if(select)
+    {
+        select.value=name;
+    }
 
 }
 
@@ -154,17 +160,27 @@ async function loadSemanticModels()
 
     await Excel.run(async(context)=>{
 
-        let sheet=context.workbook.worksheets.getItem("MODEL_FACT");
-
-        let range=sheet.getUsedRange();
-
-        range.load("values");
+        let sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
 
         await context.sync();
+
+        if (sheet.isNullObject) {
+            return;
+        }
+
+        let range=sheet.getUsedRangeOrNullObject();
+
+        await context.sync();
+
+        if (range.isNullObject) {
+            return;
+        }
 
         const rows=range.values;
 
         const select=document.getElementById("semanticModelSelect");
+
+        if(!select) return;
 
         select.innerHTML='<option value="">— Sin modelo seleccionado —</option>';
 
@@ -172,7 +188,10 @@ async function loadSemanticModels()
 
         for(let i=1;i<rows.length;i++)
         {
-            models.push(rows[i][0]);
+            if(rows[i][0])
+            {
+                models.push(rows[i][0]);
+            }
         }
 
         models.sort();
@@ -198,31 +217,44 @@ async function saveModelHeader()
 
     await Excel.run(async(context)=>{
 
-        let sheet=context.workbook.worksheets.getItem("MODEL_FACT");
-
-        let range=sheet.getUsedRange();
-
-        range.load("values");
+        let sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
 
         await context.sync();
 
-        let rows=range.values;
-		let modelName = "";
-		
-		
-	
-    const selectElem = document.getElementById("semanticModelSelect");
-    const inputElem = document.getElementById("newModelName");
+        if (sheet.isNullObject) {
+            sheet = context.workbook.worksheets.add("MODEL_FACT");
+            await context.sync();
+        }
 
-    if (selectElem && selectElem.value && selectElem.value !== "") {
-        modelName = selectElem.value.trim();
-    } else if (inputElem && inputElem.value && inputElem.value.trim() !== "") {
-        modelName = inputElem.value.trim();
-    } else {
-        modelName = currentModel;
-    }
-		
-		currentModel = modelName;
+        let range=sheet.getUsedRangeOrNullObject();
+
+        await context.sync();
+
+        let rows = [];
+
+        if (range.isNullObject) {
+            rows = [["MODEL", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE"]];
+        } else {
+            rows = range.values;
+            if (rows.length === 0) {
+                rows = [["MODEL", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE"]];
+            }
+        }
+
+        let modelName = "";
+
+        const selectElem = document.getElementById("semanticModelSelect");
+        const inputElem = document.getElementById("newModelName");
+
+        if (selectElem && selectElem.value && selectElem.value !== "") {
+            modelName = selectElem.value.trim();
+        } else if (inputElem && inputElem.value && inputElem.value.trim() !== "") {
+            modelName = inputElem.value.trim();
+        } else {
+            modelName = currentModel;
+        }
+
+        currentModel = modelName;
 
         rows=rows.filter((r,i)=>{
 
@@ -245,7 +277,11 @@ async function saveModelHeader()
 
         ]);
 
-        sheet.getUsedRange().clear();
+        let usedRange = sheet.getUsedRangeOrNullObject();
+        await context.sync();
+        if (!usedRange.isNullObject) {
+            usedRange.clear();
+        }
 
         sheet.getRangeByIndexes(0,0,rows.length,4).values=rows;
 
@@ -262,13 +298,21 @@ async function loadModel(modelName)
 
     await Excel.run(async(context)=>{
 
-        const sheet=context.workbook.worksheets.getItem("MODEL_FACT");
-
-        const range=sheet.getUsedRange();
-
-        range.load("values");
+        const sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
 
         await context.sync();
+
+        if (sheet.isNullObject) {
+            return;
+        }
+
+        const range=sheet.getUsedRangeOrNullObject();
+
+        await context.sync();
+
+        if (range.isNullObject) {
+            return;
+        }
 
         const rows=range.values;
 
@@ -308,13 +352,21 @@ async function deleteModel()
 
     await Excel.run(async(context)=>{
 
-        const sheet=context.workbook.worksheets.getItem("MODEL_FACT");
-
-        const range=sheet.getUsedRange();
-
-        range.load("values");
+        const sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
 
         await context.sync();
+
+        if (sheet.isNullObject) {
+            return;
+        }
+
+        const range=sheet.getUsedRangeOrNullObject();
+
+        await context.sync();
+
+        if (range.isNullObject) {
+            return;
+        }
 
         let rows=range.values;
 
@@ -327,7 +379,11 @@ async function deleteModel()
 
         });
 
-        sheet.getUsedRange().clear();
+        let usedRange = sheet.getUsedRangeOrNullObject();
+        await context.sync();
+        if (!usedRange.isNullObject) {
+            usedRange.clear();
+        }
 
         sheet.getRangeByIndexes(0,0,rows.length,4).values=rows;
 
@@ -335,9 +391,20 @@ async function deleteModel()
 
     });
 
+    creatingModel=false;
+
+    restoreModelSelector();
+
     clearCurrentModel();
 
     await loadSemanticModels();
+
+    const select = document.getElementById("semanticModelSelect");
+
+    if(select)
+    {
+        select.value="";
+    }
 
 }
 
@@ -360,7 +427,12 @@ function clearCurrentModel()
 
     document.getElementById("fieldsCard").style.display="none";
 
-    document.getElementById("semanticModelSelect").value="";
+    const select = document.getElementById("semanticModelSelect");
+
+    if(select)
+    {
+        select.value="";
+    }
 
 }
 
