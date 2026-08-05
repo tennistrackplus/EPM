@@ -260,7 +260,7 @@ async function saveModelHeader()
 
             currentModel,
 
-            document.getElementById("factProject").value,
+            "PRO: " + document.getElementById("factProject").value,
 
             document.getElementById("factDataset").value,
 
