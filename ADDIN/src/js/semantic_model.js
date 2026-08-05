@@ -320,7 +320,7 @@ async function loadModel(modelName)
 
     });
 
-    await fetchFactFields();
+    await fetchFactFields(true);
 
 }
 
@@ -644,7 +644,7 @@ function selectFactTable(projectId, datasetId, tableId) {
         document.getElementById("factTable").value = tableId;
         document.getElementById("factFullConcat").value = `${projectId}.${datasetId}.${tableId}`;
         closeTreeModal();
-        fetchFactFields();
+        fetchFactFields(false);
     } else if (currentTreeTarget === "DIM") {
         document.getElementById("dimRelProject").value = projectId;
         document.getElementById("dimRelDataset").value = datasetId;
@@ -655,7 +655,7 @@ function selectFactTable(projectId, datasetId, tableId) {
     }
 }
 
-async function fetchFactFields() {
+async function fetchFactFields(isModelLoad = false) {
     const token = getAuthToken();
     if (!token) return;
 
@@ -678,7 +678,7 @@ async function fetchFactFields() {
             let savedDimFields = new Set();
             let savedMeaFields = new Set();
 
-            if (typeof Excel !== "undefined" && currentModel) {
+            if (isModelLoad && typeof Excel !== "undefined" && currentModel) {
                 try {
                     await Excel.run(async (context) => {
                         const sheets = context.workbook.worksheets;
@@ -727,14 +727,18 @@ async function fetchFactFields() {
             fieldsState = data.schema.fields.map(f => {
                 const isNumeric = ["INTEGER", "FLOAT", "NUMERIC", "BIGNUMERIC"].includes(f.type);
                 let fieldType = isNumeric ? "MEASURE" : "DIMENSION";
-                let isEnabled = false;
+                let isEnabled = true;
 
-                if (savedDimFields.has(f.name)) {
-                    fieldType = "DIMENSION";
-                    isEnabled = true;
-                } else if (savedMeaFields.has(f.name)) {
-                    fieldType = "MEASURE";
-                    isEnabled = true;
+                if (isModelLoad) {
+                    if (savedDimFields.has(f.name)) {
+                        fieldType = "DIMENSION";
+                        isEnabled = true;
+                    } else if (savedMeaFields.has(f.name)) {
+                        fieldType = "MEASURE";
+                        isEnabled = true;
+                    } else {
+                        isEnabled = false;
+                    }
                 }
 
                 return {
@@ -809,11 +813,6 @@ row.innerHTML = `
     <div class="field-arrow">›</div>
 
 `;
-
-
-        if (!field.enabled) {
-            row.style.opacity = ".45";
-        }
 
         row.onclick = () => openConfigModal(idx);
 
@@ -984,10 +983,6 @@ function renderAttributesTable(attributes) {
             </label>
 
         `;
-
-        if (!attr.enabled) {
-            row.style.opacity = ".45";
-        }
 
         list.appendChild(row);
 
