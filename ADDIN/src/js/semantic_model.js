@@ -877,13 +877,28 @@ function saveDimModal() {
 }
 
 /**
- * Vuelca el modelo semántico completo a Excel rellenando las 5 pestañas objetivo
+ * Vuelca el modelo semántico completo a Excel rellenando las pestañas objetivo
  */
  
  
 // semantic_model_generate.js
 
 async function generateSemanticModelInExcel() {
+    if (creatingModel) {
+        const inputElem = document.getElementById("newModelName");
+        const nameVal = inputElem ? inputElem.value.trim() : "";
+        if (nameVal === "") {
+            alert("Por favor, introduce un nombre para el modelo semántico.");
+            return;
+        }
+        currentModel = nameVal;
+    }
+
+    if (!currentModel) {
+        alert("Por favor, selecciona o crea un modelo semántico.");
+        return;
+    }
+
     const factProject = document.getElementById("factProject").value.trim();
     const factDataset = document.getElementById("factDataset").value;
     const factTable = document.getElementById("factTable").value;
@@ -1100,7 +1115,7 @@ async function generateSemanticModelInExcel() {
 
             const sheets = context.workbook.worksheets;
 			
-			            const sheetsMap = [
+            const sheetsMap = [
                 { name: "MODEL_RELATIONSHIP", data: relData },
                 { name: "MODEL_DIMENSION",    data: dimData },
                 { name: "MODEL_MEASURES",     data: meaData },
@@ -1170,51 +1185,103 @@ async function generateSemanticModelInExcel() {
             // MODEL_FACT (guardar modelo seleccionado)
             //-----------------------------------------------------------
 
-            const factSheet = sheets.getItem("MODEL_FACT");
-
-            const factTable = factSheet.tables.getItem("TBL_MODEL_FACT");
-
-            const bodyRange = factTable.getDataBodyRangeOrNullObject();
-
-            bodyRange.load("values");
-
+            let factSheet = sheets.getItemOrNullObject("MODEL_FACT");
             await context.sync();
 
-            let rowsFact = [];
-
-            if (!bodyRange.isNullObject) {
-                rowsFact = bodyRange.values;
+            if (factSheet.isNullObject) {
+                factSheet = sheets.add("MODEL_FACT");
             }
 
-            const modelName = currentModelName;
+            const modelName = currentModel;
 
-            rowsFact = rowsFact.filter(r => r[0] !== modelName);
+            let factTableObj = factSheet.tables.getItemOrNullObject("TBL_MODEL_FACT");
+            await context.sync();
 
-            rowsFact.push([
-                modelName,
-                factProject,
-                factDataset,
-                factTable
-            ]);
+            if (!factTableObj.isNullObject) {
+                const bodyRange = factTableObj.getDataBodyRangeOrNullObject();
+                bodyRange.load("values");
+                await context.sync();
 
-            rowsFact.sort((a, b) =>
-                a[0].localeCompare(b[0])
-            );
+                let rowsFact = [];
 
-            if (!bodyRange.isNullObject) {
-                bodyRange.delete(Excel.DeleteShiftDirection.up);
-            }
+                if (!bodyRange.isNullObject && bodyRange.values) {
+                    rowsFact = bodyRange.values;
+                }
 
-            if (rowsFact.length > 0) {
+                rowsFact = rowsFact.filter(r => r[0] !== modelName);
 
-                factTable.rows.add(
-                    null,
-                    rowsFact
+                rowsFact.push([
+                    modelName,
+                    factProject,
+                    factDataset,
+                    factTable
+                ]);
+
+                rowsFact.sort((a, b) =>
+                    a[0].localeCompare(b[0])
                 );
 
+                if (!bodyRange.isNullObject) {
+                    bodyRange.delete(Excel.DeleteShiftDirection.up);
+                }
+
+                if (rowsFact.length > 0) {
+                    factTableObj.rows.add(
+                        null,
+                        rowsFact
+                    );
+                }
+            } else {
+                const range = factSheet.getUsedRangeOrNullObject();
+                range.load("values");
+                await context.sync();
+
+                let rows = [];
+                if (!range.isNullObject && range.values) {
+                    rows = range.values;
+                }
+
+                if (rows.length === 0) {
+                    rows.push(["MODELO", "PROJECT", "DATASET", "TABLE"]);
+                }
+
+                const header = rows.shift();
+                rows = rows.filter(r => r[0] !== modelName);
+                rows.push([
+                    modelName,
+                    factProject,
+                    factDataset,
+                    factTable
+                ]);
+                rows.sort((a, b) => a[0].localeCompare(b[0]));
+                rows.unshift(header);
+
+                const usedRange = factSheet.getUsedRangeOrNullObject();
+                if (!usedRange.isNullObject) {
+                    usedRange.clear();
+                }
+
+                const targetRange = factSheet.getRangeByIndexes(0, 0, rows.length, 4);
+                targetRange.values = rows;
+
+                const newTable = factSheet.tables.add(targetRange, true);
+                newTable.name = "TBL_MODEL_FACT";
+                newTable.style = "TableStyleMedium2";
             }
 
             await context.sync();
+
+            if (creatingModel) {
+                creatingModel = false;
+                restoreModelSelector();
+            }
+
+            await loadSemanticModels();
+
+            const selectElem = document.getElementById("semanticModelSelect");
+            if (selectElem) {
+                selectElem.value = currentModel;
+            }
 
             alert("Modelo semántico generado correctamente.");
 
