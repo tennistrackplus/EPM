@@ -327,6 +327,19 @@ async function loadModel(modelName)
 async function deleteModel()
 {
 
+    let modelName = "";
+    const selectElem = document.getElementById("semanticModelSelect");
+    const inputElem = document.getElementById("newModelName");
+
+    if (selectElem && selectElem.value && selectElem.value !== "") {
+        modelName = selectElem.value.trim();
+    } else if (inputElem && inputElem.value && inputElem.value.trim() !== "") {
+        modelName = inputElem.value.trim();
+    } else {
+        modelName = currentModel;
+    }
+    currentModel = modelName;
+
     if(currentModel==="")
         return;
 
@@ -662,14 +675,74 @@ async function fetchFactFields() {
         const data = await response.json();
 
         if (data.schema && data.schema.fields) {
+            let savedDimFields = new Set();
+            let savedMeaFields = new Set();
+
+            if (typeof Excel !== "undefined" && currentModel) {
+                try {
+                    await Excel.run(async (context) => {
+                        const sheets = context.workbook.worksheets;
+
+                        let sheetDim = sheets.getItemOrNullObject("MODEL_DIMENSION");
+                        await context.sync();
+                        if (!sheetDim.isNullObject) {
+                            let rangeDim = sheetDim.getUsedRangeOrNullObject();
+                            await context.sync();
+                            if (!rangeDim.isNullObject) {
+                                rangeDim.load("values");
+                                await context.sync();
+                                const rows = rangeDim.values || [];
+                                for (let i = 1; i < rows.length; i++) {
+                                    const r = rows[i];
+                                    if (r[10] === currentModel || r[r.length - 1] === currentModel) {
+                                        if (r[5]) savedDimFields.add(r[5]);
+                                    }
+                                }
+                            }
+                        }
+
+                        let sheetMea = sheets.getItemOrNullObject("MODEL_MEASURES");
+                        await context.sync();
+                        if (!sheetMea.isNullObject) {
+                            let rangeMea = sheetMea.getUsedRangeOrNullObject();
+                            await context.sync();
+                            if (!rangeMea.isNullObject) {
+                                rangeMea.load("values");
+                                await context.sync();
+                                const rows = rangeMea.values || [];
+                                for (let i = 1; i < rows.length; i++) {
+                                    const r = rows[i];
+                                    if (r[8] === currentModel || r[r.length - 1] === currentModel) {
+                                        if (r[5]) savedMeaFields.add(r[5]);
+                                    }
+                                }
+                            }
+                        }
+                    });
+                } catch (err) {
+                    console.error("Error al consultar dimensiones y medidas guardadas en Excel:", err);
+                }
+            }
+
             fieldsState = data.schema.fields.map(f => {
                 const isNumeric = ["INTEGER", "FLOAT", "NUMERIC", "BIGNUMERIC"].includes(f.type);
+                let fieldType = isNumeric ? "MEASURE" : "DIMENSION";
+                let isEnabled = false;
+
+                if (savedDimFields.has(f.name)) {
+                    fieldType = "DIMENSION";
+                    isEnabled = true;
+                } else if (savedMeaFields.has(f.name)) {
+                    fieldType = "MEASURE";
+                    isEnabled = true;
+                }
+
                 return {
                     name: f.name,
                     alias: f.name,
                     dataType: f.type,
-                    type: isNumeric ? "MEASURE" : "DIMENSION",
-                    enabled: true,
+                    type: fieldType,
+                    enabled: isEnabled,
                     // Config Medida
                     aggregation: "SUM",
                     format: "Auto",
@@ -950,6 +1023,19 @@ function saveDimModal() {
  
  
 async function generateSemanticModelInExcel() {
+    let modelName = "";
+    const selectElem = document.getElementById("semanticModelSelect");
+    const inputElem = document.getElementById("newModelName");
+
+    if (selectElem && selectElem.value && selectElem.value !== "") {
+        modelName = selectElem.value.trim();
+    } else if (inputElem && inputElem.value && inputElem.value.trim() !== "") {
+        modelName = inputElem.value.trim();
+    } else {
+        modelName = currentModel;
+    }
+    currentModel = modelName;
+
     const factProject = document.getElementById("factProject").value.trim();
     const factDataset = document.getElementById("factDataset").value;
     const factTable = document.getElementById("factTable").value;
