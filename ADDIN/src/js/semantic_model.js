@@ -1,7 +1,8 @@
 /**
  * Lógica del Modelo Semántico BigQuery EPM para Office Add-in
  */
-
+let currentModel = "";
+let creatingModel = false;
 let fieldsState = [];
 let currentConfigFieldIndex = null;
 let currentTreeTarget = "FACT"; // "FACT" o "DIM"
@@ -9,10 +10,28 @@ let currentTreeTarget = "FACT"; // "FACT" o "DIM"
 Office.onReady((info) => {
     if (info.host === Office.HostType.Excel) {
         initEvents();
+		loadSemanticModels();
     }
 });
 
 function initEvents() {
+
+    document.getElementById("btnNewModel").addEventListener("click", newModel);
+
+    document.getElementById("btnDeleteModel").addEventListener("click", deleteModel);
+
+    document.getElementById("semanticModelSelect").addEventListener("change", function(){
+
+        if(this.value==="")
+        {
+            clearCurrentModel();
+            return;
+        }
+
+        loadModel(this.value);
+
+    });
+
     document.getElementById("sapSearchBtn").addEventListener("click", () => openTreeModal("FACT"));
     document.getElementById("factFullConcat").addEventListener("click", () => openTreeModal("FACT"));
 
@@ -22,16 +41,317 @@ function initEvents() {
     document.getElementById("btnCloseTreeModal").addEventListener("click", closeTreeModal);
 
     document.getElementById("btnSaveMeasureModal").addEventListener("click", saveMeasureModal);
-    document.getElementById("btnCloseMeasureModal").addEventListener("click", () => {
-        document.getElementById("measureModal").style.display = "none";
+
+    document.getElementById("btnCloseMeasureModal").addEventListener("click",()=>{
+
+        measureModal.style.display="none";
+
     });
 
-    document.getElementById("btnSaveDimModal").addEventListener("click", saveDimModal);
-    document.getElementById("btnCloseDimModal").addEventListener("click", () => {
-        document.getElementById("dimensionModal").style.display = "none";
+    document.getElementById("btnSaveDimModal").addEventListener("click",saveDimModal);
+
+    document.getElementById("btnCloseDimModal").addEventListener("click",()=>{
+
+        dimensionModal.style.display="none";
+
     });
 
-    document.getElementById("btnGenerateModel").addEventListener("click", generateSemanticModelInExcel);
+    document.getElementById("btnGenerateModel").addEventListener("click",generateSemanticModelInExcel);
+
+}
+
+function newModel()
+{
+
+    if(creatingModel)
+        return;
+
+    creatingModel=true;
+
+    const container=document.getElementById("modelSelectorContainer");
+
+    container.innerHTML=`
+
+        <input
+            id="newModelName"
+            type="text"
+            placeholder="Nombre del modelo"
+            autofocus
+        >
+
+    `;
+
+    const input=document.getElementById("newModelName");
+
+    input.addEventListener("keydown",function(e){
+
+        if(e.key==="Enter")
+            saveNewModel();
+
+        if(e.key==="Escape")
+        {
+            creatingModel=false;
+            restoreModelSelector();
+        }
+
+    });
+
+}
+
+async function saveNewModel()
+{
+
+    const name=document.getElementById("newModelName").value.trim();
+
+    if(name==="")
+        return;
+
+    currentModel=name;
+
+    await saveModelHeader();
+
+    creatingModel=false;
+
+    restoreModelSelector();
+
+    await loadSemanticModels();
+
+    document.getElementById("semanticModelSelect").value=name;
+
+}
+
+
+function restoreModelSelector()
+{
+
+    document.getElementById("modelSelectorContainer").innerHTML=`
+
+        <select id="semanticModelSelect">
+
+            <option value="">— Sin modelo seleccionado —</option>
+
+        </select>
+
+    `;
+
+    document.getElementById("semanticModelSelect")
+        .addEventListener("change",function(){
+
+            if(this.value==="")
+            {
+                clearCurrentModel();
+                return;
+            }
+
+            loadModel(this.value);
+
+        });
+
+}
+
+async function loadSemanticModels()
+{
+
+    await Excel.run(async(context)=>{
+
+        let sheet=context.workbook.worksheets.getItem("MODEL_FACT");
+
+        let range=sheet.getUsedRange();
+
+        range.load("values");
+
+        await context.sync();
+
+        const rows=range.values;
+
+        const select=document.getElementById("semanticModelSelect");
+
+        select.innerHTML='<option value="">— Sin modelo seleccionado —</option>';
+
+        const models=[];
+
+        for(let i=1;i<rows.length;i++)
+        {
+            models.push(rows[i][0]);
+        }
+
+        models.sort();
+
+        models.forEach(model=>{
+
+            const option=document.createElement("option");
+
+            option.value=model;
+
+            option.text=model;
+
+            select.appendChild(option);
+
+        });
+
+    });
+
+}
+
+async function saveModelHeader()
+{
+
+    await Excel.run(async(context)=>{
+
+        let sheet=context.workbook.worksheets.getItem("MODEL_FACT");
+
+        let range=sheet.getUsedRange();
+
+        range.load("values");
+
+        await context.sync();
+
+        let rows=range.values;
+
+        rows=rows.filter((r,i)=>{
+
+            if(i===0)
+                return true;
+
+            return r[0]!==currentModel;
+
+        });
+
+        rows.push([
+
+            currentModel,
+
+            document.getElementById("factProject").value,
+
+            document.getElementById("factDataset").value,
+
+            document.getElementById("factTable").value
+
+        ]);
+
+        const header=rows.shift();
+
+        rows.sort((a,b)=>a[0].localeCompare(b[0]));
+
+        rows.unshift(header);
+
+        sheet.getUsedRange().clear();
+
+        sheet.getRangeByIndexes(0,0,rows.length,4).values=rows;
+
+        await context.sync();
+
+    });
+
+}
+
+async function loadModel(modelName)
+{
+
+    currentModel=modelName;
+
+    await Excel.run(async(context)=>{
+
+        const sheet=context.workbook.worksheets.getItem("MODEL_FACT");
+
+        const range=sheet.getUsedRange();
+
+        range.load("values");
+
+        await context.sync();
+
+        const rows=range.values;
+
+        for(let i=1;i<rows.length;i++)
+        {
+
+            if(rows[i][0]===modelName)
+            {
+
+                document.getElementById("factProject").value=rows[i][1];
+
+                document.getElementById("factDataset").value=rows[i][2];
+
+                document.getElementById("factTable").value=rows[i][3];
+
+                document.getElementById("factFullConcat").value=
+
+                    rows[i][1]+"."+rows[i][2]+"."+rows[i][3];
+
+                break;
+
+            }
+
+        }
+
+    });
+
+    await fetchFactFields();
+
+}
+
+async function deleteModel()
+{
+
+    if(currentModel==="")
+        return;
+
+    await Excel.run(async(context)=>{
+
+        const sheet=context.workbook.worksheets.getItem("MODEL_FACT");
+
+        const range=sheet.getUsedRange();
+
+        range.load("values");
+
+        await context.sync();
+
+        let rows=range.values;
+
+        rows=rows.filter((r,i)=>{
+
+            if(i===0)
+                return true;
+
+            return r[0]!==currentModel;
+
+        });
+
+        sheet.getUsedRange().clear();
+
+        sheet.getRangeByIndexes(0,0,rows.length,4).values=rows;
+
+        await context.sync();
+
+    });
+
+    clearCurrentModel();
+
+    await loadSemanticModels();
+
+}
+
+function clearCurrentModel()
+{
+
+    currentModel="";
+
+    fieldsState=[];
+
+    document.getElementById("factProject").value="";
+
+    document.getElementById("factDataset").value="";
+
+    document.getElementById("factTable").value="";
+
+    document.getElementById("factFullConcat").value="";
+
+    document.getElementById("fieldsList").innerHTML="";
+
+    document.getElementById("fieldsCard").style.display="none";
+
+    document.getElementById("semanticModelSelect").value="";
+
 }
 
 function getAuthToken() {
