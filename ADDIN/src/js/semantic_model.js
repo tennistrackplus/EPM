@@ -154,21 +154,13 @@ async function loadSemanticModels()
 
     await Excel.run(async(context)=>{
 
-        let sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
+        let sheet=context.workbook.worksheets.getItem("MODEL_FACT");
+
+        let range=sheet.getUsedRange();
+
+        range.load("values");
 
         await context.sync();
-
-        if (sheet.isNullObject) {
-            return;
-        }
-
-        let range=sheet.getUsedRangeOrNullObject();
-
-        await context.sync();
-
-        if (range.isNullObject) {
-            return;
-        }
 
         const rows=range.values;
 
@@ -180,10 +172,7 @@ async function loadSemanticModels()
 
         for(let i=1;i<rows.length;i++)
         {
-            if(rows[i][0])
-            {
-                models.push(rows[i][0]);
-            }
+            models.push(rows[i][0]);
         }
 
         models.sort();
@@ -204,70 +193,34 @@ async function loadSemanticModels()
 
 }
 
-
 async function saveModelHeader()
 {
 
-    // Intentamos obtener el nombre del modelo directamente desde los inputs/select del DOM
-    let modelName = "";
-
-    const selectElem = document.getElementById("semanticModelSelect");
-    const inputElem = document.getElementById("newModelName");
-
-    if (selectElem && selectElem.value && selectElem.value !== "") {
-        modelName = selectElem.value.trim();
-    } else if (inputElem && inputElem.value && inputElem.value.trim() !== "") {
-        modelName = inputElem.value.trim();
-    } else {
-        modelName = currentModel;
-    }
-
-    // Si tras revisar el DOM y la variable no hay nombre de modelo, cancelamos el guardado para no grabar filas vacías
-    if (!modelName || modelName.trim() === "") {
-        return;
-    }
-
-    // Actualizamos la variable global para mantener la coherencia
-    currentModel = modelName;
-
     await Excel.run(async(context)=>{
 
-        let sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
+        let sheet=context.workbook.worksheets.getItem("MODEL_FACT");
+
+        let range=sheet.getUsedRange();
+
+        range.load("values");
 
         await context.sync();
 
-        if (sheet.isNullObject) {
-            sheet = context.workbook.worksheets.add("MODEL_FACT");
-            await context.sync();
-        }
-
-        let range=sheet.getUsedRangeOrNullObject();
-
-        await context.sync();
-
-        let rows = [];
-
-        if (range.isNullObject) {
-            rows = [["MODEL", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE"]];
-        } else {
-            rows = range.values;
-            if (rows.length === 0) {
-                rows = [["MODEL", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE"]];
-            }
-        }
+        let rows=range.values;
+		currentModel = "HOLA";
 
         rows=rows.filter((r,i)=>{
 
             if(i===0)
                 return true;
 
-            return r[0]!==modelName;
+            return r[0]!==currentModel;
 
         });
 
         rows.splice(1, 0, [
 
-            modelName,
+            currentModel,
 
             document.getElementById("factProject").value,
 
@@ -277,11 +230,7 @@ async function saveModelHeader()
 
         ]);
 
-        let usedRange = sheet.getUsedRangeOrNullObject();
-        await context.sync();
-        if (!usedRange.isNullObject) {
-            usedRange.clear();
-        }
+        sheet.getUsedRange().clear();
 
         sheet.getRangeByIndexes(0,0,rows.length,4).values=rows;
 
@@ -291,8 +240,6 @@ async function saveModelHeader()
 
 }
 
-
-
 async function loadModel(modelName)
 {
 
@@ -300,21 +247,13 @@ async function loadModel(modelName)
 
     await Excel.run(async(context)=>{
 
-        const sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
+        const sheet=context.workbook.worksheets.getItem("MODEL_FACT");
+
+        const range=sheet.getUsedRange();
+
+        range.load("values");
 
         await context.sync();
-
-        if (sheet.isNullObject) {
-            return;
-        }
-
-        const range=sheet.getUsedRangeOrNullObject();
-
-        await context.sync();
-
-        if (range.isNullObject) {
-            return;
-        }
 
         const rows=range.values;
 
@@ -354,21 +293,13 @@ async function deleteModel()
 
     await Excel.run(async(context)=>{
 
-        const sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
+        const sheet=context.workbook.worksheets.getItem("MODEL_FACT");
+
+        const range=sheet.getUsedRange();
+
+        range.load("values");
 
         await context.sync();
-
-        if (sheet.isNullObject) {
-            return;
-        }
-
-        const range=sheet.getUsedRangeOrNullObject();
-
-        await context.sync();
-
-        if (range.isNullObject) {
-            return;
-        }
 
         let rows=range.values;
 
@@ -381,11 +312,7 @@ async function deleteModel()
 
         });
 
-        let usedRange = sheet.getUsedRangeOrNullObject();
-        await context.sync();
-        if (!usedRange.isNullObject) {
-            usedRange.clear();
-        }
+        sheet.getUsedRange().clear();
 
         sheet.getRangeByIndexes(0,0,rows.length,4).values=rows;
 
