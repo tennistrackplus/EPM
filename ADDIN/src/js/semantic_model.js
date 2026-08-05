@@ -154,13 +154,21 @@ async function loadSemanticModels()
 
     await Excel.run(async(context)=>{
 
-        let sheet=context.workbook.worksheets.getItem("MODEL_FACT");
-
-        let range=sheet.getUsedRange();
-
-        range.load("values");
+        let sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
 
         await context.sync();
+
+        if (sheet.isNullObject) {
+            return;
+        }
+
+        let range=sheet.getUsedRangeOrNullObject();
+
+        await context.sync();
+
+        if (range.isNullObject) {
+            return;
+        }
 
         const rows=range.values;
 
@@ -172,7 +180,10 @@ async function loadSemanticModels()
 
         for(let i=1;i<rows.length;i++)
         {
-            models.push(rows[i][0]);
+            if(rows[i][0])
+            {
+                models.push(rows[i][0]);
+            }
         }
 
         models.sort();
@@ -196,17 +207,45 @@ async function loadSemanticModels()
 async function saveModelHeader()
 {
 
+    if (!currentModel || currentModel.trim() === "") {
+        const select = document.getElementById("semanticModelSelect");
+        const input = document.getElementById("newModelName");
+        if (select && select.value) {
+            currentModel = select.value.trim();
+        } else if (input && input.value) {
+            currentModel = input.value.trim();
+        }
+    }
+
+    if (!currentModel || currentModel.trim() === "") {
+        return;
+    }
+
     await Excel.run(async(context)=>{
 
-        let sheet=context.workbook.worksheets.getItem("MODEL_FACT");
-
-        let range=sheet.getUsedRange();
-
-        range.load("values");
+        let sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
 
         await context.sync();
 
-        let rows=range.values;
+        if (sheet.isNullObject) {
+            sheet = context.workbook.worksheets.add("MODEL_FACT");
+            await context.sync();
+        }
+
+        let range=sheet.getUsedRangeOrNullObject();
+
+        await context.sync();
+
+        let rows = [];
+
+        if (range.isNullObject) {
+            rows = [["MODEL", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE"]];
+        } else {
+            rows = range.values;
+            if (rows.length === 0) {
+                rows = [["MODEL", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE"]];
+            }
+        }
 
         rows=rows.filter((r,i)=>{
 
@@ -229,7 +268,11 @@ async function saveModelHeader()
 
         ]);
 
-        sheet.getUsedRange().clear();
+        let usedRange = sheet.getUsedRangeOrNullObject();
+        await context.sync();
+        if (!usedRange.isNullObject) {
+            usedRange.clear();
+        }
 
         sheet.getRangeByIndexes(0,0,rows.length,4).values=rows;
 
@@ -246,13 +289,21 @@ async function loadModel(modelName)
 
     await Excel.run(async(context)=>{
 
-        const sheet=context.workbook.worksheets.getItem("MODEL_FACT");
-
-        const range=sheet.getUsedRange();
-
-        range.load("values");
+        const sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
 
         await context.sync();
+
+        if (sheet.isNullObject) {
+            return;
+        }
+
+        const range=sheet.getUsedRangeOrNullObject();
+
+        await context.sync();
+
+        if (range.isNullObject) {
+            return;
+        }
 
         const rows=range.values;
 
@@ -292,13 +343,21 @@ async function deleteModel()
 
     await Excel.run(async(context)=>{
 
-        const sheet=context.workbook.worksheets.getItem("MODEL_FACT");
-
-        const range=sheet.getUsedRange();
-
-        range.load("values");
+        const sheet=context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
 
         await context.sync();
+
+        if (sheet.isNullObject) {
+            return;
+        }
+
+        const range=sheet.getUsedRangeOrNullObject();
+
+        await context.sync();
+
+        if (range.isNullObject) {
+            return;
+        }
 
         let rows=range.values;
 
@@ -311,7 +370,11 @@ async function deleteModel()
 
         });
 
-        sheet.getUsedRange().clear();
+        let usedRange = sheet.getUsedRangeOrNullObject();
+        await context.sync();
+        if (!usedRange.isNullObject) {
+            usedRange.clear();
+        }
 
         sheet.getRangeByIndexes(0,0,rows.length,4).values=rows;
 
@@ -559,6 +622,7 @@ function selectFactTable(projectId, datasetId, tableId) {
         document.getElementById("factFullConcat").value = `${projectId}.${datasetId}.${tableId}`;
         closeTreeModal();
         fetchFactFields();
+        saveModelHeader();
     } else if (currentTreeTarget === "DIM") {
         document.getElementById("dimRelProject").value = projectId;
         document.getElementById("dimRelDataset").value = datasetId;
