@@ -8,163 +8,326 @@
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
     <link rel="stylesheet" href="css/theme.css">
     <style>
-        body {
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            height: 100%;
+            margin: 0;
             padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            color: #0f172a;
+            overflow: hidden;
         }
+
         .page-content {
-            padding: 14px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            padding: 10px;
+            gap: 8px;
+            box-sizing: border-box;
         }
+
         h3, h4 {
-            color: var(--text-primary);
+            color: var(--text-primary, #0f172a);
+            margin: 0;
         }
+
         h3 {
-            font-size: var(--fs-md);
+            font-size: 13px;
             font-weight: 700;
             letter-spacing: 0.2px;
-            margin-bottom: 12px;
         }
+
         h4 {
-            font-size: var(--fs-sm);
+            font-size: 11px;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.4px;
-            color: var(--text-muted);
-            margin: 16px 0 8px 0;
+            color: var(--text-muted, #64748b);
+            margin: 12px 0 6px 0;
         }
+
         .card {
-            padding: 16px;
-            margin-bottom: 14px;
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
         }
 
         .card.compact {
-            padding: 10px 12px;
+            padding: 8px 10px;
         }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .card-title-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .card-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: #1e293b;
+        }
+
+        .info-icon, .eye-icon {
+            font-size: 13px;
+            color: #64748b;
+            cursor: pointer;
+            user-select: none;
+        }
+
         .form-group {
-            margin-bottom: 12px;
+            margin-bottom: 8px;
         }
+
         .form-group:last-child {
             margin-bottom: 0;
         }
+
         label {
             display: block;
             font-size: 10px;
             font-weight: 700;
-            color: var(--text-muted);
+            color: #64748b;
             text-transform: uppercase;
             letter-spacing: 0.4px;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
         }
 
-        /* ---- Gestión de modelos semánticos (crear / editar / eliminar) ---- */
-        .model-manager-row {
-            display: flex;
-            align-items: stretch;
-            gap: 6px;
-        }
-
-        .model-manager-select {
-            flex: 1;
-            min-width: 0;
-        }
-
-        .model-manager-select select {
-            width: 100%;
-        }
-
+        /* ---- Gestión de modelos semánticos ---- */
         .model-manager-actions {
             display: flex;
-            gap: 6px;
+            gap: 4px;
             flex-shrink: 0;
         }
 
         .icon-btn {
-            width: 30px;
-            height: auto;
+            width: 24px;
+            height: 24px;
             flex-shrink: 0;
             display: flex;
             align-items: center;
             justify-content: center;
-            border-radius: var(--radius-sm);
-            border: 1px solid var(--border-default);
-            background-color: var(--surface-card);
-            color: var(--text-secondary);
-            font-size: 14px;
+            border-radius: 4px;
+            border: 1px solid #cbd5e1;
+            background-color: #ffffff;
+            color: #334155;
+            font-size: 13px;
             line-height: 1;
             cursor: pointer;
-            transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+            transition: all 0.15s ease;
         }
 
         .icon-btn:hover {
-            background-color: var(--gray-100);
-            color: var(--text-primary);
-            border-color: var(--gray-400);
+            background-color: #f1f5f9;
+            color: #0f172a;
+            border-color: #94a3b8;
         }
 
         .icon-btn.danger:hover {
-            background-color: var(--color-danger-light);
-            color: var(--color-danger);
-            border-color: #F3C9C6;
+            background-color: #fef2f2;
+            color: #ef4444;
+            border-color: #fca5a5;
         }
 
-        .card-divider {
-            height: 1px;
-            background-color: var(--border-subtle);
-            margin: 8px 0;
+        select, input[type="text"] {
+            width: 100%;
+            height: 30px;
+            padding: 0 8px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            background-color: #ffffff;
+            font-size: 11px;
+            color: #0f172a;
+            outline: none;
+            transition: border-color 0.15s ease;
         }
 
-        /* Compacta: sin labels visibles, solo placeholder + icono */
-        .compact-field-group {
-            margin: 0;
+        select:focus, input[type="text"]:focus {
+            border-color: #2563eb;
         }
 
-        /* Estilo de ayuda de búsqueda (SAP Matchcode) */
+        /* Selector de modelo personalizado */
+        #modelSelectorContainer {
+            width: 100%;
+        }
+
+        #modelSelectorContainer select, 
+        #modelSelectorContainer input {
+            width: 100%;
+        }
+
+        /* Estilo de ayuda de búsqueda para Tabla de Hechos */
         .sap-search-input-group {
+            position: relative;
             display: flex;
-            align-items: stretch;
+            align-items: center;
         }
+
+        .sap-search-input-group .table-icon {
+            position: absolute;
+            left: 8px;
+            font-size: 13px;
+            color: #475569;
+            pointer-events: none;
+            z-index: 1;
+        }
+
         .sap-search-input-group input[type="text"] {
-            border-top-right-radius: 0;
-            border-bottom-right-radius: 0;
-            border-right: none;
+            padding-left: 28px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            background-color: #ffffff;
         }
+
         .sap-search-btn {
-            background-color: var(--brand-primary);
-            color: var(--text-inverse);
-            border: 1px solid var(--brand-primary);
-            padding: 0 13px;
-            border-top-right-radius: var(--radius-sm);
-            border-bottom-right-radius: var(--radius-sm);
+            display: none; /* Mantenido para compatibilidad JS */
+        }
+
+        /* ---- Sección de Campos Fija con Scroll Interno ---- */
+        .fields-card {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+            padding: 10px;
+            overflow: hidden;
+        }
+
+        .fields-list {
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 2px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 4px;
+        }
+
+        .field-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 0;
+            border-bottom: 1px solid #f1f5f9;
             cursor: pointer;
-            font-size: var(--fs-base);
+        }
+
+        .field-row:last-child {
+            border-bottom: none;
+        }
+
+        .field-enable {
+            width: 14px;
+            height: 14px;
+            margin: 0;
+            flex-shrink: 0;
+            cursor: pointer;
+            accent-color: #2563eb;
+        }
+
+        .field-type {
+            width: 58px;
+            height: 24px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            background-color: #f8fafc;
+            color: #334155;
+            font-size: 9px;
+            font-weight: 700;
+            padding: 0 2px;
+            flex-shrink: 0;
+            text-align: center;
+        }
+
+        .field-info {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-width: 0;
+        }
+
+        .field-alias-input {
+            width: 100%;
+            height: 24px;
+            padding: 0 6px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            background: #ffffff;
+            font-size: 11px;
+            font-weight: 600;
+            color: #0f172a;
+            outline: none;
+        }
+
+        .field-alias-input:focus {
+            border-color: #2563eb;
+        }
+
+        .field-name {
+            margin-top: 1px;
+            font-size: 9px;
+            color: #64748b;
+            font-family: Consolas, monospace;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .field-arrow {
+            width: 22px;
+            height: 22px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: background-color var(--transition-fast);
+            color: #64748b;
+            font-size: 12px;
+            flex-shrink: 0;
+            background: #ffffff;
         }
-        .sap-search-btn:hover {
-            background-color: var(--brand-primary-hover);
+
+        /* Botón Inferior Fijo (Sticky Footer) */
+        .card-footer-sticky {
+            margin-top: auto;
+            padding-top: 8px;
+            background: #ffffff;
+            border-top: 1px solid #f1f5f9;
+            flex-shrink: 0;
         }
-        table {
-            margin-top: 6px;
-            border: 1px solid var(--border-subtle);
-            border-radius: var(--radius-md);
-            overflow: hidden;
-        }
-        th:first-child, td:first-child {
-            padding-left: 12px;
-        }
+
         .btn {
             width: 100%;
-            margin-top: 12px;
+            height: 34px;
+            background-color: #2563eb;
+            color: #ffffff;
+            border: none;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background-color 0.15s ease;
         }
-        .btn-secondary {
-            background-color: var(--surface-card);
-            color: var(--text-primary);
+
+        .btn:hover {
+            background-color: #1d4ed8;
         }
-        .btn-sm {
-            width: auto;
-            margin-top: 0;
-        }
+
         /* Modales */
         .modal {
             display: none;
@@ -178,353 +341,166 @@
             z-index: 100;
             overflow-y: auto;
         }
+
         #treeModal {
             z-index: 200;
         }
+
         .modal-content {
-            background-color: var(--surface-card);
+            background-color: #ffffff;
             margin: 24px auto;
-            padding: 18px;
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-lg);
-            border: 1px solid var(--border-subtle);
+            padding: 16px;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
             width: 90%;
             max-width: 480px;
         }
+
         .modal-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 1px solid var(--border-subtle);
-            padding-bottom: 10px;
-            margin-bottom: 14px;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 8px;
+            margin-bottom: 12px;
         }
+
         .modal-header h3 {
             margin: 0;
         }
+
         .modal-close {
-            color: var(--text-muted);
-            font-size: 20px;
+            color: #64748b;
+            font-size: 18px;
             font-weight: 400;
             cursor: pointer;
             line-height: 1;
-            width: 26px;
-            height: 26px;
-            border-radius: var(--radius-sm);
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            transition: background-color var(--transition-fast), color var(--transition-fast);
+            transition: background-color 0.15s ease;
         }
+
         .modal-close:hover {
-            background-color: var(--gray-100);
-            color: var(--text-primary);
+            background-color: #f1f5f9;
+            color: #0f172a;
         }
-        /* Árbol jerárquico de selección de tabla */
+
         .tree-container {
-            max-height: 350px;
+            max-height: 300px;
             overflow-y: auto;
-            border: 1px solid var(--border-default);
-            border-radius: var(--radius-md);
-            padding: 10px;
-            background: var(--surface-sunken);
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            padding: 8px;
+            background: #f8fafc;
         }
+
         .tree-list {
             list-style: none;
-            padding-left: 16px;
+            padding-left: 14px;
             margin: 0;
         }
+
         .tree-container > .tree-list {
             padding-left: 0;
         }
+
         .tree-item {
-            margin-top: 3px;
+            margin-top: 2px;
         }
+
         .tree-header {
             cursor: pointer;
             user-select: none;
-            padding: 5px 8px;
-            border-radius: var(--radius-sm);
-            font-size: var(--fs-base);
+            padding: 4px 6px;
+            border-radius: 4px;
+            font-size: 11px;
             display: block;
-            transition: background-color var(--transition-fast);
+            transition: background-color 0.15s ease;
         }
+
         .tree-header:hover {
-            background-color: var(--gray-100);
+            background-color: #e2e8f0;
         }
+
         .tree-toggle {
             display: inline-block;
-            width: 14px;
-            font-size: 9px;
-            color: var(--text-muted);
+            width: 12px;
+            font-size: 8px;
+            color: #64748b;
         }
+
         .tree-children {
             display: none;
         }
+
         .tree-children.open {
             display: block;
         }
+
         .table-item {
-            color: var(--brand-primary);
+            color: #2563eb;
             font-weight: 700;
         }
+
         .table-item:hover {
-            background-color: var(--brand-primary);
-            color: var(--text-inverse);
+            background-color: #2563eb;
+            color: #ffffff;
         }
 
-
-.fields-list{
-    border:1px solid var(--border-subtle);
-    border-radius:var(--radius-md);
-    overflow:hidden;
-    background:var(--surface-card);
-}
-
-.field-row{
-
-    display:flex;
-
-    align-items:center;
-
-    gap:10px;
-
-    padding:10px 14px;
-
-    cursor:pointer;
-
-    border-bottom:1px solid var(--border-subtle);
-
-    transition:background .15s;
-
-}
-
-.field-row:last-child{
-    border-bottom:none;
-}
-
-.field-row:hover{
-    background:var(--gray-100);
-}
-
-.field-badge{
-    width:42px;
-    height:22px;
-    border-radius:999px;
-    font-size:10px;
-    font-weight:700;
-    letter-spacing:.4px;
-
-    display:flex;
-    align-items:center;
-    justify-content:center;
-
-    flex-shrink:0;
-}
-
-.field-badge.dimension{
-    background:#E8F0FE;
-    color:#1A73E8;
-}
-
-.field-badge.measure{
-    background:#E8F5E9;
-    color:#188038;
-}
-
-.field-info{
-
-    flex:1;
-
-    display:flex;
-
-    flex-direction:column;
-
-    justify-content:center;
-
-    min-width:0;
-
-}
-
-.field-name{
-
-    margin-top:2px;
-
-    font-size:11px;
-
-    line-height:16px;
-
-    color:var(--text-muted);
-
-    font-family:Consolas, monospace;
-
-    white-space:nowrap;
-
-    overflow:hidden;
-
-    text-overflow:ellipsis;
-
-}
-.field-alias{
-    margin-top:2px;
-    font-size:12px;
-    color:var(--text-muted);
-    white-space:nowrap;
-    overflow:hidden;
-    text-overflow:ellipsis;
-}
-
-.field-arrow{
-    color:var(--text-muted);
-    font-size:20px;
-    line-height:1;
-    flex-shrink:0;
-}
-
-
-.field-enable{
-
-    width:14px;
-    height:14px;
-
-    margin:0 4px 0 0;
-
-    flex-shrink:0;
-
-    cursor:pointer;
-
-    accent-color:var(--brand-primary);
-
-}
-
-
-.field-type{
-
-    width:58px;
-    height:24px;
-
-    border:1px solid var(--border-subtle);
-
-    border-radius:999px;
-
-    background:#F8F9FA;
-
-    color:var(--text-secondary);
-
-    font-size:10px;
-
-    font-weight:700;
-
-    padding:0 4px;
-
-    flex-shrink:0;
-
-}
-
-
-.field-alias-input{
-
-    width:100%;
-
-    padding:0;
-
-    margin:0;
-
-    border:none;
-
-    outline:none;
-
-    background:transparent;
-
-    font-size:14px;
-
-    font-weight:600;
-
-    line-height:20px;
-
-    color:var(--text-primary);
-
-}
-
-.field-alias-input:focus{
-
-    border-bottom:1px solid var(--brand-primary);
-
-}
-
-.field-name{
-
-    margin-top:3px;
-
-    font-size:12px;
-
-    color:var(--text-muted);
-
-    white-space:nowrap;
-
-    overflow:hidden;
-
-    text-overflow:ellipsis;
-
-}
-		
-
-.field-key{
-
-    display:flex;
-
-    align-items:center;
-
-    gap:6px;
-
-    flex-shrink:0;
-
-    font-size:12px;
-
-    color:var(--text-secondary);
-
-    font-weight:600;
-
-}
-
-.field-key input{
-
-    margin:0;
-
-}
-
+        .field-key {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+            font-size: 11px;
+            color: #334155;
+            font-weight: 600;
+        }
+
+        .field-key input {
+            margin: 0;
+        }
     </style>
 </head>
 <body>
 
     <div class="page-content">
 
-        <!-- MODELO SEMÁNTICO + TABLA DE HECHOS (misma tarjeta, sin títulos, máxima compacidad) -->
+        <!-- CAJA 1: MODELO SEMÁNTICO -->
         <div class="card compact">
-
-            <!-- Gestión de modelos: crear / editar / eliminar -->
-            <div class="model-manager-row">
-			
-			
-			
-			<div id="modelSelectorContainer">
-
-    <select id="semanticModelSelect">
-        <option value="">— Sin modelo seleeeeccionado —</option>
-    </select>
-
-</div>
+            <div class="card-header">
+                <span class="card-title">Modelo semántico</span>
                 <div class="model-manager-actions">
-                    <button type="button" class="icon-btn" id="btnNewModel" title="Crear nuevo modelo">+ASD</button>
+                    <button type="button" class="icon-btn" id="btnNewModel" title="Crear nuevo modelo">+</button>
                     <button type="button" class="icon-btn danger" id="btnDeleteModel" title="Eliminar modelo">🗑</button>
                 </div>
             </div>
 
-            <div class="card-divider"></div>
+            <div id="modelSelectorContainer">
+                <select id="semanticModelSelect">
+                    <option value="">— Sin modelo seleccionado —</option>
+                </select>
+            </div>
+        </div>
 
-            <!-- Tabla de hechos -->
+        <!-- CAJA 2: TABLA DE HECHOS -->
+        <div class="card compact">
+            <div class="card-header">
+                <div class="card-title-group">
+                    <span class="card-title">Tabla de hechos</span>
+                    <span class="info-icon" title="Información">ⓘ</span>
+                </div>
+                <span class="eye-icon" title="Ver datos">👁</span>
+            </div>
+
             <div class="compact-field-group">
                 <div class="sap-search-input-group">
+                    <span class="table-icon">▦</span>
                     <input type="text" id="factFullConcat" readonly placeholder="Tabla de hechos (proyecto.dataset.tabla)" aria-label="Tabla de hechos seleccionada" title="Tabla de hechos seleccionada" style="cursor: pointer;" />
                     <button type="button" class="sap-search-btn" id="sapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
                 </div>
@@ -534,21 +510,25 @@
             </div>
         </div>
 
-        <!-- LISTA DE CAMPOS -->
+        <!-- CAJA 3: LISTA DE CAMPOS CON SCROLL Y BOTÓN FIJO -->
+        <div class="card fields-card" id="fieldsCard" style="display: none;">
+            <div class="card-header">
+                <span class="card-title">Campos</span>
+            </div>
 
-<div class="card" id="fieldsCard" style="display: none;">
-    <h3>Campos</h3>
+            <div id="fieldsList" class="fields-list">
+                <!-- Se rellena dinámicamente desde semantic_model.js -->
+            </div>
 
-    <div id="fieldsList" class="fields-list">
-        <!-- Se rellena dinámicamente desde semantic_model.js -->
+            <div class="card-footer-sticky">
+                <button class="btn" id="btnGenerateModel">
+                    Generar modelo semántico en Excel
+                </button>
+            </div>
+        </div>
+
     </div>
 
-    <button class="btn" id="btnGenerateModel">
-        Generar modelo semántico en Excel
-    </button>
-</div>
-
-    </div>
     <!-- MODAL SELECCIÓN JERÁRQUICA DE TABLA -->
     <div id="treeModal" class="modal">
         <div class="modal-content">
@@ -559,6 +539,7 @@
             <div id="treeContainer" class="tree-container"></div>
         </div>
     </div>
+
     <!-- MODAL CONFIGURACIÓN MEDIDA -->
     <div id="measureModal" class="modal">
         <div class="modal-content">
@@ -594,6 +575,7 @@
             <button class="btn" id="btnSaveMeasureModal">Guardar medida</button>
         </div>
     </div>
+
     <!-- MODAL CONFIGURACIÓN DIMENSIÓN -->
     <div id="dimensionModal" class="modal">
         <div class="modal-content">
@@ -617,19 +599,17 @@
                 <input type="hidden" id="dimRelTable" />
             </div>
 
-<div id="attributesContainer" style="display:none; margin-top:15px;">
-
-    <h4>Atributos</h4>
-
-    <div id="attributesList" class="fields-list">
-        <!-- Se rellena dinámicamente -->
-    </div>
-
-</div>
+            <div id="attributesContainer" style="display:none; margin-top:15px;">
+                <h4>Atributos</h4>
+                <div id="attributesList" class="fields-list">
+                    <!-- Se rellena dinámicamente -->
+                </div>
+            </div>
 
             <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar dimensión</button>
         </div>
     </div>
+
     <script src="js/semantic_model.js"></script>
 </body>
 </html>
