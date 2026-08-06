@@ -46,15 +46,40 @@ async function actualizarInformeFixed(event) {
 
         SQL = await BuildSQL_Fixed();
 
-        console.log(SQL);
+        console.log("SQL Generada:", SQL);
+
+        // Escritura del SQL generado en A1 y el texto "Hola" en B1 en la hoja activa
+        await Excel.run(async (context) => {
+            var sheet = context.workbook.worksheets.getActiveWorksheet();
+            sheet.getRange("A1").values = [[SQL]];
+            sheet.getRange("B1").values = [["Hola"]];
+            await context.sync();
+        });
 
         Json = await ExecuteSQL(SQL);
-        console.log(Json);
+        console.log("Respuesta BigQuery:", Json);
+
+        if (!Json) {
+            throw new Error("No se obtuvo respuesta de BigQuery o la consulta devolvió un resultado vacío.");
+        }
 
         await JSON_PaintValues(Json);
 
     } catch (error) {
         console.error("Error en la actualización del informe:", error);
+        
+        // Notificar al usuario sobre el error ocurrido
+        await Excel.run(async (context) => {
+            var sheet = context.workbook.worksheets.getActiveWorksheet();
+            var range = sheet.getRange("A1");
+            range.load("address");
+            await context.sync();
+            
+            console.error("Detalle del error en ejecucion: " + (error.message || error));
+        }).catch(function (e) {
+            console.error("Error al reportar el error:", e);
+        });
+
     } finally {
         if (event) {
             event.completed();
@@ -340,6 +365,10 @@ async function ExecuteSQL(SQL) {
             Token = localStorage.getItem("bigquery_access_token");
         }
 
+        if (!Token) {
+            throw new Error("No se encontró token de autenticación en la hoja CONFIG ni en localStorage.");
+        }
+
         var url = "https://bigquery.googleapis.com/bigquery/v2/projects/" + ProjectId + "/queries";
 
         var body = `{"query":"${EscapeJSON(SQL)}","useLegacySql":false}`;
@@ -584,6 +613,7 @@ async function ReadColumnDefinitions() {
 }
 
 async function GetFormulaArgumentValue(ws, Arg) {
+    if (!Arg) return "";
     Arg = Arg.trim();
 
     if (Arg.startsWith('"') && Arg.endsWith('"')) {
@@ -652,6 +682,11 @@ async function SQLValue(Dimension, Atributo, valor) {
 async function writeHolaInA1(event) {
     return actualizarInformeFixed(event);
 }
+
+// Exposicion explicita en el objeto global window para comandos en segundo plano
+window.hidePane = hidePane;
+window.writeHolaInA1 = writeHolaInA1;
+window.actualizarInformeFixed = actualizarInformeFixed;
 
 // Asociar las acciones del manifiesto con las funciones JavaScript
 Office.actions.associate("hidePane", hidePane);
