@@ -34,52 +34,18 @@ function hidePane(event) {
 
 /**
  * Función principal activada por el botón 'Actualizar' (RefreshReportButton)
- * Traduce la ejecución VBA completa de generación e inserción
+ * Escribe únicamente "HOLA" en la celda A1 de la hoja activa
  * @param {Office.AddinCommands.Event} event
  */
 async function actualizarInformeFixed(event) {
     try {
-        var SQL = "";
-        var Json = "";
-
-        await LoadReportDefinition();
-
-        SQL = await BuildSQL_Fixed();
-
-        console.log("SQL Generada:", SQL);
-
-        // Escritura del SQL generado en A1 y el texto "Hola" en B1 en la hoja activa
         await Excel.run(async (context) => {
             var sheet = context.workbook.worksheets.getActiveWorksheet();
-            sheet.getRange("A1").values = [[SQL]];
-            sheet.getRange("B1").values = [["Hola"]];
+            sheet.getRange("A1").values = [["HOLA"]];
             await context.sync();
         });
-
-        Json = await ExecuteSQL(SQL);
-        console.log("Respuesta BigQuery:", Json);
-
-        if (!Json) {
-            throw new Error("No se obtuvo respuesta de BigQuery o la consulta devolvió un resultado vacío.");
-        }
-
-        await JSON_PaintValues(Json);
-
     } catch (error) {
-        console.error("Error en la actualización del informe:", error);
-        
-        // Notificar al usuario sobre el error ocurrido
-        await Excel.run(async (context) => {
-            var sheet = context.workbook.worksheets.getActiveWorksheet();
-            var range = sheet.getRange("A1");
-            range.load("address");
-            await context.sync();
-            
-            console.error("Detalle del error en ejecucion: " + (error.message || error));
-        }).catch(function (e) {
-            console.error("Error al reportar el error:", e);
-        });
-
+        console.error("Error al escribir HOLA en A1:", error);
     } finally {
         if (event) {
             event.completed();
