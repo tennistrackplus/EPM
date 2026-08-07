@@ -266,9 +266,11 @@ function lastColInRowFormulas(grid, row1) {
 }
 
 // Convierte una dirección de celda tipo "$B$16" o "CSV_RESULT!$B$16" en {row, col} (base 1)
+// Si es un rango (p.ej. "A9:B9"), toma la primera celda, igual que .Row/.Column de un Range en VBA
 function parseAddress(addr) {
     addr = String(addr).trim();
     if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+    if (addr.indexOf(":") !== -1) addr = addr.split(":")[0];
     addr = addr.replace(/\$/g, "");
     const m = addr.match(/^([A-Za-z]+)(\d+)$/);
     if (!m) throw new Error("Dirección de celda no válida: " + addr);
