@@ -464,33 +464,23 @@ function sqlValue(atributesGrid, dimension, atributo, valor) {
  * GetFormulaArgumentValue
  * ------------------------------------------------------------------- */
 
-async function getFormulaArgumentValue(context, sheetName, arg) {
+// NOTA: en el VBA original esta función podía "Evaluate" una referencia de
+// celda si el argumento no venía entre comillas. En la práctica, el código
+// que pinta las fórmulas EPM_VALUE(dimension, atributo, valor, display)
+// siempre escribe los 4 argumentos como literales entre comillas, así que
+// esa rama nunca se ejecuta con datos reales. Se ha simplificado a una
+// función síncrona (sin llamadas a Excel) que solo quita las comillas,
+// evitando además que un argumento inesperado sin comillas provoque un
+// context.sync() fallido a mitad de la construcción del SQL, lo que podía
+// dejar el resto del lote en un estado inestable.
+function getFormulaArgumentValue(arg) {
     arg = String(arg).trim();
 
-    // Texto literal
-    if (arg.charAt(0) === '"' && arg.charAt(arg.length - 1) === '"') {
+    if (arg.charAt(0) === '"' && arg.charAt(arg.length - 1) === '"' && arg.length >= 2) {
         return arg.substring(1, arg.length - 1);
     }
 
-    try {
-        let targetSheet = sheetName;
-        let address = arg;
-
-        if (arg.indexOf("!") !== -1) {
-            const parts = arg.split("!");
-            targetSheet = parts[0].replace(/'/g, "");
-            address = parts[1];
-        }
-
-        const sheet = context.workbook.worksheets.getItem(targetSheet);
-        const range = sheet.getRange(address);
-        range.load("values");
-        await context.sync();
-
-        return String(range.values[0][0]);
-    } catch (err) {
-        return arg.replace(/"/g, "");
-    }
+    return arg.replace(/"/g, "");
 }
 
 /* ---------------------------------------------------------------------
@@ -523,10 +513,10 @@ async function readRowDefinitions(context, editReportGrid, csvGrid) {
 
                 items.push({
                     R: R,
-                    Dimension: await getFormulaArgumentValue(context, "CSV_RESULT", V[0]),
-                    AttributeName: await getFormulaArgumentValue(context, "CSV_RESULT", V[1]),
-                    Value: await getFormulaArgumentValue(context, "CSV_RESULT", V[2]),
-                    Display: await getFormulaArgumentValue(context, "CSV_RESULT", V[3])
+                    Dimension: getFormulaArgumentValue(V[0]),
+                    AttributeName: getFormulaArgumentValue(V[1]),
+                    Value: getFormulaArgumentValue(V[2]),
+                    Display: getFormulaArgumentValue(V[3])
                 });
             } else {
                 break; // Exit For (solo la iteración de columnas)
@@ -558,10 +548,10 @@ async function readColumnDefinitions(context, editReportGrid, csvGrid) {
 
                 items.push({
                     R: Col,
-                    Dimension: await getFormulaArgumentValue(context, "CSV_RESULT", V[0]),
-                    AttributeName: await getFormulaArgumentValue(context, "CSV_RESULT", V[1]),
-                    Value: await getFormulaArgumentValue(context, "CSV_RESULT", V[2]),
-                    Display: await getFormulaArgumentValue(context, "CSV_RESULT", V[3])
+                    Dimension: getFormulaArgumentValue(V[0]),
+                    AttributeName: getFormulaArgumentValue(V[1]),
+                    Value: getFormulaArgumentValue(V[2]),
+                    Display: getFormulaArgumentValue(V[3])
                 });
             } else {
                 break; // Exit For (solo la iteración de filas)
@@ -785,6 +775,12 @@ function buildGroupByBase(relGrid, rowsDefs, colDefs) {
 async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid) {
     const rowsDefs = await readRowDefinitions(context, editReportGrid, csvGrid);
     const colDefs = await readColumnDefinitions(context, editReportGrid, csvGrid);
+
+    // Diagnóstico: abre las herramientas de desarrollador (F12) del panel de
+    // tareas / comandos para ver exactamente qué Dimension/Attribute/Value
+    // se ha leído de las fórmulas EPM_VALUE de CSV_RESULT.
+    console.log("readRowDefinitions ->", rowsDefs);
+    console.log("readColumnDefinitions ->", colDefs);
 
     let sql = "";
 
