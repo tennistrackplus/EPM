@@ -35,11 +35,14 @@
         <!-- Barra de herramientas de la vista -->
         <div class="view-toolbar">
             <h2>Campos del informe</h2>
-            <button id="btnRefresh" class="icon-button" title="Actualizar dimensiones">
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M13.65 2.35A7.958 7.958 0 008 0C3.58 0 0 3.58 0 8s3.58 8 8 8c3.84 0 7.08-2.71 7.85-6.32h-1.63C13.48 12.37 11.01 14.5 8 14.5 4.41 14.5 1.5 11.59 1.5 8S4.41 1.5 8 1.5c1.79 0 3.41.73 4.59 1.91L10 6h6V0l-2.35 2.35z"/>
-                </svg>
-            </button>
+            <div style="display:flex; gap:6px;">
+                <button id="btnSaveDesign" class="btn-primary" style="padding:6px 14px; font-size: var(--fs-sm);">Guardar</button>
+                <button id="btnRefresh" class="icon-button" title="Actualizar dimensiones">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M13.65 2.35A7.958 7.958 0 008 0C3.58 0 0 3.58 0 8s3.58 8 8 8c3.84 0 7.08-2.71 7.85-6.32h-1.63C13.48 12.37 11.01 14.5 8 14.5 4.41 14.5 1.5 11.59 1.5 8S4.41 1.5 8 1.5c1.79 0 3.41.73 4.59 1.91L10 6h6V0l-2.35 2.35z"/>
+                    </svg>
+                </button>
+            </div>
         </div>
 
         <p class="taskpane-instruction">Arrastra los campos a las áreas correspondientes:</p>
@@ -85,10 +88,19 @@
                             </svg>
                             <span>Filas</span>
                         </div>
-                        <label class="asymmetric-checkbox" title="Informe asimétrico en filas">
+                        <label class="asymmetric-checkbox" title="Estático / Dinámico">
                             <input type="checkbox" id="chkAsymmetricRows">
-                            <span>Asimétrico</span>
+                            <span id="lblStaticRows">Dinámico</span>
                         </label>
+                    </div>
+                    <div class="range-control">
+                        <span class="range-address" id="lblRRango">(sin definir)</span>
+                        <div class="range-arrows">
+                            <button type="button" id="btnRRUp" class="icon-button" title="Mover arriba">⬆</button>
+                            <button type="button" id="btnRRDown" class="icon-button" title="Mover abajo">⬇</button>
+                            <button type="button" id="btnRRLeft" class="icon-button" title="Mover izquierda">⬅</button>
+                            <button type="button" id="btnRRRight" class="icon-button" title="Mover derecha">➡</button>
+                        </div>
                     </div>
                     <div class="dropzone-content"></div>
                 </div>
@@ -102,10 +114,19 @@
                             </svg>
                             <span>Columnas</span>
                         </div>
-                        <label class="asymmetric-checkbox" title="Informe asimétrico en columnas">
+                        <label class="asymmetric-checkbox" title="Estático / Dinámico">
                             <input type="checkbox" id="chkAsymmetricCols">
-                            <span>Asimétrico</span>
+                            <span id="lblStaticCols">Dinámico</span>
                         </label>
+                    </div>
+                    <div class="range-control">
+                        <span class="range-address" id="lblCRango">(sin definir)</span>
+                        <div class="range-arrows">
+                            <button type="button" id="btnRCUp" class="icon-button" title="Mover arriba">⬆</button>
+                            <button type="button" id="btnRCDown" class="icon-button" title="Mover abajo">⬇</button>
+                            <button type="button" id="btnRCLeft" class="icon-button" title="Mover izquierda">⬅</button>
+                            <button type="button" id="btnRCRight" class="icon-button" title="Mover derecha">➡</button>
+                        </div>
                     </div>
                     <div class="dropzone-content"></div>
                 </div>
@@ -114,7 +135,7 @@
         </div>
     </div>
 
-    <!-- Modal de Selección de Filtros -->
+    <!-- Modal de Selección de Filtros (selección única) -->
     <div id="filterModal" class="modal-backdrop" style="display: none;">
         <div class="modal-dialog">
             <div class="modal-header">
@@ -122,20 +143,8 @@
                 <button id="closeModalBtn" class="modal-close-btn">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="range-selection-box">
-                    <span class="range-title">Selección por Rango:</span>
-                    <div class="range-controls">
-                        <label>Desde: <select id="rangeFromSelect"></select></label>
-                        <label>Hasta: <select id="rangeToSelect"></select></label>
-                        <button id="btnApplyRange" class="btn-secondary">Aplicar Rango</button>
-                    </div>
-                </div>
-
                 <div class="modal-toolbar">
                     <input type="text" id="modalSearchInput" placeholder="Buscar en la lista...">
-                    <label class="select-all-label">
-                        <input type="checkbox" id="chkSelectAll"> Seleccionar todo
-                    </label>
                 </div>
                 <div id="modalItemsContainer" class="modal-items-list"></div>
             </div>
