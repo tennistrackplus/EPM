@@ -666,85 +666,6 @@ function buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs) {
     return sql;
 }
 
-function buildBaseRow(atributesGrid, rowsDefs) {
-    const dict = new Map();
-
-    for (const v of rowsDefs) {
-        const key = String(v.R);
-        const cond = "    " + v.AttributeName + "=" + sqlValue(atributesGrid, v.Dimension, v.AttributeName, v.Value);
-
-        if (!dict.has(key)) {
-            dict.set(key, cond);
-        } else {
-            dict.set(key, dict.get(key) + CRLF + "AND " + v.AttributeName + "=" + sqlValue(atributesGrid, v.Dimension, v.AttributeName, v.Value));
-        }
-    }
-
-    let sql = "BASE_ROW AS (" + CRLF + CRLF;
-    let first = true;
-
-    for (const [rowId, cond] of dict.entries()) {
-        if (!first) {
-            sql += CRLF + "UNION ALL" + CRLF + CRLF;
-        }
-
-        sql += "SELECT" + CRLF
-            + "    " + rowId + " AS ROW_ID," + CRLF
-            + "    *" + CRLF
-            + "FROM BASE" + CRLF
-            + "WHERE" + CRLF
-            + cond;
-
-        first = false;
-    }
-
-    sql += CRLF + CRLF + ")";
-
-    return sql;
-}
-
-function buildColumnsSQL(atributesGrid, colDefs) {
-    const dict = new Map();
-
-    for (const v of colDefs) {
-        const key = String(v.R);
-        const cond = "    " + v.AttributeName + "=" + sqlValue(atributesGrid, v.Dimension, v.AttributeName, v.Value);
-
-        if (!dict.has(key)) {
-            dict.set(key, cond);
-        } else {
-            dict.set(key, dict.get(key) + CRLF + "AND " + v.AttributeName + "=" + sqlValue(atributesGrid, v.Dimension, v.AttributeName, v.Value));
-        }
-    }
-
-    let sql = "";
-    let first = true;
-
-    for (const [colId, cond] of dict.entries()) {
-        if (!first) {
-            sql += CRLF + "UNION ALL" + CRLF + CRLF;
-        }
-
-        sql += "SELECT" + CRLF
-            + "    ROW_ID," + CRLF
-            + "    " + colId + " AS COLUMN_ID," + CRLF
-            + "    SUM(IMPORTE) AS IMPORTE" + CRLF
-            + "FROM BASE_ROW" + CRLF
-            + "WHERE" + CRLF
-            + cond + CRLF
-            + "GROUP BY ROW_ID";
-
-        first = false;
-    }
-
-    sql += CRLF + CRLF
-        + "ORDER BY" + CRLF
-        + "    ROW_ID," + CRLF
-        + "    COLUMN_ID";
-
-    return sql;
-}
-
 function buildGroupByBase(relGrid, rowsDefs, colDefs) {
     const dict = new Map();
 
@@ -772,6 +693,47 @@ function buildGroupByBase(relGrid, rowsDefs, colDefs) {
     return sql;
 }
 
+function indentBlock(text, prefix) {
+    return text.split(CRLF).map(line => prefix + line).join(CRLF);
+}
+
+/**
+ * Construye, para las definiciones de un eje (filas o columnas), la
+ * expresión ARRAY(SELECT <idFieldName> FROM UNNEST([STRUCT(...), ...]) WHERE COND)
+ * que sustituye al patrón "un SELECT/UNION ALL por cada ROW_ID/COLUMN_ID".
+ * Agrupa igual que hacían BuildBaseRow/BuildColumns (por v.R), concatenando
+ * las condiciones de cada grupo con AND, y genera un único STRUCT por
+ * ROW_ID/COLUMN_ID en vez de un SELECT completo contra BASE/BASE_ROW.
+ */
+function buildIdArray(atributesGrid, defs, idFieldName) {
+    const dict = new Map();
+
+    for (const v of defs) {
+        const key = String(v.R);
+        const condPart = v.AttributeName + "=" + sqlValue(atributesGrid, v.Dimension, v.AttributeName, v.Value);
+
+        if (!dict.has(key)) {
+            dict.set(key, [condPart]);
+        } else {
+            dict.get(key).push(condPart);
+        }
+    }
+
+    const structs = [];
+    for (const [id, conds] of dict.entries()) {
+        structs.push("STRUCT(" + id + " AS " + idFieldName + ", (" + conds.join(" AND ") + ") AS COND)");
+    }
+
+    let sql = "ARRAY(" + CRLF;
+    sql += "    SELECT " + idFieldName + " FROM UNNEST([" + CRLF;
+    sql += structs.map(s => "        " + s).join("," + CRLF) + CRLF;
+    sql += "    ])" + CRLF;
+    sql += "    WHERE COND" + CRLF;
+    sql += ")";
+
+    return sql;
+}
+
 async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid) {
     const rowsDefs = await readRowDefinitions(context, editReportGrid, csvGrid);
     const colDefs = await readColumnDefinitions(context, editReportGrid, csvGrid);
@@ -782,17 +744,40 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     console.log("readRowDefinitions ->", rowsDefs);
     console.log("readColumnDefinitions ->", colDefs);
 
+    const rowIdsArray = buildIdArray(atributesGrid, rowsDefs, "ROW_ID");
+    const columnIdsArray = buildIdArray(atributesGrid, colDefs, "COLUMN_ID");
+
     let sql = "";
 
+    // ---- CTE BASE: se escanea la tabla de hechos UNA sola vez ----
     sql += "WITH BASE AS (" + CRLF + CRLF;
     sql += buildSelectBase(relGrid, rowsDefs, colDefs) + CRLF + CRLF;
     sql += buildFrom(measuresGrid) + CRLF + CRLF;
     sql += buildJoins(relGrid) + CRLF + CRLF;
     sql += buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs) + CRLF + CRLF;
-    sql += buildGroupByBase(relGrid, rowsDefs, colDefs) + CRLF + CRLF;
+    sql += buildGroupByBase(relGrid, rowsDefs, colDefs) + CRLF;
     sql += ")," + CRLF + CRLF;
-    sql += buildBaseRow(atributesGrid, rowsDefs) + CRLF + CRLF;
-    sql += buildColumnsSQL(atributesGrid, colDefs);
+
+    // ---- CTE TAGGED: etiqueta cada fila de BASE con los ROW_ID/COLUMN_ID
+    //      que cumple, sin volver a escanear BASE por cada uno ----
+    sql += "TAGGED AS (" + CRLF + CRLF;
+    sql += "    SELECT" + CRLF;
+    sql += "        IMPORTE," + CRLF + CRLF;
+    sql += indentBlock(rowIdsArray, "        ") + " AS ROW_IDS," + CRLF + CRLF;
+    sql += indentBlock(columnIdsArray, "        ") + " AS COLUMN_IDS" + CRLF + CRLF;
+    sql += "    FROM BASE" + CRLF;
+    sql += ")" + CRLF + CRLF;
+
+    // ---- SELECT final: cruce ROW_ID x COLUMN_ID vía UNNEST + agregación ----
+    sql += "SELECT" + CRLF;
+    sql += "    ROW_ID," + CRLF;
+    sql += "    COLUMN_ID," + CRLF;
+    sql += "    SUM(IMPORTE) AS IMPORTE" + CRLF;
+    sql += "FROM TAGGED," + CRLF;
+    sql += "UNNEST(ROW_IDS) AS ROW_ID," + CRLF;
+    sql += "UNNEST(COLUMN_IDS) AS COLUMN_ID" + CRLF;
+    sql += "GROUP BY ROW_ID, COLUMN_ID" + CRLF;
+    sql += "ORDER BY ROW_ID, COLUMN_ID";
 
     return sql;
 }
