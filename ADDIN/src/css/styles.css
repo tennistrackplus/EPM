@@ -247,6 +247,38 @@ body {
     accent-color: var(--brand-primary);
 }
 
+.range-control {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 4px 10px;
+    background-color: var(--surface-card);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+}
+
+.range-address {
+    font-family: monospace;
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+}
+
+.range-arrows {
+    display: flex;
+    gap: 2px;
+}
+
+.range-arrows .icon-button {
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+    padding: 0;
+}
+
 .dropzone-content {
     flex: 1;
     padding: 8px;

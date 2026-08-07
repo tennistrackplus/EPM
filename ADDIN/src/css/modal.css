@@ -181,6 +181,12 @@
     margin-right: 4px;
 }
 
+.modal-item-row.selected {
+    background-color: var(--brand-primary-light);
+    font-weight: 700;
+    color: var(--brand-primary);
+}
+
 .modal-footer {
     padding: 12px 16px;
     border-top: 1px solid var(--border-subtle);
