@@ -1,195 +1,172 @@
+/* ==========================================================================
+ * FilterModal — traducción de frmFilterValues (VBA), en versión de
+ * selección ÚNICA (sin checkboxes ni selección por rango, de momento).
+ * ========================================================================== */
+
 /**
- * Lógica del Modal de Selección / Filtro con formato de Jerarquía y Selección por Rango
+ * Traducción de LoadJson: separa los nombres de campo ("name":"...") y los
+ * valores ("v":"...") del JSON crudo de BigQuery, y construye una lista
+ * "en árbol" (indentada) deduplicando cada nivel frente al valor anterior,
+ * igual que hacía el bucle de Ultimos()/Valores() en VBA.
  */
+function loadJsonTree(json) {
+    const fieldMatches = [...json.matchAll(/"name":\s*"([^"]+)"/g)];
+    const campos = fieldMatches.map(m => m[1]);
+
+    if (campos.length === 0) return [];
+
+    const ultimos = campos.map(() => "");
+    const valores = campos.map(() => "");
+
+    const valueMatches = [...json.matchAll(/"v":\s*"([^"]*)"/g)];
+
+    const items = [];
+    let nivel = 0;
+
+    for (const m of valueMatches) {
+        valores[nivel] = m[1];
+        nivel++;
+
+        if (nivel > campos.length - 1) {
+            for (let i = 0; i < campos.length; i++) {
+                if (valores[i] !== ultimos[i]) {
+                    items.push({
+                        text: " ".repeat(i * 4) + valores[i],
+                        attribute: campos[i],
+                        value: valores[i]
+                    });
+
+                    ultimos[i] = valores[i];
+                    for (let j = i + 1; j < campos.length; j++) ultimos[j] = "";
+                }
+            }
+            nivel = 0;
+        }
+    }
+
+    return items;
+}
+
 const FilterModal = {
-    currentData: null,
-    itemsList: [],
-    lastCheckedIndex: null,
+    allItems: [],
+    selected: null,
+    resolveFn: null,
 
     init() {
-        this.bindEvents();
-    },
-
-    bindEvents() {
         const closeBtn = document.getElementById("closeModalBtn");
         const cancelBtn = document.getElementById("btnCancelModal");
         const applyBtn = document.getElementById("btnApplyModal");
-        const selectAllChk = document.getElementById("chkSelectAll");
-        const rangeBtn = document.getElementById("btnApplyRange");
         const searchInput = document.getElementById("modalSearchInput");
 
-        if (closeBtn) closeBtn.addEventListener("click", () => this.close());
-        if (cancelBtn) cancelBtn.addEventListener("click", () => this.close());
+        if (closeBtn) closeBtn.addEventListener("click", () => this.cancel());
+        if (cancelBtn) cancelBtn.addEventListener("click", () => this.cancel());
         if (applyBtn) applyBtn.addEventListener("click", () => this.apply());
-        
-        if (selectAllChk) {
-            selectAllChk.addEventListener("change", (e) => {
-                const checkboxes = document.querySelectorAll("#modalItemsContainer input[type='checkbox']");
-                checkboxes.forEach(chk => chk.checked = e.target.checked);
-            });
-        }
-
-        if (rangeBtn) {
-            rangeBtn.addEventListener("click", () => this.applyRangeSelection());
-        }
-
-        if (searchInput) {
-            searchInput.addEventListener("input", (e) => this.filterItems(e.target.value));
-        }
+        if (searchInput) searchInput.addEventListener("input", (e) => this.search(e.target.value));
     },
 
-    async open(data) {
-        this.currentData = data;
-        this.lastCheckedIndex = null;
-        
-        const modal = document.getElementById("filterModal");
-        const titleEl = document.getElementById("modalTitle");
-        const container = document.getElementById("modalItemsContainer");
-        const selectAllChk = document.getElementById("chkSelectAll");
-        
-        if (selectAllChk) selectAllChk.checked = false;
-        if (titleEl) titleEl.innerText = `Filtrar: ${data.dim} -> ${data.name}`;
+    /**
+     * Abre el modal para el campo indicado y devuelve una Promise que
+     * resuelve a { value, attribute } si el usuario elige un valor,
+     * o null si cancela.
+     */
+    open(fieldData) {
+        return new Promise(async (resolve) => {
+            this.resolveFn = resolve;
+            this.selected = null;
+            this.allItems = [];
 
-        if (container) {
-            container.innerHTML = "<div style='padding: 10px; color: #605e5c;'>Cargando valores...</div>";
-        }
+            const titleEl = document.getElementById("modalTitle");
+            if (titleEl) titleEl.innerText = `Filtrar: ${fieldData.dim}.${fieldData.name}`;
 
-        modal.style.display = "flex";
+            const searchInput = document.getElementById("modalSearchInput");
+            if (searchInput) searchInput.value = "";
 
-        // Cargar elementos
-        this.itemsList = await window.ExcelService.readMetValuesForField(data.dim, data.name, data.isHierarchy);
-        this.populateRangeDropdowns(this.itemsList);
-        this.renderItems(this.itemsList, data.isHierarchy);
-    },
+            const container = document.getElementById("modalItemsContainer");
+            container.innerHTML = "<div style='padding:10px;color:#605e5c;'>Cargando valores…</div>";
 
-    close() {
-        const modal = document.getElementById("filterModal");
-        if (modal) modal.style.display = "none";
-        this.currentData = null;
-    },
+            document.getElementById("filterModal").style.display = "flex";
 
-    populateRangeDropdowns(items) {
-        const fromSelect = document.getElementById("rangeFromSelect");
-        const toSelect = document.getElementById("rangeToSelect");
+            try {
+                const sql = await window.ExcelService.buildFilterValuesSQL(fieldData.dim, fieldData.name);
 
-        if (!fromSelect || !toSelect) return;
+                if (!sql) {
+                    container.innerHTML = "<div style='padding:10px;color:#a80000;'>No se ha encontrado el atributo o jerarquía.</div>";
+                    return;
+                }
 
-        fromSelect.innerHTML = "";
-        toSelect.innerHTML = "";
-
-        items.forEach((item, index) => {
-            const val = item.value;
-            const optionFrom = document.createElement("option");
-            optionFrom.value = index;
-            optionFrom.textContent = item.level > 1 ? `${"  ".repeat(item.level - 1)}${val}` : val;
-            fromSelect.appendChild(optionFrom);
-
-            const optionTo = document.createElement("option");
-            optionTo.value = index;
-            optionTo.textContent = item.level > 1 ? `${"  ".repeat(item.level - 1)}${val}` : val;
-            toSelect.appendChild(optionTo);
-        });
-
-        if (items.length > 0) {
-            fromSelect.selectedIndex = 0;
-            toSelect.selectedIndex = items.length - 1;
-        }
-    },
-
-    applyRangeSelection() {
-        const fromSelect = document.getElementById("rangeFromSelect");
-        const toSelect = document.getElementById("rangeToSelect");
-        
-        if (!fromSelect || !toSelect) return;
-
-        const startIndex = parseInt(fromSelect.value, 10);
-        const endIndex = parseInt(toSelect.value, 10);
-
-        const fromIdx = Math.min(startIndex, endIndex);
-        const toIdx = Math.max(startIndex, endIndex);
-
-        const container = document.getElementById("modalItemsContainer");
-        const rows = container.querySelectorAll(".modal-item-row");
-
-        rows.forEach((row, idx) => {
-            const chk = row.querySelector("input[type='checkbox']");
-            if (chk) {
-                chk.checked = (idx >= fromIdx && idx <= toIdx);
+                const json = await window.ExcelService.executeSQL(sql);
+                this.allItems = loadJsonTree(json);
+                this.render(this.allItems);
+            } catch (err) {
+                console.error("Error cargando valores de filtro:", err);
+                container.innerHTML = `<div style='padding:10px;color:#a80000;'>Error: ${err.message || err}</div>`;
             }
         });
     },
 
-    renderItems(items, isHierarchy) {
+    render(items) {
         const container = document.getElementById("modalItemsContainer");
-        if (!container) return;
-
         container.innerHTML = "";
 
         if (items.length === 0) {
-            container.innerHTML = "<div style='padding: 10px; color: #605e5c;'>No hay elementos disponibles.</div>";
+            container.innerHTML = "<div style='padding:10px;color:#605e5c;'>No hay valores para mostrar.</div>";
             return;
         }
 
-        items.forEach((item, index) => {
+        items.forEach((item) => {
             const row = document.createElement("div");
             row.className = "modal-item-row";
-            row.dataset.index = index;
+            row.style.whiteSpace = "pre";
+            row.style.cursor = "pointer";
+            row.textContent = item.text;
 
-            // Formato de nivel/árbol para jerarquía
-            const level = item.level || 1;
-            const indentPixels = (level - 1) * 18;
-            row.style.paddingLeft = `${indentPixels + 8}px`;
-
-            if (isHierarchy && level > 1) {
-                row.classList.add("hierarchy-child-row");
+            if (this.selected && this.selected.attribute === item.attribute && this.selected.value === item.value) {
+                row.classList.add("selected");
             }
 
-            const checkbox = document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.id = `chk_item_${index}`;
-            checkbox.value = item.value;
-
-            // Soporte para Shift + Clic en rango
-            checkbox.addEventListener("click", (e) => {
-                if (e.shiftKey && this.lastCheckedIndex !== null) {
-                    const start = Math.min(this.lastCheckedIndex, index);
-                    const end = Math.max(this.lastCheckedIndex, index);
-                    const allCheckboxes = container.querySelectorAll("input[type='checkbox']");
-                    for (let i = start; i <= end; i++) {
-                        allCheckboxes[i].checked = checkbox.checked;
-                    }
-                }
-                this.lastCheckedIndex = index;
+            row.addEventListener("click", () => {
+                container.querySelectorAll(".modal-item-row").forEach(r => r.classList.remove("selected"));
+                row.classList.add("selected");
+                this.selected = item;
             });
 
-            const label = document.createElement("label");
-            label.htmlFor = `chk_item_${index}`;
-            
-            const prefix = (isHierarchy && level > 1) ? "└─ " : "";
-            label.innerHTML = `<span class="level-indicator">L${level}</span> ${prefix}<strong>${item.value}</strong>`;
+            row.addEventListener("dblclick", () => {
+                this.selected = item;
+                this.apply();
+            });
 
-            row.appendChild(checkbox);
-            row.appendChild(label);
             container.appendChild(row);
         });
     },
 
-    filterItems(query) {
-        const q = query.toLowerCase();
-        const rows = document.querySelectorAll("#modalItemsContainer .modal-item-row");
-        rows.forEach(row => {
-            const text = row.innerText.toLowerCase();
-            row.style.display = text.includes(q) ? "flex" : "none";
-        });
+    search(query) {
+        const q = String(query).toLowerCase().trim();
+        const filtered = q === ""
+            ? this.allItems
+            : this.allItems.filter(it => it.text.toLowerCase().includes(q));
+        this.render(filtered);
     },
 
     apply() {
-        const checkedValues = [];
-        const checkboxes = document.querySelectorAll("#modalItemsContainer input[type='checkbox']:checked");
-        checkboxes.forEach(chk => checkedValues.push(chk.value));
-
-        console.log(`Filtros aplicados a ${this.currentData.name}:`, checkedValues);
+        if (!this.selected) {
+            this.cancel();
+            return;
+        }
+        const result = { value: this.selected.value, attribute: this.selected.attribute };
+        const resolve = this.resolveFn;
         this.close();
+        if (resolve) resolve(result);
+    },
+
+    cancel() {
+        const resolve = this.resolveFn;
+        this.close();
+        if (resolve) resolve(null);
+    },
+
+    close() {
+        document.getElementById("filterModal").style.display = "none";
+        this.resolveFn = null;
     }
 };
 
