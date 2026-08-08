@@ -1372,6 +1372,17 @@ async function jsonTo3Matrices(context, json) {
     const totalDimFilas = ReportState.ColumnCount;
     const totalDimCols = ReportState.RowCount;
 
+    console.log("jsonTo3Matrices diagnóstico:", {
+        totalCampos, filas,
+        RowCount: ReportState.RowCount, ColumnCount: ReportState.ColumnCount, MeasureCount: ReportState.MeasureCount,
+        H10: cellValue(editReportGrid, 10, 8), N10: cellValue(editReportGrid, 10, 14),
+        RRows, RCols, rowsOffRow, rowsOffCol, colsOffRow, colsOffCol,
+        totalDimFilas, totalDimCols,
+        rowDictSize: rowDict.size, colDictSize: colDict.size,
+        rowDictSample: [...rowDict.values()].slice(0, 3),
+        colDictSample: [...colDict.values()].slice(0, 3)
+    });
+
     const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
     const usedRange = sheet.getUsedRangeOrNullObject();
     usedRange.load("isNullObject");
@@ -1389,48 +1400,69 @@ async function jsonTo3Matrices(context, json) {
         sheet.getRangeByIndexes(row - 1, col - 1, 1, 1).values = [[value]];
     }
 
+    try {
+        await context.sync();
+        console.log("jsonTo3Matrices: FACT pintado OK (" + filas + " celdas)");
+    } catch (err) {
+        console.error("jsonTo3Matrices: ERROR pintando FACT", err);
+    }
+
     // FILAS (usa columnas H/I/J de EDIT_REPORT, filas i+14, i=1..totalDimFilas)
+    let filasPintadas = 0;
     for (const V of rowDict.values()) {
         let iAux = 0;
         for (let i = 1; i <= totalDimFilas; i++) {
-            const flag = Number(cellValue(editReportGrid, i + 14, 10)); // J
-            if (flag === 1) iAux++;
+            try {
+                const flag = Number(cellValue(editReportGrid, i + 14, 10)); // J
+                if (flag === 1) iAux++;
 
-            if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
-                const targetRow = Number(V[0]) + rowsOffRow;
-                const targetCol = iAux + rowsOffCol;
-                const cell = sheet.getRangeByIndexes(targetRow - 1, targetCol - 1, 1, 1);
+                if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
+                    const targetRow = Number(V[0]) + rowsOffRow;
+                    const targetCol = iAux + rowsOffCol;
+                    const cell = sheet.getRangeByIndexes(targetRow - 1, targetCol - 1, 1, 1);
 
-                cell.format.indentLevel = flag === 1 ? 0 : (flag - 1);
+                    cell.format.indentLevel = flag === 1 ? 0 : Math.max(0, flag - 1);
 
-                const dim = cellValue(editReportGrid, i + 14, 8);  // H
-                const attr = cellValue(editReportGrid, i + 14, 9); // I
-                cell.formulas = [["=EPM_VALUE(\"" + dim + "\",\"" + attr + "\",\"" + V[i] + "\",\"" + V[i] + "\")"]];
+                    const dim = cellValue(editReportGrid, i + 14, 8);  // H
+                    const attr = cellValue(editReportGrid, i + 14, 9); // I
+                    cell.formulas = [["=EPM_VALUE(\"" + dim + "\",\"" + attr + "\",\"" + V[i] + "\",\"" + V[i] + "\")"]];
+                    filasPintadas++;
+                }
+            } catch (err) {
+                console.error("Error pintando cabecera FILAS", { i, V, flagRaw: cellValue(editReportGrid, i + 14, 10) }, err);
             }
         }
     }
 
     // COLUMNAS (usa columnas N/O/P de EDIT_REPORT, filas i+14, i=1..totalDimCols)
+    let columnasPintadas = 0;
     for (const V of colDict.values()) {
         let iAux = 0;
         for (let i = 1; i <= totalDimCols; i++) {
-            const flag = Number(cellValue(editReportGrid, i + 14, 16)); // P
+            try {
+                const flag = Number(cellValue(editReportGrid, i + 14, 16)); // P
 
-            if (flag === 1) iAux++;
+                if (flag === 1) iAux++;
 
-            if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
-                const targetRow = iAux + colsOffRow;
-                const targetCol = Number(V[0]) + colsOffCol;
-                const cell = sheet.getRangeByIndexes(targetRow - 1, targetCol - 1, 1, 1);
+                if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
+                    const targetRow = iAux + colsOffRow;
+                    const targetCol = Number(V[0]) + colsOffCol;
+                    const cell = sheet.getRangeByIndexes(targetRow - 1, targetCol - 1, 1, 1);
 
-                cell.format.indentLevel = flag === 1 ? 0 : (flag - 1);
+                    cell.format.indentLevel = flag === 1 ? 0 : Math.max(0, flag - 1);
 
-                const dim = cellValue(editReportGrid, i + 14, 14);  // N
-                const attr = cellValue(editReportGrid, i + 14, 15); // O
-                cell.formulas = [["=EPM_VALUE(\"" + dim + "\",\"" + attr + "\",\"" + V[i] + "\",\"" + V[i] + "\")"]];
+                    const dim = cellValue(editReportGrid, i + 14, 14);  // N
+                    const attr = cellValue(editReportGrid, i + 14, 15); // O
+                    cell.formulas = [["=EPM_VALUE(\"" + dim + "\",\"" + attr + "\",\"" + V[i] + "\",\"" + V[i] + "\")"]];
+                    columnasPintadas++;
+                }
+            } catch (err) {
+                console.error("Error pintando cabecera COLUMNAS", { i, V, flagRaw: cellValue(editReportGrid, i + 14, 16) }, err);
             }
         }
     }
+
+    console.log("jsonTo3Matrices: celdas de cabecera encoladas ->", { filasPintadas, columnasPintadas });
 
     await context.sync();
 }
@@ -1456,8 +1488,19 @@ async function actualizarInformeCore() {
 
     const json = await executeSQL(sql);
 
+    console.log("JSON de BigQuery ->", json);
+
+    // jsonTo3Matrices limpia toda la hoja CSV_RESULT antes de pintar, así que
+    // el SQL (A1) y el JSON crudo (B1) se escriben DESPUÉS, para que no se borren.
     await Excel.run(async (context) => {
         await jsonTo3Matrices(context, json);
+    });
+
+    await Excel.run(async (context) => {
+        const csvSheet = context.workbook.worksheets.getItem("CSV_RESULT");
+        csvSheet.getRange("A1").values = [[sql]];
+        csvSheet.getRange("B1").values = [[json]];
+        await context.sync();
     });
 }
 
@@ -1512,8 +1555,21 @@ window.ReportActions = { actualizar, actualizarInforme, actualizarInformeFixed }
 
 
 // Asociar el nombre del comando del manifiesto con la función JavaScript
+
+/**
+ * Función placeholder para botones del ribbon aún no implementados.
+ * No hace nada salvo completar el evento, para que el botón no falle.
+ */
+function comingSoon(event) {
+    console.log("Esta función todavía no está implementada.");
+    if (event) {
+        event.completed();
+    }
+}
+
 Office.actions.associate("hidePane", hidePane);
 Office.actions.associate("writeHolaInA1", writeHolaInA1);
 Office.actions.associate("actualizarInformeFixed", actualizarInformeFixed);
 Office.actions.associate("actualizarInforme", actualizarInforme);
 Office.actions.associate("actualizar", actualizar);
+Office.actions.associate("comingSoon", comingSoon);
