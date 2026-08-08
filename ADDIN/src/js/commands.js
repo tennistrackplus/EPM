@@ -1384,12 +1384,6 @@ async function jsonTo3Matrices(context, json) {
     });
 
     const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
-    const usedRange = sheet.getUsedRangeOrNullObject();
-    usedRange.load("isNullObject");
-    await context.sync();
-    if (!usedRange.isNullObject) {
-        usedRange.clear(Excel.ClearApplyTo.contents);
-    }
 
     // FACT
     for (let i = 0; i < filas; i++) {
@@ -1484,23 +1478,25 @@ async function actualizarInformeCore() {
         sql = buildSQL(relGrid, measuresGrid, atributesGrid);
 
         console.log("BuildSQL ->", sql);
+
+        const csvSheet = context.workbook.worksheets.getItem("CSV_RESULT");
+        csvSheet.getRange("A1").values = [[sql]];
+
+        await context.sync();
     });
 
     const json = await executeSQL(sql);
 
     console.log("JSON de BigQuery ->", json);
 
-    // jsonTo3Matrices limpia toda la hoja CSV_RESULT antes de pintar, así que
-    // el SQL (A1) y el JSON crudo (B1) se escriben DESPUÉS, para que no se borren.
     await Excel.run(async (context) => {
-        await jsonTo3Matrices(context, json);
+        const csvSheet = context.workbook.worksheets.getItem("CSV_RESULT");
+        csvSheet.getRange("B1").values = [[json]];
+        await context.sync();
     });
 
     await Excel.run(async (context) => {
-        const csvSheet = context.workbook.worksheets.getItem("CSV_RESULT");
-        csvSheet.getRange("A1").values = [[sql]];
-        csvSheet.getRange("B1").values = [[json]];
-        await context.sync();
+        await jsonTo3Matrices(context, json);
     });
 }
 
