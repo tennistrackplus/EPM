@@ -897,6 +897,41 @@ async function jsonPaintValues(context, json) {
  * ------------------------------------------------------------------- */
 
 /**
+ * Núcleo de Actualizar_informe_fixed(), sin manejo de `event` (para poder
+ * reutilizarlo tanto desde el botón del ribbon como desde el dispatcher
+ * Actualizar()).
+ */
+async function actualizarInformeFixedCore() {
+    let sql;
+
+    // 1) LoadReportDefinition + BuildSQL_Fixed + escritura de A1
+    await Excel.run(async (context) => {
+        const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
+        const relGrid = await getValuesGrid(context, "MODEL_RELATIONSHIP");
+        const measuresGrid = await getValuesGrid(context, "MODEL_MEASURES");
+        const atributesGrid = await getValuesGrid(context, "MODEL_ATRIBUTES");
+        const csvGrid = await getFormulaGrid(context, "CSV_RESULT");
+
+        loadReportDefinition(editReportGrid);
+
+        sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
+
+        const csvSheet = context.workbook.worksheets.getItem("CSV_RESULT");
+        csvSheet.getRange("A1").values = [[sql]];
+
+        await context.sync();
+    });
+
+    // 2) ExecuteSQL contra BigQuery
+    const json = await executeSQL(sql);
+
+    // 3) JSON_PaintValues
+    await Excel.run(async (context) => {
+        await jsonPaintValues(context, json);
+    });
+}
+
+/**
  * Traducción literal de Actualizar_informe_fixed():
  *   LoadReportDefinition
  *   SQL = BuildSQL_Fixed
@@ -907,45 +942,578 @@ async function jsonPaintValues(context, json) {
  */
 async function actualizarInformeFixed(event) {
     try {
-        let sql;
-
-        // 1) LoadReportDefinition + BuildSQL_Fixed + escritura de A1
-        await Excel.run(async (context) => {
-            const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
-            const relGrid = await getValuesGrid(context, "MODEL_RELATIONSHIP");
-            const measuresGrid = await getValuesGrid(context, "MODEL_MEASURES");
-            const atributesGrid = await getValuesGrid(context, "MODEL_ATRIBUTES");
-            const csvGrid = await getFormulaGrid(context, "CSV_RESULT");
-
-            loadReportDefinition(editReportGrid);
-
-            sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
-
-            const csvSheet = context.workbook.worksheets.getItem("CSV_RESULT");
-            csvSheet.getRange("A1").values = [[sql]];
-
-            await context.sync();
-        });
-
-        // 2) ExecuteSQL contra BigQuery
-        const json = await executeSQL(sql);
-
-        // 3) JSON_PaintValues
-        await Excel.run(async (context) => {
-            await jsonPaintValues(context, json);
-        });
-
+        await actualizarInformeFixedCore();
     } catch (error) {
-        console.error("Error al actualizar el informe:", error);
+        console.error("Error al actualizar el informe (fixed):", error);
     } finally {
-        // OBLIGATORIO: Informar a Excel que la función finalizó
         if (event) {
             event.completed();
         }
     }
 }
 
+/* ==========================================================================
+ * ===============  TRADUCCIÓN DEL FLUJO "Actualizar_informe"  ============
+ * ==========================================================================
+ * Este es el flujo "Dinámico" (con GROUPING SETS), usado cuando al menos
+ * uno de los dos ejes NO está marcado como Estático en EDIT_REPORT (H12/N12).
+ * A diferencia del flujo _Fixed, aquí SÍ se soportan jerarquías desplegables
+ * en el informe (totales/subtotales vía GROUPING SETS).
+ *
+ * FUNCIÓN NO DEFINIDA EN NINGÚN MÓDULO VBA QUE ME HAYAS PASADO: "GetMeasureSQL"
+ *   La llaman BuildSelect/BuildSelectEx pero no apareció su código en ningún
+ *   sitio. La he implementado leyendo MODEL_MEASURES (columnas AGGREGATION=G
+ *   y FACT_FIELD=F) y generando "AGREGACION(f.CAMPO) AS NombreMedida" — por
+ *   ejemplo "SUM(f.IMPORTE) AS IMPORTE". Si tu implementación real hace algo
+ *   distinto (otro alias, otra tabla, formato...), dímelo y la ajusto.
+ * ========================================================================== */
+
+/**
+ * GetMeasureSQL — ver nota de la cabecera de esta sección sobre la
+ * implementación asumida.
+ */
+function getMeasureSQL(measuresGrid, measureName) {
+    const R = buscarMedida(measuresGrid, measureName);
+    if (R === 0) return "";
+    const aggregation = String(cellValue(measuresGrid, R, 7)).trim(); // G: AGGREGATION
+    const field = String(cellValue(measuresGrid, R, 6)).trim();       // F: FACT_FIELD
+    return aggregation + "(f." + field + ") AS " + measureName;
+}
+
+/**
+ * BuildSelect: columnas del eje Columnas, luego eje Filas, luego medidas.
+ */
+function buildSelect(measuresGrid, relGrid) {
+    let sql = "SELECT" + CRLF;
+    let first = true;
+
+    for (const c of ReportState.Columns) {
+        if (!first) sql += "," + CRLF;
+        sql += "    " + getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName;
+        first = false;
+    }
+
+    for (const r of ReportState.Rows) {
+        if (!first) sql += "," + CRLF;
+        sql += "    " + getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName;
+        first = false;
+    }
+
+    for (const m of ReportState.Measures) {
+        if (!first) sql += "," + CRLF;
+        sql += "    " + getMeasureSQL(measuresGrid, m.Name);
+        first = false;
+    }
+
+    return sql;
+}
+
+/**
+ * BuildWhere: a diferencia de SQLValue (flujo Fixed), aquí se consideran
+ * sin comillas varios tipos numéricos de BigQuery, no solo "INTEGER".
+ */
+const UNQUOTED_TYPES = ["INTEGER", "INT64", "FLOAT", "NUMERIC", "BIGNUMERIC"];
+
+function buildWhere(atributesGrid, relGrid) {
+    if (ReportState.Filters.length === 0) return "";
+
+    let sql = "WHERE" + CRLF;
+
+    for (let i = 0; i < ReportState.Filters.length; i++) {
+        const f = ReportState.Filters[i];
+        const tipo = getAttributeType(atributesGrid, f.Dimension, f.AttributeName);
+
+        sql += getTableAlias(relGrid, f.Dimension) + "." + f.AttributeName + " = ";
+
+        if (UNQUOTED_TYPES.includes(tipo)) {
+            sql += f.Value;
+        } else {
+            sql += "'" + String(f.Value).replace(/'/g, "''") + "'";
+        }
+
+        if (i < ReportState.Filters.length - 1) {
+            sql += CRLF + "AND ";
+        }
+    }
+
+    return sql;
+}
+
+/**
+ * GenerateHierarchyCombinations: traducción del "odómetro" en VBA. Dado un
+ * array de longitudes máximas [h1, h2, ...], genera todas las combinaciones
+ * desde [h1,h2,...] hasta [1,1,...] en orden decreciente (nunca llega a 0).
+ */
+function generateHierarchyCombinations(hierarchies) {
+    const result = [];
+    const current = hierarchies.slice();
+
+    while (true) {
+        result.push(current.slice());
+
+        let i = current.length - 1;
+        let continueLoop = false;
+
+        while (true) {
+            current[i] -= 1;
+
+            if (current[i] > 0) {
+                break;
+            } else {
+                current[i] = hierarchies[i];
+                i -= 1;
+
+                if (i < 0) {
+                    continueLoop = true;
+                    break;
+                }
+            }
+        }
+
+        if (continueLoop) break;
+    }
+
+    return result;
+}
+
+/**
+ * Buildconfigsets: construye la cláusula GROUP BY GROUPING SETS (...)
+ * combinando niveles de jerarquía de Filas y Columnas.
+ */
+function buildConfigSets(relGrid) {
+    // ---- DIMENSIONS: Filas primero, luego Columnas ----
+    const dimensions = [null]; // índice 1-based, dimensions[0] sin usar
+
+    for (const r of ReportState.Rows) {
+        dimensions.push(getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName);
+    }
+    for (const c of ReportState.Columns) {
+        dimensions.push(getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName);
+    }
+
+    // ---- HIERARCHIES: longitud de cada tramo de "misma dimensión consecutiva" ----
+    const hierarchies = [];
+
+    let lastDim = "";
+    let contador = 0;
+    for (const r of ReportState.Rows) {
+        if (r.Dimension !== lastDim) {
+            if (lastDim !== "") hierarchies.push(contador);
+            lastDim = r.Dimension;
+            contador = 1;
+        } else {
+            contador++;
+        }
+    }
+    if (ReportState.Rows.length > 0) hierarchies.push(contador);
+
+    lastDim = "";
+    contador = 0;
+    for (const c of ReportState.Columns) {
+        if (c.Dimension !== lastDim) {
+            if (lastDim !== "") hierarchies.push(contador);
+            lastDim = c.Dimension;
+            contador = 1;
+        } else {
+            contador++;
+        }
+    }
+    if (ReportState.Columns.length > 0) hierarchies.push(contador);
+
+    // ---- HIERARCHIES ACUM ----
+    const hierarchiesAcum = [];
+    let acum = 0;
+    for (const h of hierarchies) {
+        acum += h;
+        hierarchiesAcum.push(acum);
+    }
+
+    const combinations = generateHierarchyCombinations(hierarchies);
+
+    let texto = "";
+    let first = true;
+
+    for (const item of combinations) {
+        if (first) {
+            texto += "GROUP BY GROUPING SETS ( ( ";
+            first = false;
+        } else {
+            texto += ",( ";
+        }
+
+        for (let i = 0; i < item.length; i++) {
+            for (let j = 1; j <= item[i]; j++) {
+                if (item[i] > 0) {
+                    if (i !== 0 || j !== 1) {
+                        texto += ", ";
+                    }
+                    if (i === 0) {
+                        texto += dimensions[j];
+                    } else {
+                        texto += dimensions[j + hierarchiesAcum[i - 1]];
+                    }
+                } else {
+                    texto += "[TOTAL]";
+                }
+            }
+        }
+
+        texto += " )";
+    }
+
+    texto += " )";
+
+    return texto;
+}
+
+/**
+ * BuildFinalSelect: traducción literal, incluyendo el cruce ROW_ID/COLUMN_ID
+ * "invertido" tal cual está en tu VBA (ROW_ID se calcula a partir del eje
+ * Columnas y COLUMN_ID a partir del eje Filas) — se deja igual, según lo
+ * acordado.
+ */
+function buildFinalSelect() {
+    let sql = "SELECT" + CRLF + CRLF;
+
+    sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
+    let first = true;
+    for (const c of ReportState.Columns) {
+        if (c.Hierarchy > 0) {
+            sql += first ? (CRLF + "            " + c.AttributeName) : ("," + CRLF + "            " + c.AttributeName);
+            first = false;
+        }
+    }
+    sql += CRLF + "    ) AS ROW_ID," + CRLF + CRLF;
+
+    sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
+    first = true;
+    for (const r of ReportState.Rows) {
+        if (r.Hierarchy > 0) {
+            sql += first ? (CRLF + "            " + r.AttributeName) : ("," + CRLF + "            " + r.AttributeName);
+            first = false;
+        }
+    }
+    sql += CRLF + "    ) AS COLUMN_ID," + CRLF + CRLF;
+
+    first = true;
+    for (const c of ReportState.Columns) {
+        sql += first ? ("    " + c.AttributeName) : ("," + CRLF + "    " + c.AttributeName);
+        first = false;
+    }
+    for (const r of ReportState.Rows) {
+        sql += "," + CRLF + "    " + r.AttributeName;
+    }
+
+    sql += "," + CRLF + "    IMPORTE" + CRLF + CRLF + "FROM REPORT_DATA";
+
+    return sql;
+}
+
+/**
+ * BuildFinalWhere: excluye de cada eje las filas de detalle que no
+ * correspondan al grouping-set de totales de esa jerarquía (IS NULL).
+ */
+function buildFinalWhere() {
+    let sql = "";
+    let currentDim = "";
+    let first = true;
+
+    // ---- COLUMNAS ----
+    for (const c of ReportState.Columns) {
+        if (c.Hierarchy > 0) {
+            if (currentDim !== c.Dimension.toUpperCase()) {
+                if (currentDim !== "") {
+                    sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
+                } else {
+                    sql += "WHERE NOT (" + CRLF;
+                }
+                currentDim = c.Dimension.toUpperCase();
+                first = true;
+            }
+
+            sql += first
+                ? ("    " + c.AttributeName + " IS NULL")
+                : (CRLF + "    AND " + c.AttributeName + " IS NULL");
+            first = false;
+        }
+    }
+
+    sql += CRLF + ")";
+
+    // ---- FILAS ----
+    currentDim = "";
+
+    for (const r of ReportState.Rows) {
+        if (r.Hierarchy > 0) {
+            if (currentDim !== r.Dimension.toUpperCase()) {
+                if (currentDim !== "") {
+                    sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
+                } else {
+                    sql += CRLF + CRLF + "AND NOT (" + CRLF;
+                }
+                currentDim = r.Dimension.toUpperCase();
+                first = true;
+            }
+
+            sql += first
+                ? ("    " + r.AttributeName + " IS NULL")
+                : (CRLF + "    AND " + r.AttributeName + " IS NULL");
+            first = false;
+        }
+    }
+
+    if (currentDim !== "") {
+        sql += CRLF + ")";
+    }
+
+    return sql;
+}
+
+/**
+ * BuildSQL: ensambla el flujo "Dinámico" completo.
+ */
+function buildSQL(relGrid, measuresGrid, atributesGrid) {
+    let sql = "";
+
+    sql += "WITH REPORT_DATA AS (" + CRLF + CRLF;
+    sql += buildSelect(measuresGrid, relGrid) + CRLF + CRLF;
+    sql += buildFrom(measuresGrid) + CRLF + CRLF;
+    sql += buildJoins(relGrid) + CRLF + CRLF;
+    sql += buildWhere(atributesGrid, relGrid) + CRLF + CRLF;
+    sql += buildConfigSets(relGrid) + CRLF + CRLF;
+    sql += ")" + CRLF + CRLF;
+    sql += buildFinalSelect() + CRLF + CRLF;
+    sql += buildFinalWhere() + CRLF + CRLF;
+    sql += "ORDER BY" + CRLF + "    ROW_ID," + CRLF + "    COLUMN_ID";
+
+    return sql;
+}
+
+/**
+ * JSON_To_3_Matrices: traducción literal, incluyendo el mismo cruce
+ * "invertido" H/N que usa el resto del módulo (total_dim_filas=ColumnCount
+ * leído de columnas H/I/J; total_dim_cols=RowCount leído de columnas N/O/P).
+ */
+async function jsonTo3Matrices(context, json) {
+    const totalCampos = 2 + ReportState.RowCount + ReportState.ColumnCount + ReportState.MeasureCount;
+
+    // ---- Extraer todos los "v" ----
+    const valores = [];
+    let pos = 0;
+
+    while (true) {
+        const idx = json.indexOf('"v":', pos);
+        if (idx === -1) break;
+
+        let ini = idx + 5;
+        while (json.charAt(ini) === " ") ini++;
+
+        let fin, texto;
+        if (json.charAt(ini) === '"') {
+            ini++;
+            fin = json.indexOf('"', ini);
+            texto = json.substring(ini, fin);
+        } else {
+            fin = json.indexOf("}", ini);
+            texto = json.substring(ini, fin);
+        }
+
+        valores.push(texto);
+        pos = fin + 1;
+    }
+
+    const filas = Math.floor(valores.length / totalCampos);
+
+    // ---- FACT ----
+    const fact = [];
+    for (let i = 0; i < filas; i++) {
+        const base = i * totalCampos;
+        const row = [];
+        for (let j = 0; j < totalCampos; j++) row.push(valores[base + j]);
+        fact.push(row); // fact[i][j] con j 0-based (VBA era 1-based)
+    }
+
+    const rowDict = new Map();
+    const colDict = new Map();
+
+    for (let i = 0; i < filas; i++) {
+        const f = fact[i]; // f[0]=ROW_ID, f[1]=COLUMN_ID, f[2..]=dims, f[last]=IMPORTE
+
+        // ROW KEY
+        let rowKey = f[0];
+        for (let j = 1; j <= ReportState.ColumnCount; j++) rowKey += "|" + f[1 + j];
+        if (!rowDict.has(rowKey)) {
+            const arr = [f[0]]; // arr[0]=ROW_ID
+            for (let j = 1; j <= ReportState.ColumnCount; j++) arr.push(f[1 + j]);
+            rowDict.set(rowKey, arr);
+        }
+
+        // COLUMN KEY
+        let colKey = f[1];
+        for (let j = 1; j <= ReportState.RowCount; j++) colKey += "|" + f[1 + ReportState.ColumnCount + j];
+        if (!colDict.has(colKey)) {
+            const arr = [f[1]]; // arr[0]=COLUMN_ID
+            for (let j = 1; j <= ReportState.RowCount; j++) arr.push(f[1 + ReportState.ColumnCount + j]);
+            colDict.set(colKey, arr);
+        }
+    }
+
+    // ---- PINTAR ----
+    const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
+
+    const RRows = parseAddress(cellValue(editReportGrid, 10, 8));  // EDIT_REPORT!H10
+    const RCols = parseAddress(cellValue(editReportGrid, 10, 14)); // EDIT_REPORT!N10
+
+    const rowsOffRow = RRows.row - 1;
+    const rowsOffCol = RRows.col - 1;
+    const colsOffRow = RCols.row - 1;
+    const colsOffCol = RCols.col - 1;
+
+    const totalDimFilas = ReportState.ColumnCount;
+    const totalDimCols = ReportState.RowCount;
+
+    const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+    const usedRange = sheet.getUsedRangeOrNullObject();
+    usedRange.load("isNullObject");
+    await context.sync();
+    if (!usedRange.isNullObject) {
+        usedRange.clear(Excel.ClearApplyTo.contents);
+    }
+
+    // FACT
+    for (let i = 0; i < filas; i++) {
+        const f = fact[i];
+        const row = Number(f[0]) + rowsOffRow;
+        const col = Number(f[1]) + colsOffCol;
+        const value = coerceCellLiteral(String(f[totalCampos - 1]));
+        sheet.getRangeByIndexes(row - 1, col - 1, 1, 1).values = [[value]];
+    }
+
+    // FILAS (usa columnas H/I/J de EDIT_REPORT, filas i+14, i=1..totalDimFilas)
+    for (const V of rowDict.values()) {
+        let iAux = 0;
+        for (let i = 1; i <= totalDimFilas; i++) {
+            const flag = Number(cellValue(editReportGrid, i + 14, 10)); // J
+            if (flag === 1) iAux++;
+
+            if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
+                const targetRow = Number(V[0]) + rowsOffRow;
+                const targetCol = iAux + rowsOffCol;
+                const cell = sheet.getRangeByIndexes(targetRow - 1, targetCol - 1, 1, 1);
+
+                cell.format.indentLevel = flag === 1 ? 0 : (flag - 1);
+
+                const dim = cellValue(editReportGrid, i + 14, 8);  // H
+                const attr = cellValue(editReportGrid, i + 14, 9); // I
+                cell.formulas = [["=EPM_VALUE(\"" + dim + "\",\"" + attr + "\",\"" + V[i] + "\",\"" + V[i] + "\")"]];
+            }
+        }
+    }
+
+    // COLUMNAS (usa columnas N/O/P de EDIT_REPORT, filas i+14, i=1..totalDimCols)
+    for (const V of colDict.values()) {
+        let iAux = 0;
+        for (let i = 1; i <= totalDimCols; i++) {
+            const flag = Number(cellValue(editReportGrid, i + 14, 16)); // P
+
+            if (flag === 1) iAux++;
+
+            if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
+                const targetRow = iAux + colsOffRow;
+                const targetCol = Number(V[0]) + colsOffCol;
+                const cell = sheet.getRangeByIndexes(targetRow - 1, targetCol - 1, 1, 1);
+
+                cell.format.indentLevel = flag === 1 ? 0 : (flag - 1);
+
+                const dim = cellValue(editReportGrid, i + 14, 14);  // N
+                const attr = cellValue(editReportGrid, i + 14, 15); // O
+                cell.formulas = [["=EPM_VALUE(\"" + dim + "\",\"" + attr + "\",\"" + V[i] + "\",\"" + V[i] + "\")"]];
+            }
+        }
+    }
+
+    await context.sync();
+}
+
+/**
+ * Núcleo de Actualizar_informe(), sin manejo de `event`.
+ */
+async function actualizarInformeCore() {
+    let sql;
+
+    await Excel.run(async (context) => {
+        const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
+        const relGrid = await getValuesGrid(context, "MODEL_RELATIONSHIP");
+        const measuresGrid = await getValuesGrid(context, "MODEL_MEASURES");
+        const atributesGrid = await getValuesGrid(context, "MODEL_ATRIBUTES");
+
+        loadReportDefinition(editReportGrid);
+
+        sql = buildSQL(relGrid, measuresGrid, atributesGrid);
+
+        console.log("BuildSQL ->", sql);
+    });
+
+    const json = await executeSQL(sql);
+
+    await Excel.run(async (context) => {
+        await jsonTo3Matrices(context, json);
+    });
+}
+
+/**
+ * Traducción de Actualizar_informe(): LoadReportDefinition, BuildSQL,
+ * ExecuteSQL, JSON_To_3_Matrices.
+ * @param {Office.AddinCommands.Event} event
+ */
+async function actualizarInforme(event) {
+    try {
+        await actualizarInformeCore();
+    } catch (error) {
+        console.error("Error al actualizar el informe (dinámico):", error);
+    } finally {
+        if (event) {
+            event.completed();
+        }
+    }
+}
+
+/**
+ * Traducción de Actualizar(): dispatcher según EDIT_REPORT!H12/N12.
+ * @param {Office.AddinCommands.Event} event
+ */
+async function actualizar(event) {
+    try {
+        const isFixed = await Excel.run(async (context) => {
+            const grid = await getValuesGrid(context, "EDIT_REPORT");
+            const h12 = String(cellValue(grid, 12, 8)).trim().toUpperCase();
+            const n12 = String(cellValue(grid, 12, 14)).trim().toUpperCase();
+            return h12 === "X" && n12 === "X";
+        });
+
+        if (isFixed) {
+            await actualizarInformeFixedCore();
+        } else {
+            await actualizarInformeCore();
+        }
+    } catch (error) {
+        console.error("Error al actualizar el informe:", error);
+    } finally {
+        if (event) {
+            event.completed();
+        }
+    }
+}
+
+// Exponer las funciones de actualización para poder llamarlas también desde
+// el taskpane (p.ej. tras guardar el diseño), no solo desde el ribbon.
+window.ReportActions = { actualizar, actualizarInforme, actualizarInformeFixed };
+
+
+
 // Asociar el nombre del comando del manifiesto con la función JavaScript
 Office.actions.associate("hidePane", hidePane);
 Office.actions.associate("writeHolaInA1", writeHolaInA1);
 Office.actions.associate("actualizarInformeFixed", actualizarInformeFixed);
+Office.actions.associate("actualizarInforme", actualizarInforme);
+Office.actions.associate("actualizar", actualizar);
