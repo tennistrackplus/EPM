@@ -1372,91 +1372,166 @@ async function jsonTo3Matrices(context, json) {
     const totalDimFilas = ReportState.ColumnCount;
     const totalDimCols = ReportState.RowCount;
 
+    // Precalcular una sola vez el flag (NIVEL) de cada posición del eje,
+    // en vez de releerlo de EDIT_REPORT en cada iteración de cada ROW_ID/COLUMN_ID.
+    const flagsFilas = [];
+    for (let i = 1; i <= totalDimFilas; i++) flagsFilas[i] = Number(cellValue(editReportGrid, i + 14, 10)); // J
+
+    const flagsColumnas = [];
+    for (let i = 1; i <= totalDimCols; i++) flagsColumnas[i] = Number(cellValue(editReportGrid, i + 14, 16)); // P
+
     console.log("jsonTo3Matrices diagnóstico:", {
         totalCampos, filas,
         RowCount: ReportState.RowCount, ColumnCount: ReportState.ColumnCount, MeasureCount: ReportState.MeasureCount,
         H10: cellValue(editReportGrid, 10, 8), N10: cellValue(editReportGrid, 10, 14),
         RRows, RCols, rowsOffRow, rowsOffCol, colsOffRow, colsOffCol,
         totalDimFilas, totalDimCols,
-        rowDictSize: rowDict.size, colDictSize: colDict.size,
-        rowDictSample: [...rowDict.values()].slice(0, 3),
-        colDictSample: [...colDict.values()].slice(0, 3)
+        rowDictSize: rowDict.size, colDictSize: colDict.size
     });
 
     const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
 
-    // FACT
+    /* -------------------------------------------------------------
+     * 1) FACT — construir el bloque completo en memoria y escribirlo
+     *    de una sola vez con un único range.values = [...]
+     * ----------------------------------------------------------- */
+    const factCells = new Map(); // "row_col" -> {row, col, value}
     for (let i = 0; i < filas; i++) {
         const f = fact[i];
         const row = Number(f[0]) + rowsOffRow;
         const col = Number(f[1]) + colsOffCol;
         const value = coerceCellLiteral(String(f[totalCampos - 1]));
-        sheet.getRangeByIndexes(row - 1, col - 1, 1, 1).values = [[value]];
+        factCells.set(row + "_" + col, { row, col, value });
     }
+    await writeCellBlock(context, sheet, factCells);
 
-    try {
-        await context.sync();
-        console.log("jsonTo3Matrices: FACT pintado OK (" + filas + " celdas)");
-    } catch (err) {
-        console.error("jsonTo3Matrices: ERROR pintando FACT", err);
-    }
-
-    // FILAS (usa columnas H/I/J de EDIT_REPORT, filas i+14, i=1..totalDimFilas)
-    let filasPintadas = 0;
+    /* -------------------------------------------------------------
+     * 2) FILAS — mismo cálculo que antes (última entrada no-nula por
+     *    ROW_ID "gana", igual que el pintado secuencial original),
+     *    pero acumulado en un Map en vez de escribir celda a celda.
+     * ----------------------------------------------------------- */
+    const filasCells = new Map(); // "row_col" -> {row, col, value, indent}
     for (const V of rowDict.values()) {
         let iAux = 0;
         for (let i = 1; i <= totalDimFilas; i++) {
-            try {
-                const flag = Number(cellValue(editReportGrid, i + 14, 10)); // J
-                if (flag === 1) iAux++;
+            const flag = flagsFilas[i];
+            if (flag === 1) iAux++;
 
-                if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
-                    const targetRow = Number(V[0]) + rowsOffRow;
-                    const targetCol = iAux + rowsOffCol;
-                    const cell = sheet.getRangeByIndexes(targetRow - 1, targetCol - 1, 1, 1);
-
-                    cell.format.indentLevel = flag === 1 ? 0 : Math.max(0, flag - 1);
-
-                    const dim = cellValue(editReportGrid, i + 14, 8);  // H
-                    const attr = cellValue(editReportGrid, i + 14, 9); // I
-                    cell.formulas = [["=EPM_VALUE(\"" + dim + "\",\"" + attr + "\",\"" + V[i] + "\",\"" + V[i] + "\")"]];
-                    filasPintadas++;
-                }
-            } catch (err) {
-                console.error("Error pintando cabecera FILAS", { i, V, flagRaw: cellValue(editReportGrid, i + 14, 10) }, err);
+            if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
+                const row = Number(V[0]) + rowsOffRow;
+                const col = iAux + rowsOffCol;
+                const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
+                // Sobrescribe si ya había una entrada (mismo comportamiento que
+                // el bucle secuencial original: el último nivel no-nulo gana).
+                filasCells.set(row + "_" + col, { row, col, value: coerceCellLiteral(V[i]), indent });
             }
         }
     }
+    await writeCellBlock(context, sheet, filasCells);
+    await writeIndentRuns(context, sheet, filasCells);
 
-    // COLUMNAS (usa columnas N/O/P de EDIT_REPORT, filas i+14, i=1..totalDimCols)
-    let columnasPintadas = 0;
+    /* -------------------------------------------------------------
+     * 3) COLUMNAS — análogo a FILAS
+     * ----------------------------------------------------------- */
+    const columnasCells = new Map();
     for (const V of colDict.values()) {
         let iAux = 0;
         for (let i = 1; i <= totalDimCols; i++) {
-            try {
-                const flag = Number(cellValue(editReportGrid, i + 14, 16)); // P
+            const flag = flagsColumnas[i];
+            if (flag === 1) iAux++;
 
-                if (flag === 1) iAux++;
-
-                if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
-                    const targetRow = iAux + colsOffRow;
-                    const targetCol = Number(V[0]) + colsOffCol;
-                    const cell = sheet.getRangeByIndexes(targetRow - 1, targetCol - 1, 1, 1);
-
-                    cell.format.indentLevel = flag === 1 ? 0 : Math.max(0, flag - 1);
-
-                    const dim = cellValue(editReportGrid, i + 14, 14);  // N
-                    const attr = cellValue(editReportGrid, i + 14, 15); // O
-                    cell.formulas = [["=EPM_VALUE(\"" + dim + "\",\"" + attr + "\",\"" + V[i] + "\",\"" + V[i] + "\")"]];
-                    columnasPintadas++;
-                }
-            } catch (err) {
-                console.error("Error pintando cabecera COLUMNAS", { i, V, flagRaw: cellValue(editReportGrid, i + 14, 16) }, err);
+            if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
+                const row = iAux + colsOffRow;
+                const col = Number(V[0]) + colsOffCol;
+                const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
+                columnasCells.set(row + "_" + col, { row, col, value: coerceCellLiteral(V[i]), indent });
             }
         }
     }
+    await writeCellBlock(context, sheet, columnasCells);
+    await writeIndentRuns(context, sheet, columnasCells);
 
-    console.log("jsonTo3Matrices: celdas de cabecera encoladas ->", { filasPintadas, columnasPintadas });
+    console.log("jsonTo3Matrices: pintado OK ->", {
+        factCeldas: factCells.size, filasCeldas: filasCells.size, columnasCeldas: columnasCells.size
+    });
+}
+
+/**
+ * Escribe un conjunto de celdas {row,col,value} en el MÍNIMO número de
+ * llamadas a la API de Excel posible: agrupa por bounding box, LEE el
+ * contenido actual de ese rectángulo (para no pisar nada fuera de las
+ * celdas concretas que tocan — mismo comportamiento que escribir celda a
+ * celda sin ClearContents previo) y hace una única escritura de vuelta.
+ */
+async function writeCellBlock(context, sheet, cellsMap) {
+    if (cellsMap.size === 0) return;
+
+    let minRow = Infinity, maxRow = -Infinity, minCol = Infinity, maxCol = -Infinity;
+    for (const c of cellsMap.values()) {
+        if (c.row < minRow) minRow = c.row;
+        if (c.row > maxRow) maxRow = c.row;
+        if (c.col < minCol) minCol = c.col;
+        if (c.col > maxCol) maxCol = c.col;
+    }
+
+    const numRows = maxRow - minRow + 1;
+    const numCols = maxCol - minCol + 1;
+
+    // Bounding box demasiado disperso (pocas celdas reales en un área enorme):
+    // más rápido ir celda a celda que leer/escribir un rectángulo gigante.
+    if (numRows * numCols > 50000 && numRows * numCols > cellsMap.size * 50) {
+        for (const c of cellsMap.values()) {
+            sheet.getRangeByIndexes(c.row - 1, c.col - 1, 1, 1).values = [[c.value]];
+        }
+        await context.sync();
+        return;
+    }
+
+    const range = sheet.getRangeByIndexes(minRow - 1, minCol - 1, numRows, numCols);
+    range.load("values");
+    await context.sync();
+
+    const grid = range.values.map(r => r.slice());
+    for (const c of cellsMap.values()) {
+        grid[c.row - minRow][c.col - minCol] = c.value;
+    }
+
+    range.values = grid;
+    await context.sync();
+}
+
+/**
+ * Aplica el indentLevel agrupando en tramos contiguos (misma columna, filas
+ * consecutivas, mismo indentLevel) para minimizar llamadas a la API,
+ * respetando exactamente los valores por celda calculados antes.
+ */
+async function writeIndentRuns(context, sheet, cellsMap) {
+    if (cellsMap.size === 0) return;
+
+    const byCol = new Map();
+    for (const c of cellsMap.values()) {
+        if (!byCol.has(c.col)) byCol.set(c.col, []);
+        byCol.get(c.col).push(c);
+    }
+
+    for (const [col, list] of byCol) {
+        list.sort((a, b) => a.row - b.row);
+
+        let runStart = 0;
+        for (let k = 1; k <= list.length; k++) {
+            const endOfRun = k === list.length
+                || list[k].row !== list[k - 1].row + 1
+                || list[k].indent !== list[k - 1].indent;
+
+            if (endOfRun) {
+                const first = list[runStart];
+                const last = list[k - 1];
+                const numRows = last.row - first.row + 1;
+                sheet.getRangeByIndexes(first.row - 1, col - 1, numRows, 1).format.indentLevel = first.indent;
+                runStart = k;
+            }
+        }
+    }
 
     await context.sync();
 }
@@ -1491,7 +1566,11 @@ async function actualizarInformeCore() {
 
     await Excel.run(async (context) => {
         const csvSheet = context.workbook.worksheets.getItem("CSV_RESULT");
-        csvSheet.getRange("B1").values = [[json]];
+        const EXCEL_CELL_CHAR_LIMIT = 32000; // límite real de Excel: 32767
+        const jsonForCell = json.length > EXCEL_CELL_CHAR_LIMIT
+            ? json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
+            : json;
+        csvSheet.getRange("B1").values = [[jsonForCell]];
         await context.sync();
     });
 
