@@ -1293,12 +1293,197 @@ function buildSQL(relGrid, measuresGrid, atributesGrid) {
     return sql;
 }
 
+/* ---------------------------------------------------------------------
+ * Expandir/Contraer jerarquías (Filas/Columnas) sin ocultar filas de
+ * Excel: se filtra y renumera el propio resultado antes de pintarlo, y
+ * se mantiene en memoria (dura mientras el libro está abierto; no se
+ * guarda en la hoja) qué nodos están contraídos para cada eje, mientras
+ * ese eje no cambie de campos.
+ * ------------------------------------------------------------------- */
+
+const DracoCollapseState = {
+    rows: { signature: null, collapsed: new Set() },
+    cols: { signature: null, collapsed: new Set() }
+};
+
+let DracoLastJson = null;           // último JSON de BigQuery, para repintar sin re-consultar
+let DracoHandlerRegistered = false; // evita registrar el listener de clic más de una vez
+let DracoIndicatorMap = new Map();  // "row_col" -> { axis, nodeKey } de los indicadores +/- pintados
+
+// Firma del eje = lista de "DIMENSION.ATRIBUTO:NIVEL" de sus campos, en
+// orden. Si cambia (se añade/quita/reordena un campo en ESE eje), se
+// entiende que la jerarquía cambió y se resetea su estado de contraído.
+function computeDracoAxisSignature(editReportGrid, dimCol, attrCol, hierCol, count) {
+    const parts = [];
+    for (let i = 1; i <= count; i++) {
+        const R = i + 14;
+        const dim = String(cellValue(editReportGrid, R, dimCol)).trim().toUpperCase();
+        const attr = String(cellValue(editReportGrid, R, attrCol)).trim().toUpperCase();
+        const nivel = String(cellValue(editReportGrid, R, hierCol)).trim();
+        parts.push(dim + "." + attr + ":" + nivel);
+    }
+    return parts.join("|");
+}
+
+function resetDracoCollapseIfAxisChanged(axis, signature) {
+    const st = DracoCollapseState[axis];
+    if (st.signature !== signature) {
+        st.signature = signature;
+        st.collapsed = new Set();
+    }
+}
+
+/**
+ * Filtra (oculta hijos de nodos contraídos) y renumera 1..N el diccionario
+ * de un eje (rowDict o colDict), a partir del set de nodos contraídos.
+ *
+ * "Profundidad" de una fila = longitud del prefijo contiguo de valores no
+ * nulos empezando en el campo 1 (si aparece un NULL, el resto de campos
+ * posteriores —aunque tengan valor, p.ej. otro campo plano detrás de la
+ * jerarquía— no cuenta: son datos de otra jerarquía/campo, no de esta).
+ */
+function filterAndCompactDracoAxis(dict, count, collapsedSet) {
+    const items = [];
+    for (const V of dict.values()) {
+        let deepest = 0;
+        for (let i = 1; i <= count; i++) {
+            if (String(V[i]).toLowerCase().indexOf("null") === 0) break;
+            deepest = i;
+        }
+        items.push({ oldId: Number(V[0]), V, deepest });
+    }
+    items.sort((a, b) => a.oldId - b.oldId);
+
+    function prefixKey(item, p) {
+        const parts = [];
+        for (let i = 1; i <= p; i++) parts.push(String(item.V[i]));
+        return p + "\u00A7" + parts.join("\u241F");
+    }
+
+    // Excluidas: alguna de sus filas ancestro (p < profundidad propia) está contraída.
+    const kept = items.filter(item => {
+        for (let p = 1; p < item.deepest; p++) {
+            if (collapsedSet.has(prefixKey(item, p))) return false;
+        }
+        return true;
+    });
+
+    // ¿Tiene hijos? — existe OTRA fila del resultado (contraída o no) que
+    // comparte el mismo prefijo y llega más profundo.
+    function hasChildren(item) {
+        if (item.deepest <= 0) return false;
+        const key = prefixKey(item, item.deepest);
+        return items.some(other => other.deepest > item.deepest && prefixKey(other, item.deepest) === key);
+    }
+
+    const dictOut = new Map();
+    const idMap = new Map();     // oldId -> newId (para remapear FACT)
+    const indicators = [];       // { newId, nodeKey, collapsed }
+
+    kept.forEach((item, idx) => {
+        const newId = idx + 1;
+        idMap.set(item.oldId, newId);
+        const arr = item.V.slice();
+        arr[0] = newId;
+        dictOut.set(String(newId), arr);
+
+        if (item.deepest > 0 && hasChildren(item)) {
+            const nodeKey = prefixKey(item, item.deepest);
+            indicators.push({ newId, nodeKey, collapsed: collapsedSet.has(nodeKey) });
+        }
+    });
+
+    return { dict: dictOut, idMap, indicators };
+}
+
+/**
+ * Pinta la columna (eje Filas) o fila (eje Columnas) de indicadores +/-
+ * junto al bloque de jerarquía, y registra sus coordenadas en
+ * DracoIndicatorMap para poder resolver el clic.
+ */
+async function paintDracoCollapseIndicators(context, sheet, opts) {
+    const { axis, items, orientation, fixedIndex, offset } = opts;
+    if (!items || items.length === 0) return;
+
+    const cellsToWrite = new Map();
+    for (const it of items) {
+        const glyph = it.collapsed ? "+" : "\u2212"; // signo menos (expandido)
+        const row = orientation === "vertical" ? it.newId + offset : fixedIndex;
+        const col = orientation === "vertical" ? fixedIndex : it.newId + offset;
+        const key = row + "_" + col;
+        cellsToWrite.set(key, { row, col, value: glyph });
+        DracoIndicatorMap.set(key, { axis, nodeKey: it.nodeKey });
+    }
+
+    await writeCellBlock(context, sheet, cellsToWrite);
+
+    for (const c of cellsToWrite.values()) {
+        const r = sheet.getRangeByIndexes(c.row - 1, c.col - 1, 1, 1);
+        r.format.font.name = DRACO_FONT_NAME;
+        r.format.font.size = DRACO_FONT_SIZE;
+        r.format.font.bold = true;
+        r.format.font.color = DRACO_BORDER_COLOR;
+        r.format.horizontalAlignment = Excel.HorizontalAlignment.center;
+    }
+    await context.sync();
+}
+
+async function registerDracoSelectionHandler(context, sheet) {
+    if (DracoHandlerRegistered) return;
+    sheet.onSelectionChanged.add(handleDracoSelectionChanged);
+    await context.sync();
+    DracoHandlerRegistered = true;
+}
+
+/**
+ * Handler del clic (selección de una sola celda) sobre un indicador +/-:
+ * alterna el estado contraído/expandido de ese nodo y repinta reutilizando
+ * el último JSON de BigQuery (sin volver a consultar).
+ */
+async function handleDracoSelectionChanged(eventArgs) {
+    if (DracoIndicatorMap.size === 0) return;
+
+    try {
+        let addr = (eventArgs && eventArgs.address) || "";
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        if (!addr) return;
+
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+            const range = sheet.getRange(addr);
+            range.load(["rowCount", "columnCount", "rowIndex", "columnIndex"]);
+            await context.sync();
+
+            if (range.rowCount !== 1 || range.columnCount !== 1) return;
+
+            const key = (range.rowIndex + 1) + "_" + (range.columnIndex + 1);
+            const meta = DracoIndicatorMap.get(key);
+            if (!meta) return;
+
+            const st = DracoCollapseState[meta.axis];
+            if (st.collapsed.has(meta.nodeKey)) {
+                st.collapsed.delete(meta.nodeKey);
+            } else {
+                st.collapsed.add(meta.nodeKey);
+            }
+
+            if (DracoLastJson) {
+                await jsonTo3Matrices(context, DracoLastJson);
+            }
+        });
+    } catch (e) {
+        console.error("Error al contraer/expandir jerarquía Draco:", e);
+    }
+}
+
 /**
  * JSON_To_3_Matrices: traducción literal, incluyendo el mismo cruce
  * "invertido" H/N que usa el resto del módulo (total_dim_filas=ColumnCount
  * leído de columnas H/I/J; total_dim_cols=RowCount leído de columnas N/O/P).
  */
 async function jsonTo3Matrices(context, json) {
+    DracoLastJson = json; // cache para poder repintar en un toggle +/- sin re-consultar BigQuery
+
     const totalCampos = 2 + ReportState.RowCount + ReportState.ColumnCount + ReportState.MeasureCount;
 
     // ---- Extraer todos los "v" ----
@@ -1384,13 +1569,25 @@ async function jsonTo3Matrices(context, json) {
     const flagsColumnas = [];
     for (let i = 1; i <= totalDimCols; i++) flagsColumnas[i] = Number(cellValue(editReportGrid, i + 14, 16)); // P
 
+    // ---- Expandir/Contraer: si el eje (misma lista de campos) no ha
+    // cambiado desde el último refresco, se respeta qué nodos estaban
+    // contraídos; si ha cambiado, se resetea (todo expandido) para ESE eje.
+    const rowsSignature = computeDracoAxisSignature(editReportGrid, 8, 9, 10, totalDimFilas);
+    const colsSignature = computeDracoAxisSignature(editReportGrid, 14, 15, 16, totalDimCols);
+    resetDracoCollapseIfAxisChanged("rows", rowsSignature);
+    resetDracoCollapseIfAxisChanged("cols", colsSignature);
+
+    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, DracoCollapseState.rows.collapsed);
+    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, DracoCollapseState.cols.collapsed);
+
     console.log("jsonTo3Matrices diagnóstico:", {
         totalCampos, filas,
         RowCount: ReportState.RowCount, ColumnCount: ReportState.ColumnCount, MeasureCount: ReportState.MeasureCount,
         H10: cellValue(editReportGrid, 10, 8), N10: cellValue(editReportGrid, 10, 14),
         RRows, RCols, rowsOffRow, rowsOffCol, colsOffRow, colsOffCol,
         totalDimFilas, totalDimCols,
-        rowDictSize: rowDict.size, colDictSize: colDict.size
+        rowDictSize: rowDict.size, colDictSize: colDict.size,
+        filasVisibles: rowsFilter.dict.size, columnasVisibles: colsFilter.dict.size
     });
 
     const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
@@ -1403,8 +1600,10 @@ async function jsonTo3Matrices(context, json) {
 
     // Limpiar todo lo pintado en ejecuciones anteriores (incluidas posibles
     // fórmulas EPM_VALUE residuales de una tabla previa más grande, y su
-    // formato: relleno, fuente, bordes...), pero preservando la fila 1
+    // formato: relleno, fuente, bordes..., y también la franja de
+    // indicadores +/- de la ejecución anterior), pero preservando la fila 1
     // (A1=SQL, B1=JSON) que se escribe aparte.
+    DracoIndicatorMap = new Map();
     const usedRange = sheet.getUsedRangeOrNullObject();
     usedRange.load(["isNullObject", "rowIndex", "rowCount"]);
     await context.sync();
@@ -1421,13 +1620,19 @@ async function jsonTo3Matrices(context, json) {
 
     /* -------------------------------------------------------------
      * 1) FACT — construir el bloque completo en memoria y escribirlo
-     *    de una sola vez con un único range.values = [...]
+     *    de una sola vez con un único range.values = [...]. Las filas
+     *    cuyo ROW_ID/COLUMN_ID original haya quedado oculto por una
+     *    jerarquía contraída se descartan, y los IDs restantes se
+     *    remapean a la numeración compactada 1..N.
      * ----------------------------------------------------------- */
     const factCells = new Map(); // "row_col" -> {row, col, value}
     for (let i = 0; i < filas; i++) {
         const f = fact[i];
-        const row = Number(f[0]) + rowsOffRow;
-        const col = Number(f[1]) + colsOffCol;
+        const newRowId = rowsFilter.idMap.get(Number(f[0]));
+        const newColId = colsFilter.idMap.get(Number(f[1]));
+        if (newRowId === undefined || newColId === undefined) continue; // oculto por contraído
+        const row = newRowId + rowsOffRow;
+        const col = newColId + colsOffCol;
         const value = coerceCellLiteral(String(f[totalCampos - 1]));
         factCells.set(row + "_" + col, { row, col, value });
     }
@@ -1436,11 +1641,12 @@ async function jsonTo3Matrices(context, json) {
     /* -------------------------------------------------------------
      * 2) FILAS — mismo cálculo que antes (última entrada no-nula por
      *    ROW_ID "gana", igual que el pintado secuencial original),
-     *    pero acumulado en un Map en vez de escribir celda a celda.
+     *    pero acumulado en un Map en vez de escribir celda a celda,
+     *    y usando el diccionario ya filtrado/renumerado.
      * ----------------------------------------------------------- */
     const filasCells = new Map(); // "row_col" -> {row, col, value, indent, field}
     let maxRowId = 0;
-    for (const V of rowDict.values()) {
+    for (const V of rowsFilter.dict.values()) {
         if (Number(V[0]) > maxRowId) maxRowId = Number(V[0]);
 
         let iAux = 0;
@@ -1466,7 +1672,7 @@ async function jsonTo3Matrices(context, json) {
      * ----------------------------------------------------------- */
     const columnasCells = new Map();
     let maxColId = 0;
-    for (const V of colDict.values()) {
+    for (const V of colsFilter.dict.values()) {
         if (Number(V[0]) > maxColId) maxColId = Number(V[0]);
 
         let iAux = 0;
@@ -1493,9 +1699,36 @@ async function jsonTo3Matrices(context, json) {
         RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId
     });
 
+    /* -------------------------------------------------------------
+     * 5) Indicadores +/- de expandir/contraer, pegados a la jerarquía:
+     *    una columna a la izquierda del bloque de Filas, una fila
+     *    encima del bloque de Columnas. Solo se pintan en los nodos
+     *    que realmente tienen hijos.
+     * ----------------------------------------------------------- */
+    const rowsIndicatorCol = RRows.col - 1;
+    if (rowsIndicatorCol >= 1) {
+        await paintDracoCollapseIndicators(context, sheet, {
+            axis: "rows", items: rowsFilter.indicators, orientation: "vertical",
+            fixedIndex: rowsIndicatorCol, offset: rowsOffRow
+        });
+    }
+
+    const colsIndicatorRow = RCols.row - 1;
+    if (colsIndicatorRow >= 1) {
+        await paintDracoCollapseIndicators(context, sheet, {
+            axis: "cols", items: colsFilter.indicators, orientation: "horizontal",
+            fixedIndex: colsIndicatorRow, offset: colsOffCol
+        });
+    }
+
+    // 6) Registrar (una sola vez por sesión) el listener de clic que
+    //    resuelve los indicadores +/- pintados arriba.
+    await registerDracoSelectionHandler(context, sheet);
+
     console.log("jsonTo3Matrices: pintado OK ->", {
         factCeldas: factCells.size, filasCeldas: filasCells.size, columnasCeldas: columnasCells.size,
-        maxRowId, maxColId
+        maxRowId, maxColId,
+        indicadoresFilas: rowsFilter.indicators.length, indicadoresColumnas: colsFilter.indicators.length
     });
 }
 
