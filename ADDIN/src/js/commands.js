@@ -1015,12 +1015,16 @@ function buildSelect(measuresGrid, relGrid) {
 const UNQUOTED_TYPES = ["INTEGER", "INT64", "FLOAT", "NUMERIC", "BIGNUMERIC"];
 
 function buildWhere(atributesGrid, relGrid) {
-    if (ReportState.Filters.length === 0) return "";
+    // Filtros "vacíos" (sin valor seleccionado en el taskpane) no deben
+    // añadirse al WHERE: se ignoran por completo, como si no existieran.
+    const activeFilters = ReportState.Filters.filter(f => String(f.Value).trim() !== "");
+
+    if (activeFilters.length === 0) return "";
 
     let sql = "WHERE" + CRLF;
 
-    for (let i = 0; i < ReportState.Filters.length; i++) {
-        const f = ReportState.Filters[i];
+    for (let i = 0; i < activeFilters.length; i++) {
+        const f = activeFilters[i];
         const tipo = getAttributeType(atributesGrid, f.Dimension, f.AttributeName);
 
         sql += getTableAlias(relGrid, f.Dimension) + "." + f.AttributeName + " = ";
@@ -1031,7 +1035,7 @@ function buildWhere(atributesGrid, relGrid) {
             sql += "'" + String(f.Value).replace(/'/g, "''") + "'";
         }
 
-        if (i < ReportState.Filters.length - 1) {
+        if (i < activeFilters.length - 1) {
             sql += CRLF + "AND ";
         }
     }
@@ -1391,6 +1395,30 @@ async function jsonTo3Matrices(context, json) {
 
     const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
 
+    // Antes de refrescar: borrar formato Y contenido de los rangos con
+    // nombre Draco_001_Rows / Draco_001_Cols / Draco_001_Values de la
+    // ejecución anterior (si existen), para no arrastrar colores/bordes
+    // de una tabla previa más grande o con otra forma.
+    await clearDracoNamedRanges(context);
+
+    // Limpiar todo lo pintado en ejecuciones anteriores (incluidas posibles
+    // fórmulas EPM_VALUE residuales de una tabla previa más grande, y su
+    // formato: relleno, fuente, bordes...), pero preservando la fila 1
+    // (A1=SQL, B1=JSON) que se escribe aparte.
+    const usedRange = sheet.getUsedRangeOrNullObject();
+    usedRange.load(["isNullObject", "rowIndex", "rowCount"]);
+    await context.sync();
+
+    if (!usedRange.isNullObject) {
+        const firstDataRow = Math.max(usedRange.rowIndex, 1); // índice 0-based: fila 2 en adelante
+        const lastRow = usedRange.rowIndex + usedRange.rowCount; // exclusivo
+        if (lastRow > firstDataRow) {
+            sheet.getRangeByIndexes(firstDataRow, 0, lastRow - firstDataRow, 16384)
+                .clear(Excel.ClearApplyTo.all);
+        }
+    }
+    await context.sync();
+
     /* -------------------------------------------------------------
      * 1) FACT — construir el bloque completo en memoria y escribirlo
      *    de una sola vez con un único range.values = [...]
@@ -1410,8 +1438,11 @@ async function jsonTo3Matrices(context, json) {
      *    ROW_ID "gana", igual que el pintado secuencial original),
      *    pero acumulado en un Map en vez de escribir celda a celda.
      * ----------------------------------------------------------- */
-    const filasCells = new Map(); // "row_col" -> {row, col, value, indent}
+    const filasCells = new Map(); // "row_col" -> {row, col, value, indent, field}
+    let maxRowId = 0;
     for (const V of rowDict.values()) {
+        if (Number(V[0]) > maxRowId) maxRowId = Number(V[0]);
+
         let iAux = 0;
         for (let i = 1; i <= totalDimFilas; i++) {
             const flag = flagsFilas[i];
@@ -1423,18 +1454,21 @@ async function jsonTo3Matrices(context, json) {
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
                 // Sobrescribe si ya había una entrada (mismo comportamiento que
                 // el bucle secuencial original: el último nivel no-nulo gana).
-                filasCells.set(row + "_" + col, { row, col, value: coerceCellLiteral(V[i]), indent });
+                filasCells.set(row + "_" + col, { row, col, value: coerceCellLiteral(V[i]), indent, field: iAux });
             }
         }
     }
     await writeCellBlock(context, sheet, filasCells);
-    await writeIndentRuns(context, sheet, filasCells);
+    await writeIndentAndColorRuns(context, sheet, filasCells, "col", rowsOffCol);
 
     /* -------------------------------------------------------------
      * 3) COLUMNAS — análogo a FILAS
      * ----------------------------------------------------------- */
     const columnasCells = new Map();
+    let maxColId = 0;
     for (const V of colDict.values()) {
+        if (Number(V[0]) > maxColId) maxColId = Number(V[0]);
+
         let iAux = 0;
         for (let i = 1; i <= totalDimCols; i++) {
             const flag = flagsColumnas[i];
@@ -1444,16 +1478,198 @@ async function jsonTo3Matrices(context, json) {
                 const row = iAux + colsOffRow;
                 const col = Number(V[0]) + colsOffCol;
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
-                columnasCells.set(row + "_" + col, { row, col, value: coerceCellLiteral(V[i]), indent });
+                columnasCells.set(row + "_" + col, { row, col, value: coerceCellLiteral(V[i]), indent, field: iAux });
             }
         }
     }
     await writeCellBlock(context, sheet, columnasCells);
-    await writeIndentRuns(context, sheet, columnasCells);
+    await writeIndentAndColorRuns(context, sheet, columnasCells, "row", colsOffRow);
+
+    /* -------------------------------------------------------------
+     * 4) RANGOS CON NOMBRE Draco_001_Rows / Draco_001_Cols / Draco_001_Values
+     *    + formato general (Segoe UI 9, número en Values, bordes finos)
+     * ----------------------------------------------------------- */
+    await applyDracoNamedRanges(context, sheet, {
+        RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId
+    });
 
     console.log("jsonTo3Matrices: pintado OK ->", {
-        factCeldas: factCells.size, filasCeldas: filasCells.size, columnasCeldas: columnasCells.size
+        factCeldas: factCells.size, filasCeldas: filasCells.size, columnasCeldas: columnasCells.size,
+        maxRowId, maxColId
     });
+}
+
+/* ---------------------------------------------------------------------
+ * Formato "Draco_001_*": paleta de color por nivel de jerarquía, rangos
+ * con nombre, tipografía y bordes.
+ * ------------------------------------------------------------------- */
+
+// RGB(15,23,42) / RGB(71,85,105) / RGB(241,245,249) / RGB(248,250,252) (a
+// partir de aquí se repite para niveles 4, 5, 6...), con su color de texto.
+const DRACO_LEVEL_PALETTE = [
+    { fill: "#0F172A", font: "#FFFFFF" }, // nivel 1
+    { fill: "#475569", font: "#FFFFFF" }, // nivel 2
+    { fill: "#F1F5F9", font: "#0D172A" }, // nivel 3
+    { fill: "#F8FAFC", font: "#0D172A" }  // nivel 4 en adelante
+];
+
+const DRACO_BORDER_COLOR = "#0D172A"; // RGB(13,23,42)
+const DRACO_FONT_NAME = "Segoe UI";
+const DRACO_FONT_SIZE = 9;
+
+function dracoColorForLevel(fieldBase1, indent) {
+    const idx = Math.min(Math.max(fieldBase1 - 1, 0) + Math.max(indent, 0), DRACO_LEVEL_PALETTE.length - 1);
+    return DRACO_LEVEL_PALETTE[idx];
+}
+
+/**
+ * Aplica indentLevel + color de relleno/texto + fuente a un bloque de
+ * celdas ya escrito (filasCells o columnasCells), agrupando en tramos
+ * contiguos para minimizar llamadas a la API.
+ *
+ * axis === "col": el "nivel" viene dado por la COLUMNA (bloque de FILAS,
+ *   la jerarquía crece hacia la derecha); se agrupa por columna y se
+ *   recorren tramos contiguos de fila con el mismo indent.
+ * axis === "row": el "nivel" viene dado por la FILA (bloque de COLUMNAS,
+ *   la jerarquía crece hacia abajo); se agrupa por fila y se recorren
+ *   tramos contiguos de columna con el mismo indent.
+ */
+async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffset) {
+    if (cellsMap.size === 0) return;
+
+    const groupKeyName = axis === "col" ? "col" : "row";
+    const runKeyName = axis === "col" ? "row" : "col";
+
+    const groups = new Map();
+    for (const c of cellsMap.values()) {
+        const g = c[groupKeyName];
+        if (!groups.has(g)) groups.set(g, []);
+        groups.get(g).push(c);
+    }
+
+    for (const [g, list] of groups) {
+        list.sort((a, b) => a[runKeyName] - b[runKeyName]);
+        const fieldBase1 = g - fieldOffset; // 1-based: posición del campo en el eje
+
+        let runStart = 0;
+        for (let k = 1; k <= list.length; k++) {
+            const endOfRun = k === list.length
+                || list[k][runKeyName] !== list[k - 1][runKeyName] + 1
+                || list[k].indent !== list[k - 1].indent;
+
+            if (endOfRun) {
+                const first = list[runStart];
+                const last = list[k - 1];
+                const style = dracoColorForLevel(fieldBase1, first.indent);
+
+                let range;
+                if (axis === "col") {
+                    const numRows = last.row - first.row + 1;
+                    range = sheet.getRangeByIndexes(first.row - 1, g - 1, numRows, 1);
+                } else {
+                    const numCols = last.col - first.col + 1;
+                    range = sheet.getRangeByIndexes(g - 1, first.col - 1, 1, numCols);
+                }
+
+                range.format.indentLevel = first.indent;
+                range.format.font.name = DRACO_FONT_NAME;
+                range.format.font.size = DRACO_FONT_SIZE;
+                range.format.fill.color = style.fill;
+                range.format.font.color = style.font;
+
+                runStart = k;
+            }
+        }
+    }
+
+    await context.sync();
+}
+
+/**
+ * Borra (formato + contenido) los rangos de la ejecución anterior a los
+ * que apuntaban los nombres Draco_001_Rows/Cols/Values, si existen.
+ */
+async function clearDracoNamedRanges(context) {
+    const names = ["Draco_001_Rows", "Draco_001_Cols", "Draco_001_Values"];
+    const items = names.map(n => context.workbook.names.getItemOrNullObject(n));
+    items.forEach(it => it.load("isNullObject"));
+    await context.sync();
+
+    let anyToClear = false;
+    for (const it of items) {
+        if (!it.isNullObject) {
+            it.getRange().clear(Excel.ClearApplyTo.all);
+            anyToClear = true;
+        }
+    }
+    if (anyToClear) {
+        await context.sync();
+    }
+}
+
+/**
+ * Crea/actualiza los 3 rangos con nombre a partir de la última tabla
+ * pintada, y aplica: fuente Segoe UI 9 en los tres, número 2 decimales +
+ * separador de miles + centrado en Draco_001_Values, y un borde fino
+ * RGB(13,23,42) alrededor de cada uno de los 3 rangos.
+ */
+async function applyDracoNamedRanges(context, sheet, dims) {
+    const { RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId } = dims;
+
+    if (maxRowId <= 0 || maxColId <= 0 || totalDimFilas <= 0 || totalDimCols <= 0) {
+        // No hay datos suficientes para definir una tabla: no se crean rangos.
+        return;
+    }
+
+    const rowsRange = sheet.getRangeByIndexes(RRows.row - 1, RRows.col - 1, maxRowId, totalDimFilas);
+    const colsRange = sheet.getRangeByIndexes(RCols.row - 1, RCols.col - 1, totalDimCols, maxColId);
+    const valuesRange = sheet.getRangeByIndexes(RRows.row - 1, RCols.col - 1, maxRowId, maxColId);
+
+    // ---- Fuente Segoe UI 9 en los tres rangos ----
+    for (const r of [rowsRange, colsRange, valuesRange]) {
+        r.format.font.name = DRACO_FONT_NAME;
+        r.format.font.size = DRACO_FONT_SIZE;
+    }
+
+    // ---- Valores: 2 decimales + separador de miles, centrado ----
+    valuesRange.numberFormat = [["#,##0.00"]];
+    valuesRange.format.horizontalAlignment = Excel.HorizontalAlignment.center;
+
+    // ---- Bordes finos alrededor de cada rango ----
+    for (const r of [rowsRange, colsRange, valuesRange]) {
+        const edges = [
+            Excel.BorderIndex.edgeTop, Excel.BorderIndex.edgeBottom,
+            Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight
+        ];
+        for (const edge of edges) {
+            const border = r.format.borders.getItem(edge);
+            border.style = Excel.BorderLineStyle.continuous;
+            border.weight = Excel.BorderWeight.thin;
+            border.color = DRACO_BORDER_COLOR;
+        }
+    }
+
+    await context.sync();
+
+    // ---- (Re)definir los nombres apuntando a los rangos recién pintados ----
+    const defs = [
+        { name: "Draco_001_Rows", range: rowsRange },
+        { name: "Draco_001_Cols", range: colsRange },
+        { name: "Draco_001_Values", range: valuesRange }
+    ];
+
+    for (const d of defs) {
+        const existing = context.workbook.names.getItemOrNullObject(d.name);
+        existing.load("isNullObject");
+        await context.sync();
+        if (!existing.isNullObject) {
+            existing.delete();
+            await context.sync();
+        }
+        context.workbook.names.add(d.name, d.range);
+    }
+
+    await context.sync();
 }
 
 /**
@@ -1642,9 +1858,19 @@ function comingSoon(event) {
     }
 }
 
-Office.actions.associate("hidePane", hidePane);
-Office.actions.associate("writeHolaInA1", writeHolaInA1);
-Office.actions.associate("actualizarInformeFixed", actualizarInformeFixed);
-Office.actions.associate("actualizarInforme", actualizarInforme);
-Office.actions.associate("actualizar", actualizar);
-Office.actions.associate("comingSoon", comingSoon);
+// Nota: este fichero se carga tanto en el runtime de comandos (commands.html)
+// como, ahora, dentro del propio taskpane (taskpane.html), para poder
+// disparar Actualizar()/ActualizarInforme() (y por tanto jsonTo3Matrices)
+// automáticamente al guardar cambios en el diseñador. Office.actions.associate
+// solo tiene efecto real en el runtime de comandos; se protege con try/catch
+// por si el host no expone esa API fuera de ese contexto.
+try {
+    Office.actions.associate("hidePane", hidePane);
+    Office.actions.associate("writeHolaInA1", writeHolaInA1);
+    Office.actions.associate("actualizarInformeFixed", actualizarInformeFixed);
+    Office.actions.associate("actualizarInforme", actualizarInforme);
+    Office.actions.associate("actualizar", actualizar);
+    Office.actions.associate("comingSoon", comingSoon);
+} catch (e) {
+    console.warn("Office.actions.associate no disponible en este contexto:", e);
+}

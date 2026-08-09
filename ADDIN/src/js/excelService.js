@@ -3,7 +3,7 @@
  * diseñador de informes (frmReportDesigner2 + módulo de filtros).
  * ========================================================================== */
 
-const CRLF = "\r\n";
+const SVC_CRLF = "\r\n";
 
 /* ---------------------------------------------------------------------
  * Utilidades de rango ("grids"), igual que en commands.js: se carga el
@@ -109,9 +109,9 @@ function buildAttributeSQL(atribGrid, dimension, attributeName) {
         }
     }
 
-    return "SELECT DISTINCT" + CRLF
-        + "    " + field + CRLF
-        + "FROM `" + project + "." + dataset + "." + table + "`" + CRLF
+    return "SELECT DISTINCT" + SVC_CRLF
+        + "    " + field + SVC_CRLF
+        + "FROM `" + project + "." + dataset + "." + table + "`" + SVC_CRLF
         + "ORDER BY " + field;
 }
 
@@ -141,11 +141,11 @@ function buildHierarchySQL(hierGrid, dimension, hierarchy) {
         }
     }
 
-    let sql = "SELECT DISTINCT" + CRLF;
-    sql += fields.map(f => "    " + f).join("," + CRLF);
-    sql += CRLF + "FROM `" + project + "." + dataset + "." + table + "`" + CRLF;
-    sql += "ORDER BY" + CRLF;
-    sql += fields.map(f => "    " + f).join("," + CRLF);
+    let sql = "SELECT DISTINCT" + SVC_CRLF;
+    sql += fields.map(f => "    " + f).join("," + SVC_CRLF);
+    sql += SVC_CRLF + "FROM `" + project + "." + dataset + "." + table + "`" + SVC_CRLF;
+    sql += "ORDER BY" + SVC_CRLF;
+    sql += fields.map(f => "    " + f).join("," + SVC_CRLF);
 
     return sql;
 }

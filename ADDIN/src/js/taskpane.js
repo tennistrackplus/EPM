@@ -111,6 +111,70 @@ const TaskPaneApp = {
         colsStatic: false
     },
 
+    /* -------------------------------------------------------------
+     * Autoguardado + autoactualización: cada cambio estructural en el
+     * taskpane (añadir/quitar campo, elegir valor de filtro, marcar
+     * Estático/Dinámico, mover rangos) guarda el diseño en EDIT_REPORT
+     * y dispara Actualizar() (que internamente llama a jsonTo3Matrices
+     * cuando el eje es Dinámico), sin que el usuario tenga que pulsar
+     * "Guardar" ni el botón del ribbon.
+     * ----------------------------------------------------------- */
+    autoRefreshTimer: null,
+    isAutoRefreshing: false,
+    autoRefreshQueued: false,
+
+    setAutoStatus(text) {
+        const el = document.getElementById("autoStatus");
+        if (el) el.innerText = text;
+    },
+
+    scheduleAutoUpdate() {
+        this.setAutoStatus("Cambios pendientes…");
+        if (this.autoRefreshTimer) clearTimeout(this.autoRefreshTimer);
+        this.autoRefreshTimer = setTimeout(() => this.runAutoSaveAndRefresh(), 700);
+    },
+
+    async runAutoSaveAndRefresh() {
+        if (this.isAutoRefreshing) {
+            this.autoRefreshQueued = true;
+            return;
+        }
+        this.isAutoRefreshing = true;
+
+        try {
+            this.setAutoStatus("Guardando…");
+            await window.ExcelService.saveEditReportDesign({
+                filters: this.state.filters,
+                rows: this.state.rows,
+                columns: this.state.columns,
+                rowsStatic: this.state.rowsStatic,
+                colsStatic: this.state.colsStatic,
+                rrAddress: RangeAxis.addressOf("rr"),
+                rcAddress: RangeAxis.addressOf("rc")
+            });
+
+            if (window.ReportActions && typeof window.ReportActions.actualizar === "function") {
+                this.setAutoStatus("Actualizando…");
+                await window.ReportActions.actualizar();
+            }
+
+            this.setAutoStatus("Actualizado ✓");
+            setTimeout(() => {
+                const el = document.getElementById("autoStatus");
+                if (el && el.innerText === "Actualizado ✓") el.innerText = "";
+            }, 2000);
+        } catch (err) {
+            console.error("Error en el autoguardado/autoactualización:", err);
+            this.setAutoStatus("Error al actualizar");
+        } finally {
+            this.isAutoRefreshing = false;
+            if (this.autoRefreshQueued) {
+                this.autoRefreshQueued = false;
+                this.scheduleAutoUpdate();
+            }
+        }
+    },
+
     async init() {
         if (typeof FilterModal !== "undefined" && FilterModal.init) {
             FilterModal.init();
@@ -138,25 +202,27 @@ const TaskPaneApp = {
             chkRows.addEventListener("change", (e) => {
                 this.state.rowsStatic = e.target.checked;
                 this.updateStaticLabel("rows");
+                this.scheduleAutoUpdate();
             });
         }
         if (chkCols) {
             chkCols.addEventListener("change", (e) => {
                 this.state.colsStatic = e.target.checked;
                 this.updateStaticLabel("cols");
+                this.scheduleAutoUpdate();
             });
         }
 
         // Flechas de movimiento de rango
-        this.bindArrow("btnRRUp", () => { RangeAxis.moveRR(-1, 0); this.refreshRangeLabels(); });
-        this.bindArrow("btnRRDown", () => { RangeAxis.moveRR(1, 0); this.refreshRangeLabels(); });
-        this.bindArrow("btnRRLeft", () => { RangeAxis.moveRR(0, -1); this.refreshRangeLabels(); });
-        this.bindArrow("btnRRRight", () => { RangeAxis.moveRRRight(); this.refreshRangeLabels(); });
+        this.bindArrow("btnRRUp", () => { RangeAxis.moveRR(-1, 0); this.refreshRangeLabels(); this.scheduleAutoUpdate(); });
+        this.bindArrow("btnRRDown", () => { RangeAxis.moveRR(1, 0); this.refreshRangeLabels(); this.scheduleAutoUpdate(); });
+        this.bindArrow("btnRRLeft", () => { RangeAxis.moveRR(0, -1); this.refreshRangeLabels(); this.scheduleAutoUpdate(); });
+        this.bindArrow("btnRRRight", () => { RangeAxis.moveRRRight(); this.refreshRangeLabels(); this.scheduleAutoUpdate(); });
 
-        this.bindArrow("btnRCUp", () => { RangeAxis.moveRC(-1, 0); this.refreshRangeLabels(); });
-        this.bindArrow("btnRCDown", () => { RangeAxis.moveRCDown(); this.refreshRangeLabels(); });
-        this.bindArrow("btnRCLeft", () => { RangeAxis.moveRC(0, -1); this.refreshRangeLabels(); });
-        this.bindArrow("btnRCRight", () => { RangeAxis.moveRC(0, 1); this.refreshRangeLabels(); });
+        this.bindArrow("btnRCUp", () => { RangeAxis.moveRC(-1, 0); this.refreshRangeLabels(); this.scheduleAutoUpdate(); });
+        this.bindArrow("btnRCDown", () => { RangeAxis.moveRCDown(); this.refreshRangeLabels(); this.scheduleAutoUpdate(); });
+        this.bindArrow("btnRCLeft", () => { RangeAxis.moveRC(0, -1); this.refreshRangeLabels(); this.scheduleAutoUpdate(); });
+        this.bindArrow("btnRCRight", () => { RangeAxis.moveRC(0, 1); this.refreshRangeLabels(); this.scheduleAutoUpdate(); });
 
         // Dropzones
         const zones = document.querySelectorAll(".zone-card");
@@ -428,6 +494,11 @@ const TaskPaneApp = {
         this.refreshRangeLabels();
 
         this.renderTag(container, zoneId, entry);
+
+        // Un filtro recién soltado aún no tiene valor (se ignora en el WHERE
+        // hasta que se elija uno), pero añadir/quitar campos de Filas o
+        // Columnas sí cambia el informe de inmediato: autoguardar+actualizar.
+        this.scheduleAutoUpdate();
     },
 
     removeFromState(zoneId, data) {
@@ -438,6 +509,8 @@ const TaskPaneApp = {
         if (zoneId === "rows") RangeAxis.onRowFieldRemoved();
         if (zoneId === "columns") RangeAxis.onColFieldRemoved();
         this.refreshRangeLabels();
+
+        this.scheduleAutoUpdate();
     },
 
     listForZone(zoneId) {
@@ -455,8 +528,11 @@ const TaskPaneApp = {
         tag.dataset.fieldName = entry.name;
         tag.dataset.isHierarchy = entry.isHierarchy;
 
+        // Filtro sin valor seleccionado todavía: se muestra vacío (no se
+        // añade al WHERE de la consulta hasta que el usuario elija un valor
+        // con doble clic).
         const titleText = zoneId === "filters"
-            ? `${entry.dimension}.${entry.name}: ${entry.value ? entry.value : "…⚙"}`
+            ? (entry.value ? `${entry.dimension}.${entry.name}: ${entry.value}` : `${entry.dimension}.${entry.name}: (vacío · doble clic para elegir)`)
             : `${entry.dimension}.${entry.name}`;
 
         tag.innerHTML = `
@@ -488,6 +564,7 @@ const TaskPaneApp = {
                     entry.value = result.value;
                     entry.realAttribute = result.attribute;
                     tag.querySelector(".dropped-tag-title").innerText = `${entry.dimension}.${entry.name}: ${entry.value}`;
+                    this.scheduleAutoUpdate();
                 }
             });
         }
