@@ -1694,7 +1694,7 @@ async function jsonTo3Matrices(context, json) {
             const newId = cell.row - rowsOffRow;
             const ind = byLogicalKey.get(newId + "_" + cell.field);
             if (ind) {
-                const glyph = ind.collapsed ? "+" : "\u2212";
+                const glyph = ind.collapsed ? "▸" : "▾";
                 cell.value = glyph + " " + cell.value;
                 DracoIndicatorMap.set(physKey, { axis: "rows", nodeKey: ind.nodeKey });
             }
@@ -1733,7 +1733,7 @@ async function jsonTo3Matrices(context, json) {
             const newId = cell.col - colsOffCol;
             const ind = byLogicalKey.get(newId + "_" + cell.field);
             if (ind) {
-                const glyph = ind.collapsed ? "+" : "\u2212";
+                const glyph = ind.collapsed ? "▸" : "▾";
                 cell.value = glyph + " " + cell.value;
                 DracoIndicatorMap.set(physKey, { axis: "cols", nodeKey: ind.nodeKey });
             }
