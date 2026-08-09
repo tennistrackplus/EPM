@@ -1342,7 +1342,7 @@ function resetDracoCollapseIfAxisChanged(axis, signature) {
  * posteriores —aunque tengan valor, p.ej. otro campo plano detrás de la
  * jerarquía— no cuenta: son datos de otra jerarquía/campo, no de esta).
  */
-function filterAndCompactDracoAxis(dict, count, collapsedSet) {
+function filterAndCompactDracoAxis(dict, count, collapsedSet, flags) {
     const items = [];
     for (const V of dict.values()) {
         let deepest = 0;
@@ -1376,9 +1376,19 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet) {
         return items.some(other => other.deepest > item.deepest && prefixKey(other, item.deepest) === key);
     }
 
+    // Columna/fila física (iAux) en la que cae el nivel `deepest` de este
+    // nodo — es la MISMA celda donde ya se pinta su etiqueta.
+    function fieldAtDeepest(item) {
+        let field = 0;
+        for (let k = 1; k <= item.deepest; k++) {
+            if (flags[k] === 1) field++;
+        }
+        return field;
+    }
+
     const dictOut = new Map();
     const idMap = new Map();     // oldId -> newId (para remapear FACT)
-    const indicators = [];       // { newId, nodeKey, collapsed }
+    const indicators = [];       // { newId, field, nodeKey, collapsed }
 
     kept.forEach((item, idx) => {
         const newId = idx + 1;
@@ -1389,43 +1399,54 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet) {
 
         if (item.deepest > 0 && hasChildren(item)) {
             const nodeKey = prefixKey(item, item.deepest);
-            indicators.push({ newId, nodeKey, collapsed: collapsedSet.has(nodeKey) });
+            indicators.push({ newId, field: fieldAtDeepest(item), nodeKey, collapsed: collapsedSet.has(nodeKey) });
         }
     });
 
     return { dict: dictOut, idMap, indicators };
 }
 
+// Convierte un número de columna (1-based) en letras de columna Excel ("A", "AB"...)
+function dracoColToLetters(col) {
+    let s = "";
+    while (col > 0) {
+        const rem = (col - 1) % 26;
+        s = String.fromCharCode(65 + rem) + s;
+        col = Math.floor((col - 1) / 26);
+    }
+    return s;
+}
+
 /**
- * Pinta la columna (eje Filas) o fila (eje Columnas) de indicadores +/-
- * junto al bloque de jerarquía, y registra sus coordenadas en
- * DracoIndicatorMap para poder resolver el clic.
+ * Limpia todos los comentarios (notas) previos de la hoja y añade uno por
+ * cada celda indicadora registrada en DracoIndicatorMap, a modo de tooltip
+ * que se ve al pasar el ratón por encima ("esto se puede clicar").
  */
-async function paintDracoCollapseIndicators(context, sheet, opts) {
-    const { axis, items, orientation, fixedIndex, offset } = opts;
-    if (!items || items.length === 0) return;
-
-    const cellsToWrite = new Map();
-    for (const it of items) {
-        const glyph = it.collapsed ? "+" : "\u2212"; // signo menos (expandido)
-        const row = orientation === "vertical" ? it.newId + offset : fixedIndex;
-        const col = orientation === "vertical" ? fixedIndex : it.newId + offset;
-        const key = row + "_" + col;
-        cellsToWrite.set(key, { row, col, value: glyph });
-        DracoIndicatorMap.set(key, { axis, nodeKey: it.nodeKey });
+async function refreshDracoIndicatorTooltips(context, sheet) {
+    try {
+        sheet.comments.load("items");
+        await context.sync();
+        if (sheet.comments.items.length > 0) {
+            sheet.comments.items.forEach(c => c.delete());
+            await context.sync();
+        }
+    } catch (e) {
+        console.warn("No se pudieron limpiar los tooltips Draco previos:", e);
+        return;
     }
 
-    await writeCellBlock(context, sheet, cellsToWrite);
+    if (DracoIndicatorMap.size === 0) return;
 
-    for (const c of cellsToWrite.values()) {
-        const r = sheet.getRangeByIndexes(c.row - 1, c.col - 1, 1, 1);
-        r.format.font.name = DRACO_FONT_NAME;
-        r.format.font.size = DRACO_FONT_SIZE;
-        r.format.font.bold = true;
-        r.format.font.color = DRACO_BORDER_COLOR;
-        r.format.horizontalAlignment = Excel.HorizontalAlignment.center;
+    try {
+        for (const key of DracoIndicatorMap.keys()) {
+            const [rowStr, colStr] = key.split("_");
+            const addr = dracoColToLetters(Number(colStr)) + rowStr;
+            context.workbook.comments.add("'CSV_RESULT'!" + addr, "Clic para expandir / contraer");
+        }
+        await context.sync();
+    } catch (e) {
+        console.warn("No se pudieron crear los tooltips Draco:", e);
     }
-    await context.sync();
 }
 
 async function registerDracoSelectionHandler(context, sheet) {
@@ -1577,8 +1598,8 @@ async function jsonTo3Matrices(context, json) {
     resetDracoCollapseIfAxisChanged("rows", rowsSignature);
     resetDracoCollapseIfAxisChanged("cols", colsSignature);
 
-    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, DracoCollapseState.rows.collapsed);
-    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, DracoCollapseState.cols.collapsed);
+    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, DracoCollapseState.rows.collapsed, flagsFilas);
+    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, DracoCollapseState.cols.collapsed, flagsColumnas);
 
     console.log("jsonTo3Matrices diagnóstico:", {
         totalCampos, filas,
@@ -1664,6 +1685,22 @@ async function jsonTo3Matrices(context, json) {
             }
         }
     }
+
+    // Fusionar el indicador +/- en la misma celda del nivel (nodos con
+    // hijos), en vez de una columna aparte: "− España" / "+ España".
+    {
+        const byLogicalKey = new Map(rowsFilter.indicators.map(it => [it.newId + "_" + it.field, it]));
+        for (const [physKey, cell] of filasCells) {
+            const newId = cell.row - rowsOffRow;
+            const ind = byLogicalKey.get(newId + "_" + cell.field);
+            if (ind) {
+                const glyph = ind.collapsed ? "+" : "\u2212";
+                cell.value = glyph + " " + cell.value;
+                DracoIndicatorMap.set(physKey, { axis: "rows", nodeKey: ind.nodeKey });
+            }
+        }
+    }
+
     await writeCellBlock(context, sheet, filasCells);
     await writeIndentAndColorRuns(context, sheet, filasCells, "col", rowsOffCol);
 
@@ -1688,6 +1725,21 @@ async function jsonTo3Matrices(context, json) {
             }
         }
     }
+
+    // Igual que en FILAS: el glifo +/- se fusiona en la propia celda.
+    {
+        const byLogicalKey = new Map(colsFilter.indicators.map(it => [it.newId + "_" + it.field, it]));
+        for (const [physKey, cell] of columnasCells) {
+            const newId = cell.col - colsOffCol;
+            const ind = byLogicalKey.get(newId + "_" + cell.field);
+            if (ind) {
+                const glyph = ind.collapsed ? "+" : "\u2212";
+                cell.value = glyph + " " + cell.value;
+                DracoIndicatorMap.set(physKey, { axis: "cols", nodeKey: ind.nodeKey });
+            }
+        }
+    }
+
     await writeCellBlock(context, sheet, columnasCells);
     await writeIndentAndColorRuns(context, sheet, columnasCells, "row", colsOffRow);
 
@@ -1700,26 +1752,10 @@ async function jsonTo3Matrices(context, json) {
     });
 
     /* -------------------------------------------------------------
-     * 5) Indicadores +/- de expandir/contraer, pegados a la jerarquía:
-     *    una columna a la izquierda del bloque de Filas, una fila
-     *    encima del bloque de Columnas. Solo se pintan en los nodos
-     *    que realmente tienen hijos.
+     * 5) Tooltip al pasar el ratón ("Clic para expandir / contraer")
+     *    sobre cada celda que lleva el indicador +/- fusionado.
      * ----------------------------------------------------------- */
-    const rowsIndicatorCol = RRows.col - 1;
-    if (rowsIndicatorCol >= 1) {
-        await paintDracoCollapseIndicators(context, sheet, {
-            axis: "rows", items: rowsFilter.indicators, orientation: "vertical",
-            fixedIndex: rowsIndicatorCol, offset: rowsOffRow
-        });
-    }
-
-    const colsIndicatorRow = RCols.row - 1;
-    if (colsIndicatorRow >= 1) {
-        await paintDracoCollapseIndicators(context, sheet, {
-            axis: "cols", items: colsFilter.indicators, orientation: "horizontal",
-            fixedIndex: colsIndicatorRow, offset: colsOffCol
-        });
-    }
+    await refreshDracoIndicatorTooltips(context, sheet);
 
     // 6) Registrar (una sola vez por sesión) el listener de clic que
     //    resuelve los indicadores +/- pintados arriba.
