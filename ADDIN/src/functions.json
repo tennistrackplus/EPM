@@ -5,7 +5,6 @@
       "id": "EPM_VALUE",
       "name": "EPM_VALUE",
       "description": "Devuelve el texto indicado en el parámetro Display.",
-      "helpUrl": "https://localhost:3000/help.html",
       "result": {
         "type": "string",
         "dimensionality": "scalar"
