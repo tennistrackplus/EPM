@@ -1504,13 +1504,13 @@ async function jsonTo3Matrices(context, json) {
  * con nombre, tipografía y bordes.
  * ------------------------------------------------------------------- */
 
-// RGB(15,23,42) / RGB(71,85,105) / RGB(241,245,249) / RGB(248,250,252) (a
-// partir de aquí se repite para niveles 4, 5, 6...), con su color de texto.
+// RGB(226,232,240) / RGB(241,245,249) / RGB(248,250,252) / blanco (a partir
+// de aquí se repite para niveles 4, 5, 6...). Texto RGB(13,23,42) en todos.
 const DRACO_LEVEL_PALETTE = [
-    { fill: "#0F172A", font: "#FFFFFF" }, // nivel 1
-    { fill: "#475569", font: "#FFFFFF" }, // nivel 2
-    { fill: "#F1F5F9", font: "#0D172A" }, // nivel 3
-    { fill: "#F8FAFC", font: "#0D172A" }  // nivel 4 en adelante
+    { fill: "#E2E8F0", font: "#0D172A" }, // nivel 1
+    { fill: "#F1F5F9", font: "#0D172A" }, // nivel 2
+    { fill: "#F8FAFC", font: "#0D172A" }, // nivel 3
+    { fill: "#FFFFFF", font: "#0D172A" }  // nivel 4 en adelante
 ];
 
 const DRACO_BORDER_COLOR = "#0D172A"; // RGB(13,23,42)
@@ -1635,20 +1635,39 @@ async function applyDracoNamedRanges(context, sheet, dims) {
     valuesRange.numberFormat = [["#,##0.00"]];
     valuesRange.format.horizontalAlignment = Excel.HorizontalAlignment.center;
 
-    // ---- Bordes finos alrededor de cada rango ----
+    // ---- Bordes: primero se elimina cualquier borde existente del rango
+    //      (externo + interior, restos de refrescos anteriores con otra
+    //      forma/tamaño de tabla) y SOLO DESPUÉS se pinta el borde exterior
+    //      fino nuevo. Hacerlo en el mismo lote sin sync intermedio hace
+    //      que Excel no aplique bien el cambio, así que se separan en dos
+    //      pasadas con su propio context.sync().
+    const ALL_BORDER_EDGES = [
+        Excel.BorderIndex.edgeTop, Excel.BorderIndex.edgeBottom,
+        Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight,
+        Excel.BorderIndex.insideHorizontal, Excel.BorderIndex.insideVertical
+    ];
+    const OUTER_BORDER_EDGES = [
+        Excel.BorderIndex.edgeTop, Excel.BorderIndex.edgeBottom,
+        Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight
+    ];
+
+    // Pasada 1: quitar el borde del rango por completo.
     for (const r of [rowsRange, colsRange, valuesRange]) {
-        const edges = [
-            Excel.BorderIndex.edgeTop, Excel.BorderIndex.edgeBottom,
-            Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight
-        ];
-        for (const edge of edges) {
+        for (const edge of ALL_BORDER_EDGES) {
+            r.format.borders.getItem(edge).style = Excel.BorderLineStyle.none;
+        }
+    }
+    await context.sync();
+
+    // Pasada 2: pintar el borde exterior fino, color RGB(13,23,42).
+    for (const r of [rowsRange, colsRange, valuesRange]) {
+        for (const edge of OUTER_BORDER_EDGES) {
             const border = r.format.borders.getItem(edge);
             border.style = Excel.BorderLineStyle.continuous;
             border.weight = Excel.BorderWeight.thin;
             border.color = DRACO_BORDER_COLOR;
         }
     }
-
     await context.sync();
 
     // ---- (Re)definir los nombres apuntando a los rangos recién pintados ----
