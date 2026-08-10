@@ -1,0 +1,609 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EPM Data Studio · Modelo semántico</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link rel="stylesheet" href="css/theme.css">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            min-height: 100%;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            color: #0f172a;
+            overflow-y: auto;
+        }
+
+        .page-content {
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            gap: 8px;
+            box-sizing: border-box;
+        }
+
+        h3, h4 {
+            color: var(--text-primary, #0f172a);
+            margin: 0;
+        }
+
+        h3 {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+        }
+
+        h4 {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: var(--text-muted, #64748b);
+            margin: 12px 0 6px 0;
+        }
+
+        .card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+        }
+
+        .card.compact {
+            padding: 8px 10px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .card-title-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .card-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: #1e293b;
+        }
+
+        .info-icon, .eye-icon {
+            font-size: 13px;
+            color: #64748b;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .form-group {
+            margin-bottom: 8px;
+        }
+
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            font-size: 10px;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin-bottom: 4px;
+        }
+
+        /* ---- Gestión de modelos semánticos y acciones ---- */
+        .model-manager-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .btn-generate {
+            height: 24px;
+            padding: 0 8px;
+            background-color: #2563eb;
+            color: #ffffff;
+            border: none;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background-color 0.15s ease;
+        }
+
+        .btn-generate:hover {
+            background-color: #1d4ed8;
+        }
+
+        .icon-btn {
+            width: 24px;
+            height: 24px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            border: 1px solid #cbd5e1;
+            background-color: #ffffff;
+            color: #334155;
+            font-size: 13px;
+            line-height: 1;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .icon-btn:hover {
+            background-color: #f1f5f9;
+            color: #0f172a;
+            border-color: #94a3b8;
+        }
+
+        .icon-btn.danger:hover {
+            background-color: #fef2f2;
+            color: #ef4444;
+            border-color: #fca5a5;
+        }
+
+        select, input[type="text"] {
+            width: 100%;
+            height: 30px;
+            padding: 0 8px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            background-color: #ffffff;
+            font-size: 11px;
+            color: #0f172a;
+            outline: none;
+            transition: border-color 0.15s ease;
+        }
+
+        select:focus, input[type="text"]:focus {
+            border-color: #2563eb;
+        }
+
+        #modelSelectorContainer {
+            width: 100%;
+        }
+
+        #modelSelectorContainer select, 
+        #modelSelectorContainer input {
+            width: 100%;
+        }
+
+        /* Estilo de ayuda de búsqueda para Tabla de Hechos */
+        .sap-search-input-group {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .sap-search-input-group .table-icon {
+            position: absolute;
+            left: 8px;
+            font-size: 13px;
+            color: #475569;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .sap-search-input-group input[type="text"] {
+            padding-left: 28px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            background-color: #ffffff;
+        }
+
+        .sap-search-btn {
+            display: none; /* Mantenido para compatibilidad JS */
+        }
+
+        /* ---- Sección de Campos ---- */
+        .fields-card {
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+        }
+
+        .fields-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 4px;
+        }
+
+        .field-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            height: 34px;
+            padding: 0 2px;
+            border-bottom: 1px solid #f1f5f9;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+
+        .field-row:last-child {
+            border-bottom: none;
+        }
+
+        .field-enable {
+            width: 14px;
+            height: 14px;
+            margin: 0;
+            flex-shrink: 0;
+            cursor: pointer;
+            accent-color: #2563eb;
+        }
+
+        .field-type {
+            width: 58px;
+            height: 24px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            background-color: #f8fafc;
+            color: #334155;
+            font-size: 9px;
+            font-weight: 700;
+            padding: 0 2px;
+            flex-shrink: 0;
+            text-align: center;
+        }
+
+        .field-info {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            min-width: 0;
+        }
+
+        /* Ocultar el nombre técnico para evitar desalineaciones */
+        .field-name {
+            display: none !important;
+        }
+
+        .field-alias-input {
+            width: 100%;
+            height: 24px;
+            padding: 0 6px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            background: #ffffff;
+            font-size: 11px;
+            font-weight: 600;
+            color: #0f172a;
+            outline: none;
+        }
+
+        .field-alias-input:focus {
+            border-color: #2563eb;
+        }
+
+        .field-arrow {
+            width: 22px;
+            height: 22px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #64748b;
+            font-size: 12px;
+            flex-shrink: 0;
+            background: #ffffff;
+        }
+
+        /* Botón genérico para modales */
+        .btn {
+            width: 100%;
+            height: 34px;
+            background-color: #2563eb;
+            color: #ffffff;
+            border: none;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+        }
+
+        .btn:hover {
+            background-color: #1d4ed8;
+        }
+
+        /* Modales */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(15, 27, 51, 0.45);
+            backdrop-filter: blur(1px);
+            z-index: 100;
+            overflow-y: auto;
+        }
+
+        #treeModal {
+            z-index: 200;
+        }
+
+        .modal-content {
+            background-color: #ffffff;
+            margin: 24px auto;
+            padding: 16px;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+            width: 90%;
+            max-width: 480px;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 8px;
+            margin-bottom: 12px;
+        }
+
+        .modal-header h3 {
+            margin: 0;
+        }
+
+        .modal-close {
+            color: #64748b;
+            font-size: 18px;
+            font-weight: 400;
+            cursor: pointer;
+            line-height: 1;
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.15s ease;
+        }
+
+        .modal-close:hover {
+            background-color: #f1f5f9;
+            color: #0f172a;
+        }
+
+        .tree-container {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            padding: 8px;
+            background: #f8fafc;
+        }
+
+        .tree-list {
+            list-style: none;
+            padding-left: 14px;
+            margin: 0;
+        }
+
+        .tree-container > .tree-list {
+            padding-left: 0;
+        }
+
+        .tree-item {
+            margin-top: 2px;
+        }
+
+        .tree-header {
+            cursor: pointer;
+            user-select: none;
+            padding: 4px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            display: block;
+            transition: background-color 0.15s ease;
+        }
+
+        .tree-header:hover {
+            background-color: #e2e8f0;
+        }
+
+        .tree-toggle {
+            display: inline-block;
+            width: 12px;
+            font-size: 8px;
+            color: #64748b;
+        }
+
+        .tree-children {
+            display: none;
+        }
+
+        .tree-children.open {
+            display: block;
+        }
+
+        .table-item {
+            color: #2563eb;
+            font-weight: 700;
+        }
+
+        .table-item:hover {
+            background-color: #2563eb;
+            color: #ffffff;
+        }
+
+        .field-key {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+            font-size: 11px;
+            color: #334155;
+            font-weight: 600;
+        }
+
+        .field-key input {
+            margin: 0;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="page-content">
+
+        <!-- CAJA 1: MODELO SEMÁNTICO -->
+        <div class="card compact">
+            <div class="card-header">
+                <span class="card-title">Modelo semántico</span>
+                <div class="model-manager-actions">
+                    <button type="button" class="btn-generate" id="btnGenerateModel" title="Generar modelo semántico en Excel">Generar Excel</button>
+                    <button type="button" class="icon-btn" id="btnNewModel" title="Crear nuevo modelo">+</button>
+                    <button type="button" class="icon-btn danger" id="btnDeleteModel" title="Eliminar modelo">🗑</button>
+                </div>
+            </div>
+
+            <div id="modelSelectorContainer">
+                <select id="semanticModelSelect">
+                    <option value="">— Sin modelo seleccionado —</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- CAJA 2: TABLA DE HECHOS -->
+        <div class="card compact">
+            <div class="card-header">
+                <div class="card-title-group">
+                    <span class="card-title">Tabla de hechos</span>
+                    <span class="info-icon" title="Información">ⓘ</span>
+                </div>
+                <span class="eye-icon" title="Ver datos">👁</span>
+            </div>
+
+            <div class="compact-field-group">
+                <div class="sap-search-input-group">
+                    <span class="table-icon">▦</span>
+                    <input type="text" id="factFullConcat" readonly placeholder="Tabla de hechos (proyecto.dataset.tabla)" aria-label="Tabla de hechos seleccionada" title="Tabla de hechos seleccionada" style="cursor: pointer;" />
+                    <button type="button" class="sap-search-btn" id="sapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
+                </div>
+                <input type="hidden" id="factProject" />
+                <input type="hidden" id="factDataset" />
+                <input type="hidden" id="factTable" />
+            </div>
+        </div>
+
+        <!-- CAJA 3: LISTA DE CAMPOS -->
+        <div class="card fields-card" id="fieldsCard" style="display: none;">
+            <div class="card-header">
+                <span class="card-title">Campos</span>
+            </div>
+
+            <div id="fieldsList" class="fields-list">
+                <!-- Se rellena dinámicamente desde semantic_model.js -->
+            </div>
+        </div>
+
+    </div>
+
+    <!-- MODAL SELECCIÓN JERÁRQUICA DE TABLA -->
+    <div id="treeModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Seleccionar tabla de BigQuery</h3>
+                <span class="modal-close" id="btnCloseTreeModal">&times;</span>
+            </div>
+            <div id="treeContainer" class="tree-container"></div>
+        </div>
+    </div>
+
+    <!-- MODAL CONFIGURACIÓN MEDIDA -->
+    <div id="measureModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Medida: <span id="modalMeasureFieldName"></span></h3>
+                <span class="modal-close" id="btnCloseMeasureModal">&times;</span>
+            </div>
+            <div class="form-group">
+                <label>Alias</label>
+                <input type="text" id="modalMeasureAlias" />
+            </div>
+            <div class="form-group">
+                <label>Agregación</label>
+                <select id="modalMeasureAgg">
+                    <option value="SUM">SUM</option>
+                    <option value="COUNT">COUNT</option>
+                    <option value="AVG">AVG</option>
+                    <option value="MIN">MIN</option>
+                    <option value="MAX">MAX</option>
+                    <option value="COUNT_DISTINCT">COUNT_DISTINCT</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Formato</label>
+                <select id="modalMeasureFormat">
+                    <option value="Auto">Auto</option>
+                    <option value="Currency">Moneda (€)</option>
+                    <option value="Integer">Entero</option>
+                    <option value="Decimal">Decimal</option>
+                    <option value="Percent">Porcentaje (%)</option>
+                </select>
+            </div>
+            <button class="btn" id="btnSaveMeasureModal">Guardar medida</button>
+        </div>
+    </div>
+
+    <!-- MODAL CONFIGURACIÓN DIMENSIÓN -->
+    <div id="dimensionModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Dimensión: <span id="modalDimFieldName"></span></h3>
+                <span class="modal-close" id="btnCloseDimModal">&times;</span>
+            </div>
+            <div class="form-group">
+                <label>Alias</label>
+                <input type="text" id="modalDimAlias" />
+            </div>
+            <h4>Tabla de atributos (relación)</h4>
+            <div class="form-group">
+                <label>Tabla de dimensión seleccionada</label>
+                <div class="sap-search-input-group">
+                    <input type="text" id="dimRelFullConcat" readonly placeholder="Seleccionar tabla de dimensión..." style="cursor: pointer;" />
+                    <button type="button" class="sap-search-btn" id="dimSapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
+                </div>
+                <input type="hidden" id="dimRelProject" />
+                <input type="hidden" id="dimRelDataset" />
+                <input type="hidden" id="dimRelTable" />
+            </div>
+
+            <div id="attributesContainer" style="display:none; margin-top:15px;">
+                <h4>Atributos</h4>
+                <div id="attributesList" class="fields-list">
+                    <!-- Se rellena dinámicamente -->
+                </div>
+            </div>
+
+            <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar dimensión</button>
+        </div>
+    </div>
+
+    <script src="js/semantic_model.js"></script>
+</body>
+</html>

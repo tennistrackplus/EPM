@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPM Data Studio · Autenticación</title>
+    <!-- Script de Office necesario para comunicar la ventana emergente con el TaskPane -->
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link rel="stylesheet" href="css/theme.css">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        .status-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 14px;
+            padding: 32px 28px;
+            background: var(--surface-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-md);
+            max-width: 320px;
+        }
+
+        .status-logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 42px;
+            height: 42px;
+            border-radius: var(--radius-md);
+            background: linear-gradient(160deg, var(--brand-primary) 0%, #5A8DFF 100%);
+            color: var(--text-inverse);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .status-spinner {
+            width: 22px;
+            height: 22px;
+            border: 3px solid var(--gray-200);
+            border-top-color: var(--brand-primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .status-box h3 {
+            font-size: var(--fs-md);
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .status-box p {
+            font-size: var(--fs-sm);
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+    <div class="status-box">
+        <span class="status-logo" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="3" y="12" width="4" height="9" rx="1" fill="currentColor"/>
+                <rect x="10" y="7" width="4" height="14" rx="1" fill="currentColor"/>
+                <rect x="17" y="3" width="4" height="18" rx="1" fill="currentColor"/>
+            </svg>
+        </span>
+        <div class="status-spinner" aria-hidden="true"></div>
+        <h3>Procesando autenticación con Google BigQuery</h3>
+        <p>Por favor, espera un momento. Esta ventana se cerrará automáticamente.</p>
+    </div>
+
+    <script>
+        function processAuth() {
+            const hash = window.location.hash.substring(1);
+            const params = new URLSearchParams(hash || window.location.search);
+
+            const accessToken = params.get("access_token");
+            const expiresIn = params.get("expires_in");
+            const error = params.get("error");
+
+            let payload = null;
+
+            if (accessToken) {
+                payload = JSON.stringify({
+                    status: "success",
+                    provider: "bigquery",
+                    token: accessToken,
+                    expiresIn: expiresIn
+                });
+            } else if (error) {
+                payload = JSON.stringify({
+                    status: "error",
+                    provider: "bigquery",
+                    error: error
+                });
+            }
+
+            if (payload) {
+                // Si estamos dentro del entorno de Office Add-in
+                if (typeof Office !== "undefined" && Office.context && Office.context.ui && typeof Office.context.ui.messageParent === "function") {
+                    Office.context.ui.messageParent(payload);
+                } else if (window.opener) {
+                    // Respaldo si se abrió mediante un navegador web estándar
+                    window.opener.postMessage(payload, "*");
+                    window.close();
+                }
+            }
+        }
+
+        if (typeof Office !== "undefined") {
+            Office.onReady(() => {
+                processAuth();
+            });
+        } else {
+            document.addEventListener("DOMContentLoaded", () => {
+                processAuth();
+            });
+        }
+    </script>
+</body>
+</html>

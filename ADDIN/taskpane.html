@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPM Data Studio · Diseño del informe</title>
+
+    <!-- Librería JavaScript de Microsoft Office (Requerida en el HEAD) -->
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/modal.css">
+</head>
+<body>
+    <div class="taskpane-container">
+
+        <!-- Barra de marca (idéntica en todas las pantallas del complemento) -->
+        <header class="app-topbar">
+            <div class="app-topbar-brand">
+                <span class="app-logo" aria-hidden="true">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="3" y="12" width="4" height="9" rx="1" fill="currentColor"/>
+                        <rect x="10" y="7" width="4" height="14" rx="1" fill="currentColor"/>
+                        <rect x="17" y="3" width="4" height="18" rx="1" fill="currentColor"/>
+                    </svg>
+                </span>
+                <div class="app-topbar-titles">
+                    <span class="app-topbar-title">EPM Data Studio</span>
+                    <span class="app-topbar-subtitle">Diseño del informe</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Barra de herramientas de la vista -->
+        <div class="view-toolbar">
+            <h2>Campos del informe</h2>
+            <div style="display:flex; align-items:center; gap:6px;">
+                <span id="autoStatus" style="font-size: var(--fs-sm, 11px); color:#7045A9; min-width: 90px;"></span>
+                <button id="btnSaveDesign" class="btn-primary" style="padding:6px 14px; font-size: var(--fs-sm);">Guardar</button>
+                <button id="btnReportProperties" class="icon-button" title="Propiedades del informe">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 4.75a.75.75 0 01.75.75v3.19l2.22 1.28a.75.75 0 01-.75 1.3l-2.6-1.5a.75.75 0 01-.37-.65V5.5A.75.75 0 018 4.75zM8 1a7 7 0 100 14A7 7 0 008 1z"/>
+                    </svg>
+                </button>
+                <button id="btnFieldOptions" class="icon-button" title="Opciones de campo">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M6 2h4v2H6V2zM2 6h4v2H2V6zm6 0h6v2H8V6zM2 10h8v2H2v-2zm10 0h2v2h-2v-2z"/>
+                    </svg>
+                </button>
+                <button id="btnRefresh" class="icon-button" title="Actualizar dimensiones">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M13.65 2.35A7.958 7.958 0 008 0C3.58 0 0 3.58 0 8s3.58 8 8 8c3.84 0 7.08-2.71 7.85-6.32h-1.63C13.48 12.37 11.01 14.5 8 14.5 4.41 14.5 1.5 11.59 1.5 8S4.41 1.5 8 1.5c1.79 0 3.41.73 4.59 1.91L10 6h6V0l-2.35 2.35z"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <p class="taskpane-instruction">Arrastra los campos a las áreas correspondientes:</p>
+
+        <!-- Layout Principal -->
+        <div class="taskpane-body">
+
+            <!-- Panel Izquierdo: Lista de Dimensiones -->
+            <section class="fields-section">
+                <div class="search-input-wrapper">
+                    <svg class="search-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M11.742 10.344a6.5 6.5 0 10-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 001.415-1.414l-3.85-3.85a1.007 1.007 0 00-.115-.1zM12 6.5a5.5 5.5 0 11-11 0 5.5 5.5 0 0111 0z"/>
+                    </svg>
+                    <input type="text" id="fieldSearch" placeholder="Buscar campo..." autocomplete="off">
+                </div>
+                <div id="availableFieldsContainer" class="fields-tree">
+                    <!-- Se rellena dinámicamente -->
+                </div>
+            </section>
+
+            <!-- Panel Derecho: Ejes (Dropzones) -->
+            <section class="zones-section">
+
+                <!-- Zona Filtros -->
+                <div class="zone-card" data-zone="filters">
+                    <div class="zone-header">
+                        <div class="zone-title-group">
+                            <svg class="zone-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M1.5 1.5A.5.5 0 012 1h12a.5.5 0 01.354.854L9.5 6.707V13.5a.5.5 0 01-.757.429l-2-1.25A.5.5 0 016.5 12.25V6.707L1.146 1.854A.5.5 0 011.5 1.5z"/>
+                            </svg>
+                            <span>Filtros</span>
+                        </div>
+                    </div>
+                    <div class="dropzone-content"></div>
+                </div>
+
+                <!-- Zona Filas -->
+                <div class="zone-card" data-zone="rows">
+                    <div class="zone-header">
+                        <div class="zone-title-group">
+                            <svg class="zone-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M2 3h12a1 1 0 011 1v2a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1zm0 6h12a1 1 0 011 1v2a1 1 0 01-1 1H2a1 1 0 01-1-1v-2a1 1 0 011-1z"/>
+                            </svg>
+                            <span>Filas</span>
+                        </div>
+                        <label class="asymmetric-checkbox" title="Estático / Dinámico">
+                            <input type="checkbox" id="chkAsymmetricRows">
+                            <span id="lblStaticRows">Dinámico</span>
+                        </label>
+                    </div>
+                    <div class="range-control">
+                        <span class="range-address" id="lblRRango">(sin definir)</span>
+                        <div class="range-arrows">
+                            <button type="button" id="btnRRUp" class="icon-button" title="Mover arriba">⬆</button>
+                            <button type="button" id="btnRRDown" class="icon-button" title="Mover abajo">⬇</button>
+                            <button type="button" id="btnRRLeft" class="icon-button" title="Mover izquierda">⬅</button>
+                            <button type="button" id="btnRRRight" class="icon-button" title="Mover derecha">➡</button>
+                        </div>
+                    </div>
+                    <div class="dropzone-content"></div>
+                </div>
+
+                <!-- Zona Columnas -->
+                <div class="zone-card" data-zone="columns">
+                    <div class="zone-header">
+                        <div class="zone-title-group">
+                            <svg class="zone-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M3 2h2a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1zm6 0h2a1 1 0 011 1v10a1 1 0 01-1 1H9a1 1 0 01-1-1V3a1 1 0 011-1z"/>
+                            </svg>
+                            <span>Columnas</span>
+                        </div>
+                        <label class="asymmetric-checkbox" title="Estático / Dinámico">
+                            <input type="checkbox" id="chkAsymmetricCols">
+                            <span id="lblStaticCols">Dinámico</span>
+                        </label>
+                    </div>
+                    <div class="range-control">
+                        <span class="range-address" id="lblCRango">(sin definir)</span>
+                        <div class="range-arrows">
+                            <button type="button" id="btnRCUp" class="icon-button" title="Mover arriba">⬆</button>
+                            <button type="button" id="btnRCDown" class="icon-button" title="Mover abajo">⬇</button>
+                            <button type="button" id="btnRCLeft" class="icon-button" title="Mover izquierda">⬅</button>
+                            <button type="button" id="btnRCRight" class="icon-button" title="Mover derecha">➡</button>
+                        </div>
+                    </div>
+                    <div class="dropzone-content"></div>
+                </div>
+
+            </section>
+
+            <!-- Panel derecho (oculto por defecto): opciones del campo seleccionado -->
+            <section class="field-options-panel" id="fieldOptionsPanel">
+                <div class="field-options-header">Opciones de campo</div>
+                <div class="field-options-body" id="fieldOptionsBody">
+                    <div class="field-options-empty">Haz clic en un campo de Filtros, Filas o Columnas para ver sus opciones.</div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Modal de Propiedades del informe -->
+    <div id="reportPropertiesModal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3>Propiedades del informe</h3>
+                <button id="closePropertiesModalBtn" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="properties-form">
+                    <label class="form-row">
+                        Nombre del informe
+                        <input type="text" id="propReportName" placeholder="Report 001">
+                    </label>
+
+                    <label class="properties-checkbox-row">
+                        <input type="checkbox" id="propSuppressZeroRows">
+                        Suprimir ceros en filas
+                    </label>
+                    <label class="properties-checkbox-row">
+                        <input type="checkbox" id="propSuppressZeroCols">
+                        Suprimir ceros en columnas
+                    </label>
+                    <label class="properties-checkbox-row">
+                        <input type="checkbox" id="propSubtotalsOnTop">
+                        Mostrar subtotales arriba
+                    </label>
+                    <label class="properties-checkbox-row">
+                        <input type="checkbox" id="propOverwriteFormats">
+                        Sobrescribir formatos al actualizar
+                    </label>
+                    <label class="properties-checkbox-row">
+                        <input type="checkbox" id="propAutoFitColumns">
+                        Autoajustar ancho de columnas al actualizar
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btnCancelProperties" class="btn-secondary">Cancelar</button>
+                <button id="btnSaveProperties" class="btn-primary">Guardar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Selección de Filtros (selección única) -->
+    <div id="filterModal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3 id="modalTitle">Filtrar Campo</h3>
+                <button id="closeModalBtn" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="modal-toolbar">
+                    <input type="text" id="modalSearchInput" placeholder="Buscar en la lista...">
+                </div>
+                <div id="modalItemsContainer" class="modal-items-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button id="btnCancelModal" class="btn-secondary">Cancelar</button>
+                <button id="btnApplyModal" class="btn-primary">Aceptar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/excelService.js"></script>
+    <script src="js/filterModal.js"></script>
+    <script src="js/commands.js"></script>
+    <script src="js/taskpane.js"></script>
+</body>
+</html>
