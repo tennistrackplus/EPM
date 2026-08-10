@@ -38,6 +38,16 @@
             <div style="display:flex; align-items:center; gap:6px;">
                 <span id="autoStatus" style="font-size: var(--fs-sm, 11px); color:#7045A9; min-width: 90px;"></span>
                 <button id="btnSaveDesign" class="btn-primary" style="padding:6px 14px; font-size: var(--fs-sm);">Guardar</button>
+                <button id="btnReportProperties" class="icon-button" title="Propiedades del informe">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 4.75a.75.75 0 01.75.75v3.19l2.22 1.28a.75.75 0 01-.75 1.3l-2.6-1.5a.75.75 0 01-.37-.65V5.5A.75.75 0 018 4.75zM8 1a7 7 0 100 14A7 7 0 008 1z"/>
+                    </svg>
+                </button>
+                <button id="btnFieldOptions" class="icon-button" title="Opciones de campo">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M6 2h4v2H6V2zM2 6h4v2H2V6zm6 0h6v2H8V6zM2 10h8v2H2v-2zm10 0h2v2h-2v-2z"/>
+                    </svg>
+                </button>
                 <button id="btnRefresh" class="icon-button" title="Actualizar dimensiones">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M13.65 2.35A7.958 7.958 0 008 0C3.58 0 0 3.58 0 8s3.58 8 8 8c3.84 0 7.08-2.71 7.85-6.32h-1.63C13.48 12.37 11.01 14.5 8 14.5 4.41 14.5 1.5 11.59 1.5 8S4.41 1.5 8 1.5c1.79 0 3.41.73 4.59 1.91L10 6h6V0l-2.35 2.35z"/>
@@ -133,6 +143,57 @@
                 </div>
 
             </section>
+
+            <!-- Panel derecho (oculto por defecto): opciones del campo seleccionado -->
+            <section class="field-options-panel" id="fieldOptionsPanel">
+                <div class="field-options-header">Opciones de campo</div>
+                <div class="field-options-body" id="fieldOptionsBody">
+                    <div class="field-options-empty">Haz clic en un campo de Filtros, Filas o Columnas para ver sus opciones.</div>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <!-- Modal de Propiedades del informe -->
+    <div id="reportPropertiesModal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3>Propiedades del informe</h3>
+                <button id="closePropertiesModalBtn" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="properties-form">
+                    <label class="form-row">
+                        Nombre del informe
+                        <input type="text" id="propReportName" placeholder="Report 001">
+                    </label>
+
+                    <label class="properties-checkbox-row">
+                        <input type="checkbox" id="propSuppressZeroRows">
+                        Suprimir ceros en filas
+                    </label>
+                    <label class="properties-checkbox-row">
+                        <input type="checkbox" id="propSuppressZeroCols">
+                        Suprimir ceros en columnas
+                    </label>
+                    <label class="properties-checkbox-row">
+                        <input type="checkbox" id="propSubtotalsOnTop">
+                        Mostrar subtotales arriba
+                    </label>
+                    <label class="properties-checkbox-row">
+                        <input type="checkbox" id="propOverwriteFormats">
+                        Sobrescribir formatos al actualizar
+                    </label>
+                    <label class="properties-checkbox-row">
+                        <input type="checkbox" id="propAutoFitColumns">
+                        Autoajustar ancho de columnas al actualizar
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btnCancelProperties" class="btn-secondary">Cancelar</button>
+                <button id="btnSaveProperties" class="btn-primary">Guardar</button>
+            </div>
         </div>
     </div>
 
