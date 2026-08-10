@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Buscar miembro</title>
+
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/modal.css">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            background: var(--surface-card, #ffffff);
+            font-family: 'Segoe UI', sans-serif;
+        }
+
+        .picker-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        .picker-header {
+            padding: 14px 16px 12px;
+            border-bottom: 1px solid var(--border-subtle, #e1e1e1);
+            flex-shrink: 0;
+        }
+
+        .picker-header h3 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: var(--text-primary, #201f1e);
+        }
+
+        .picker-header input {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 8px 10px;
+            border: 1px solid var(--border-default, #ccc);
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .picker-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 4px 0;
+        }
+
+        .picker-footer {
+            padding: 10px 16px;
+            border-top: 1px solid var(--border-subtle, #e1e1e1);
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="picker-container">
+        <div class="picker-header">
+            <h3 id="pickerTitle">Buscar miembro</h3>
+            <input type="text" id="pickerSearchInput" placeholder="Buscar en la lista..." autocomplete="off">
+        </div>
+        <div class="picker-body" id="pickerItemsContainer">
+            <div style="padding:10px;color:#605e5c;">Cargando valores…</div>
+        </div>
+        <div class="picker-footer">
+            <button id="btnPickerCancel" class="btn-secondary">Cancelar</button>
+            <button id="btnPickerApply" class="btn-primary">Aceptar</button>
+        </div>
+    </div>
+
+    <script src="js/excelService.js"></script>
+    <script src="js/memberPicker.js"></script>
+</body>
+</html>
