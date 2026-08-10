@@ -1342,7 +1342,10 @@ function resetDracoCollapseIfAxisChanged(axis, signature) {
  * posteriores —aunque tengan valor, p.ej. otro campo plano detrás de la
  * jerarquía— no cuenta: son datos de otra jerarquía/campo, no de esta).
  */
-function filterAndCompactDracoAxis(dict, count, collapsedSet, flags) {
+function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
+    const opts = options || {};
+    const subtotalsOnTop = !!opts.subtotalsOnTop;
+
     const items = [];
     for (const V of dict.values()) {
         let deepest = 0;
@@ -1358,6 +1361,26 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags) {
         const parts = [];
         for (let i = 1; i <= p; i++) parts.push(String(item.V[i]));
         return p + "\u00A7" + parts.join("\u241F");
+    }
+
+    // "Mostrar subtotales arriba" (propiedades del informe): por defecto se
+    // respeta el orden natural del resultado (subtotal justo antes que su
+    // detalle, que es como suele venir el GROUPING SETS); si el usuario NO
+    // quiere los subtotales arriba, se reordena para que cada nodo-resumen
+    // pase a ir DESPUÉS de todos sus descendientes.
+    if (!subtotalsOnTop) {
+        items.sort((a, b) => {
+            const len = Math.min(a.deepest, b.deepest);
+            let samePrefix = true;
+            for (let i = 1; i <= len; i++) {
+                if (String(a.V[i]) !== String(b.V[i])) { samePrefix = false; break; }
+            }
+            if (samePrefix && a.deepest !== b.deepest) {
+                // Uno es ancestro (subtotal) del otro: el ancestro va DESPUÉS.
+                return a.deepest < b.deepest ? 1 : -1;
+            }
+            return a.oldId - b.oldId; // sin relación de parentesco directa: orden natural
+        });
     }
 
     // Excluidas: alguna de sus filas ancestro (p < profundidad propia) está contraída.
@@ -1404,6 +1427,41 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags) {
     });
 
     return { dict: dictOut, idMap, indicators };
+}
+
+/**
+ * Devuelve las propiedades del informe (nombre, suprimir ceros, subtotales
+ * arriba, sobrescribir formatos, autoajustar columnas), guardadas por el
+ * modal "Propiedades del informe" del taskpane en Office roaming settings.
+ * Accesible desde cualquier contexto (taskpane o commands.html/ribbon).
+ */
+function getDracoReportProperties() {
+    const defaults = {
+        reportName: "Report 001",
+        suppressZeroRows: false,
+        suppressZeroCols: false,
+        subtotalsOnTop: true,
+        overwriteFormats: true,
+        autoFitColumns: false
+    };
+    try {
+        const raw = Office.context.document.settings.get("draco_reportProperties");
+        if (!raw) return defaults;
+        const parsed = JSON.parse(raw);
+        return Object.assign({}, defaults, parsed);
+    } catch (e) {
+        console.warn("No se pudieron leer las propiedades del informe, se usan valores por defecto:", e);
+        return defaults;
+    }
+}
+
+// Construye el literal de fórmula EPM_VALUE("DIM","ATRIBUTO","VALOR","DISPLAY")
+// usado para "congelar" como texto editable las celdas de un eje marcado
+// como Estático (mismo formato que readRowDefinitions/readColumnDefinitions
+// ya saben leer para el flujo Fijo).
+function buildEpmValueFormula(dim, attr, text) {
+    const esc = (s) => String(s === null || s === undefined ? "" : s).replace(/"/g, '""');
+    return '=EPM_VALUE("' + esc(dim) + '","' + esc(attr) + '","' + esc(text) + '","' + esc(text) + '")';
 }
 
 // Convierte un número de columna (1-based) en letras de columna Excel ("A", "AB"...)
@@ -1582,13 +1640,28 @@ async function jsonTo3Matrices(context, json) {
     const totalDimFilas = ReportState.ColumnCount;
     const totalDimCols = ReportState.RowCount;
 
+    // Estático/Dinámico por eje (H12 filas, N12 columnas) y propiedades
+    // generales del informe (nombre, suprimir ceros, subtotales arriba,
+    // sobrescribir formatos...), guardadas desde el taskpane.
+    const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
+    const colsStatic = String(cellValue(editReportGrid, 12, 14)).trim().toUpperCase() === "X";
+    const reportProps = getDracoReportProperties();
+
     // Precalcular una sola vez el flag (NIVEL) de cada posición del eje,
     // en vez de releerlo de EDIT_REPORT en cada iteración de cada ROW_ID/COLUMN_ID.
     const flagsFilas = [];
-    for (let i = 1; i <= totalDimFilas; i++) flagsFilas[i] = Number(cellValue(editReportGrid, i + 14, 10)); // J
+    const fieldsFilas = []; // {dim, attr} por posición — solo hace falta si el eje es Estático (fórmulas EPM_VALUE)
+    for (let i = 1; i <= totalDimFilas; i++) {
+        flagsFilas[i] = Number(cellValue(editReportGrid, i + 14, 10)); // J
+        fieldsFilas[i] = { dim: cellValue(editReportGrid, i + 14, 8), attr: cellValue(editReportGrid, i + 14, 9) }; // H, I
+    }
 
     const flagsColumnas = [];
-    for (let i = 1; i <= totalDimCols; i++) flagsColumnas[i] = Number(cellValue(editReportGrid, i + 14, 16)); // P
+    const fieldsColumnas = [];
+    for (let i = 1; i <= totalDimCols; i++) {
+        flagsColumnas[i] = Number(cellValue(editReportGrid, i + 14, 16)); // P
+        fieldsColumnas[i] = { dim: cellValue(editReportGrid, i + 14, 14), attr: cellValue(editReportGrid, i + 14, 15) }; // N, O
+    }
 
     // ---- Expandir/Contraer: si el eje (misma lista de campos) no ha
     // cambiado desde el último refresco, se respeta qué nodos estaban
@@ -1598,8 +1671,34 @@ async function jsonTo3Matrices(context, json) {
     resetDracoCollapseIfAxisChanged("rows", rowsSignature);
     resetDracoCollapseIfAxisChanged("cols", colsSignature);
 
-    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, DracoCollapseState.rows.collapsed, flagsFilas);
-    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, DracoCollapseState.cols.collapsed, flagsColumnas);
+    // "Suprimir ceros en filas/columnas" (propiedades del informe): se quita
+    // del diccionario, ANTES de compactar, cualquier ROW_ID/COLUMN_ID cuyo
+    // valor sea siempre cero (o vacío) en todo el FACT.
+    if (reportProps.suppressZeroRows || reportProps.suppressZeroCols) {
+        const rowsWithValue = new Set();
+        const colsWithValue = new Set();
+        for (let i = 0; i < filas; i++) {
+            const f = fact[i];
+            const n = Number(f[totalCampos - 1]);
+            if (!isNaN(n) && n !== 0) {
+                rowsWithValue.add(String(f[0]));
+                colsWithValue.add(String(f[1]));
+            }
+        }
+        if (reportProps.suppressZeroRows) {
+            for (const k of Array.from(rowDict.keys())) {
+                if (!rowsWithValue.has(String(rowDict.get(k)[0]))) rowDict.delete(k);
+            }
+        }
+        if (reportProps.suppressZeroCols) {
+            for (const k of Array.from(colDict.keys())) {
+                if (!colsWithValue.has(String(colDict.get(k)[0]))) colDict.delete(k);
+            }
+        }
+    }
+
+    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, DracoCollapseState.rows.collapsed, flagsFilas, { subtotalsOnTop: reportProps.subtotalsOnTop });
+    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, DracoCollapseState.cols.collapsed, flagsColumnas, { subtotalsOnTop: reportProps.subtotalsOnTop });
 
     console.log("jsonTo3Matrices diagnóstico:", {
         totalCampos, filas,
@@ -1607,6 +1706,7 @@ async function jsonTo3Matrices(context, json) {
         H10: cellValue(editReportGrid, 10, 8), N10: cellValue(editReportGrid, 10, 14),
         RRows, RCols, rowsOffRow, rowsOffCol, colsOffRow, colsOffCol,
         totalDimFilas, totalDimCols,
+        rowsStatic, colsStatic, reportProps,
         rowDictSize: rowDict.size, colDictSize: colDict.size,
         filasVisibles: rowsFilter.dict.size, columnasVisibles: colsFilter.dict.size
     });
@@ -1679,16 +1779,24 @@ async function jsonTo3Matrices(context, json) {
                 const row = Number(V[0]) + rowsOffRow;
                 const col = iAux + rowsOffCol;
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
+                const text = coerceCellLiteral(V[i]);
+                // Eje Estático: se escribe como fórmula EPM_VALUE editable
+                // (mismo formato que lee el flujo Fijo), no como texto plano.
+                const cellVal = rowsStatic
+                    ? buildEpmValueFormula(fieldsFilas[i].dim, fieldsFilas[i].attr, text)
+                    : text;
                 // Sobrescribe si ya había una entrada (mismo comportamiento que
                 // el bucle secuencial original: el último nivel no-nulo gana).
-                filasCells.set(row + "_" + col, { row, col, value: coerceCellLiteral(V[i]), indent, field: iAux });
+                filasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux });
             }
         }
     }
 
     // Fusionar el indicador +/- en la misma celda del nivel (nodos con
     // hijos), en vez de una columna aparte: "− España" / "+ España".
-    {
+    // No aplica si el eje es Estático (esas celdas ya son fórmulas EPM_VALUE
+    // editables a mano; anteponer un glifo de texto las rompería).
+    if (!rowsStatic) {
         const byLogicalKey = new Map(rowsFilter.indicators.map(it => [it.newId + "_" + it.field, it]));
         for (const [physKey, cell] of filasCells) {
             const newId = cell.row - rowsOffRow;
@@ -1702,7 +1810,9 @@ async function jsonTo3Matrices(context, json) {
     }
 
     await writeCellBlock(context, sheet, filasCells);
-    await writeIndentAndColorRuns(context, sheet, filasCells, "col", rowsOffCol);
+    if (reportProps.overwriteFormats) {
+        await writeIndentAndColorRuns(context, sheet, filasCells, "col", rowsOffCol);
+    }
 
     /* -------------------------------------------------------------
      * 3) COLUMNAS — análogo a FILAS
@@ -1721,13 +1831,18 @@ async function jsonTo3Matrices(context, json) {
                 const row = iAux + colsOffRow;
                 const col = Number(V[0]) + colsOffCol;
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
-                columnasCells.set(row + "_" + col, { row, col, value: coerceCellLiteral(V[i]), indent, field: iAux });
+                const text = coerceCellLiteral(V[i]);
+                const cellVal = colsStatic
+                    ? buildEpmValueFormula(fieldsColumnas[i].dim, fieldsColumnas[i].attr, text)
+                    : text;
+                columnasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux });
             }
         }
     }
 
-    // Igual que en FILAS: el glifo +/- se fusiona en la propia celda.
-    {
+    // Igual que en FILAS: el glifo +/- se fusiona en la propia celda
+    // (salvo eje Estático, ver comentario arriba).
+    if (!colsStatic) {
         const byLogicalKey = new Map(colsFilter.indicators.map(it => [it.newId + "_" + it.field, it]));
         for (const [physKey, cell] of columnasCells) {
             const newId = cell.col - colsOffCol;
@@ -1741,14 +1856,19 @@ async function jsonTo3Matrices(context, json) {
     }
 
     await writeCellBlock(context, sheet, columnasCells);
-    await writeIndentAndColorRuns(context, sheet, columnasCells, "row", colsOffRow);
+    if (reportProps.overwriteFormats) {
+        await writeIndentAndColorRuns(context, sheet, columnasCells, "row", colsOffRow);
+    }
 
     /* -------------------------------------------------------------
      * 4) RANGOS CON NOMBRE Draco_001_Rows / Draco_001_Cols / Draco_001_Values
-     *    + formato general (Segoe UI 9, número en Values, bordes finos)
+     *    + formato general (Segoe UI 9, número en Values, bordes finos),
+     *    salvo que "Sobrescribir formatos" esté desactivado en las
+     *    propiedades del informe (entonces solo se (re)definen los rangos).
      * ----------------------------------------------------------- */
     await applyDracoNamedRanges(context, sheet, {
-        RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId
+        RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId,
+        applyVisualFormat: reportProps.overwriteFormats
     });
 
     /* -------------------------------------------------------------
@@ -1760,6 +1880,16 @@ async function jsonTo3Matrices(context, json) {
     // 6) Registrar (una sola vez por sesión) el listener de clic que
     //    resuelve los indicadores +/- pintados arriba.
     await registerDracoSelectionHandler(context, sheet);
+
+    // 7) Autoajustar ancho de columnas (propiedades del informe), si procede.
+    if (reportProps.autoFitColumns) {
+        try {
+            sheet.getUsedRange().format.autofitColumns();
+            await context.sync();
+        } catch (e) {
+            console.warn("No se pudo autoajustar el ancho de columnas:", e);
+        }
+    }
 
     console.log("jsonTo3Matrices: pintado OK ->", {
         factCeldas: factCells.size, filasCeldas: filasCells.size, columnasCeldas: columnasCells.size,
@@ -1883,7 +2013,8 @@ async function clearDracoNamedRanges(context) {
  * RGB(13,23,42) alrededor de cada uno de los 3 rangos.
  */
 async function applyDracoNamedRanges(context, sheet, dims) {
-    const { RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId } = dims;
+    const { RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId, applyVisualFormat } = dims;
+    const doFormat = applyVisualFormat !== false; // por defecto, sí formatear (comportamiento previo)
 
     if (maxRowId <= 0 || maxColId <= 0 || totalDimFilas <= 0 || totalDimCols <= 0) {
         // No hay datos suficientes para definir una tabla: no se crean rangos.
@@ -1894,50 +2025,56 @@ async function applyDracoNamedRanges(context, sheet, dims) {
     const colsRange = sheet.getRangeByIndexes(RCols.row - 1, RCols.col - 1, totalDimCols, maxColId);
     const valuesRange = sheet.getRangeByIndexes(RRows.row - 1, RCols.col - 1, maxRowId, maxColId);
 
-    // ---- Fuente Segoe UI 9 en los tres rangos ----
-    for (const r of [rowsRange, colsRange, valuesRange]) {
-        r.format.font.name = DRACO_FONT_NAME;
-        r.format.font.size = DRACO_FONT_SIZE;
-    }
-
-    // ---- Valores: 2 decimales + separador de miles, centrado ----
-    valuesRange.numberFormat = [["#,##0.00"]];
-    valuesRange.format.horizontalAlignment = Excel.HorizontalAlignment.center;
-
-    // ---- Bordes: primero se elimina cualquier borde existente del rango
-    //      (externo + interior, restos de refrescos anteriores con otra
-    //      forma/tamaño de tabla) y SOLO DESPUÉS se pinta el borde exterior
-    //      fino nuevo. Hacerlo en el mismo lote sin sync intermedio hace
-    //      que Excel no aplique bien el cambio, así que se separan en dos
-    //      pasadas con su propio context.sync().
-    const ALL_BORDER_EDGES = [
-        Excel.BorderIndex.edgeTop, Excel.BorderIndex.edgeBottom,
-        Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight,
-        Excel.BorderIndex.insideHorizontal, Excel.BorderIndex.insideVertical
-    ];
-    const OUTER_BORDER_EDGES = [
-        Excel.BorderIndex.edgeTop, Excel.BorderIndex.edgeBottom,
-        Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight
-    ];
-
-    // Pasada 1: quitar el borde del rango por completo.
-    for (const r of [rowsRange, colsRange, valuesRange]) {
-        for (const edge of ALL_BORDER_EDGES) {
-            r.format.borders.getItem(edge).style = Excel.BorderLineStyle.none;
+    // "Sobrescribir formatos" (propiedades del informe) desactivado: se
+    // conservan el color/fuente/bordes que el usuario haya tocado a mano,
+    // y solo se (re)definen los 3 rangos con nombre para que apunten al
+    // tamaño actual de la tabla.
+    if (doFormat) {
+        // ---- Fuente Segoe UI 9 en los tres rangos ----
+        for (const r of [rowsRange, colsRange, valuesRange]) {
+            r.format.font.name = DRACO_FONT_NAME;
+            r.format.font.size = DRACO_FONT_SIZE;
         }
-    }
-    await context.sync();
 
-    // Pasada 2: pintar el borde exterior fino, color RGB(13,23,42).
-    for (const r of [rowsRange, colsRange, valuesRange]) {
-        for (const edge of OUTER_BORDER_EDGES) {
-            const border = r.format.borders.getItem(edge);
-            border.style = Excel.BorderLineStyle.continuous;
-            border.weight = Excel.BorderWeight.thin;
-            border.color = DRACO_BORDER_COLOR;
+        // ---- Valores: 2 decimales + separador de miles, centrado ----
+        valuesRange.numberFormat = [["#,##0.00"]];
+        valuesRange.format.horizontalAlignment = Excel.HorizontalAlignment.center;
+
+        // ---- Bordes: primero se elimina cualquier borde existente del rango
+        //      (externo + interior, restos de refrescos anteriores con otra
+        //      forma/tamaño de tabla) y SOLO DESPUÉS se pinta el borde exterior
+        //      fino nuevo. Hacerlo en el mismo lote sin sync intermedio hace
+        //      que Excel no aplique bien el cambio, así que se separan en dos
+        //      pasadas con su propio context.sync().
+        const ALL_BORDER_EDGES = [
+            Excel.BorderIndex.edgeTop, Excel.BorderIndex.edgeBottom,
+            Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight,
+            Excel.BorderIndex.insideHorizontal, Excel.BorderIndex.insideVertical
+        ];
+        const OUTER_BORDER_EDGES = [
+            Excel.BorderIndex.edgeTop, Excel.BorderIndex.edgeBottom,
+            Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight
+        ];
+
+        // Pasada 1: quitar el borde del rango por completo.
+        for (const r of [rowsRange, colsRange, valuesRange]) {
+            for (const edge of ALL_BORDER_EDGES) {
+                r.format.borders.getItem(edge).style = Excel.BorderLineStyle.none;
+            }
         }
+        await context.sync();
+
+        // Pasada 2: pintar el borde exterior fino, color RGB(13,23,42).
+        for (const r of [rowsRange, colsRange, valuesRange]) {
+            for (const edge of OUTER_BORDER_EDGES) {
+                const border = r.format.borders.getItem(edge);
+                border.style = Excel.BorderLineStyle.continuous;
+                border.weight = Excel.BorderWeight.thin;
+                border.color = DRACO_BORDER_COLOR;
+            }
+        }
+        await context.sync();
     }
-    await context.sync();
 
     // ---- (Re)definir los nombres apuntando a los rangos recién pintados ----
     const defs = [
@@ -2129,7 +2266,10 @@ async function actualizar(event) {
 
 // Exponer las funciones de actualización para poder llamarlas también desde
 // el taskpane (p.ej. tras guardar el diseño), no solo desde el ribbon.
-window.ReportActions = { actualizar, actualizarInforme, actualizarInformeFixed };
+window.ReportActions = {
+    actualizar, actualizarInforme, actualizarInformeFixed,
+    toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions
+};
 
 
 
@@ -2146,6 +2286,94 @@ function comingSoon(event) {
     }
 }
 
+/* ---------------------------------------------------------------------
+ * Botones del ribbon "tipo pulsador": Pausar refresco / Reconocimiento
+ * de miembros. Por ahora SOLO guardan su estado (Office roaming
+ * settings, visible desde cualquier contexto: ribbon y taskpane); no hay
+ * ninguna lógica de negocio todavía detrás de ellos.
+ * ------------------------------------------------------------------- */
+function toggleDracoSetting(key) {
+    const settings = Office.context.document.settings;
+    const current = !!settings.get(key);
+    settings.set(key, !current);
+    return new Promise((resolve) => settings.saveAsync(() => resolve(!current)));
+}
+
+async function requestRibbonLabelUpdate(controlId, label) {
+    try {
+        if (Office.ribbon && Office.ribbon.requestUpdate) {
+            await Office.ribbon.requestUpdate({
+                tabs: [{
+                    id: "DracoBITab",
+                    groups: [{ id: "GroupOpcionesInforme", controls: [{ id: controlId, label }] }]
+                }]
+            });
+        }
+    } catch (e) {
+        console.warn("No se pudo actualizar la etiqueta del ribbon (" + controlId + "):", e);
+    }
+}
+
+async function toggleRefreshPaused(event) {
+    try {
+        const nowOn = await toggleDracoSetting("draco_refreshPaused");
+        console.log("Pausar refresco:", nowOn ? "activado" : "desactivado");
+        await requestRibbonLabelUpdate("BtnPausarRefresco", nowOn ? "Refresco: Pausado" : "Pausar refresco");
+    } catch (error) {
+        console.error("Error al alternar 'Pausar refresco':", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+async function toggleMemberRecognition(event) {
+    try {
+        const nowOn = await toggleDracoSetting("draco_memberRecognition");
+        console.log("Reconocimiento de miembros:", nowOn ? "activado" : "desactivado");
+        await requestRibbonLabelUpdate("BtnReconocimientoMiembros", nowOn ? "Miembros: activado" : "Reconoc. de miembros");
+    } catch (error) {
+        console.error("Error al alternar 'Reconocimiento de miembros':", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+/**
+ * Botones del ribbon "Propiedades del informe" y "Opciones de campo":
+ * abren/traen al frente el taskpane y le dejan marcada una acción
+ * pendiente en Office roaming settings; taskpane.js la recoge al arrancar
+ * (o al detectar el cambio de settings) y abre el modal/panel correspondiente.
+ */
+async function openReportProperties(event) {
+    try {
+        const settings = Office.context.document.settings;
+        settings.set("draco_pendingAction", "properties");
+        await new Promise((resolve) => settings.saveAsync(resolve));
+        if (Office.addin && Office.addin.showAsTaskpane) {
+            await Office.addin.showAsTaskpane();
+        }
+    } catch (error) {
+        console.error("Error al abrir Propiedades del informe:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+async function openFieldOptions(event) {
+    try {
+        const settings = Office.context.document.settings;
+        settings.set("draco_pendingAction", "fieldOptions");
+        await new Promise((resolve) => settings.saveAsync(resolve));
+        if (Office.addin && Office.addin.showAsTaskpane) {
+            await Office.addin.showAsTaskpane();
+        }
+    } catch (error) {
+        console.error("Error al abrir Opciones de campo:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
 // Nota: este fichero se carga tanto en el runtime de comandos (commands.html)
 // como, ahora, dentro del propio taskpane (taskpane.html), para poder
 // disparar Actualizar()/ActualizarInforme() (y por tanto jsonTo3Matrices)
@@ -2159,6 +2387,10 @@ try {
     Office.actions.associate("actualizarInforme", actualizarInforme);
     Office.actions.associate("actualizar", actualizar);
     Office.actions.associate("comingSoon", comingSoon);
+    Office.actions.associate("toggleRefreshPaused", toggleRefreshPaused);
+    Office.actions.associate("toggleMemberRecognition", toggleMemberRecognition);
+    Office.actions.associate("openReportProperties", openReportProperties);
+    Office.actions.associate("openFieldOptions", openFieldOptions);
 } catch (e) {
     console.warn("Office.actions.associate no disponible en este contexto:", e);
 }

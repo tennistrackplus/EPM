@@ -108,8 +108,26 @@ const TaskPaneApp = {
         rows: [],
         columns: [],
         rowsStatic: false,
-        colsStatic: false
+        colsStatic: false,
+        // Opciones por campo (mostrar totales, orden, expandir hasta nivel,
+        // niveles visibles, formato de medida...), clave "zona|dim|nombre".
+        fieldOptions: {}
     },
+
+    // Propiedades generales del informe (modal "Propiedades del informe"),
+    // guardadas en Office roaming settings (visibles también desde el ribbon).
+    reportProperties: {
+        reportName: "Report 001",
+        suppressZeroRows: false,
+        suppressZeroCols: false,
+        subtotalsOnTop: true,
+        overwriteFormats: true,
+        autoFitColumns: false
+    },
+
+    // Campo actualmente seleccionado en el panel "Opciones de campo"
+    // ({ zoneId, dimension, name, isHierarchy }) o null si no hay ninguno.
+    selectedFieldForOptions: null,
 
     /* -------------------------------------------------------------
      * Autoguardado + autoactualización: cada cambio estructural en el
@@ -128,6 +146,21 @@ const TaskPaneApp = {
         if (el) el.innerText = text;
     },
 
+    // Payload común para SaveEditReportDesign (autoguardado, guardado manual
+    // y el guardado "solo guardar, sin actualizar" del botón Estático).
+    collectDesignPayload() {
+        return {
+            filters: this.state.filters,
+            rows: this.state.rows,
+            columns: this.state.columns,
+            rowsStatic: this.state.rowsStatic,
+            colsStatic: this.state.colsStatic,
+            fieldOptions: this.state.fieldOptions,
+            rrAddress: RangeAxis.addressOf("rr"),
+            rcAddress: RangeAxis.addressOf("rc")
+        };
+    },
+
     scheduleAutoUpdate() {
         this.setAutoStatus("Cambios pendientes…");
         if (this.autoRefreshTimer) clearTimeout(this.autoRefreshTimer);
@@ -143,15 +176,7 @@ const TaskPaneApp = {
 
         try {
             this.setAutoStatus("Guardando…");
-            await window.ExcelService.saveEditReportDesign({
-                filters: this.state.filters,
-                rows: this.state.rows,
-                columns: this.state.columns,
-                rowsStatic: this.state.rowsStatic,
-                colsStatic: this.state.colsStatic,
-                rrAddress: RangeAxis.addressOf("rr"),
-                rcAddress: RangeAxis.addressOf("rc")
-            });
+            await window.ExcelService.saveEditReportDesign(this.collectDesignPayload());
 
             if (window.ReportActions && typeof window.ReportActions.actualizar === "function") {
                 this.setAutoStatus("Actualizando…");
@@ -175,13 +200,33 @@ const TaskPaneApp = {
         }
     },
 
+    // Guarda el diseño SIN disparar Actualizar() (BigQuery). Se usa al
+    // marcar/desmarcar Estático: el propio botón pide explícitamente que
+    // eso no dispare un refresco automático.
+    async saveDesignOnly() {
+        try {
+            this.setAutoStatus("Guardando…");
+            await window.ExcelService.saveEditReportDesign(this.collectDesignPayload());
+            this.setAutoStatus("Guardado ✓");
+            setTimeout(() => {
+                const el = document.getElementById("autoStatus");
+                if (el && el.innerText === "Guardado ✓") el.innerText = "";
+            }, 1500);
+        } catch (err) {
+            console.error("Error al guardar (sin actualizar):", err);
+            this.setAutoStatus("Error al guardar");
+        }
+    },
+
     async init() {
         if (typeof FilterModal !== "undefined" && FilterModal.init) {
             FilterModal.init();
         }
         this.bindEvents();
+        this.loadReportPropertiesFromSettings();
         await this.loadFields();
         await this.loadDesignFromSheet();
+        await this.handlePendingRibbonAction();
     },
 
     bindEvents() {
@@ -194,7 +239,11 @@ const TaskPaneApp = {
         const btnSave = document.getElementById("btnSaveDesign");
         if (btnSave) btnSave.addEventListener("click", () => this.saveDesign());
 
-        // Checkboxes Estático / Dinámico (Checkrow / CheckCol del VBA)
+        // Checkboxes Estático / Dinámico (Checkrow / CheckCol del VBA): NO
+        // disparan Actualizar() (solo guardan el flag), sombrean la zona y
+        // deshabilitan el drag&drop mientras esté marcado. La conversión de
+        // ese eje a fórmulas EPM_VALUE ocurre en el propio pintado del
+        // próximo refresco real (jsonTo3Matrices), no aquí.
         const chkRows = document.getElementById("chkAsymmetricRows");
         const chkCols = document.getElementById("chkAsymmetricCols");
 
@@ -202,14 +251,16 @@ const TaskPaneApp = {
             chkRows.addEventListener("change", (e) => {
                 this.state.rowsStatic = e.target.checked;
                 this.updateStaticLabel("rows");
-                this.scheduleAutoUpdate();
+                this.setZoneLocked("rows", this.state.rowsStatic);
+                this.saveDesignOnly();
             });
         }
         if (chkCols) {
             chkCols.addEventListener("change", (e) => {
                 this.state.colsStatic = e.target.checked;
                 this.updateStaticLabel("cols");
-                this.scheduleAutoUpdate();
+                this.setZoneLocked("columns", this.state.colsStatic);
+                this.saveDesignOnly();
             });
         }
 
@@ -232,6 +283,39 @@ const TaskPaneApp = {
             zone.addEventListener("dragleave", (e) => this.handleDragLeave(e));
             zone.addEventListener("drop", (e) => this.handleDrop(e));
         });
+
+        // Botón "Propiedades del informe"
+        const btnProps = document.getElementById("btnReportProperties");
+        if (btnProps) btnProps.addEventListener("click", () => this.openReportPropertiesModal());
+
+        const btnCancelProps = document.getElementById("btnCancelProperties");
+        if (btnCancelProps) btnCancelProps.addEventListener("click", () => this.closeReportPropertiesModal());
+
+        const btnCloseProps = document.getElementById("closePropertiesModalBtn");
+        if (btnCloseProps) btnCloseProps.addEventListener("click", () => this.closeReportPropertiesModal());
+
+        const btnSaveProps = document.getElementById("btnSaveProperties");
+        if (btnSaveProps) btnSaveProps.addEventListener("click", () => this.saveReportPropertiesFromModal());
+
+        // Botón "Opciones de campo" (toggle del panel derecho)
+        const btnFieldOptions = document.getElementById("btnFieldOptions");
+        if (btnFieldOptions) btnFieldOptions.addEventListener("click", () => this.toggleFieldOptionsPanel());
+    },
+
+    /* -------------------------------------------------------------
+     * Eje Estático: sombrea la zona y desactiva el drag&drop (tanto
+     * soltar campos nuevos como arrastrar/quitar los que ya hay).
+     * ----------------------------------------------------------- */
+    setZoneLocked(zoneId, locked) {
+        const zone = document.querySelector(`.zone-card[data-zone="${zoneId}"]`);
+        if (!zone) return;
+        zone.classList.toggle("zone-locked", locked);
+        zone.querySelectorAll(".dropped-tag").forEach(tag => { tag.draggable = !locked; });
+    },
+
+    isZoneLocked(zoneId) {
+        const zone = document.querySelector(`.zone-card[data-zone="${zoneId}"]`);
+        return !!(zone && zone.classList.contains("zone-locked"));
     },
 
     bindArrow(id, handler) {
@@ -273,16 +357,19 @@ const TaskPaneApp = {
             this.state.columns = design.columns.map(c => ({ dimension: c.dimension, name: c.name, isHierarchy: c.isHierarchy }));
             this.state.rowsStatic = design.rowsStatic;
             this.state.colsStatic = design.colsStatic;
+            this.state.fieldOptions = design.fieldOptions || {};
 
             RangeAxis.loadFromAddresses(design.rrAddress, design.rcAddress);
 
-            // Pintar checkboxes
+            // Pintar checkboxes + sombreado/bloqueo si el eje ya venía Estático
             const chkRows = document.getElementById("chkAsymmetricRows");
             const chkCols = document.getElementById("chkAsymmetricCols");
             if (chkRows) chkRows.checked = this.state.rowsStatic;
             if (chkCols) chkCols.checked = this.state.colsStatic;
             this.updateStaticLabel("rows");
             this.updateStaticLabel("cols");
+            this.setZoneLocked("rows", this.state.rowsStatic);
+            this.setZoneLocked("columns", this.state.colsStatic);
 
             this.refreshRangeLabels();
 
@@ -294,6 +381,11 @@ const TaskPaneApp = {
             this.state.filters.forEach(f => this.renderTag(filtersContent, "filters", f));
             this.state.rows.forEach(r => this.renderTag(rowsContent, "rows", r));
             this.state.columns.forEach(c => this.renderTag(colsContent, "columns", c));
+
+            // El bloqueo de arrastre se aplica de nuevo aquí porque renderTag
+            // crea las etiquetas con draggable=true por defecto.
+            this.setZoneLocked("rows", this.state.rowsStatic);
+            this.setZoneLocked("columns", this.state.colsStatic);
 
         } catch (err) {
             console.error("Error cargando el diseño desde EDIT_REPORT:", err);
@@ -317,15 +409,7 @@ const TaskPaneApp = {
         try {
             if (btn) { btn.disabled = true; btn.innerText = "Guardando…"; }
 
-            await window.ExcelService.saveEditReportDesign({
-                filters: this.state.filters,
-                rows: this.state.rows,
-                columns: this.state.columns,
-                rowsStatic: this.state.rowsStatic,
-                colsStatic: this.state.colsStatic,
-                rrAddress: RangeAxis.addressOf("rr"),
-                rcAddress: RangeAxis.addressOf("rc")
-            });
+            await window.ExcelService.saveEditReportDesign(this.collectDesignPayload());
 
             if (btn) btn.innerText = "Guardado ✓";
         } catch (err) {
@@ -428,6 +512,8 @@ const TaskPaneApp = {
      * Drag & drop entre zonas
      * ----------------------------------------------------------- */
     handleDragOver(e) {
+        const zoneId = e.currentTarget.getAttribute("data-zone");
+        if (this.isZoneLocked(zoneId)) return; // eje Estático: no admite drop
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
         e.currentTarget.classList.add("drag-over");
@@ -438,8 +524,11 @@ const TaskPaneApp = {
     },
 
     handleDrop(e) {
-        e.preventDefault();
         const dropzoneBox = e.currentTarget;
+        const zoneId = dropzoneBox.getAttribute("data-zone");
+        if (this.isZoneLocked(zoneId)) return; // eje Estático: no admite drop
+
+        e.preventDefault();
         dropzoneBox.classList.remove("drag-over");
 
         if (!this.draggedElementData) {
@@ -454,10 +543,16 @@ const TaskPaneApp = {
 
         const { data, sourceTag, sourceZone } = this.draggedElementData;
         const targetContent = dropzoneBox.querySelector(".dropzone-content");
-        const zoneId = dropzoneBox.getAttribute("data-zone");
 
         if (sourceZone === zoneId) {
             // Mismo eje: no hacer nada
+            this.draggedElementData = null;
+            return;
+        }
+
+        // El eje de origen también puede estar bloqueado (no se puede sacar
+        // un campo de un eje Estático arrastrándolo a otro sitio).
+        if (sourceZone && this.isZoneLocked(sourceZone)) {
             this.draggedElementData = null;
             return;
         }
@@ -575,6 +670,336 @@ const TaskPaneApp = {
             this.removeFromState(zoneId, { dim: entry.dimension, name: entry.name });
         });
 
+        // Clic (simple) sobre el campo: abre/actualiza el panel "Opciones de
+        // campo" con los controles de ESE campo (medida o dimensión).
+        tag.classList.add("clickable-for-options");
+        tag.addEventListener("click", (e) => {
+            if (e.target.closest(".dropped-tag-remove")) return;
+            this.selectFieldForOptions(zoneId, entry);
+        });
+
         container.appendChild(tag);
+    },
+
+    /* =================================================================
+     * PROPIEDADES DEL INFORME (modal): nombre del informe, suprimir
+     * ceros en filas/columnas, subtotales arriba, sobrescribir formatos,
+     * autoajustar columnas. Se guardan en Office roaming settings, para
+     * que también las pueda leer commands.js (ribbon y jsonTo3Matrices).
+     * ================================================================= */
+    loadReportPropertiesFromSettings() {
+        try {
+            const raw = Office.context.document.settings.get("draco_reportProperties");
+            if (raw) {
+                this.reportProperties = Object.assign({}, this.reportProperties, JSON.parse(raw));
+            }
+        } catch (err) {
+            console.warn("No se pudieron leer las propiedades del informe:", err);
+        }
+    },
+
+    async saveReportPropertiesToSettings() {
+        const settings = Office.context.document.settings;
+        settings.set("draco_reportProperties", JSON.stringify(this.reportProperties));
+        await new Promise((resolve) => settings.saveAsync(resolve));
+    },
+
+    openReportPropertiesModal() {
+        const modal = document.getElementById("reportPropertiesModal");
+        if (!modal) return;
+
+        document.getElementById("propReportName").value = this.reportProperties.reportName || "Report 001";
+        document.getElementById("propSuppressZeroRows").checked = !!this.reportProperties.suppressZeroRows;
+        document.getElementById("propSuppressZeroCols").checked = !!this.reportProperties.suppressZeroCols;
+        document.getElementById("propSubtotalsOnTop").checked = !!this.reportProperties.subtotalsOnTop;
+        document.getElementById("propOverwriteFormats").checked = !!this.reportProperties.overwriteFormats;
+        document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
+
+        modal.style.display = "flex";
+    },
+
+    closeReportPropertiesModal() {
+        const modal = document.getElementById("reportPropertiesModal");
+        if (modal) modal.style.display = "none";
+    },
+
+    async saveReportPropertiesFromModal() {
+        this.reportProperties = {
+            reportName: (document.getElementById("propReportName").value || "Report 001").trim(),
+            suppressZeroRows: document.getElementById("propSuppressZeroRows").checked,
+            suppressZeroCols: document.getElementById("propSuppressZeroCols").checked,
+            subtotalsOnTop: document.getElementById("propSubtotalsOnTop").checked,
+            overwriteFormats: document.getElementById("propOverwriteFormats").checked,
+            autoFitColumns: document.getElementById("propAutoFitColumns").checked
+        };
+
+        const btn = document.getElementById("btnSaveProperties");
+        try {
+            if (btn) { btn.disabled = true; btn.innerText = "Guardando…"; }
+            await this.saveReportPropertiesToSettings();
+            this.closeReportPropertiesModal();
+            // Estas propiedades las lee jsonTo3Matrices en cada refresco real;
+            // no hace falta lanzar uno aquí, solo quedan guardadas para el próximo.
+        } catch (err) {
+            console.error("Error al guardar las propiedades del informe:", err);
+            alert("Error al guardar: " + (err.message || err));
+        } finally {
+            if (btn) { btn.disabled = false; btn.innerText = "Guardar"; }
+        }
+    },
+
+    /* =================================================================
+     * ACCIÓN PENDIENTE DESDE EL RIBBON: los botones "Propiedades del
+     * informe" y "Opciones de campo" del ribbon dejan marcada una acción
+     * en Office roaming settings y abren/traen al frente el taskpane;
+     * aquí se recoge esa marca al arrancar y se abre lo que corresponda.
+     * ================================================================= */
+    async handlePendingRibbonAction() {
+        try {
+            const settings = Office.context.document.settings;
+            const pending = settings.get("draco_pendingAction");
+            if (!pending) return;
+
+            settings.remove("draco_pendingAction");
+            await new Promise((resolve) => settings.saveAsync(resolve));
+
+            if (pending === "properties") {
+                this.openReportPropertiesModal();
+            } else if (pending === "fieldOptions") {
+                this.setFieldOptionsPanelOpen(true);
+            }
+        } catch (err) {
+            console.warn("No se pudo procesar la acción pendiente del ribbon:", err);
+        }
+    },
+
+    /* =================================================================
+     * PANEL "OPCIONES DE CAMPO" (columna derecha, solo estético: al
+     * mostrarse amplía el ancho del cuerpo del taskpane, al ocultarse lo
+     * reduce). Un clic en un campo de Filtros/Filas/Columnas muestra sus
+     * opciones aquí; el propio panel no dispara ningún refresco.
+     * ================================================================= */
+    isFieldOptionsPanelOpen() {
+        const container = document.querySelector(".taskpane-container");
+        return !!(container && container.classList.contains("field-options-open"));
+    },
+
+    setFieldOptionsPanelOpen(open) {
+        const container = document.querySelector(".taskpane-container");
+        const btn = document.getElementById("btnFieldOptions");
+        if (container) container.classList.toggle("field-options-open", open);
+        if (btn) btn.classList.toggle("toggle-active", open);
+        if (!open) this.selectedFieldForOptions = null;
+    },
+
+    toggleFieldOptionsPanel() {
+        this.setFieldOptionsPanelOpen(!this.isFieldOptionsPanelOpen());
+    },
+
+    fieldOptionsKey(zoneId, entry) {
+        return `${zoneId}|${entry.dimension}|${entry.name}`;
+    },
+
+    getFieldOptions(zoneId, entry) {
+        const key = this.fieldOptionsKey(zoneId, entry);
+        const isMeasure = String(entry.dimension).toUpperCase() === "MEASURE";
+        const defaults = isMeasure
+            ? { numberFormat: "#,##0.00", decimalSeparator: ",", thousandsSeparator: ".", factor: 1, decimals: 2, aggregation: "SUM" }
+            : { showTotals: true, sortOrder: "none", expandToLevel: null, visibleLevels: null };
+        return Object.assign({}, defaults, this.state.fieldOptions[key] || {});
+    },
+
+    setFieldOptions(zoneId, entry, options) {
+        const key = this.fieldOptionsKey(zoneId, entry);
+        this.state.fieldOptions[key] = options;
+    },
+
+    async selectFieldForOptions(zoneId, entry) {
+        this.selectedFieldForOptions = { zoneId, dimension: entry.dimension, name: entry.name, isHierarchy: entry.isHierarchy };
+        this.setFieldOptionsPanelOpen(true);
+        await this.renderFieldOptionsBody(zoneId, entry);
+    },
+
+    async renderFieldOptionsBody(zoneId, entry) {
+        const body = document.getElementById("fieldOptionsBody");
+        if (!body) return;
+
+        const isMeasure = String(entry.dimension).toUpperCase() === "MEASURE";
+        const options = this.getFieldOptions(zoneId, entry);
+
+        body.innerHTML = "";
+
+        const nameEl = document.createElement("div");
+        nameEl.className = "field-options-field-name";
+        nameEl.innerText = `${entry.dimension}.${entry.name}`;
+        body.appendChild(nameEl);
+
+        if (isMeasure) {
+            body.appendChild(this.buildMeasureOptionsForm(zoneId, entry, options));
+        } else {
+            body.appendChild(this.buildDimensionOptionsForm(zoneId, entry, options));
+            if (entry.isHierarchy) {
+                const levelsBox = document.createElement("div");
+                levelsBox.className = "field-options-group";
+                levelsBox.innerHTML = `<div class="field-options-section-title">Jerarquía</div>
+                    <div class="field-options-empty" id="fieldOptionsLevelsLoading">Cargando niveles…</div>`;
+                body.appendChild(levelsBox);
+
+                try {
+                    const levels = await window.ExcelService.getHierarchyLevels(entry.dimension, entry.name);
+                    this.renderHierarchyLevelControls(levelsBox, zoneId, entry, options, levels);
+                } catch (err) {
+                    console.error("Error al leer los niveles de la jerarquía:", err);
+                    levelsBox.querySelector("#fieldOptionsLevelsLoading").innerText = "No se pudieron cargar los niveles.";
+                }
+            }
+        }
+    },
+
+    buildDimensionOptionsForm(zoneId, entry, options) {
+        const wrap = document.createElement("div");
+        wrap.className = "field-options-group";
+
+        wrap.innerHTML = `
+            <div class="field-options-section-title">General</div>
+            <label class="field-options-checkbox-row">
+                <input type="checkbox" id="optShowTotals" ${options.showTotals ? "checked" : ""}>
+                Mostrar totales
+            </label>
+            <label>
+                Ordenar
+                <select id="optSortOrder">
+                    <option value="none" ${options.sortOrder === "none" ? "selected" : ""}>Sin ordenar</option>
+                    <option value="asc" ${options.sortOrder === "asc" ? "selected" : ""}>Ascendente</option>
+                    <option value="desc" ${options.sortOrder === "desc" ? "selected" : ""}>Descendente</option>
+                </select>
+            </label>
+        `;
+
+        const persist = () => {
+            const current = this.getFieldOptions(zoneId, entry);
+            current.showTotals = wrap.querySelector("#optShowTotals").checked;
+            current.sortOrder = wrap.querySelector("#optSortOrder").value;
+            this.setFieldOptions(zoneId, entry, current);
+            this.scheduleAutoUpdate();
+        };
+
+        wrap.querySelector("#optShowTotals").addEventListener("change", persist);
+        wrap.querySelector("#optSortOrder").addEventListener("change", persist);
+
+        return wrap;
+    },
+
+    renderHierarchyLevelControls(container, zoneId, entry, options, levels) {
+        container.innerHTML = `<div class="field-options-section-title">Jerarquía</div>`;
+
+        if (!levels || levels.length === 0) {
+            const empty = document.createElement("div");
+            empty.className = "field-options-empty";
+            empty.innerText = "Esta jerarquía no tiene niveles definidos.";
+            container.appendChild(empty);
+            return;
+        }
+
+        const expandLabel = document.createElement("label");
+        expandLabel.innerHTML = `Expandir hasta nivel`;
+        const expandSelect = document.createElement("select");
+        expandSelect.id = "optExpandToLevel";
+        expandSelect.innerHTML = `<option value="">(todos)</option>` +
+            levels.map(l => `<option value="${l.nivel}" ${String(options.expandToLevel) === String(l.nivel) ? "selected" : ""}>Nivel ${l.nivel} — ${l.attribute}</option>`).join("");
+        expandLabel.appendChild(expandSelect);
+        container.appendChild(expandLabel);
+
+        const visibleLevels = Array.isArray(options.visibleLevels) ? options.visibleLevels : levels.map(l => l.nivel);
+
+        const levelsTitle = document.createElement("div");
+        levelsTitle.className = "field-options-section-title";
+        levelsTitle.style.marginTop = "6px";
+        levelsTitle.innerText = "Mostrar niveles";
+        container.appendChild(levelsTitle);
+
+        const levelsBox = document.createElement("div");
+        levelsBox.className = "field-options-levels";
+        levels.forEach(l => {
+            const row = document.createElement("label");
+            row.className = "field-options-checkbox-row";
+            row.innerHTML = `<input type="checkbox" data-nivel="${l.nivel}" ${visibleLevels.includes(l.nivel) ? "checked" : ""}> Nivel ${l.nivel} — ${l.attribute}`;
+            levelsBox.appendChild(row);
+        });
+        container.appendChild(levelsBox);
+
+        const persist = () => {
+            const current = this.getFieldOptions(zoneId, entry);
+            const val = expandSelect.value;
+            current.expandToLevel = val === "" ? null : Number(val);
+            current.visibleLevels = Array.from(levelsBox.querySelectorAll("input[type=checkbox]"))
+                .filter(cb => cb.checked)
+                .map(cb => Number(cb.dataset.nivel));
+            this.setFieldOptions(zoneId, entry, current);
+            this.scheduleAutoUpdate();
+        };
+
+        expandSelect.addEventListener("change", persist);
+        levelsBox.querySelectorAll("input[type=checkbox]").forEach(cb => cb.addEventListener("change", persist));
+    },
+
+    buildMeasureOptionsForm(zoneId, entry, options) {
+        const wrap = document.createElement("div");
+        wrap.className = "field-options-group";
+
+        wrap.innerHTML = `
+            <div class="field-options-section-title">Formato de número</div>
+            <label>
+                Formato
+                <select id="optNumberFormat">
+                    <option value="#,##0" ${options.numberFormat === "#,##0" ? "selected" : ""}>1.234 (sin decimales)</option>
+                    <option value="#,##0.00" ${options.numberFormat === "#,##0.00" ? "selected" : ""}>1.234,00</option>
+                    <option value="0.00%" ${options.numberFormat === "0.00%" ? "selected" : ""}>Porcentaje</option>
+                    <option value="#,##0.00 €" ${options.numberFormat === "#,##0.00 €" ? "selected" : ""}>Moneda (€)</option>
+                </select>
+            </label>
+            <label>
+                Separador decimal
+                <select id="optDecimalSeparator">
+                    <option value="," ${options.decimalSeparator === "," ? "selected" : ""}>Coma (,)</option>
+                    <option value="." ${options.decimalSeparator === "." ? "selected" : ""}>Punto (.)</option>
+                </select>
+            </label>
+            <label>
+                Nº de decimales
+                <input type="number" id="optDecimals" min="0" max="10" value="${options.decimals}">
+            </label>
+            <label>
+                Factor de escala
+                <select id="optFactor">
+                    <option value="1" ${Number(options.factor) === 1 ? "selected" : ""}>Unidades</option>
+                    <option value="1000" ${Number(options.factor) === 1000 ? "selected" : ""}>Miles</option>
+                    <option value="1000000" ${Number(options.factor) === 1000000 ? "selected" : ""}>Millones</option>
+                </select>
+            </label>
+            <div class="field-options-section-title">Agregación</div>
+            <label>
+                Función
+                <select id="optAggregation">
+                    ${["SUM", "AVG", "COUNT", "COUNT_DISTINCT", "MIN", "MAX"].map(a =>
+                        `<option value="${a}" ${options.aggregation === a ? "selected" : ""}>${a}</option>`).join("")}
+                </select>
+            </label>
+        `;
+
+        const persist = () => {
+            const current = this.getFieldOptions(zoneId, entry);
+            current.numberFormat = wrap.querySelector("#optNumberFormat").value;
+            current.decimalSeparator = wrap.querySelector("#optDecimalSeparator").value;
+            current.decimals = Number(wrap.querySelector("#optDecimals").value) || 0;
+            current.factor = Number(wrap.querySelector("#optFactor").value) || 1;
+            current.aggregation = wrap.querySelector("#optAggregation").value;
+            this.setFieldOptions(zoneId, entry, current);
+            this.scheduleAutoUpdate();
+        };
+
+        wrap.querySelectorAll("select, input").forEach(el => el.addEventListener("change", persist));
+
+        return wrap;
     }
 };

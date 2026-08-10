@@ -270,6 +270,32 @@ const ExcelService = {
         });
     },
 
+    /**
+     * Devuelve los niveles (nivel + nombre de atributo) de una jerarquía
+     * concreta, leídos de MODEL_HIER, para poder listarlos en el panel
+     * "Opciones de campo" (expandir hasta nivel / mostrar niveles).
+     */
+    async getHierarchyLevels(dimension, hierarchy) {
+        return await Excel.run(async (context) => {
+            const hierGrid = await getValuesGrid(context, "MODEL_HIER");
+            const lastRow = lastRowInColumnValues(hierGrid, 4);
+            const levels = [];
+
+            for (let R = 2; R <= lastRow; R++) {
+                if (String(cellValue(hierGrid, R, 4)).toUpperCase() === String(dimension).toUpperCase()
+                    && String(cellValue(hierGrid, R, 2)).toUpperCase() === String(hierarchy).toUpperCase()) {
+                    levels.push({
+                        nivel: Number(cellValue(hierGrid, R, 3)),
+                        attribute: String(cellValue(hierGrid, R, 5)).trim()
+                    });
+                }
+            }
+
+            levels.sort((a, b) => a.nivel - b.nivel);
+            return levels;
+        });
+    },
+
     async executeSQL(sql) {
         return await executeSQLBigQuery(sql);
     },
@@ -352,10 +378,22 @@ const ExcelService = {
             const rrAddress = String(cellValue(grid, 10, 8)).trim();
             const rcAddress = String(cellValue(grid, 10, 14)).trim();
 
+            // ---- Opciones por campo (mostrar totales, orden, expandir hasta
+            // nivel, niveles visibles, formato de medida...): un único JSON
+            // guardado en S1, clave "zona|dimension|nombre" -> objeto opciones.
+            let fieldOptions = {};
+            try {
+                const raw = String(cellValue(grid, 1, 19)).trim(); // S1
+                if (raw) fieldOptions = JSON.parse(raw);
+            } catch (e) {
+                console.warn("No se pudieron leer las opciones de campo (S1):", e);
+            }
+
             return {
                 filters, rows, columns,
                 rowsStatic, colsStatic,
-                rrAddress, rcAddress
+                rrAddress, rcAddress,
+                fieldOptions
             };
         });
     },
@@ -445,6 +483,9 @@ const ExcelService = {
             // ---- SaveRanges: H10 / N10 ----
             sheet.getRange("H10").values = [[state.rrAddress || ""]];
             sheet.getRange("N10").values = [[state.rcAddress || ""]];
+
+            // ---- Opciones por campo: JSON en S1 ----
+            sheet.getRange("S1").values = [[JSON.stringify(state.fieldOptions || {})]];
 
             await context.sync();
         });
