@@ -223,10 +223,34 @@ const TaskPaneApp = {
             FilterModal.init();
         }
         this.bindEvents();
+        this.registerPendingRibbonActionListener();
         this.loadReportPropertiesFromSettings();
         await this.loadFields();
         await this.loadDesignFromSheet();
         await this.handlePendingRibbonAction();
+    },
+
+    /**
+     * Los botones del ribbon "Propiedades" y "Opciones de campo" (ver
+     * openReportProperties/openFieldOptions en commands.js) guardan la
+     * acción pendiente en Office roaming settings y llaman a
+     * Office.addin.showAsTaskpane(). Si el taskpane YA estaba abierto,
+     * showAsTaskpane() no recarga la página, así que init() (y por tanto
+     * handlePendingRibbonAction) no se vuelve a ejecutar solo por eso: sin
+     * este listener de SettingsChanged los paneles/modal existen en el
+     * HTML pero nunca llegan a mostrarse en ese caso, que es el habitual.
+     */
+    registerPendingRibbonActionListener() {
+        try {
+            const settings = Office.context && Office.context.document && Office.context.document.settings;
+            if (settings && settings.addHandlerAsync) {
+                settings.addHandlerAsync(Office.EventType.SettingsChanged, () => {
+                    this.handlePendingRibbonAction();
+                });
+            }
+        } catch (err) {
+            console.warn("No se pudo registrar el listener de SettingsChanged:", err);
+        }
     },
 
     bindEvents() {
@@ -241,25 +265,28 @@ const TaskPaneApp = {
 
         // Checkboxes Estático / Dinámico (Checkrow / CheckCol del VBA): NO
         // disparan Actualizar() (solo guardan el flag), sombrean la zona y
-        // deshabilitan el drag&drop mientras esté marcado. La conversión de
-        // ese eje a fórmulas EPM_VALUE ocurre en el propio pintado del
-        // próximo refresco real (jsonTo3Matrices), no aquí.
+        // deshabilitan el drag&drop mientras esté marcado. Además, convierten
+        // AHORA MISMO (sin esperar al próximo refresco real) las celdas ya
+        // pintadas de Draco_001_Rows/Draco_001_Cols entre texto plano y
+        // fórmula EPM_VALUE (ver convertAxisStaticFormulas en commands.js).
         const chkRows = document.getElementById("chkAsymmetricRows");
         const chkCols = document.getElementById("chkAsymmetricCols");
 
         if (chkRows) {
-            chkRows.addEventListener("change", (e) => {
+            chkRows.addEventListener("change", async (e) => {
                 this.state.rowsStatic = e.target.checked;
                 this.updateStaticLabel("rows");
                 this.setZoneLocked("rows", this.state.rowsStatic);
+                await this.applyAxisStaticFormulas("rows", this.state.rowsStatic);
                 this.saveDesignOnly();
             });
         }
         if (chkCols) {
-            chkCols.addEventListener("change", (e) => {
+            chkCols.addEventListener("change", async (e) => {
                 this.state.colsStatic = e.target.checked;
                 this.updateStaticLabel("cols");
                 this.setZoneLocked("columns", this.state.colsStatic);
+                await this.applyAxisStaticFormulas("columns", this.state.colsStatic);
                 this.saveDesignOnly();
             });
         }
@@ -316,6 +343,23 @@ const TaskPaneApp = {
     isZoneLocked(zoneId) {
         const zone = document.querySelector(`.zone-card[data-zone="${zoneId}"]`);
         return !!(zone && zone.classList.contains("zone-locked"));
+    },
+
+    /**
+     * Reescribe in situ (Excel.run) las celdas ya pintadas del rango con
+     * nombre Draco_001_Rows/Draco_001_Cols del eje indicado, alternando
+     * entre texto plano y fórmula EPM_VALUE. Si todavía no existe tabla
+     * pintada no hace nada (se pintará ya en el modo correcto en el
+     * próximo refresco). No bloquea la UI: los errores solo se registran.
+     */
+    async applyAxisStaticFormulas(axis, isStatic) {
+        try {
+            if (window.ReportActions && window.ReportActions.convertAxisStaticFormulas) {
+                await window.ReportActions.convertAxisStaticFormulas(axis, isStatic);
+            }
+        } catch (err) {
+            console.error(`Error al convertir las celdas de "${axis}" a EPM_VALUE:`, err);
+        }
     },
 
     bindArrow(id, handler) {

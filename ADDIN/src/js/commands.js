@@ -1464,6 +1464,106 @@ function buildEpmValueFormula(dim, attr, text) {
     return '=EPM_VALUE("' + esc(dim) + '","' + esc(attr) + '","' + esc(text) + '","' + esc(text) + '")';
 }
 
+/* ---------------------------------------------------------------------
+ * Conversión INMEDIATA (sin esperar al próximo refresco/BigQuery) de las
+ * celdas ya pintadas de Draco_001_Rows / Draco_001_Cols entre texto plano
+ * y fórmula EPM_VALUE, al marcar/desmarcar un eje como Estático desde el
+ * taskpane. Reutiliza la misma correspondencia {dim, attr} por nivel que
+ * usa jsonTo3Matrices (columnas H/I para Filas, N/O para Columnas de
+ * EDIT_REPORT), pero solo toca el rango con nombre ya existente: si
+ * todavía no se ha pintado ninguna tabla no hace nada (el próximo
+ * refresco la pintará ya en el modo correcto).
+ * @param {"rows"|"columns"} axis
+ * @param {boolean} makeStatic true = texto -> EPM_VALUE; false = EPM_VALUE -> texto
+ */
+async function convertAxisStaticFormulas(axis, makeStatic) {
+    const rangeName = axis === "rows" ? "Draco_001_Rows" : "Draco_001_Cols";
+
+    await Excel.run(async (context) => {
+        const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
+        loadReportDefinition(editReportGrid);
+
+        const totalDimFilas = ReportState.ColumnCount; // nº de niveles del eje Filas
+        const totalDimCols = ReportState.RowCount;      // nº de niveles del eje Columnas
+
+        // {dim, attr} por posición (nivel), igual que fieldsFilas/fieldsColumnas
+        // en jsonTo3Matrices.
+        const fields = [];
+        if (axis === "rows") {
+            for (let i = 1; i <= totalDimFilas; i++) {
+                fields[i] = { dim: cellValue(editReportGrid, i + 14, 8), attr: cellValue(editReportGrid, i + 14, 9) };
+            }
+        } else {
+            for (let i = 1; i <= totalDimCols; i++) {
+                fields[i] = { dim: cellValue(editReportGrid, i + 14, 14), attr: cellValue(editReportGrid, i + 14, 15) };
+            }
+        }
+
+        const namedRange = context.workbook.names.getItemOrNullObject(rangeName);
+        namedRange.load("isNullObject");
+        await context.sync();
+        if (namedRange.isNullObject) {
+            // Todavía no hay tabla pintada: nada que convertir ahora mismo.
+            return;
+        }
+
+        const range = namedRange.getRange();
+        range.load(["values", "formulas", "rowCount", "columnCount"]);
+        await context.sync();
+
+        const GLYPH_PREFIX = /^[▸▾]\s+/; // indicador +/- fusionado (solo aplica en eje Dinámico)
+        const EPM_RE = /^=\s*EPM_VALUE\s*\(/i;
+        const EPM_VALOR_RE = /EPM_VALUE\s*\(\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"((?:[^"]|"")*)"/i;
+
+        const newFormulas = [];
+        let changed = false;
+
+        for (let r = 0; r < range.rowCount; r++) {
+            const rowOut = [];
+            for (let c = 0; c < range.columnCount; c++) {
+                const currentValue = range.values[r][c];
+                const currentFormula = range.formulas[r][c];
+
+                if (currentValue === "" || currentValue === null || currentValue === undefined) {
+                    rowOut.push(currentFormula);
+                    continue;
+                }
+
+                // Nivel del campo dentro del eje: en Filas crece por COLUMNA,
+                // en Columnas crece por FILA (misma orientación que al pintar).
+                const level = (axis === "rows" ? c : r) + 1;
+                const field = fields[level];
+                const isEpmFormula = typeof currentFormula === "string" && EPM_RE.test(currentFormula);
+
+                if (makeStatic) {
+                    if (isEpmFormula || !field) {
+                        rowOut.push(currentFormula);
+                        continue;
+                    }
+                    const text = String(currentValue).replace(GLYPH_PREFIX, "");
+                    rowOut.push(buildEpmValueFormula(field.dim, field.attr, text));
+                    changed = true;
+                } else {
+                    if (!isEpmFormula) {
+                        rowOut.push(currentFormula);
+                        continue;
+                    }
+                    const match = currentFormula.match(EPM_VALOR_RE);
+                    const text = match ? match[1].replace(/""/g, '"') : String(currentValue);
+                    rowOut.push(text);
+                    changed = true;
+                }
+            }
+            newFormulas.push(rowOut);
+        }
+
+        if (changed) {
+            range.formulas = newFormulas;
+            await context.sync();
+        }
+    });
+}
+
 // Convierte un número de columna (1-based) en letras de columna Excel ("A", "AB"...)
 function dracoColToLetters(col) {
     let s = "";
@@ -2268,7 +2368,8 @@ async function actualizar(event) {
 // el taskpane (p.ej. tras guardar el diseño), no solo desde el ribbon.
 window.ReportActions = {
     actualizar, actualizarInforme, actualizarInformeFixed,
-    toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions
+    toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
+    convertAxisStaticFormulas
 };
 
 
