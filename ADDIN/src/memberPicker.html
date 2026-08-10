@@ -1,83 +1,130 @@
 <!DOCTYPE html>
-<html lang="es">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Buscar miembro</title>
-
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>Seleccionar miembro</title>
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-
-    <link rel="stylesheet" href="css/theme.css">
-    <link rel="stylesheet" href="css/modal.css">
     <style>
+        * { box-sizing: border-box; }
         html, body {
-            margin: 0;
-            padding: 0;
-            height: 100%;
-            background: var(--surface-card, #ffffff);
-            font-family: 'Segoe UI', sans-serif;
+            margin: 0; padding: 0; height: 100%;
+            font-family: "Segoe UI", "Segoe UI Web", Arial, sans-serif;
+            font-size: 13px; color: #201f1e; background: #ffffff;
         }
-
-        .picker-container {
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-            box-sizing: border-box;
+        .header {
+            padding: 10px 12px 8px; border-bottom: 1px solid #edebe9;
         }
-
-        .picker-header {
-            padding: 14px 16px 12px;
-            border-bottom: 1px solid var(--border-subtle, #e1e1e1);
-            flex-shrink: 0;
+        .header input {
+            width: 100%; padding: 6px 8px; border: 1px solid #8a8886;
+            border-radius: 2px; font-size: 13px;
         }
-
-        .picker-header h3 {
-            margin: 0 0 10px 0;
-            font-size: 14px;
-            color: var(--text-primary, #201f1e);
+        .items {
+            overflow-y: auto; height: calc(100% - 96px);
         }
-
-        .picker-header input {
-            width: 100%;
-            box-sizing: border-box;
-            padding: 8px 10px;
-            border: 1px solid var(--border-default, #ccc);
-            border-radius: 4px;
-            font-size: 13px;
+        .item {
+            padding: 6px 12px; cursor: pointer; white-space: pre;
         }
-
-        .picker-body {
-            flex: 1;
-            overflow-y: auto;
-            padding: 4px 0;
+        .item:hover { background: #f3f2f1; }
+        .empty, .loading, .error {
+            padding: 14px; color: #605e5c;
         }
-
-        .picker-footer {
-            padding: 10px 16px;
-            border-top: 1px solid var(--border-subtle, #e1e1e1);
-            display: flex;
-            justify-content: flex-end;
-            gap: 8px;
-            flex-shrink: 0;
+        .error { color: #a80000; }
+        .footer {
+            padding: 8px 12px; border-top: 1px solid #edebe9; text-align: right;
         }
+        .footer button {
+            padding: 6px 14px; border: 1px solid #8a8886; background: #fff;
+            border-radius: 2px; cursor: pointer;
+        }
+        .footer button:hover { background: #f3f2f1; }
     </style>
 </head>
 <body>
-    <div class="picker-container">
-        <div class="picker-header">
-            <h3 id="pickerTitle">Buscar miembro</h3>
-            <input type="text" id="pickerSearchInput" placeholder="Buscar en la lista..." autocomplete="off">
-        </div>
-        <div class="picker-body" id="pickerItemsContainer">
-            <div style="padding:10px;color:#605e5c;">Cargando valores…</div>
-        </div>
-        <div class="picker-footer">
-            <button id="btnPickerCancel" class="btn-secondary">Cancelar</button>
-            <button id="btnPickerApply" class="btn-primary">Aceptar</button>
-        </div>
+    <div class="header">
+        <input type="text" id="searchInput" placeholder="Buscar…" autocomplete="off" />
+    </div>
+    <div class="items" id="itemsContainer">
+        <div class="loading" id="loadingMsg">Esperando datos…</div>
+    </div>
+    <div class="footer">
+        <button id="btnCancel">Cancelar</button>
     </div>
 
-    <script src="js/excelService.js"></script>
-    <script src="js/memberPicker.js"></script>
+    <script>
+        // Buscador de miembros mostrado como Office Dialog (ventana propia,
+        // centrada sobre Excel) para no tener que abrir el taskpane solo
+        // para elegir un valor. Se comunica con el host (commands.js, en el
+        // shared runtime del taskpane) por mensajes, ya que un diálogo NO
+        // tiene acceso al modelo de objetos de Excel (no puede llamar a
+        // Excel.run por sí mismo).
+        let allItems = [];
+
+        function log(...args) {
+            // Aparece en la consola de ESTA ventana de diálogo (F12 sobre
+            // la propia ventana emergente, no sobre el taskpane).
+            console.log("[MemberPicker]", ...args);
+        }
+
+        function render(items) {
+            const container = document.getElementById("itemsContainer");
+            container.innerHTML = "";
+            if (!items.length) {
+                container.innerHTML = "<div class='empty'>Sin resultados.</div>";
+                return;
+            }
+            for (const it of items) {
+                const div = document.createElement("div");
+                div.className = "item";
+                div.textContent = it.text;
+                div.addEventListener("click", () => {
+                    log("Selección de usuario:", it);
+                    Office.context.ui.messageParent(JSON.stringify({
+                        type: "select", value: it.value, attribute: it.attribute
+                    }));
+                });
+                container.appendChild(div);
+            }
+        }
+
+        function applySearch(term) {
+            const t = (term || "").toLowerCase();
+            const filtered = t ? allItems.filter(it => it.text.toLowerCase().indexOf(t) !== -1) : allItems;
+            render(filtered);
+        }
+
+        document.getElementById("searchInput").addEventListener("input", (e) => applySearch(e.target.value));
+        document.getElementById("btnCancel").addEventListener("click", () => {
+            log("Cancelado por el usuario.");
+            Office.context.ui.messageParent(JSON.stringify({ type: "cancel" }));
+        });
+
+        Office.onReady(() => {
+            log("Office.onReady en el diálogo. Enviando 'ready' al host…");
+            try {
+                // Mensaje inicial al padre: "ya estoy listo para recibir los
+                // items" (el host los precarga con Excel.run/BigQuery ANTES
+                // de abrir este diálogo y los envía con dialog.messageChild).
+                Office.context.ui.messageParent(JSON.stringify({ type: "ready" }));
+            } catch (err) {
+                log("Error enviando 'ready':", err);
+            }
+
+            Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg) => {
+                log("Mensaje recibido del host:", arg.message);
+                try {
+                    const payload = JSON.parse(arg.message);
+                    allItems = payload.items || [];
+                    document.getElementById("searchInput").value = payload.initialSearch || "";
+                    if (payload.title) document.title = payload.title;
+                    applySearch(payload.initialSearch || "");
+                } catch (err) {
+                    log("Error parseando mensaje del host:", err);
+                    document.getElementById("itemsContainer").innerHTML =
+                        "<div class='error'>Error cargando los valores.</div>";
+                }
+            });
+        });
+    </script>
 </body>
 </html>
