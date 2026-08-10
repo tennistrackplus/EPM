@@ -1476,28 +1476,31 @@ function buildEpmValueFormula(dim, attr, text) {
  * @param {"rows"|"columns"} axis
  * @param {boolean} makeStatic true = texto -> EPM_VALUE; false = EPM_VALUE -> texto
  */
+// {dim, attr} por posición (nivel) de un eje, igual que fieldsFilas/fieldsColumnas
+// en jsonTo3Matrices. Requiere que ReportState ya esté cargado (loadReportDefinition).
+function buildAxisFieldsTable(editReportGrid, axis) {
+    const totalDimFilas = ReportState.ColumnCount; // nº de niveles del eje Filas
+    const totalDimCols = ReportState.RowCount;      // nº de niveles del eje Columnas
+    const fields = [];
+    if (axis === "rows") {
+        for (let i = 1; i <= totalDimFilas; i++) {
+            fields[i] = { dim: cellValue(editReportGrid, i + 14, 8), attr: cellValue(editReportGrid, i + 14, 9) };
+        }
+    } else {
+        for (let i = 1; i <= totalDimCols; i++) {
+            fields[i] = { dim: cellValue(editReportGrid, i + 14, 14), attr: cellValue(editReportGrid, i + 14, 15) };
+        }
+    }
+    return fields;
+}
+
 async function convertAxisStaticFormulas(axis, makeStatic) {
     const rangeName = axis === "rows" ? "Draco_001_Rows" : "Draco_001_Cols";
 
     await Excel.run(async (context) => {
         const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
         loadReportDefinition(editReportGrid);
-
-        const totalDimFilas = ReportState.ColumnCount; // nº de niveles del eje Filas
-        const totalDimCols = ReportState.RowCount;      // nº de niveles del eje Columnas
-
-        // {dim, attr} por posición (nivel), igual que fieldsFilas/fieldsColumnas
-        // en jsonTo3Matrices.
-        const fields = [];
-        if (axis === "rows") {
-            for (let i = 1; i <= totalDimFilas; i++) {
-                fields[i] = { dim: cellValue(editReportGrid, i + 14, 8), attr: cellValue(editReportGrid, i + 14, 9) };
-            }
-        } else {
-            for (let i = 1; i <= totalDimCols; i++) {
-                fields[i] = { dim: cellValue(editReportGrid, i + 14, 14), attr: cellValue(editReportGrid, i + 14, 15) };
-            }
-        }
+        const fields = buildAxisFieldsTable(editReportGrid, axis);
 
         const namedRange = context.workbook.names.getItemOrNullObject(rangeName);
         namedRange.load("isNullObject");
@@ -1607,9 +1610,186 @@ async function refreshDracoIndicatorTooltips(context, sheet) {
     }
 }
 
+/**
+ * Localiza, dentro de Draco_001_Rows/Draco_001_Cols, a qué {dim, attr}
+ * corresponde una celda concreta de CSV_RESULT (equivalente a
+ * GetDimAttrRows/GetDimAttrCols del VBA, pero usando los rangos con
+ * nombre en lugar de recalcular límites a mano).
+ * Devuelve null si la celda no pertenece a ninguno de los dos ejes.
+ */
+async function locateDracoAxisField(context, addr) {
+    const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+    const cell = sheet.getRange(addr);
+    cell.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+    const rowsNamed = context.workbook.names.getItemOrNullObject("Draco_001_Rows");
+    const colsNamed = context.workbook.names.getItemOrNullObject("Draco_001_Cols");
+    rowsNamed.load("isNullObject");
+    colsNamed.load("isNullObject");
+    await context.sync();
+
+    if (cell.rowCount !== 1 || cell.columnCount !== 1) return null;
+
+    let axis = null;
+    let level = null;
+
+    if (!rowsNamed.isNullObject) {
+        const r = rowsNamed.getRange();
+        r.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+        await context.sync();
+        const withinRows = cell.rowIndex >= r.rowIndex && cell.rowIndex < r.rowIndex + r.rowCount
+            && cell.columnIndex >= r.columnIndex && cell.columnIndex < r.columnIndex + r.columnCount;
+        if (withinRows) {
+            axis = "rows";
+            level = (cell.columnIndex - r.columnIndex) + 1;
+        }
+    }
+
+    if (!axis && !colsNamed.isNullObject) {
+        const c = colsNamed.getRange();
+        c.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+        await context.sync();
+        const withinCols = cell.rowIndex >= c.rowIndex && cell.rowIndex < c.rowIndex + c.rowCount
+            && cell.columnIndex >= c.columnIndex && cell.columnIndex < c.columnIndex + c.columnCount;
+        if (withinCols) {
+            axis = "columns";
+            level = (cell.rowIndex - c.rowIndex) + 1;
+        }
+    }
+
+    if (!axis) return null;
+
+    const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
+    loadReportDefinition(editReportGrid);
+    const fields = buildAxisFieldsTable(editReportGrid, axis);
+    const field = fields[level];
+    if (!field || !field.dim) return null;
+
+    return { axis, level, dim: field.dim, attr: field.attr };
+}
+
+/**
+ * "Reconocimiento de miembros" (traducción de Workbook_SheetChange +
+ * Helpvalue del VBA): con el pulsador activado, si el usuario teclea un
+ * valor en una celda de Draco_001_Rows/Draco_001_Cols que todavía no es
+ * una fórmula EPM_VALUE, se abre el buscador de miembros (FilterModal,
+ * la misma ventana que usan los filtros) precargado con lo escrito, y al
+ * elegir un valor se sustituye la celda por la fórmula EPM_VALUE
+ * correspondiente. Si se cancela, se deja el texto tal cual (igual que
+ * en VBA).
+ *
+ * LIMITACIÓN DE LA PLATAFORMA: Office.js no expone un evento de doble
+ * clic sobre una celda (a diferencia de Workbook_SheetBeforeDoubleClick
+ * en VBA); Excel.Worksheet solo ofrece onChanged (tras escribir+Enter) y
+ * onSelectionChanged (al cambiar de celda seleccionada). Por eso este
+ * "reconocimiento" se dispara al escribir un valor (onChanged, fiable al
+ * 100%) y, como aproximación al doble clic, también al hacer clic sobre
+ * una celda de esos rangos que esté VACÍA (onSelectionChanged) — abre el
+ * buscador directamente sin necesidad de escribir nada antes.
+ */
+async function handleDracoMemberRecognitionChanged(eventArgs) {
+    try {
+        if (!Office.context.document.settings.get("draco_memberRecognition")) return;
+
+        let addr = (eventArgs && eventArgs.address) || "";
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        if (!addr) return;
+
+        let located = null;
+        let currentText = "";
+
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+            const cell = sheet.getRange(addr);
+            cell.load(["rowCount", "columnCount", "values", "formulas"]);
+            await context.sync();
+            if (cell.rowCount !== 1 || cell.columnCount !== 1) return;
+
+            const value = cell.values[0][0];
+            const formula = cell.formulas[0][0];
+            if (value === "" || value === null || value === undefined) return;
+            // Ya es EPM_VALUE (por ejemplo, porque nosotros mismos la acabamos de
+            // escribir): salir para no reabrir el buscador en bucle.
+            if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) return;
+
+            currentText = String(value);
+            located = await locateDracoAxisField(context, addr);
+        });
+
+        if (!located) return;
+        await openMemberRecognitionPicker(addr, located, currentText);
+    } catch (e) {
+        console.error("Error en el reconocimiento de miembros:", e);
+    }
+}
+
+/**
+ * Aproximación al doble clic (ver comentario anterior): clic sobre una
+ * celda VACÍA de Draco_001_Rows/Draco_001_Cols con el reconocimiento
+ * activado abre directamente el buscador de miembros.
+ */
+async function handleDracoMemberRecognitionSelection(eventArgs) {
+    try {
+        if (!Office.context.document.settings.get("draco_memberRecognition")) return;
+
+        let addr = (eventArgs && eventArgs.address) || "";
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        if (!addr) return;
+
+        let located = null;
+
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+            const cell = sheet.getRange(addr);
+            cell.load(["rowCount", "columnCount", "values"]);
+            await context.sync();
+            if (cell.rowCount !== 1 || cell.columnCount !== 1) return;
+
+            const value = cell.values[0][0];
+            if (value !== "" && value !== null && value !== undefined) return; // solo celdas vacías
+
+            located = await locateDracoAxisField(context, addr);
+        });
+
+        if (!located) return;
+        await openMemberRecognitionPicker(addr, located, "");
+    } catch (e) {
+        console.error("Error en el reconocimiento de miembros (clic):", e);
+    }
+}
+
+/**
+ * Abre FilterModal (mismo buscador que usan los Filtros) para elegir un
+ * miembro de {dim, attr} y escribe la fórmula EPM_VALUE resultante en la
+ * celda. Requiere el runtime compartido (FilterModal vive en el DOM de
+ * taskpane.html); si no está disponible no hace nada.
+ */
+async function openMemberRecognitionPicker(addr, located, initialSearch) {
+    if (typeof FilterModal === "undefined" || !FilterModal.open) {
+        console.warn("FilterModal no disponible en este contexto (¿shared runtime activo?).");
+        return;
+    }
+
+    if (Office.addin && Office.addin.showAsTaskpane) {
+        try { await Office.addin.showAsTaskpane(); } catch (e) { /* no crítico */ }
+    }
+
+    const result = await FilterModal.open({ dim: located.dim, name: located.attr, initialSearch });
+    if (!result) return; // cancelado: se deja el texto tal cual, igual que en VBA
+
+    await Excel.run(async (context) => {
+        const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+        const cell = sheet.getRange(addr);
+        cell.formulas = [[buildEpmValueFormula(located.dim, result.attribute, result.value)]];
+        await context.sync();
+    });
+}
+
 async function registerDracoSelectionHandler(context, sheet) {
     if (DracoHandlerRegistered) return;
     sheet.onSelectionChanged.add(handleDracoSelectionChanged);
+    sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
+    sheet.onChanged.add(handleDracoMemberRecognitionChanged);
     await context.sync();
     DracoHandlerRegistered = true;
 }
@@ -1977,8 +2157,9 @@ async function jsonTo3Matrices(context, json) {
      * ----------------------------------------------------------- */
     await refreshDracoIndicatorTooltips(context, sheet);
 
-    // 6) Registrar (una sola vez por sesión) el listener de clic que
-    //    resuelve los indicadores +/- pintados arriba.
+    // 6) Registrar (una sola vez por sesión) los listeners de clic/edición:
+    //    resuelven los indicadores +/- pintados arriba y el "Reconocimiento
+    //    de miembros" sobre las celdas de Draco_001_Rows/Draco_001_Cols.
     await registerDracoSelectionHandler(context, sheet);
 
     // 7) Autoajustar ancho de columnas (propiedades del informe), si procede.

@@ -79,7 +79,7 @@ const FilterModal = {
             if (titleEl) titleEl.innerText = `Filtrar: ${fieldData.dim}.${fieldData.name}`;
 
             const searchInput = document.getElementById("modalSearchInput");
-            if (searchInput) searchInput.value = "";
+            if (searchInput) searchInput.value = fieldData.initialSearch || "";
 
             const container = document.getElementById("modalItemsContainer");
             container.innerHTML = "<div style='padding:10px;color:#605e5c;'>Cargando valores…</div>";
@@ -96,7 +96,7 @@ const FilterModal = {
 
                 const json = await window.ExcelService.executeSQL(sql);
                 this.allItems = loadJsonTree(json);
-                this.render(this.allItems);
+                this.search(fieldData.initialSearch || "");
             } catch (err) {
                 console.error("Error cargando valores de filtro:", err);
                 container.innerHTML = `<div style='padding:10px;color:#a80000;'>Error: ${err.message || err}</div>`;
