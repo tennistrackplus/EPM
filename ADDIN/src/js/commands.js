@@ -2445,13 +2445,40 @@ async function toggleMemberRecognition(event) {
  * pendiente en Office roaming settings; taskpane.js la recoge al arrancar
  * (o al detectar el cambio de settings) y abre el modal/panel correspondiente.
  */
+/**
+ * Botones del ribbon "Propiedades del informe" y "Opciones de campo".
+ *
+ * Desde que el complemento usa Shared Runtime (ver <Runtimes> en el
+ * manifiesto, resid="Taskpane.Url"), estas funciones se ejecutan en el
+ * MISMO contexto JS que taskpane.js (que además sigue vivo aunque el
+ * panel esté oculto, por "lifetime=long"). Eso permite:
+ *   1) Llamar directamente a los métodos de TaskPaneApp (sin pasar por
+ *      Office roaming settings ni esperar a que taskpane.js relea nada).
+ *   2) Usar Office.addin.showAsTaskpane(), que EXIGE Shared Runtime; sin
+ *      él lanza "RichApi.Error: La API solo se aplica al complemento que
+ *      usa Shared Runtime" (el error que se veía antes de este cambio).
+ *
+ * Se conserva el mecanismo antiguo (Office roaming settings +
+ * SettingsChanged en taskpane.js) como red de seguridad, por si en algún
+ * host el runtime compartido tardase en levantar TaskPaneApp.
+ */
 async function openReportProperties(event) {
     try {
-        const settings = Office.context.document.settings;
-        settings.set("draco_pendingAction", "properties");
-        await new Promise((resolve) => settings.saveAsync(resolve));
+        console.log("[Draco] openReportProperties: shared runtime ¿activo? ->", typeof TaskPaneApp !== "undefined");
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.openReportPropertiesModal) {
+            TaskPaneApp.openReportPropertiesModal();
+            console.log("[Draco] openReportPropertiesModal() ejecutado directamente (shared runtime OK).");
+        } else {
+            console.warn("[Draco] TaskPaneApp NO existe en este contexto: usando fallback de settings (¿manifest sin Runtimes recargado?).");
+            const settings = Office.context.document.settings;
+            settings.set("draco_pendingAction", "properties");
+            await new Promise((resolve) => settings.saveAsync(resolve));
+        }
         if (Office.addin && Office.addin.showAsTaskpane) {
             await Office.addin.showAsTaskpane();
+            console.log("[Draco] showAsTaskpane() resuelto sin error.");
+        } else {
+            console.warn("[Draco] Office.addin.showAsTaskpane no está disponible en este runtime.");
         }
     } catch (error) {
         console.error("Error al abrir Propiedades del informe:", error);
@@ -2462,11 +2489,21 @@ async function openReportProperties(event) {
 
 async function openFieldOptions(event) {
     try {
-        const settings = Office.context.document.settings;
-        settings.set("draco_pendingAction", "fieldOptions");
-        await new Promise((resolve) => settings.saveAsync(resolve));
+        console.log("[Draco] openFieldOptions: shared runtime ¿activo? ->", typeof TaskPaneApp !== "undefined");
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.setFieldOptionsPanelOpen) {
+            TaskPaneApp.setFieldOptionsPanelOpen(true);
+            console.log("[Draco] setFieldOptionsPanelOpen(true) ejecutado directamente (shared runtime OK).");
+        } else {
+            console.warn("[Draco] TaskPaneApp NO existe en este contexto: usando fallback de settings (¿manifest sin Runtimes recargado?).");
+            const settings = Office.context.document.settings;
+            settings.set("draco_pendingAction", "fieldOptions");
+            await new Promise((resolve) => settings.saveAsync(resolve));
+        }
         if (Office.addin && Office.addin.showAsTaskpane) {
             await Office.addin.showAsTaskpane();
+            console.log("[Draco] showAsTaskpane() resuelto sin error.");
+        } else {
+            console.warn("[Draco] Office.addin.showAsTaskpane no está disponible en este runtime.");
         }
     } catch (error) {
         console.error("Error al abrir Opciones de campo:", error);

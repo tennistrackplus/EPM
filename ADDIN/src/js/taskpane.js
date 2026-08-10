@@ -346,6 +346,25 @@ const TaskPaneApp = {
     },
 
     /**
+     * "Pulsador" del ribbon (Propiedades / Opciones de campo): Office.js no
+     * soporta un botón de ribbon con estado visual pulsado/despulsado
+     * nativo (eso solo existe en el ribbon COM/VBA clásico). El acercamiento
+     * soportado en add-ins web es cambiar la etiqueta del botón para reflejar
+     * el estado, igual que ya se hace con "Pausar refresco" — reutiliza
+     * requestRibbonLabelUpdate (definida en commands.js; mismo contexto JS
+     * gracias al Shared Runtime).
+     */
+    updateRibbonToggleLabel(controlId, baseLabel, isOpen) {
+        try {
+            if (typeof requestRibbonLabelUpdate === "function") {
+                requestRibbonLabelUpdate(controlId, isOpen ? baseLabel + " ✓" : baseLabel);
+            }
+        } catch (err) {
+            console.warn(`No se pudo actualizar el estado visual del botón ${controlId}:`, err);
+        }
+    },
+
+    /**
      * Reescribe in situ (Excel.run) las celdas ya pintadas del rango con
      * nombre Draco_001_Rows/Draco_001_Cols del eje indicado, alternando
      * entre texto plano y fórmula EPM_VALUE. Si todavía no existe tabla
@@ -760,11 +779,13 @@ const TaskPaneApp = {
         document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
 
         modal.style.display = "flex";
+        this.updateRibbonToggleLabel("BtnPropiedadesInforme", "Propiedades", true);
     },
 
     closeReportPropertiesModal() {
         const modal = document.getElementById("reportPropertiesModal");
         if (modal) modal.style.display = "none";
+        this.updateRibbonToggleLabel("BtnPropiedadesInforme", "Propiedades", false);
     },
 
     async saveReportPropertiesFromModal() {
@@ -834,6 +855,7 @@ const TaskPaneApp = {
         if (container) container.classList.toggle("field-options-open", open);
         if (btn) btn.classList.toggle("toggle-active", open);
         if (!open) this.selectedFieldForOptions = null;
+        this.updateRibbonToggleLabel("BtnOpcionesCampo", "Opciones de campo", open);
     },
 
     toggleFieldOptionsPanel() {
