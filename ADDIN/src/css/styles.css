@@ -346,3 +346,202 @@ body {
     font-style: normal;
     padding: 4px 2px;
 }
+
+/* ==========================================================
+   EJE ESTÁTICO: sombreado + drag&drop deshabilitado
+   ========================================================== */
+.zone-card.zone-locked {
+    background-color: var(--gray-50);
+}
+
+.zone-card.zone-locked .zone-header {
+    background-color: var(--gray-100);
+}
+
+.zone-card.zone-locked .dropzone-content {
+    opacity: 0.55;
+    pointer-events: none;
+    filter: grayscale(0.5);
+}
+
+.zone-card.zone-locked .range-control {
+    opacity: 0.55;
+    pointer-events: none;
+}
+
+.zone-card.zone-locked .dropzone-content:empty::before {
+    content: "Eje estático: usa fórmulas EPM_VALUE en la hoja (arrastrar y soltar deshabilitado)";
+}
+
+/* ==========================================================
+   BOTONES DE ICONO CON ESTADO "ACTIVO" (paneles tipo toggle)
+   ========================================================== */
+.icon-button.toggle-active {
+    background-color: var(--brand-primary-light);
+    border-color: var(--brand-primary);
+    color: var(--brand-primary);
+}
+
+/* ==========================================================
+   PANEL DERECHO "OPCIONES DE CAMPO" (solo estético: al mostrarse
+   amplía el ancho del cuerpo del taskpane, al ocultarse lo reduce)
+   ========================================================== */
+.field-options-panel {
+    width: 0;
+    min-width: 0;
+    flex-shrink: 0;
+    overflow: hidden;
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    transition: width var(--transition-base), min-width var(--transition-base), opacity var(--transition-base);
+    opacity: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.taskpane-container.field-options-open .field-options-panel {
+    width: 230px;
+    min-width: 230px;
+    opacity: 1;
+}
+
+.field-options-header {
+    padding: 8px 10px;
+    font-weight: 700;
+    font-size: var(--fs-sm);
+    color: var(--text-primary);
+    background: var(--surface-sunken);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.field-options-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 210px;
+}
+
+.field-options-empty {
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    padding: 6px 2px;
+}
+
+.field-options-field-name {
+    font-weight: 700;
+    font-size: var(--fs-sm);
+    color: var(--brand-primary);
+    word-break: break-word;
+}
+
+.field-options-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.field-options-group label {
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+    font-weight: 600;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.field-options-group select,
+.field-options-group input[type="text"],
+.field-options-group input[type="number"] {
+    padding: 5px 6px;
+    font-size: var(--fs-sm);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--surface-card);
+    width: 100%;
+}
+
+.field-options-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-sm);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.field-options-checkbox-row input {
+    accent-color: var(--brand-primary);
+    cursor: pointer;
+}
+
+.field-options-levels {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 120px;
+    overflow-y: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 6px;
+    background: var(--surface-sunken);
+}
+
+.field-options-section-title {
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+}
+
+.dropped-tag.clickable-for-options {
+    cursor: pointer;
+    box-shadow: 0 0 0 2px rgba(42, 91, 215, 0.18);
+}
+
+/* ==========================================================
+   MODAL "PROPIEDADES DEL INFORME" (reutiliza .modal-backdrop / .modal-dialog)
+   ========================================================== */
+.properties-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.properties-form label.form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: var(--fs-sm);
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.properties-form input[type="text"] {
+    padding: 7px 9px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-base);
+}
+
+.properties-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-sm);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.properties-checkbox-row input {
+    accent-color: var(--brand-primary);
+    cursor: pointer;
+}
