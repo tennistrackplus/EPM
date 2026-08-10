@@ -492,6 +492,26 @@ function replaceAll(text, search) {
     return text.split(search).join("");
 }
 
+// El namespace del custom function está declarado en manifest.xml
+// (<Namespace id="EPM"/>), así que en la hoja la fórmula real es
+// "=EPM.EPM_VALUE(...)", NO "=EPM_VALUE(...)" a secas — escribir la
+// fórmula sin el prefijo "EPM." es justo lo que provocaba el error en
+// Excel (#¿NOMBRE?). Estas utilidades centralizan el prefijo para no
+// tener que acordarse de él en cada sitio donde se construye o se lee.
+const EPM_NAMESPACE = "EPM";
+const EPM_VALUE_FORMULA_RE = /^=\s*(?:EPM\.)?EPM_VALUE\s*\(/i;
+
+// Quita "=EPM.EPM_VALUE(", "=EPM_VALUE(" (formatos antiguos sin el
+// namespace, por compatibilidad con tablas ya pintadas) y el paréntesis
+// de cierre final, dejando solo "dim","attr","valor","display".
+function stripEpmValuePrefix(F) {
+    F = replaceAll(F, "=@");
+    F = replaceAll(F, "=" + EPM_NAMESPACE + ".EPM_VALUE(");
+    F = replaceAll(F, "=EPM_VALUE(");
+    F = replaceAll(F, ")");
+    return F;
+}
+
 async function readRowDefinitions(context, editReportGrid, csvGrid) {
     const items = [];
 
@@ -505,9 +525,7 @@ async function readRowDefinitions(context, editReportGrid, csvGrid) {
             if (cellHasFormula(csvGrid, R, Col)) {
                 let F = String(cellFormula(csvGrid, R, Col));
 
-                F = replaceAll(F, "=@");
-                F = replaceAll(F, "=EPM_VALUE(");
-                F = replaceAll(F, ")");
+                F = stripEpmValuePrefix(F);
 
                 const V = F.indexOf(";") !== -1 ? F.split(";") : F.split(",");
 
@@ -540,9 +558,7 @@ async function readColumnDefinitions(context, editReportGrid, csvGrid) {
             if (cellHasFormula(csvGrid, R, Col)) {
                 let F = String(cellFormula(csvGrid, R, Col));
 
-                F = replaceAll(F, "=@");
-                F = replaceAll(F, "=EPM_VALUE(");
-                F = replaceAll(F, ")");
+                F = stripEpmValuePrefix(F);
 
                 const V = F.indexOf(";") !== -1 ? F.split(";") : F.split(",");
 
@@ -1461,7 +1477,7 @@ function getDracoReportProperties() {
 // ya saben leer para el flujo Fijo).
 function buildEpmValueFormula(dim, attr, text) {
     const esc = (s) => String(s === null || s === undefined ? "" : s).replace(/"/g, '""');
-    return '=EPM_VALUE("' + esc(dim) + '","' + esc(attr) + '","' + esc(text) + '","' + esc(text) + '")';
+    return '=' + EPM_NAMESPACE + '.EPM_VALUE("' + esc(dim) + '","' + esc(attr) + '","' + esc(text) + '","' + esc(text) + '")';
 }
 
 /* ---------------------------------------------------------------------
@@ -1515,7 +1531,7 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         await context.sync();
 
         const GLYPH_PREFIX = /^[▸▾]\s+/; // indicador +/- fusionado (solo aplica en eje Dinámico)
-        const EPM_RE = /^=\s*EPM_VALUE\s*\(/i;
+        const EPM_RE = EPM_VALUE_FORMULA_RE;
         const EPM_VALOR_RE = /EPM_VALUE\s*\(\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"((?:[^"]|"")*)"/i;
 
         const newFormulas = [];
@@ -1710,7 +1726,7 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
             if (value === "" || value === null || value === undefined) return;
             // Ya es EPM_VALUE (por ejemplo, porque nosotros mismos la acabamos de
             // escribir): salir para no reabrir el buscador en bucle.
-            if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) return;
+            if (typeof formula === "string" && EPM_VALUE_FORMULA_RE.test(formula)) return;
 
             currentText = String(value);
             located = await locateDracoAxisField(context, addr);
@@ -1759,29 +1775,74 @@ async function handleDracoMemberRecognitionSelection(eventArgs) {
 }
 
 /**
- * Abre FilterModal (mismo buscador que usan los Filtros) para elegir un
- * miembro de {dim, attr} y escribe la fórmula EPM_VALUE resultante en la
- * celda. Requiere el runtime compartido (FilterModal vive en el DOM de
- * taskpane.html); si no está disponible no hace nada.
+ * Base donde está publicado el complemento (misma que taskpane.html,
+ * login.html...), para poder construir la URL del diálogo del buscador.
+ */
+const DRACO_ADDIN_BASE_URL = "https://tennistrackplus.github.io/EPM/ADDIN/src/";
+
+/**
+ * Abre el buscador de miembros como un DIÁLOGO DE OFFICE independiente
+ * (Office.context.ui.displayDialogAsync -> memberPicker.html), centrado
+ * sobre la ventana de Excel — ya NO como un overlay dentro del taskpane.
+ * Al elegir un valor, escribe la fórmula EPM_VALUE resultante en la celda.
+ *
+ * LIMITACIÓN DE LA PLATAFORMA: Office.js no expone la posición en pantalla
+ * de una celda, así que no es posible anclar el diálogo "al lado" de ella
+ * con precisión de píxel; displayDialogAsync solo permite centrarlo sobre
+ * la ventana de Excel con un tamaño (en % de pantalla), que es lo que se
+ * hace aquí.
  */
 async function openMemberRecognitionPicker(addr, located, initialSearch) {
-    if (typeof FilterModal === "undefined" || !FilterModal.open) {
-        console.warn("FilterModal no disponible en este contexto (¿shared runtime activo?).");
-        return;
-    }
+    return new Promise((resolve) => {
+        const query = new URLSearchParams({
+            dim: located.dim || "",
+            attr: located.attr || "",
+            search: initialSearch || ""
+        });
+        const url = DRACO_ADDIN_BASE_URL + "memberPicker.html?" + query.toString();
 
-    if (Office.addin && Office.addin.showAsTaskpane) {
-        try { await Office.addin.showAsTaskpane(); } catch (e) { /* no crítico */ }
-    }
+        Office.context.ui.displayDialogAsync(
+            url,
+            { height: 50, width: 35, displayInIframe: false },
+            (asyncResult) => {
+                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                    console.error("No se pudo abrir el buscador de miembros:", asyncResult.error);
+                    resolve(null);
+                    return;
+                }
 
-    const result = await FilterModal.open({ dim: located.dim, name: located.attr, initialSearch });
-    if (!result) return; // cancelado: se deja el texto tal cual, igual que en VBA
+                const dialog = asyncResult.value;
+                let settled = false;
 
-    await Excel.run(async (context) => {
-        const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
-        const cell = sheet.getRange(addr);
-        cell.formulas = [[buildEpmValueFormula(located.dim, result.attribute, result.value)]];
-        await context.sync();
+                dialog.addEventHandler(Office.EventType.DialogMessageReceived, async (arg) => {
+                    settled = true;
+                    dialog.close();
+
+                    let result = null;
+                    try { result = arg.message ? JSON.parse(arg.message) : null; } catch (e) { result = null; }
+
+                    if (result) {
+                        try {
+                            await Excel.run(async (context) => {
+                                const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+                                const cell = sheet.getRange(addr);
+                                cell.formulas = [[buildEpmValueFormula(located.dim, result.attribute || located.attr, result.value)]];
+                                await context.sync();
+                            });
+                        } catch (e) {
+                            console.error("Error al escribir la fórmula EPM_VALUE elegida:", e);
+                        }
+                    }
+
+                    resolve(result);
+                });
+
+                dialog.addEventHandler(Office.EventType.DialogEventReceived, () => {
+                    // Cerrado con la X / Esc, sin elegir nada: se deja el texto tal cual.
+                    if (!settled) resolve(null);
+                });
+            }
+        );
     });
 }
 
