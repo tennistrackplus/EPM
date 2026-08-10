@@ -492,26 +492,6 @@ function replaceAll(text, search) {
     return text.split(search).join("");
 }
 
-// El namespace del custom function está declarado en manifest.xml
-// (<Namespace id="EPM"/>), así que en la hoja la fórmula real es
-// "=EPM.EPM_VALUE(...)", NO "=EPM_VALUE(...)" a secas — escribir la
-// fórmula sin el prefijo "EPM." es justo lo que provocaba el error en
-// Excel (#¿NOMBRE?). Estas utilidades centralizan el prefijo para no
-// tener que acordarse de él en cada sitio donde se construye o se lee.
-const EPM_NAMESPACE = "EPM";
-const EPM_VALUE_FORMULA_RE = /^=\s*(?:EPM\.)?EPM_VALUE\s*\(/i;
-
-// Quita "=EPM.EPM_VALUE(", "=EPM_VALUE(" (formatos antiguos sin el
-// namespace, por compatibilidad con tablas ya pintadas) y el paréntesis
-// de cierre final, dejando solo "dim","attr","valor","display".
-function stripEpmValuePrefix(F) {
-    F = replaceAll(F, "=@");
-    F = replaceAll(F, "=" + EPM_NAMESPACE + ".EPM_VALUE(");
-    F = replaceAll(F, "=EPM_VALUE(");
-    F = replaceAll(F, ")");
-    return F;
-}
-
 async function readRowDefinitions(context, editReportGrid, csvGrid) {
     const items = [];
 
@@ -525,7 +505,9 @@ async function readRowDefinitions(context, editReportGrid, csvGrid) {
             if (cellHasFormula(csvGrid, R, Col)) {
                 let F = String(cellFormula(csvGrid, R, Col));
 
-                F = stripEpmValuePrefix(F);
+                F = replaceAll(F, "=@");
+                F = replaceAll(F, "=EPM_VALUE(");
+                F = replaceAll(F, ")");
 
                 const V = F.indexOf(";") !== -1 ? F.split(";") : F.split(",");
 
@@ -558,7 +540,9 @@ async function readColumnDefinitions(context, editReportGrid, csvGrid) {
             if (cellHasFormula(csvGrid, R, Col)) {
                 let F = String(cellFormula(csvGrid, R, Col));
 
-                F = stripEpmValuePrefix(F);
+                F = replaceAll(F, "=@");
+                F = replaceAll(F, "=EPM_VALUE(");
+                F = replaceAll(F, ")");
 
                 const V = F.indexOf(";") !== -1 ? F.split(";") : F.split(",");
 
@@ -1324,6 +1308,7 @@ const DracoCollapseState = {
 
 let DracoLastJson = null;           // último JSON de BigQuery, para repintar sin re-consultar
 let DracoHandlerRegistered = false; // evita registrar el listener de clic más de una vez
+let DracoSuppressChangeEvents = false; // true mientras jsonTo3Matrices pinta celdas (evita que el reconocimiento de miembros reaccione a nuestras propias escrituras)
 let DracoIndicatorMap = new Map();  // "row_col" -> { axis, nodeKey } de los indicadores +/- pintados
 
 // Firma del eje = lista de "DIMENSION.ATRIBUTO:NIVEL" de sus campos, en
@@ -1477,7 +1462,7 @@ function getDracoReportProperties() {
 // ya saben leer para el flujo Fijo).
 function buildEpmValueFormula(dim, attr, text) {
     const esc = (s) => String(s === null || s === undefined ? "" : s).replace(/"/g, '""');
-    return '=' + EPM_NAMESPACE + '.EPM_VALUE("' + esc(dim) + '","' + esc(attr) + '","' + esc(text) + '","' + esc(text) + '")';
+    return '=EPM_VALUE("' + esc(dim) + '","' + esc(attr) + '","' + esc(text) + '","' + esc(text) + '")';
 }
 
 /* ---------------------------------------------------------------------
@@ -1512,6 +1497,8 @@ function buildAxisFieldsTable(editReportGrid, axis) {
 
 async function convertAxisStaticFormulas(axis, makeStatic) {
     const rangeName = axis === "rows" ? "Draco_001_Rows" : "Draco_001_Cols";
+    DracoSuppressChangeEvents = true;
+    try {
 
     await Excel.run(async (context) => {
         const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
@@ -1531,7 +1518,7 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         await context.sync();
 
         const GLYPH_PREFIX = /^[▸▾]\s+/; // indicador +/- fusionado (solo aplica en eje Dinámico)
-        const EPM_RE = EPM_VALUE_FORMULA_RE;
+        const EPM_RE = /^=\s*EPM_VALUE\s*\(/i;
         const EPM_VALOR_RE = /EPM_VALUE\s*\(\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"((?:[^"]|"")*)"/i;
 
         const newFormulas = [];
@@ -1577,10 +1564,14 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         }
 
         if (changed) {
-            range.formulas = newFormulas;
+            range.values = newFormulas;
             await context.sync();
         }
     });
+
+    } finally {
+        DracoSuppressChangeEvents = false;
+    }
 }
 
 // Convierte un número de columna (1-based) en letras de columna Excel ("A", "AB"...)
@@ -1705,11 +1696,16 @@ async function locateDracoAxisField(context, addr) {
  */
 async function handleDracoMemberRecognitionChanged(eventArgs) {
     try {
+        if (DracoSuppressChangeEvents) {
+            console.log("[Draco] onChanged ignorado: escritura programática en curso (refresco/pintado).");
+            return;
+        }
         if (!Office.context.document.settings.get("draco_memberRecognition")) return;
 
         let addr = (eventArgs && eventArgs.address) || "";
         if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
         if (!addr) return;
+        console.log("[Draco] onChanged: reconocimiento de miembros activo, evaluando celda", addr);
 
         let located = null;
         let currentText = "";
@@ -1726,12 +1722,13 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
             if (value === "" || value === null || value === undefined) return;
             // Ya es EPM_VALUE (por ejemplo, porque nosotros mismos la acabamos de
             // escribir): salir para no reabrir el buscador en bucle.
-            if (typeof formula === "string" && EPM_VALUE_FORMULA_RE.test(formula)) return;
+            if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) return;
 
             currentText = String(value);
             located = await locateDracoAxisField(context, addr);
         });
 
+        console.log("[Draco] onChanged: resultado de locateDracoAxisField ->", located);
         if (!located) return;
         await openMemberRecognitionPicker(addr, located, currentText);
     } catch (e) {
@@ -1746,11 +1743,13 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
  */
 async function handleDracoMemberRecognitionSelection(eventArgs) {
     try {
+        if (DracoSuppressChangeEvents) return;
         if (!Office.context.document.settings.get("draco_memberRecognition")) return;
 
         let addr = (eventArgs && eventArgs.address) || "";
         if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
         if (!addr) return;
+        console.log("[Draco] onSelectionChanged: reconocimiento de miembros activo, evaluando celda", addr);
 
         let located = null;
 
@@ -1767,6 +1766,7 @@ async function handleDracoMemberRecognitionSelection(eventArgs) {
             located = await locateDracoAxisField(context, addr);
         });
 
+        console.log("[Draco] onSelectionChanged: resultado de locateDracoAxisField ->", located);
         if (!located) return;
         await openMemberRecognitionPicker(addr, located, "");
     } catch (e) {
@@ -1775,71 +1775,156 @@ async function handleDracoMemberRecognitionSelection(eventArgs) {
 }
 
 /**
- * Base donde está publicado el complemento (misma que taskpane.html,
- * login.html...), para poder construir la URL del diálogo del buscador.
+ * Parser mínimo del JSON de BigQuery a una lista plana {text, attribute,
+ * value} — copia local de loadJsonTree (filterModal.js) para no depender
+ * del DOM del taskpane: el diálogo del picker se ejecuta en su PROPIA
+ * ventana/contexto y no puede acceder a nada del taskpane directamente.
  */
-const DRACO_ADDIN_BASE_URL = "https://tennistrackplus.github.io/EPM/ADDIN/src/";
+function parseMemberJsonTree(json) {
+    const fieldMatches = [...json.matchAll(/"name":\s*"([^"]+)"/g)];
+    const campos = fieldMatches.map((m) => m[1]);
+    if (campos.length === 0) return [];
+
+    const ultimos = campos.map(() => "");
+    const valores = campos.map(() => "");
+    const valueMatches = [...json.matchAll(/"v":\s*"([^"]*)"/g)];
+
+    const items = [];
+    let nivel = 0;
+
+    for (const m of valueMatches) {
+        valores[nivel] = m[1];
+        nivel++;
+        if (nivel > campos.length - 1) {
+            for (let i = 0; i < campos.length; i++) {
+                if (valores[i] !== ultimos[i]) {
+                    items.push({ text: " ".repeat(i * 4) + valores[i], attribute: campos[i], value: valores[i] });
+                }
+            }
+            for (let i = 0; i < campos.length; i++) ultimos[i] = valores[i];
+            nivel = 0;
+        }
+    }
+    return items;
+}
 
 /**
- * Abre el buscador de miembros como un DIÁLOGO DE OFFICE independiente
- * (Office.context.ui.displayDialogAsync -> memberPicker.html), centrado
- * sobre la ventana de Excel — ya NO como un overlay dentro del taskpane.
- * Al elegir un valor, escribe la fórmula EPM_VALUE resultante en la celda.
+ * Abre el buscador de miembros como una ventana de DIÁLOGO de Office
+ * (Office.context.ui.displayDialogAsync): aparece centrada sobre la
+ * ventana de Excel, en SU PROPIA ventana, sin necesidad de mostrar el
+ * taskpane en absoluto (a diferencia de FilterModal, que vive dentro del
+ * DOM de taskpane.html).
  *
- * LIMITACIÓN DE LA PLATAFORMA: Office.js no expone la posición en pantalla
- * de una celda, así que no es posible anclar el diálogo "al lado" de ella
- * con precisión de píxel; displayDialogAsync solo permite centrarlo sobre
- * la ventana de Excel con un tamaño (en % de pantalla), que es lo que se
- * hace aquí.
+ * Un diálogo no tiene acceso al modelo de objetos de Excel, así que:
+ *   1) Aquí (con Excel.run disponible) se resuelve primero la lista de
+ *      valores (buildFilterValuesSQL + executeSQL, igual que FilterModal).
+ *   2) Se abre el diálogo (memberPicker.html) y, en cuanto avisa que está
+ *      listo, se le envían los items por mensaje (dialog.messageChild).
+ *   3) Cuando el usuario elige uno (o cancela), el diálogo manda un
+ *      mensaje de vuelta (DialogMessageReceived) y aquí se escribe la
+ *      fórmula EPM_VALUE y se cierra el diálogo.
+ *
+ * NOTA: Office.js no permite "anclar" un diálogo a la posición de una
+ * celda concreta (no hay API para eso); displayDialogAsync solo permite
+ * centrarlo sobre la ventana de Excel con un tamaño (%) dado, que es lo
+ * más parecido a "en medio del Excel" que soporta la plataforma.
  */
 async function openMemberRecognitionPicker(addr, located, initialSearch) {
-    return new Promise((resolve) => {
-        const query = new URLSearchParams({
-            dim: located.dim || "",
-            attr: located.attr || "",
-            search: initialSearch || ""
-        });
-        const url = DRACO_ADDIN_BASE_URL + "memberPicker.html?" + query.toString();
+    console.log("[Draco] openMemberRecognitionPicker: iniciando para", addr, located);
 
+    let items = [];
+    try {
+        const sql = await window.ExcelService.buildFilterValuesSQL(located.dim, located.attr);
+        console.log("[Draco] SQL de valores construida:", sql);
+        if (!sql) {
+            console.warn("[Draco] No se ha podido construir el SQL (dim/attr no reconocidos):", located);
+            return;
+        }
+        const json = await window.ExcelService.executeSQL(sql);
+        items = parseMemberJsonTree(json);
+        console.log("[Draco] Nº de items recibidos para el picker:", items.length);
+    } catch (err) {
+        console.error("[Draco] Error obteniendo los valores del picker:", err);
+        return;
+    }
+
+    const dialogUrl = new URL("memberPicker.html", window.location.href).href;
+    console.log("[Draco] Abriendo diálogo del picker en:", dialogUrl);
+
+    await new Promise((resolve) => {
         Office.context.ui.displayDialogAsync(
-            url,
-            { height: 50, width: 35, displayInIframe: false },
+            dialogUrl,
+            { height: 55, width: 28, displayInIframe: false },
             (asyncResult) => {
                 if (asyncResult.status === Office.AsyncResultStatus.Failed) {
-                    console.error("No se pudo abrir el buscador de miembros:", asyncResult.error);
-                    resolve(null);
+                    console.error(
+                        "[Draco] displayDialogAsync ha fallado:",
+                        asyncResult.error && asyncResult.error.code,
+                        asyncResult.error && asyncResult.error.message
+                    );
+                    resolve();
                     return;
                 }
 
+                console.log("[Draco] Diálogo abierto correctamente.");
                 const dialog = asyncResult.value;
                 let settled = false;
 
+                const closeDialog = () => {
+                    try { dialog.close(); } catch (e) { /* ya cerrado */ }
+                };
+
                 dialog.addEventHandler(Office.EventType.DialogMessageReceived, async (arg) => {
-                    settled = true;
-                    dialog.close();
+                    console.log("[Draco] Mensaje recibido del diálogo:", arg.message);
+                    let payload;
+                    try {
+                        payload = JSON.parse(arg.message);
+                    } catch (err) {
+                        console.error("[Draco] Mensaje del diálogo no es JSON válido:", err);
+                        return;
+                    }
 
-                    let result = null;
-                    try { result = arg.message ? JSON.parse(arg.message) : null; } catch (e) { result = null; }
+                    if (payload.type === "ready") {
+                        console.log("[Draco] Diálogo listo: enviando items…");
+                        dialog.messageChild(JSON.stringify({
+                            items,
+                            initialSearch,
+                            title: `${located.dim} / ${located.attr}`
+                        }));
+                        return;
+                    }
 
-                    if (result) {
+                    if (payload.type === "select") {
+                        console.log("[Draco] Valor elegido:", payload.value, "/", payload.attribute);
+                        settled = true;
+                        closeDialog();
                         try {
                             await Excel.run(async (context) => {
                                 const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
                                 const cell = sheet.getRange(addr);
-                                cell.formulas = [[buildEpmValueFormula(located.dim, result.attribute || located.attr, result.value)]];
+                                cell.values = [[buildEpmValueFormula(located.dim, payload.attribute, payload.value)]];
                                 await context.sync();
                             });
-                        } catch (e) {
-                            console.error("Error al escribir la fórmula EPM_VALUE elegida:", e);
+                            console.log("[Draco] Fórmula EPM_VALUE escrita correctamente en", addr);
+                        } catch (err) {
+                            console.error("[Draco] Error escribiendo la fórmula EPM_VALUE:", err);
                         }
+                        resolve();
+                        return;
                     }
 
-                    resolve(result);
+                    if (payload.type === "cancel") {
+                        console.log("[Draco] Selección cancelada por el usuario.");
+                        settled = true;
+                        closeDialog();
+                        resolve();
+                    }
                 });
 
-                dialog.addEventHandler(Office.EventType.DialogEventReceived, () => {
-                    // Cerrado con la X / Esc, sin elegir nada: se deja el texto tal cual.
-                    if (!settled) resolve(null);
+                dialog.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
+                    // 12006 = el usuario cerró el diálogo con la X.
+                    console.warn("[Draco] DialogEventReceived:", arg.error);
+                    if (!settled) resolve();
                 });
             }
         );
@@ -1902,6 +1987,15 @@ async function handleDracoSelectionChanged(eventArgs) {
  * leído de columnas H/I/J; total_dim_cols=RowCount leído de columnas N/O/P).
  */
 async function jsonTo3Matrices(context, json) {
+    DracoSuppressChangeEvents = true; // evita que el reconocimiento de miembros reaccione a este pintado
+    try {
+        return await jsonTo3MatricesCore(context, json);
+    } finally {
+        DracoSuppressChangeEvents = false;
+    }
+}
+
+async function jsonTo3MatricesCore(context, json) {
     DracoLastJson = json; // cache para poder repintar en un toggle +/- sin re-consultar BigQuery
 
     const totalCampos = 2 + ReportState.RowCount + ReportState.ColumnCount + ReportState.MeasureCount;
