@@ -1941,6 +1941,36 @@ async function registerDracoSelectionHandler(context, sheet) {
 }
 
 /**
+ * Registro TEMPRANO de los listeners de CSV_RESULT (indicadores +/- y
+ * Reconocimiento de miembros), independiente de que se haya pulsado
+ * "Actualizar informe" alguna vez. Se llama desde TaskPaneApp.init(), que
+ * se ejecuta en cuanto arranca el Shared Runtime (con CUALQUIER clic del
+ * ribbon, no solo al abrir el taskpane) — así el reconocimiento de
+ * miembros funciona aunque el panel nunca se haya abierto en la sesión.
+ * Si la hoja CSV_RESULT todavía no existe (primer uso, sin refresco
+ * previo) no hace nada; el refresco la registrará igualmente cuando
+ * pinte la primera tabla.
+ */
+async function ensureDracoHandlersRegistered() {
+    if (DracoHandlerRegistered) return;
+    try {
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItemOrNullObject("CSV_RESULT");
+            sheet.load("isNullObject");
+            await context.sync();
+            if (sheet.isNullObject) {
+                console.log("[Draco] ensureDracoHandlersRegistered: CSV_RESULT no existe todavía (sin refresco previo).");
+                return;
+            }
+            await registerDracoSelectionHandler(context, sheet);
+            console.log("[Draco] Listeners de CSV_RESULT registrados de forma temprana (sin necesidad de refrescar).");
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudieron registrar los listeners de forma temprana:", e);
+    }
+}
+
+/**
  * Handler del clic (selección de una sola celda) sobre un indicador +/-:
  * alterna el estado contraído/expandido de ese nodo y repinta reutilizando
  * el último JSON de BigQuery (sin volver a consultar).
@@ -2705,7 +2735,7 @@ async function actualizar(event) {
 window.ReportActions = {
     actualizar, actualizarInforme, actualizarInformeFixed,
     toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
-    convertAxisStaticFormulas
+    convertAxisStaticFormulas, ensureDracoHandlersRegistered
 };
 
 
@@ -2762,6 +2792,30 @@ async function toggleRefreshPaused(event) {
         if (event) event.completed();
     }
 }
+
+/**
+ * Escribe el texto "hola" directamente en la celda A1 de la hoja activa
+ * @param {Office.AddinCommands.Event} event
+ */
+async function writeHolaInA1Simple(event) {
+    try {
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getActiveWorksheet();
+            const range = sheet.getRange("A1");
+            range.values = [["hola"]];
+            await context.sync();
+        });
+    } catch (error) {
+        console.error("Error al escribir en A1:", error);
+    } finally {
+        // OBLIGATORIO: Informar a Excel que la función ha finalizado
+        if (event) {
+            event.completed();
+        }
+    }
+}
+
+
 
 async function toggleMemberRecognition(event) {
     try {
@@ -2865,6 +2919,8 @@ try {
     Office.actions.associate("toggleMemberRecognition", toggleMemberRecognition);
     Office.actions.associate("openReportProperties", openReportProperties);
     Office.actions.associate("openFieldOptions", openFieldOptions);
+    Office.actions.associate("writeHolaInA1Simple", writeHolaInA1Simple);
+
 } catch (e) {
     console.warn("Office.actions.associate no disponible en este contexto:", e);
 }
