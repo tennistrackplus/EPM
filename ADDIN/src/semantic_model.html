@@ -464,6 +464,193 @@
         .field-key input {
             margin: 0;
         }
+
+        /* ---- Jerarquías (lista dentro del modal de dimensión) ---- */
+        .hierarchies-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .hierarchy-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            background: #f8fafc;
+        }
+
+        .hierarchy-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .hierarchy-name {
+            font-size: 11px;
+            font-weight: 700;
+            color: #1e293b;
+        }
+
+        .hierarchy-levels-summary {
+            font-size: 10px;
+            color: #64748b;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .hierarchy-empty {
+            font-size: 11px;
+            color: #94a3b8;
+            padding: 6px 2px;
+        }
+
+        /* ---- Popup editor de jerarquía (drag & drop) ---- */
+        .hierarchy-modal-content {
+            max-width: 640px;
+        }
+
+        .hierarchy-modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 15px;
+        }
+
+        .hierarchy-editor {
+            display: flex;
+            gap: 12px;
+            margin-top: 8px;
+        }
+
+        .hierarchy-pool-col,
+        .hierarchy-levels-col {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .hierarchy-col-label {
+            font-size: 10px;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin-bottom: 4px;
+        }
+
+        .hierarchy-pool-list,
+        .hierarchy-levels-list {
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            min-height: 160px;
+            max-height: 260px;
+            overflow-y: auto;
+            padding: 6px;
+            background: #f8fafc;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            transition: background-color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .hierarchy-pool-list.drag-over,
+        .hierarchy-levels-list.drag-over {
+            background: #e0e7ff;
+            border-color: #2563eb;
+        }
+
+        .hierarchy-attr-chip,
+        .hierarchy-level-chip {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 8px;
+            border-radius: 5px;
+            font-size: 11px;
+            cursor: grab;
+            user-select: none;
+        }
+
+        .hierarchy-attr-chip {
+            background: #ffffff;
+            border: 1px solid #cbd5e1;
+            color: #334155;
+            justify-content: space-between;
+        }
+
+        .hierarchy-level-chip {
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            color: #1e3a8a;
+        }
+
+        .hierarchy-attr-chip:active,
+        .hierarchy-level-chip:active {
+            cursor: grabbing;
+        }
+
+        .hierarchy-attr-chip.dragging,
+        .hierarchy-level-chip.dragging {
+            opacity: 0.4;
+        }
+
+        .hierarchy-level-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #2563eb;
+            color: #ffffff;
+            font-size: 9px;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .hierarchy-level-name {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .hierarchy-chip-actions {
+            display: flex;
+            gap: 2px;
+            flex-shrink: 0;
+        }
+
+        .hierarchy-chip-btn {
+            width: 18px;
+            height: 18px;
+            border: none;
+            background: transparent;
+            color: #64748b;
+            cursor: pointer;
+            font-size: 11px;
+            line-height: 1;
+            border-radius: 3px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .hierarchy-chip-btn:hover {
+            background: #e2e8f0;
+            color: #0f172a;
+        }
+
+        .hierarchy-pool-empty,
+        .hierarchy-levels-empty {
+            font-size: 10px;
+            color: #94a3b8;
+            padding: 8px 4px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -600,7 +787,50 @@
                 </div>
             </div>
 
+            <div id="hierarchiesContainer" style="margin-top:15px;">
+                <div class="card-header" style="margin-bottom:6px;">
+                    <h4 style="margin:0;">Jerarquías</h4>
+                    <button type="button" class="icon-btn" id="btnAddHierarchy" title="Nueva jerarquía">+</button>
+                </div>
+                <div id="hierarchiesList" class="hierarchies-list">
+                    <!-- Se rellena dinámicamente -->
+                </div>
+            </div>
+
             <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar dimensión</button>
+        </div>
+    </div>
+
+    <!-- MODAL EDITOR DE JERARQUÍA (arrastrar y soltar atributos por niveles) -->
+    <div id="hierarchyModal" class="modal">
+        <div class="modal-content hierarchy-modal-content">
+            <div class="modal-header">
+                <h3 id="hierarchyModalTitle">Nueva jerarquía</h3>
+                <span class="modal-close" id="btnCloseHierarchyModal">&times;</span>
+            </div>
+
+            <div class="form-group">
+                <label>Nombre de la jerarquía</label>
+                <input type="text" id="hierarchyNameInput" placeholder="Ej. Geografía" />
+            </div>
+
+            <h4 style="margin-top:12px;">Niveles (arrastra los atributos de izquierda a derecha)</h4>
+
+            <div class="hierarchy-editor">
+                <div class="hierarchy-pool-col">
+                    <div class="hierarchy-col-label">Atributos disponibles</div>
+                    <div id="hierarchyPoolList" class="hierarchy-pool-list"></div>
+                </div>
+                <div class="hierarchy-levels-col">
+                    <div class="hierarchy-col-label">Nivel superior → inferior</div>
+                    <div id="hierarchyLevelsList" class="hierarchy-levels-list"></div>
+                </div>
+            </div>
+
+            <div class="hierarchy-modal-footer">
+                <button type="button" class="btn btn-secondary" id="btnCancelHierarchyModal">Cancelar</button>
+                <button type="button" class="btn" id="btnSaveHierarchyModal">Guardar jerarquía</button>
+            </div>
         </div>
     </div>
 
