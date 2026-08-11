@@ -178,22 +178,8 @@ const TaskPaneApp = {
             this.setAutoStatus("Guardando…");
             await window.ExcelService.saveEditReportDesign(this.collectDesignPayload());
 
-
-        // PASO 1
-        await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
-            sheet.getRange("D1").values = [["paso1"]];
-            await context.sync();
-        });
-
             if (window.ReportActions && typeof window.ReportActions.actualizar === "function") {
                 this.setAutoStatus("Actualizando…");
-				        // PASO 1
-        await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
-            sheet.getRange("E1").values = [["paso2"]];
-            await context.sync();
-        });
                 await window.ReportActions.actualizar();
             }
 

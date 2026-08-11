@@ -64,7 +64,119 @@ function initEvents() {
 
     document.getElementById("btnSaveHierarchyModal").addEventListener("click", saveHierarchyEditor);
 
+    document.getElementById("btnPreviewHierarchy").addEventListener("click", previewCurrentHierarchy);
+
+    document.getElementById("btnViewFactData").addEventListener("click", () => {
+
+        openDataPreviewDialog(
+            document.getElementById("factProject").value,
+            document.getElementById("factDataset").value,
+            document.getElementById("factTable").value
+        );
+
+    });
+
+    document.getElementById("btnViewDimData").addEventListener("click", () => {
+
+        openDataPreviewDialog(
+            document.getElementById("dimRelProject").value,
+            document.getElementById("dimRelDataset").value,
+            document.getElementById("dimRelTable").value
+        );
+
+    });
+
     document.getElementById("btnGenerateModel").addEventListener("click",generateSemanticModelInExcel);
+
+}
+
+/**
+ * Abre un diálogo de Office (Office.context.ui.displayDialogAsync) centrado
+ * sobre la ventana de Excel ("en medio del Excel") con un SELECT * LIMIT 500
+ * de la tabla indicada. Es una página independiente (dataPreview.html) que
+ * no necesita el modelo de objetos de Excel, solo el token de BigQuery.
+ */
+function openDataPreviewDialog(project, dataset, table) {
+
+    if (!project || !dataset || !table) {
+        alert("Selecciona primero una tabla para poder previsualizar sus datos.");
+        return;
+    }
+
+    const relativeUrl =
+        `dataPreview.html?project=${encodeURIComponent(project)}` +
+        `&dataset=${encodeURIComponent(dataset)}` +
+        `&table=${encodeURIComponent(table)}`;
+
+    const dialogUrl = new URL(relativeUrl, window.location.href).href;
+
+    Office.context.ui.displayDialogAsync(
+        dialogUrl,
+        { height: 70, width: 60, displayInIframe: false },
+        (asyncResult) => {
+
+            if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                console.error("Error al abrir la vista previa de datos:", asyncResult.error);
+                alert("No se ha podido abrir la vista previa: " + asyncResult.error.message);
+            }
+
+        }
+    );
+
+}
+
+/**
+ * Abre un diálogo centrado sobre Excel mostrando cómo se vería la jerarquía
+ * que se está editando en el popup (árbol de valores reales agrupados por
+ * nivel), sin necesidad de guardarla antes.
+ */
+function previewCurrentHierarchy() {
+
+    const field = fieldsState[currentConfigFieldIndex];
+
+    if (!field || !hierEditState) return;
+
+    if (!hierEditState.levels || hierEditState.levels.length === 0) {
+        alert("Añade al menos un nivel a la jerarquía para poder previsualizarla.");
+        return;
+    }
+
+    if (!field.relProject || !field.relDataset || !field.relTable) {
+        alert("Selecciona primero la tabla de dimensión.");
+        return;
+    }
+
+    const levels = hierEditState.levels.map(l => {
+        const attr = (field.attributes || []).find(a => a.name === l.attribute);
+        return {
+            field: l.attribute,
+            label: attr ? (attr.alias || attr.name) : l.attribute
+        };
+    });
+
+    const spec = {
+        project: field.relProject,
+        dataset: field.relDataset,
+        table: field.relTable,
+        hierarchyName: document.getElementById("hierarchyNameInput").value.trim() || "(sin nombre)",
+        levels: levels
+    };
+
+    const relativeUrl = `hierarchyPreview.html?spec=${encodeURIComponent(JSON.stringify(spec))}`;
+    const dialogUrl = new URL(relativeUrl, window.location.href).href;
+
+    Office.context.ui.displayDialogAsync(
+        dialogUrl,
+        { height: 70, width: 50, displayInIframe: false },
+        (asyncResult) => {
+
+            if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                console.error("Error al abrir la vista previa de la jerarquía:", asyncResult.error);
+                alert("No se ha podido abrir la vista previa: " + asyncResult.error.message);
+            }
+
+        }
+    );
 
 }
 
@@ -1320,13 +1432,8 @@ function renderHierarchyEditor() {
             chip.dataset.index = idx;
 
             chip.innerHTML = `
-                <span class="hierarchy-level-badge">${idx + 1}</span>
                 <span class="hierarchy-level-name">${attr ? (attr.alias || attr.name) : lvl.attribute}</span>
-                <div class="hierarchy-chip-actions">
-                    <button type="button" class="hierarchy-chip-btn" title="Subir nivel" onclick="event.stopPropagation(); moveHierarchyLevel(${idx}, -1)">↑</button>
-                    <button type="button" class="hierarchy-chip-btn" title="Bajar nivel" onclick="event.stopPropagation(); moveHierarchyLevel(${idx}, 1)">↓</button>
-                    <button type="button" class="hierarchy-chip-btn" title="Quitar del nivel" onclick="event.stopPropagation(); removeHierarchyLevel(${idx})">✕</button>
-                </div>
+                <button type="button" class="hierarchy-chip-btn hierarchy-chip-btn-remove" title="Quitar del nivel" onclick="event.stopPropagation(); removeHierarchyLevel(${idx})">✕</button>
             `;
 
             chip.addEventListener("dragstart", (e) => {
@@ -1431,22 +1538,6 @@ function removeHierarchyLevel(idx) {
     if (!hierEditState) return;
 
     hierEditState.levels.splice(idx, 1);
-
-    renderHierarchyEditor();
-
-}
-
-function moveHierarchyLevel(idx, direction) {
-
-    if (!hierEditState) return;
-
-    const newIdx = idx + direction;
-
-    if (newIdx < 0 || newIdx >= hierEditState.levels.length) return;
-
-    const levels = hierEditState.levels;
-    const [moved] = levels.splice(idx, 1);
-    levels.splice(newIdx, 0, moved);
 
     renderHierarchyEditor();
 
