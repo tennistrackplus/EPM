@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vista previa de jerarquía</title>
+    <link rel="stylesheet" href="css/theme.css">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #ffffff;
+            color: #0f172a;
+        }
+
+        .preview-page {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .preview-header {
+            flex-shrink: 0;
+            padding: 12px 16px;
+            border-bottom: 1px solid #e2e8f0;
+            background-color: #f8fafc;
+        }
+
+        .preview-header h3 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 700;
+            color: #0f172a;
+        }
+
+        .preview-subtitle {
+            display: block;
+            margin-top: 2px;
+            font-size: 11px;
+            color: #64748b;
+        }
+
+        .preview-status {
+            padding: 24px 16px;
+            font-size: 12px;
+            color: #64748b;
+            text-align: center;
+        }
+
+        .preview-status.preview-error {
+            color: #b91c1c;
+        }
+
+        .preview-tree-wrapper {
+            flex: 1;
+            overflow: auto;
+            padding: 12px 16px 16px;
+            display: none;
+        }
+
+        ul.hier-preview-root,
+        ul.hier-preview-children {
+            list-style: none;
+            margin: 0;
+            padding-left: 0;
+        }
+
+        ul.hier-preview-children {
+            padding-left: 20px;
+            border-left: 1px dashed #cbd5e1;
+            margin-left: 7px;
+        }
+
+        li.hier-preview-node {
+            margin: 2px 0;
+        }
+
+        .hier-preview-label {
+            display: flex;
+            align-items: baseline;
+            gap: 6px;
+            padding: 3px 6px;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+
+        .hier-preview-label:hover {
+            background-color: #f1f5f9;
+        }
+
+        .hier-preview-level-tag {
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            color: #94a3b8;
+            flex-shrink: 0;
+            min-width: 60px;
+        }
+
+        .hier-preview-value {
+            color: #1e293b;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="preview-page">
+        <div class="preview-header">
+            <h3 id="previewTitle">Vista previa de jerarquía</h3>
+            <span class="preview-subtitle" id="previewSubtitle"></span>
+        </div>
+
+        <div id="previewStatus" class="preview-status">Cargando datos…</div>
+
+        <div id="previewTreeWrapper" class="preview-tree-wrapper"></div>
+    </div>
+
+    <script src="js/hierarchyPreview.js"></script>
+</body>
+</html>

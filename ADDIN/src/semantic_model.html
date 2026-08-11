@@ -644,6 +644,19 @@
             color: #0f172a;
         }
 
+        .hierarchy-chip-btn-remove {
+            width: 13px;
+            height: 13px;
+            font-size: 8px;
+            flex-shrink: 0;
+            color: #94a3b8;
+        }
+
+        .hierarchy-chip-btn-remove:hover {
+            background: #fee2e2;
+            color: #ef4444;
+        }
+
         .hierarchy-pool-empty,
         .hierarchy-levels-empty {
             font-size: 10px;
@@ -662,7 +675,7 @@
             <div class="card-header">
                 <span class="card-title">Modelo semántico</span>
                 <div class="model-manager-actions">
-                    <button type="button" class="btn-generate" id="btnGenerateModel" title="Generar modelo semántico en Excel">Generar Excel</button>
+                    <button type="button" class="btn-generate" id="btnGenerateModel" title="Guardar modelo semántico en Excel">💾 Guardar</button>
                     <button type="button" class="icon-btn" id="btnNewModel" title="Crear nuevo modelo">+</button>
                     <button type="button" class="icon-btn danger" id="btnDeleteModel" title="Eliminar modelo">🗑</button>
                 </div>
@@ -682,7 +695,7 @@
                     <span class="card-title">Tabla de hechos</span>
                     <span class="info-icon" title="Información">ⓘ</span>
                 </div>
-                <span class="eye-icon" title="Ver datos">👁</span>
+                <span class="eye-icon" id="btnViewFactData" title="Ver datos (SELECT * LIMIT 500)">👁</span>
             </div>
 
             <div class="compact-field-group">
@@ -768,17 +781,17 @@
                 <label>Alias</label>
                 <input type="text" id="modalDimAlias" />
             </div>
-            <h4>Tabla de atributos (relación)</h4>
-            <div class="form-group">
-                <label>Tabla de dimensión seleccionada</label>
-                <div class="sap-search-input-group">
+            <h4>Tabla de atributos</h4>
+            <div class="card-header" style="margin-bottom:6px;">
+                <div class="sap-search-input-group" style="flex:1;">
                     <input type="text" id="dimRelFullConcat" readonly placeholder="Seleccionar tabla de dimensión..." style="cursor: pointer;" />
                     <button type="button" class="sap-search-btn" id="dimSapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
                 </div>
-                <input type="hidden" id="dimRelProject" />
-                <input type="hidden" id="dimRelDataset" />
-                <input type="hidden" id="dimRelTable" />
+                <span class="eye-icon" id="btnViewDimData" title="Ver datos (SELECT * LIMIT 500)" style="margin-left:6px;">👁</span>
             </div>
+            <input type="hidden" id="dimRelProject" />
+            <input type="hidden" id="dimRelDataset" />
+            <input type="hidden" id="dimRelTable" />
 
             <div id="attributesContainer" style="display:none; margin-top:15px;">
                 <h4>Atributos</h4>
@@ -810,7 +823,10 @@
             </div>
 
             <div class="form-group">
-                <label>Nombre de la jerarquía</label>
+                <div class="card-header" style="margin-bottom:4px;">
+                    <label style="margin:0;">Nombre de la jerarquía</label>
+                    <span class="eye-icon" id="btnPreviewHierarchy" title="Ver cómo se vería la jerarquía">👁</span>
+                </div>
                 <input type="text" id="hierarchyNameInput" placeholder="Ej. Geografía" />
             </div>
 
