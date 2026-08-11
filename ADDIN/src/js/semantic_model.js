@@ -56,6 +56,14 @@ function initEvents() {
 
     });
 
+    document.getElementById("btnAddHierarchy").addEventListener("click", () => openHierarchyEditor(null));
+
+    document.getElementById("btnCloseHierarchyModal").addEventListener("click", closeHierarchyEditor);
+
+    document.getElementById("btnCancelHierarchyModal").addEventListener("click", closeHierarchyEditor);
+
+    document.getElementById("btnSaveHierarchyModal").addEventListener("click", saveHierarchyEditor);
+
     document.getElementById("btnGenerateModel").addEventListener("click",generateSemanticModelInExcel);
 
 }
@@ -348,7 +356,10 @@ async function deleteModel()
         const targets = [
             { name: "MODEL_FACT", modelCol: 0 },
             { name: "MODEL_DIMENSION", modelCol: 10 },
-            { name: "MODEL_MEASURES", modelCol: 8 }
+            { name: "MODEL_MEASURES", modelCol: 8 },
+            { name: "MODEL_RELATIONSHIP", modelCol: -1 },
+            { name: "MODEL_ATRIBUTES", modelCol: -1 },
+            { name: "MODEL_HIER", modelCol: -1 }
         ];
 
         for (const target of targets) {
@@ -377,7 +388,10 @@ async function deleteModel()
 
                             if (i === 0) return true;
 
-                            return r[target.modelCol] !== currentModel && r[r.length - 1] !== currentModel;
+                            // modelCol === -1 significa "el nombre del modelo está en la última columna"
+                            const col = target.modelCol === -1 ? r.length - 1 : target.modelCol;
+
+                            return r[col] !== currentModel && r[r.length - 1] !== currentModel;
 
                         });
 
@@ -677,6 +691,9 @@ async function fetchFactFields(isModelLoad = false) {
         if (data.schema && data.schema.fields) {
             let savedDimFields = new Set();
             let savedMeaFields = new Set();
+            let relMap = {};    // DIMENSION -> { relProject, relDataset, relTable }
+            let attrMap = {};   // DIMENSION -> [ {name, alias, dataType, isKey, enabled} ]
+            let hierMap = {};   // DIMENSION -> [ {name, levels:[{attribute}]} ]
 
             if (isModelLoad && typeof Excel !== "undefined" && currentModel) {
                 try {
@@ -718,9 +735,101 @@ async function fetchFactFields(isModelLoad = false) {
                                 }
                             }
                         }
+
+                        // MODEL_RELATIONSHIP -> relación de cada dimensión con su tabla
+                        let sheetRel = sheets.getItemOrNullObject("MODEL_RELATIONSHIP");
+                        await context.sync();
+                        if (!sheetRel.isNullObject) {
+                            let rangeRel = sheetRel.getUsedRangeOrNullObject();
+                            await context.sync();
+                            if (!rangeRel.isNullObject) {
+                                rangeRel.load("values");
+                                await context.sync();
+                                const rows = rangeRel.values || [];
+                                for (let i = 1; i < rows.length; i++) {
+                                    const r = rows[i];
+                                    if (r[r.length - 1] === currentModel) {
+                                        const dimName = r[1];
+                                        if (dimName) {
+                                            relMap[dimName] = {
+                                                relProject: r[6] || "",
+                                                relDataset: r[7] || "",
+                                                relTable: r[8] || ""
+                                            };
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // MODEL_ATRIBUTES -> atributos de cada dimensión
+                        let sheetAttr = sheets.getItemOrNullObject("MODEL_ATRIBUTES");
+                        await context.sync();
+                        if (!sheetAttr.isNullObject) {
+                            let rangeAttr = sheetAttr.getUsedRangeOrNullObject();
+                            await context.sync();
+                            if (!rangeAttr.isNullObject) {
+                                rangeAttr.load("values");
+                                await context.sync();
+                                const rows = rangeAttr.values || [];
+                                for (let i = 1; i < rows.length; i++) {
+                                    const r = rows[i];
+                                    if (r[r.length - 1] === currentModel) {
+                                        const dimName = r[1];
+                                        const attrName = r[2];
+                                        if (dimName && attrName) {
+                                            if (!attrMap[dimName]) attrMap[dimName] = [];
+                                            attrMap[dimName].push({
+                                                name: attrName,
+                                                alias: (r[7] && String(r[7]).trim() !== "") ? r[7] : attrName,
+                                                dataType: r[8] || "",
+                                                isKey: r[9] === "X" || r[9] === true,
+                                                enabled: true
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // MODEL_HIER -> jerarquías de cada dimensión
+                        let sheetHier = sheets.getItemOrNullObject("MODEL_HIER");
+                        await context.sync();
+                        if (!sheetHier.isNullObject) {
+                            let rangeHier = sheetHier.getUsedRangeOrNullObject();
+                            await context.sync();
+                            if (!rangeHier.isNullObject) {
+                                rangeHier.load("values");
+                                await context.sync();
+                                const rows = rangeHier.values || [];
+                                const rawMap = {}; // dimName -> hierName -> [{nivel, attribute}]
+                                for (let i = 1; i < rows.length; i++) {
+                                    const r = rows[i];
+                                    if (r[r.length - 1] === currentModel) {
+                                        const hierName = r[1];
+                                        const nivel = Number(r[2]);
+                                        const dimName = r[3];
+                                        const fieldName = r[8];
+                                        if (dimName && hierName && fieldName) {
+                                            if (!rawMap[dimName]) rawMap[dimName] = {};
+                                            if (!rawMap[dimName][hierName]) rawMap[dimName][hierName] = [];
+                                            rawMap[dimName][hierName].push({ nivel: nivel, attribute: fieldName });
+                                        }
+                                    }
+                                }
+                                Object.keys(rawMap).forEach(dimName => {
+                                    hierMap[dimName] = Object.keys(rawMap[dimName]).map(hierName => {
+                                        const levels = rawMap[dimName][hierName]
+                                            .sort((a, b) => a.nivel - b.nivel)
+                                            .map(l => ({ attribute: l.attribute }));
+                                        return { name: hierName, levels: levels };
+                                    });
+                                });
+                            }
+                        }
                     });
                 } catch (err) {
-                    console.error("Error al consultar dimensiones y medidas guardadas en Excel:", err);
+                    console.error("Error al consultar dimensiones, relaciones, atributos y jerarquías guardadas en Excel:", err);
                 }
             }
 
@@ -741,7 +850,7 @@ async function fetchFactFields(isModelLoad = false) {
                     }
                 }
 
-                return {
+                const field = {
                     name: f.name,
                     alias: f.name,
                     dataType: f.type,
@@ -754,8 +863,25 @@ async function fetchFactFields(isModelLoad = false) {
                     relProject: "",
                     relDataset: "",
                     relTable: "",
-                    attributes: []
+                    attributes: [],
+                    hierarchies: []
                 };
+
+                if (isModelLoad && fieldType === "DIMENSION" && isEnabled) {
+                    if (relMap[f.name]) {
+                        field.relProject = relMap[f.name].relProject;
+                        field.relDataset = relMap[f.name].relDataset;
+                        field.relTable = relMap[f.name].relTable;
+                    }
+                    if (attrMap[f.name]) {
+                        field.attributes = attrMap[f.name];
+                    }
+                    if (hierMap[f.name]) {
+                        field.hierarchies = hierMap[f.name];
+                    }
+                }
+
+                return field;
             });
 
             renderFieldsTable();
@@ -861,6 +987,8 @@ function openConfigModal(index) {
             document.getElementById("attributesContainer").style.display = "none";
         }
 
+        renderHierarchiesList();
+
         document.getElementById("dimensionModal").style.display = "block";
     }
 }
@@ -892,6 +1020,7 @@ async function fetchDimensionAttributes(forceRefetch = false) {
     if (!forceRefetch && field.attributes && field.attributes.length > 0 && field.relTable === tableId && field.relProject === projectId && field.relDataset === datasetId) {
         renderAttributesTable(field.attributes);
         document.getElementById("attributesContainer").style.display = "block";
+        renderHierarchiesList();
         return;
     }
 
@@ -918,14 +1047,22 @@ async function fetchDimensionAttributes(forceRefetch = false) {
                     alias: attr.name,
                     dataType: attr.type,
                     isKey: idx === 0,
-                    enabled: true,
-                    hier1: "",
-                    hier2: ""
+                    enabled: true
                 };
             });
 
+            // Si la tabla de dimensión ha cambiado, limpiamos de las jerarquías
+            // cualquier nivel que referencie atributos que ya no existen.
+            if (field.hierarchies && field.hierarchies.length > 0) {
+                const validNames = new Set(field.attributes.map(a => a.name));
+                field.hierarchies = field.hierarchies
+                    .map(h => ({ name: h.name, levels: h.levels.filter(l => validNames.has(l.attribute)) }))
+                    .filter(h => h.levels.length > 0);
+            }
+
             renderAttributesTable(field.attributes);
             document.getElementById("attributesContainer").style.display = "block";
+            renderHierarchiesList();
         }
     } catch (err) {
         console.error("Error al obtener atributos de la dimensión:", err);
@@ -1000,8 +1137,6 @@ function updateAttrKey(selectedIdx) {
     });
 }
 function updateAttrEnabled(idx, val) { fieldsState[currentConfigFieldIndex].attributes[idx].enabled = val; }
-function updateAttrHier1(idx, val) { fieldsState[currentConfigFieldIndex].attributes[idx].hier1 = val; }
-function updateAttrHier2(idx, val) { fieldsState[currentConfigFieldIndex].attributes[idx].hier2 = val; }
 
 function saveDimModal() {
     if (currentConfigFieldIndex !== null) {
@@ -1011,12 +1146,446 @@ function saveDimModal() {
     document.getElementById("dimensionModal").style.display = "none";
 }
 
+/* =====================================================================
+ * DISEÑO DE JERARQUÍAS
+ *
+ * Cada dimensión (field) guarda su lista de jerarquías en
+ * field.hierarchies = [{ name, levels: [{ attribute }] }]
+ * donde "levels" está ordenado de nivel superior (índice 0) a inferior.
+ * ===================================================================== */
+
+let hierEditState = null;      // { name, levels: [{attribute}] } — estado en edición dentro del popup
+let editingHierarchyIndex = null; // null = nueva jerarquía; número = editando field.hierarchies[idx]
+
+function renderHierarchiesList() {
+
+    const field = fieldsState[currentConfigFieldIndex];
+    const container = document.getElementById("hierarchiesList");
+
+    if (!field || !container) return;
+
+    container.innerHTML = "";
+
+    const hierarchies = field.hierarchies || [];
+
+    if (hierarchies.length === 0) {
+        container.innerHTML = `<div class="hierarchy-empty">No hay jerarquías definidas para esta dimensión.</div>`;
+        return;
+    }
+
+    hierarchies.forEach((hier, idx) => {
+
+        const levelNames = (hier.levels || []).map(l => {
+            const attr = (field.attributes || []).find(a => a.name === l.attribute);
+            return attr ? (attr.alias || attr.name) : l.attribute;
+        }).join(" › ");
+
+        const row = document.createElement("div");
+        row.className = "hierarchy-row";
+
+        row.innerHTML = `
+            <div class="hierarchy-info">
+                <div class="hierarchy-name">${hier.name}</div>
+                <div class="hierarchy-levels-summary">${levelNames || "(sin niveles)"}</div>
+            </div>
+            <div class="hierarchy-chip-actions">
+                <button type="button" class="hierarchy-chip-btn" title="Editar jerarquía" onclick="event.stopPropagation(); openHierarchyEditor(${idx})">✎</button>
+                <button type="button" class="hierarchy-chip-btn" title="Eliminar jerarquía" onclick="event.stopPropagation(); deleteHierarchyAt(${idx})">🗑</button>
+            </div>
+        `;
+
+        container.appendChild(row);
+
+    });
+
+}
+
+function deleteHierarchyAt(idx) {
+
+    const field = fieldsState[currentConfigFieldIndex];
+
+    if (!field || !field.hierarchies || !field.hierarchies[idx]) return;
+
+    if (!confirm(`¿Eliminar la jerarquía "${field.hierarchies[idx].name}"?`)) return;
+
+    field.hierarchies.splice(idx, 1);
+
+    renderHierarchiesList();
+
+}
+
+function openHierarchyEditor(index = null) {
+
+    const field = fieldsState[currentConfigFieldIndex];
+
+    if (!field) return;
+
+    if (!field.attributes || field.attributes.length === 0) {
+        alert("Selecciona primero la tabla de dimensión y sus atributos antes de crear una jerarquía.");
+        return;
+    }
+
+    editingHierarchyIndex = index;
+
+    if (index === null) {
+        hierEditState = { name: "", levels: [] };
+        document.getElementById("hierarchyModalTitle").textContent = "Nueva jerarquía";
+    } else {
+        const existing = field.hierarchies[index];
+        hierEditState = {
+            name: existing.name,
+            levels: existing.levels.map(l => ({ attribute: l.attribute }))
+        };
+        document.getElementById("hierarchyModalTitle").textContent = "Editar jerarquía";
+    }
+
+    document.getElementById("hierarchyNameInput").value = hierEditState.name;
+
+    renderHierarchyEditor();
+
+    document.getElementById("hierarchyModal").style.display = "block";
+
+}
+
+function closeHierarchyEditor() {
+
+    document.getElementById("hierarchyModal").style.display = "none";
+
+    hierEditState = null;
+    editingHierarchyIndex = null;
+
+}
+
+function renderHierarchyEditor() {
+
+    const field = fieldsState[currentConfigFieldIndex];
+
+    if (!field || !hierEditState) return;
+
+    const poolContainer = document.getElementById("hierarchyPoolList");
+    const levelsContainer = document.getElementById("hierarchyLevelsList");
+
+    const usedNames = new Set(hierEditState.levels.map(l => l.attribute));
+    const availableAttrs = (field.attributes || []).filter(a => a.enabled !== false && !usedNames.has(a.name));
+
+    // ---- Columna izquierda: atributos disponibles (arrastrables) ----
+    poolContainer.innerHTML = "";
+
+    if (availableAttrs.length === 0) {
+        poolContainer.innerHTML = `<div class="hierarchy-pool-empty">Todos los atributos están ya en la jerarquía.</div>`;
+    } else {
+
+        availableAttrs.forEach(attr => {
+
+            const chip = document.createElement("div");
+            chip.className = "hierarchy-attr-chip";
+            chip.draggable = true;
+            chip.title = "Arrastra a la derecha o haz clic para añadir";
+
+            chip.innerHTML = `
+                <span class="hierarchy-level-name">${attr.alias || attr.name}</span>
+                <span class="hierarchy-chip-btn">＋</span>
+            `;
+
+            chip.addEventListener("dragstart", (e) => {
+                chip.classList.add("dragging");
+                e.dataTransfer.setData("text/plain", attr.name);
+                e.dataTransfer.effectAllowed = "copyMove";
+            });
+
+            chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+
+            chip.addEventListener("click", () => addLevelFromPool(attr.name));
+
+            poolContainer.appendChild(chip);
+
+        });
+
+    }
+
+    // ---- Columna derecha: niveles de la jerarquía (ordenados, arrastrables) ----
+    levelsContainer.innerHTML = "";
+
+    if (hierEditState.levels.length === 0) {
+        levelsContainer.innerHTML = `<div class="hierarchy-levels-empty">Arrastra aquí los atributos, del nivel superior (arriba) al inferior (abajo).</div>`;
+    } else {
+
+        hierEditState.levels.forEach((lvl, idx) => {
+
+            const attr = (field.attributes || []).find(a => a.name === lvl.attribute);
+
+            const chip = document.createElement("div");
+            chip.className = "hierarchy-level-chip";
+            chip.draggable = true;
+            chip.dataset.index = idx;
+
+            chip.innerHTML = `
+                <span class="hierarchy-level-badge">${idx + 1}</span>
+                <span class="hierarchy-level-name">${attr ? (attr.alias || attr.name) : lvl.attribute}</span>
+                <div class="hierarchy-chip-actions">
+                    <button type="button" class="hierarchy-chip-btn" title="Subir nivel" onclick="event.stopPropagation(); moveHierarchyLevel(${idx}, -1)">↑</button>
+                    <button type="button" class="hierarchy-chip-btn" title="Bajar nivel" onclick="event.stopPropagation(); moveHierarchyLevel(${idx}, 1)">↓</button>
+                    <button type="button" class="hierarchy-chip-btn" title="Quitar del nivel" onclick="event.stopPropagation(); removeHierarchyLevel(${idx})">✕</button>
+                </div>
+            `;
+
+            chip.addEventListener("dragstart", (e) => {
+                chip.classList.add("dragging");
+                e.dataTransfer.setData("text/plain", "LEVEL:" + idx);
+                e.dataTransfer.effectAllowed = "move";
+            });
+
+            chip.addEventListener("dragend", () => chip.classList.remove("dragging"));
+
+            levelsContainer.appendChild(chip);
+
+        });
+
+    }
+
+    // ---- Zona de destino: niveles (añadir nuevos o reordenar) ----
+    levelsContainer.ondragover = (e) => {
+        e.preventDefault();
+        levelsContainer.classList.add("drag-over");
+    };
+
+    levelsContainer.ondragleave = () => levelsContainer.classList.remove("drag-over");
+
+    levelsContainer.ondrop = (e) => {
+
+        e.preventDefault();
+        levelsContainer.classList.remove("drag-over");
+
+        const data = e.dataTransfer.getData("text/plain");
+
+        if (!data) return;
+
+        const dropIndex = getLevelDropIndex(levelsContainer, e.clientY);
+
+        if (data.indexOf("LEVEL:") === 0) {
+            const fromIdx = parseInt(data.split(":")[1], 10);
+            reorderHierarchyLevel(fromIdx, dropIndex);
+        } else {
+            addLevelFromPool(data, dropIndex);
+        }
+
+    };
+
+    // ---- Zona de destino: pool (soltar aquí un nivel lo quita de la jerarquía) ----
+    poolContainer.ondragover = (e) => {
+        e.preventDefault();
+        poolContainer.classList.add("drag-over");
+    };
+
+    poolContainer.ondragleave = () => poolContainer.classList.remove("drag-over");
+
+    poolContainer.ondrop = (e) => {
+
+        e.preventDefault();
+        poolContainer.classList.remove("drag-over");
+
+        const data = e.dataTransfer.getData("text/plain");
+
+        if (data && data.indexOf("LEVEL:") === 0) {
+            const fromIdx = parseInt(data.split(":")[1], 10);
+            removeHierarchyLevel(fromIdx);
+        }
+
+    };
+
+}
+
+function getLevelDropIndex(container, clientY) {
+
+    const chips = Array.from(container.querySelectorAll(".hierarchy-level-chip"));
+
+    for (let i = 0; i < chips.length; i++) {
+        const rect = chips[i].getBoundingClientRect();
+        if (clientY < rect.top + rect.height / 2) {
+            return i;
+        }
+    }
+
+    return chips.length;
+
+}
+
+function addLevelFromPool(attrName, atIndex = null) {
+
+    if (!hierEditState) return;
+
+    if (hierEditState.levels.some(l => l.attribute === attrName)) return;
+
+    if (atIndex === null || atIndex < 0 || atIndex > hierEditState.levels.length) {
+        hierEditState.levels.push({ attribute: attrName });
+    } else {
+        hierEditState.levels.splice(atIndex, 0, { attribute: attrName });
+    }
+
+    renderHierarchyEditor();
+
+}
+
+function removeHierarchyLevel(idx) {
+
+    if (!hierEditState) return;
+
+    hierEditState.levels.splice(idx, 1);
+
+    renderHierarchyEditor();
+
+}
+
+function moveHierarchyLevel(idx, direction) {
+
+    if (!hierEditState) return;
+
+    const newIdx = idx + direction;
+
+    if (newIdx < 0 || newIdx >= hierEditState.levels.length) return;
+
+    const levels = hierEditState.levels;
+    const [moved] = levels.splice(idx, 1);
+    levels.splice(newIdx, 0, moved);
+
+    renderHierarchyEditor();
+
+}
+
+function reorderHierarchyLevel(fromIdx, toIdx) {
+
+    if (!hierEditState) return;
+    if (fromIdx === toIdx) return;
+
+    const levels = hierEditState.levels;
+    const [moved] = levels.splice(fromIdx, 1);
+
+    let insertAt = toIdx;
+    if (fromIdx < toIdx) insertAt -= 1;
+
+    levels.splice(insertAt, 0, moved);
+
+    renderHierarchyEditor();
+
+}
+
+function saveHierarchyEditor() {
+
+    const field = fieldsState[currentConfigFieldIndex];
+
+    if (!field || !hierEditState) return;
+
+    const name = document.getElementById("hierarchyNameInput").value.trim();
+
+    if (name === "") {
+        alert("Indica un nombre para la jerarquía.");
+        return;
+    }
+
+    if (hierEditState.levels.length === 0) {
+        alert("Añade al menos un nivel a la jerarquía.");
+        return;
+    }
+
+    if (!field.hierarchies) field.hierarchies = [];
+
+    const duplicate = field.hierarchies.some((h, idx) =>
+        h.name.toUpperCase() === name.toUpperCase() && idx !== editingHierarchyIndex
+    );
+
+    if (duplicate) {
+        alert("Ya existe una jerarquía con ese nombre en esta dimensión.");
+        return;
+    }
+
+    const hierObj = {
+        name: name,
+        levels: hierEditState.levels.map(l => ({ attribute: l.attribute }))
+    };
+
+    if (editingHierarchyIndex === null) {
+        field.hierarchies.push(hierObj);
+    } else {
+        field.hierarchies[editingHierarchyIndex] = hierObj;
+    }
+
+    closeHierarchyEditor();
+    renderHierarchiesList();
+
+}
+
 /**
  * Vuelca el modelo semántico completo a Excel rellenando las 5 pestañas objetivo
  */
  
  
  
+/**
+ * Fusiona en una hoja (sheetName) las filas nuevas (newRows) de un modelo,
+ * conservando intactas las filas de los DEMÁS modelos que ya hubiera en la
+ * hoja. Es la misma lógica que ya usaban MODEL_DIMENSION / MODEL_MEASURES,
+ * generalizada para aplicarla también a MODEL_RELATIONSHIP, MODEL_ATRIBUTES
+ * y MODEL_HIER, de forma que TODAS las pestañas del modelo semántico
+ * guarden y respeten el nombre del modelo (MODEL_NAME, última columna).
+ */
+async function mergeModelSheet(context, sheets, sheetName, headers, newRows, modelName) {
+
+    const modelNameColIdx = headers.length - 1; // MODEL_NAME siempre es la última columna
+
+    let sheet = sheets.getItemOrNullObject(sheetName);
+    await context.sync();
+
+    if (sheet.isNullObject) {
+        sheet = sheets.add(sheetName);
+    }
+
+    let range = sheet.getUsedRangeOrNullObject();
+    await context.sync();
+
+    let existingRows = [];
+
+    if (!range.isNullObject) {
+        range.load("values");
+        await context.sync();
+        existingRows = range.values || [];
+    }
+
+    let finalRows;
+
+    if (existingRows.length > 0) {
+
+        finalRows = existingRows.filter((r, i) => {
+
+            if (i === 0) return true; // conservar cabecera existente
+
+            return r[modelNameColIdx] !== modelName;
+
+        });
+
+    } else {
+
+        finalRows = [headers];
+
+    }
+
+    newRows.forEach(row => finalRows.push(row));
+
+    sheet.getUsedRangeOrNullObject().clear();
+
+    if (finalRows.length > 0) {
+        sheet.getRangeByIndexes(0, 0, finalRows.length, finalRows[0].length).values = finalRows;
+    }
+
+    return sheet;
+
+}
+
+/**
+ * Vuelca el modelo semántico completo a Excel rellenando las 5 pestañas objetivo.
+ * Todas las pestañas guardan el nombre del modelo (MODEL_NAME) en su última
+ * columna y se fusionan con lo que ya hubiera de otros modelos (misma lógica
+ * que MODEL_FACT / MODEL_DIMENSION), en vez de sobrescribir toda la hoja.
+ */
 async function generateSemanticModelInExcel() {
     let modelName = "";
     const selectElem = document.getElementById("semanticModelSelect");
@@ -1031,14 +1600,17 @@ async function generateSemanticModelInExcel() {
     }
     currentModel = modelName;
 
+    if (currentModel === "") {
+        alert("Indica primero el nombre del modelo.");
+        return;
+    }
+
     const factProject = document.getElementById("factProject").value.trim();
     const factDataset = document.getElementById("factDataset").value;
     const factTable = document.getElementById("factTable").value;
 
-    const enabledFields = fieldsState.filter(f => f.enabled);
-
     // 1. MODEL_RELATIONSHIP
-    const relData = [[
+    const relHeaders = [
         "FILA",
         "DIMENSION",
         "FACT_PROJECT",
@@ -1049,8 +1621,11 @@ async function generateSemanticModelInExcel() {
         "DIM_DATASET",
         "DIM_TABLE",
         "DIM_FIELD",
-        "JOIN TYPE"
-    ]];
+        "JOIN TYPE",
+        "MODEL_NAME"
+    ];
+
+    const relNewRows = [];
 
     fieldsState.forEach((f, idx) => {
 
@@ -1059,7 +1634,7 @@ async function generateSemanticModelInExcel() {
 
         const keyAttr = (f.attributes || []).find(a => a.isKey);
 
-        relData.push([
+        relNewRows.push([
             idx + 1,
             f.name,
             factProject,
@@ -1070,7 +1645,8 @@ async function generateSemanticModelInExcel() {
             f.relDataset,
             f.relTable,
             keyAttr ? keyAttr.name : f.name,
-            "LEFT"
+            "LEFT",
+            currentModel
         ]);
 
     });
@@ -1148,7 +1724,7 @@ async function generateSemanticModelInExcel() {
     });
 
     // 4. MODEL_ATRIBUTES
-    const attrData = [[
+    const attrHeaders = [
         "FILA",
         "DIMENSION",
         "ATRIBUTE",
@@ -1157,8 +1733,12 @@ async function generateSemanticModelInExcel() {
         "DIM_TABLE",
         "DIM_FIELD",
         "DISPLAY_NAME",
-        "DATA_TYPE"
-    ]];
+        "DATA_TYPE",
+        "IS_KEY",
+        "MODEL_NAME"
+    ];
+
+    const attrNewRows = [];
 
     fieldsState.forEach((f, idx) => {
 
@@ -1171,7 +1751,7 @@ async function generateSemanticModelInExcel() {
                 .filter(a => a.enabled)
                 .forEach(a => {
 
-                    attrData.push([
+                    attrNewRows.push([
                         idx + 1,
                         f.name,
                         a.name,
@@ -1180,7 +1760,9 @@ async function generateSemanticModelInExcel() {
                         f.relTable || factTable,
                         a.name,
                         a.alias === a.name ? "" : a.alias,
-                        a.dataType
+                        a.dataType,
+                        a.isKey ? "X" : "",
+                        currentModel
                     ]);
 
                 });
@@ -1188,7 +1770,7 @@ async function generateSemanticModelInExcel() {
         }
         else {
 
-            attrData.push([
+            attrNewRows.push([
                 idx + 1,
                 f.name,
                 f.name,
@@ -1197,7 +1779,9 @@ async function generateSemanticModelInExcel() {
                 factTable,
                 f.name,
                 "",
-                f.dataType
+                f.dataType,
+                "X",
+                currentModel
             ]);
 
         }
@@ -1205,118 +1789,71 @@ async function generateSemanticModelInExcel() {
     });
 
     // 5. MODEL_HIER
-    const hierData = [["DIMENSION", "HIERARCHY_LEVEL", "ATTRIBUTE_COLUMN"]];
-    enabledFields.filter(f => f.type === "DIMENSION").forEach(f => {
-        if (f.attributes) {
-            f.attributes.forEach(a => {
-                if (a.hier1) hierData.push([f.name, `LEVEL_${a.hier1}`, a.name]);
-                if (a.hier2) hierData.push([f.name, `LEVEL_${a.hier2}`, a.name]);
+    // Esquema esperado por excelService.js / commands.js:
+    // FILA | HIERARCHY | NIVEL | DIMENSION | ATRIBUTO | DIM_PROJECT | DIM_DATASET | DIM_TABLE | DIM_FIELD | MODEL_NAME
+    const hierHeaders = [
+        "FILA",
+        "HIERARCHY",
+        "NIVEL",
+        "DIMENSION",
+        "ATRIBUTO",
+        "DIM_PROJECT",
+        "DIM_DATASET",
+        "DIM_TABLE",
+        "DIM_FIELD",
+        "MODEL_NAME"
+    ];
+
+    const hierNewRows = [];
+    let hierFila = 1;
+
+    fieldsState.forEach(f => {
+
+        if (!f.enabled || f.type !== "DIMENSION" || !f.hierarchies || f.hierarchies.length === 0)
+            return;
+
+        f.hierarchies.forEach(hier => {
+
+            (hier.levels || []).forEach((lvl, levelIdx) => {
+
+                const attr = (f.attributes || []).find(a => a.name === lvl.attribute);
+
+                hierNewRows.push([
+                    hierFila++,
+                    hier.name,
+                    levelIdx + 1,
+                    f.name,
+                    attr ? (attr.alias || attr.name) : lvl.attribute,
+                    f.relProject || factProject,
+                    f.relDataset || factDataset,
+                    f.relTable || factTable,
+                    lvl.attribute,
+                    currentModel
+                ]);
+
             });
-        }
+
+        });
+
     });
 
     try {
         await saveModelHeader();
 
         await Excel.run(async (context) => {
+
             const sheets = context.workbook.worksheets;
 
-            // 1. MODEL_RELATIONSHIP
-            let sheetRel = sheets.getItemOrNullObject("MODEL_RELATIONSHIP");
-            await context.sync();
-            if (sheetRel.isNullObject) sheetRel = sheets.add("MODEL_RELATIONSHIP");
-            else sheetRel.getUsedRangeOrNullObject().clear();
-
-            if (relData.length > 0) {
-                sheetRel.getRangeByIndexes(0, 0, relData.length, relData[0].length).values = relData;
-            }
-
-            // 2. MODEL_DIMENSION
-            let sheetDim = sheets.getItemOrNullObject("MODEL_DIMENSION");
-            await context.sync();
-            if (sheetDim.isNullObject) sheetDim = sheets.add("MODEL_DIMENSION");
-
-            let rangeDim = sheetDim.getUsedRangeOrNullObject();
-            await context.sync();
-
-            let existingDimRows = [];
-            if (!rangeDim.isNullObject) {
-                rangeDim.load("values");
-                await context.sync();
-                existingDimRows = rangeDim.values || [];
-            }
-
-            let finalDimData = [];
-            if (existingDimRows.length > 0) {
-                finalDimData = existingDimRows.filter((r, i) => {
-                    if (i === 0) return true;
-                    return r[10] !== currentModel && r[r.length - 1] !== currentModel;
-                });
-            } else {
-                finalDimData.push(dimHeaders);
-            }
-
-            dimNewRows.forEach(row => finalDimData.push(row));
-
-            sheetDim.getUsedRangeOrNullObject().clear();
-            if (finalDimData.length > 0) {
-                sheetDim.getRangeByIndexes(0, 0, finalDimData.length, finalDimData[0].length).values = finalDimData;
-            }
-
-            // 3. MODEL_MEASURES
-            let sheetMea = sheets.getItemOrNullObject("MODEL_MEASURES");
-            await context.sync();
-            if (sheetMea.isNullObject) sheetMea = sheets.add("MODEL_MEASURES");
-
-            let rangeMea = sheetMea.getUsedRangeOrNullObject();
-            await context.sync();
-
-            let existingMeaRows = [];
-            if (!rangeMea.isNullObject) {
-                rangeMea.load("values");
-                await context.sync();
-                existingMeaRows = rangeMea.values || [];
-            }
-
-            let finalMeaData = [];
-            if (existingMeaRows.length > 0) {
-                finalMeaData = existingMeaRows.filter((r, i) => {
-                    if (i === 0) return true;
-                    return r[8] !== currentModel && r[r.length - 1] !== currentModel;
-                });
-            } else {
-                finalMeaData.push(meaHeaders);
-            }
-
-            meaNewRows.forEach(row => finalMeaData.push(row));
-
-            sheetMea.getUsedRangeOrNullObject().clear();
-            if (finalMeaData.length > 0) {
-                sheetMea.getRangeByIndexes(0, 0, finalMeaData.length, finalMeaData[0].length).values = finalMeaData;
-            }
-
-            // 4. MODEL_ATRIBUTES
-            let sheetAttr = sheets.getItemOrNullObject("MODEL_ATRIBUTES");
-            await context.sync();
-            if (sheetAttr.isNullObject) sheetAttr = sheets.add("MODEL_ATRIBUTES");
-            else sheetAttr.getUsedRangeOrNullObject().clear();
-
-            if (attrData.length > 0) {
-                sheetAttr.getRangeByIndexes(0, 0, attrData.length, attrData[0].length).values = attrData;
-            }
-
-            // 5. MODEL_HIER
-            let sheetHier = sheets.getItemOrNullObject("MODEL_HIER");
-            await context.sync();
-            if (sheetHier.isNullObject) sheetHier = sheets.add("MODEL_HIER");
-            else sheetHier.getUsedRangeOrNullObject().clear();
-
-            if (hierData.length > 0) {
-                sheetHier.getRangeByIndexes(0, 0, hierData.length, hierData[0].length).values = hierData;
-            }
+            await mergeModelSheet(context, sheets, "MODEL_RELATIONSHIP", relHeaders, relNewRows, currentModel);
+            await mergeModelSheet(context, sheets, "MODEL_DIMENSION", dimHeaders, dimNewRows, currentModel);
+            await mergeModelSheet(context, sheets, "MODEL_MEASURES", meaHeaders, meaNewRows, currentModel);
+            await mergeModelSheet(context, sheets, "MODEL_ATRIBUTES", attrHeaders, attrNewRows, currentModel);
+            await mergeModelSheet(context, sheets, "MODEL_HIER", hierHeaders, hierNewRows, currentModel);
 
             await context.sync();
+
             alert("¡Modelo Semántico generado con éxito en Excel!");
+
         });
     } catch (err) {
         console.error("Error al escribir el modelo semántico en Excel:", err);

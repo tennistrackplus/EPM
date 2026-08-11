@@ -2,12 +2,7 @@
  * Lógica para comandos ejecutados en segundo plano por Excel
  */
 Office.onReady(() => {
-    // Handshake completado para comandos y registro explícito de acciones
-    Office.actions.associate("hidePane", hidePane);
-    Office.actions.associate("writeHolaInA1", writeHolaInA1);
-    Office.actions.associate("actualizarInformeFixed", actualizarInformeFixed);
-    Office.actions.associate("actualizarInforme", actualizarInforme);
-    Office.actions.associate("actualizar", actualizar);
+    // Handshake completado para comandos
 });
 
 /**
@@ -33,24 +28,89 @@ function hidePane(event) {
  * Ejecuta la consulta SQL en BigQuery y vuelca los resultados en la hoja activa comenzando en A1 de forma optimizada
  * @param {Office.AddinCommands.Event} event
  */
-
-
-/**
- * Escribe únicamente "hola" en la celda A1 de la hoja activa de forma inmediata
- * @param {Office.AddinCommands.Event} event
- */
 async function writeHolaInA1(event) {
     try {
+        const token = localStorage.getItem("bigquery_access_token");
+        const expires = localStorage.getItem("bigquery_token_expires");
+
+        // Comprobación de token de autenticación
+        if (!token || !expires || Date.now() >= parseInt(expires)) {
+            console.error("No hay una sesión activa de BigQuery. Inicia sesión en el panel primero.");
+            return;
+        }
+
+        const projectId = "bigqueryexcelconnector";
+        const sqlQuery = "select * from `ANALYTICS.DIM_CECO`";
+
+        // Petición a la API de BigQuery con deshabilitación de Legacy SQL
+        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/queries`, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                query: sqlQuery,
+                useLegacySql: false
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.error) {
+            console.error("Error devuelto por la API de BigQuery:", data.error.message);
+            return;
+        }
+
+        if (!data.schema || !data.schema.fields) {
+            console.warn("La consulta no devolvió estructuras de datos válidas.");
+            return;
+        }
+
+        const fields = data.schema.fields;
+        const fieldsCount = fields.length;
+        const rawRows = data.rows || [];
+        const rowsCount = rawRows.length;
+
+        // 1. Extraer los nombres de las columnas (Cabecera)
+        const headers = new Array(fieldsCount);
+        for (let i = 0; i < fieldsCount; i++) {
+            headers[i] = fields[i].name;
+        }
+
+        // 2. Conversión optimizada de datos a matriz 2D
+        const gridData = new Array(rowsCount + 1);
+        gridData[0] = headers;
+
+        for (let i = 0; i < rowsCount; i++) {
+            const rowCells = rawRows[i].f;
+            const rowArray = new Array(fieldsCount);
+            for (let j = 0; j < fieldsCount; j++) {
+                const val = rowCells[j].v;
+                rowArray[j] = val !== null && val !== undefined ? val : "";
+            }
+            gridData[i + 1] = rowArray;
+        }
+
+        // 3. Escribir los resultados en Excel optimizando el rendimiento visual
         await Excel.run(async (context) => {
+            // Suspender el redibujado de la pantalla en Excel durante la inserción
+            context.workbook.application.suspendScreenUpdatingUntilNextSync();
+
             const sheet = context.workbook.worksheets.getActiveWorksheet();
-            const range = sheet.getRange("A1");
-            range.values = [["hola"]];
+            const totalRows = gridData.length;
+
+            // Definir el rango total e inyectar la matriz completa de una sola vez
+            const range = sheet.getRangeByIndexes(0, 0, totalRows, fieldsCount);
+            range.values = gridData;
 
             await context.sync();
         });
+
     } catch (error) {
-        console.error("Error al escribir en A1:", error);
+        console.error("Error al ejecutar la consulta o pintar los datos en Excel:", error);
     } finally {
+        // OBLIGATORIO: Informar a Excel que la función finalizó
         if (event) {
             event.completed();
         }
@@ -2668,4 +2728,173 @@ async function actualizar(event) {
             event.completed();
         }
     }
+}
+
+// Exponer las funciones de actualización para poder llamarlas también desde
+// el taskpane (p.ej. tras guardar el diseño), no solo desde el ribbon.
+window.ReportActions = {
+    actualizar, actualizarInforme, actualizarInformeFixed,
+    toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
+    convertAxisStaticFormulas, ensureDracoHandlersRegistered
+};
+
+
+
+// Asociar el nombre del comando del manifiesto con la función JavaScript
+
+/**
+ * Función placeholder para botones del ribbon aún no implementados.
+ * No hace nada salvo completar el evento, para que el botón no falle.
+ */
+function comingSoon(event) {
+    console.log("Esta función todavía no está implementada.");
+    if (event) {
+        event.completed();
+    }
+}
+
+/* ---------------------------------------------------------------------
+ * Botones del ribbon "tipo pulsador": Pausar refresco / Reconocimiento
+ * de miembros. Por ahora SOLO guardan su estado (Office roaming
+ * settings, visible desde cualquier contexto: ribbon y taskpane); no hay
+ * ninguna lógica de negocio todavía detrás de ellos.
+ * ------------------------------------------------------------------- */
+function toggleDracoSetting(key) {
+    const settings = Office.context.document.settings;
+    const current = !!settings.get(key);
+    settings.set(key, !current);
+    return new Promise((resolve) => settings.saveAsync(() => resolve(!current)));
+}
+
+async function requestRibbonLabelUpdate(controlId, label) {
+    try {
+        if (Office.ribbon && Office.ribbon.requestUpdate) {
+            await Office.ribbon.requestUpdate({
+                tabs: [{
+                    id: "DracoBITab",
+                    groups: [{ id: "GroupOpcionesInforme", controls: [{ id: controlId, label }] }]
+                }]
+            });
+        }
+    } catch (e) {
+        console.warn("No se pudo actualizar la etiqueta del ribbon (" + controlId + "):", e);
+    }
+}
+
+async function toggleRefreshPaused(event) {
+    try {
+        const nowOn = await toggleDracoSetting("draco_refreshPaused");
+        console.log("Pausar refresco:", nowOn ? "activado" : "desactivado");
+        await requestRibbonLabelUpdate("BtnPausarRefresco", nowOn ? "Refresco: Pausado" : "Pausar refresco");
+    } catch (error) {
+        console.error("Error al alternar 'Pausar refresco':", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+async function toggleMemberRecognition(event) {
+    try {
+        const nowOn = await toggleDracoSetting("draco_memberRecognition");
+        console.log("Reconocimiento de miembros:", nowOn ? "activado" : "desactivado");
+        await requestRibbonLabelUpdate("BtnReconocimientoMiembros", nowOn ? "Miembros: activado" : "Reconoc. de miembros");
+    } catch (error) {
+        console.error("Error al alternar 'Reconocimiento de miembros':", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+/**
+ * Botones del ribbon "Propiedades del informe" y "Opciones de campo":
+ * abren/traen al frente el taskpane y le dejan marcada una acción
+ * pendiente en Office roaming settings; taskpane.js la recoge al arrancar
+ * (o al detectar el cambio de settings) y abre el modal/panel correspondiente.
+ */
+/**
+ * Botones del ribbon "Propiedades del informe" y "Opciones de campo".
+ *
+ * Desde que el complemento usa Shared Runtime (ver <Runtimes> en el
+ * manifiesto, resid="Taskpane.Url"), estas funciones se ejecutan en el
+ * MISMO contexto JS que taskpane.js (que además sigue vivo aunque el
+ * panel esté oculto, por "lifetime=long"). Eso permite:
+ *   1) Llamar directamente a los métodos de TaskPaneApp (sin pasar por
+ *      Office roaming settings ni esperar a que taskpane.js relea nada).
+ *   2) Usar Office.addin.showAsTaskpane(), que EXIGE Shared Runtime; sin
+ *      él lanza "RichApi.Error: La API solo se aplica al complemento que
+ *      usa Shared Runtime" (el error que se veía antes de este cambio).
+ *
+ * Se conserva el mecanismo antiguo (Office roaming settings +
+ * SettingsChanged en taskpane.js) como red de seguridad, por si en algún
+ * host el runtime compartido tardase en levantar TaskPaneApp.
+ */
+async function openReportProperties(event) {
+    try {
+        console.log("[Draco] openReportProperties: shared runtime ¿activo? ->", typeof TaskPaneApp !== "undefined");
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.openReportPropertiesModal) {
+            TaskPaneApp.openReportPropertiesModal();
+            console.log("[Draco] openReportPropertiesModal() ejecutado directamente (shared runtime OK).");
+        } else {
+            console.warn("[Draco] TaskPaneApp NO existe en este contexto: usando fallback de settings (¿manifest sin Runtimes recargado?).");
+            const settings = Office.context.document.settings;
+            settings.set("draco_pendingAction", "properties");
+            await new Promise((resolve) => settings.saveAsync(resolve));
+        }
+        if (Office.addin && Office.addin.showAsTaskpane) {
+            await Office.addin.showAsTaskpane();
+            console.log("[Draco] showAsTaskpane() resuelto sin error.");
+        } else {
+            console.warn("[Draco] Office.addin.showAsTaskpane no está disponible en este runtime.");
+        }
+    } catch (error) {
+        console.error("Error al abrir Propiedades del informe:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+async function openFieldOptions(event) {
+    try {
+        console.log("[Draco] openFieldOptions: shared runtime ¿activo? ->", typeof TaskPaneApp !== "undefined");
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.setFieldOptionsPanelOpen) {
+            TaskPaneApp.setFieldOptionsPanelOpen(true);
+            console.log("[Draco] setFieldOptionsPanelOpen(true) ejecutado directamente (shared runtime OK).");
+        } else {
+            console.warn("[Draco] TaskPaneApp NO existe en este contexto: usando fallback de settings (¿manifest sin Runtimes recargado?).");
+            const settings = Office.context.document.settings;
+            settings.set("draco_pendingAction", "fieldOptions");
+            await new Promise((resolve) => settings.saveAsync(resolve));
+        }
+        if (Office.addin && Office.addin.showAsTaskpane) {
+            await Office.addin.showAsTaskpane();
+            console.log("[Draco] showAsTaskpane() resuelto sin error.");
+        } else {
+            console.warn("[Draco] Office.addin.showAsTaskpane no está disponible en este runtime.");
+        }
+    } catch (error) {
+        console.error("Error al abrir Opciones de campo:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+// Nota: este fichero se carga tanto en el runtime de comandos (commands.html)
+// como, ahora, dentro del propio taskpane (taskpane.html), para poder
+// disparar Actualizar()/ActualizarInforme() (y por tanto jsonTo3Matrices)
+// automáticamente al guardar cambios en el diseñador. Office.actions.associate
+// solo tiene efecto real en el runtime de comandos; se protege con try/catch
+// por si el host no expone esa API fuera de ese contexto.
+try {
+    Office.actions.associate("hidePane", hidePane);
+    Office.actions.associate("writeHolaInA1", writeHolaInA1);
+    Office.actions.associate("actualizarInformeFixed", actualizarInformeFixed);
+    Office.actions.associate("actualizarInforme", actualizarInforme);
+    Office.actions.associate("actualizar", actualizar);
+    Office.actions.associate("comingSoon", comingSoon);
+    Office.actions.associate("toggleRefreshPaused", toggleRefreshPaused);
+    Office.actions.associate("toggleMemberRecognition", toggleMemberRecognition);
+    Office.actions.associate("openReportProperties", openReportProperties);
+    Office.actions.associate("openFieldOptions", openFieldOptions);
+} catch (e) {
+    console.warn("Office.actions.associate no disponible en este contexto:", e);
 }
