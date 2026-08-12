@@ -21,9 +21,16 @@ const RangeAxis = {
     rr: { row: 1, col: 1, height: 1, width: 0 },   // eje Filas
     rc: { row: 1, col: 1, height: 0, width: 1 },   // eje Columnas
 
-    loadFromAddresses(rrAddress, rcAddress) {
-        this.rr = this._parseRange(rrAddress, { row: 1, col: 1, height: 1, width: 0 });
-        this.rc = this._parseRange(rcAddress, { row: 1, col: 1, height: 0, width: 1 });
+    loadFromAddresses(rrAddress, rcAddress, anchorAddress) {
+        // Ancla de la PRIMERA vez (EDIT_REPORT!E1): solo se usa como
+        // fallback cuando el eje correspondiente todavía no tiene una
+        // dirección guardada (rrAddress/rcAddress vacíos), es decir, la
+        // primera vez que se monta el informe. Si E1 no tiene una
+        // dirección válida, se mantiene A1 (comportamiento anterior).
+        const anchor = window.ReportDesignerUtils.parseAddress(anchorAddress) || { row: 1, col: 1 };
+
+        this.rr = this._parseRange(rrAddress, { row: anchor.row, col: anchor.col, height: 1, width: 0 });
+        this.rc = this._parseRange(rcAddress, { row: anchor.row, col: anchor.col, height: 0, width: 1 });
     },
 
     _parseRange(address, fallback) {
@@ -120,9 +127,9 @@ const TaskPaneApp = {
         reportName: "Report 001",
         suppressZeroRows: false,
         suppressZeroCols: false,
-        subtotalsOnTop: true,
+        subtotalsOnTop: false,
         overwriteFormats: true,
-        autoFitColumns: false
+        autoFitColumns: true
     },
 
     // Campo actualmente seleccionado en el panel "Opciones de campo"
@@ -542,7 +549,7 @@ const TaskPaneApp = {
             this.state.colsStatic = design.colsStatic;
             this.state.fieldOptions = design.fieldOptions || {};
 
-            RangeAxis.loadFromAddresses(design.rrAddress, design.rcAddress);
+            RangeAxis.loadFromAddresses(design.rrAddress, design.rcAddress, design.anchorAddress);
 
             // Pintar checkboxes + sombreado/bloqueo si el eje ya venía Estático
             const chkRows = document.getElementById("chkAsymmetricRows");
@@ -1019,8 +1026,20 @@ const TaskPaneApp = {
                 await window.ExcelService.saveReportPropertiesToSheetCells(this.reportProperties);
             }
             this.closeReportPropertiesModal();
-            // Estas propiedades las lee jsonTo3Matrices en cada refresco real;
-            // no hace falta lanzar uno aquí, solo quedan guardadas para el próximo.
+
+            // Al guardar las propiedades del informe, se refresca el
+            // informe para que los cambios (suprimir ceros, subtotales
+            // arriba, sobrescribir formatos, autoajustar columnas...) se
+            // vean reflejados de inmediato.
+            if (window.ReportActions && typeof window.ReportActions.actualizar === "function") {
+                this.setAutoStatus("Actualizando…");
+                await window.ReportActions.actualizar();
+                this.setAutoStatus("Actualizado ✓");
+                setTimeout(() => {
+                    const el = document.getElementById("autoStatus");
+                    if (el && el.innerText === "Actualizado ✓") el.innerText = "";
+                }, 2000);
+            }
         } catch (err) {
             console.error("Error al guardar las propiedades del informe:", err);
             alert("Error al guardar: " + (err.message || err));
@@ -1087,7 +1106,7 @@ const TaskPaneApp = {
         const isMeasure = String(entry.dimension).toUpperCase() === "MEASURE";
         const defaults = isMeasure
             ? { numberFormat: "#,##0.00", decimalSeparator: ",", thousandsSeparator: ".", factor: 1, decimals: 2, aggregation: "SUM" }
-            : { showTotals: true, sortOrder: "none", expandToLevel: null, visibleLevels: null };
+            : { showTotals: false, sortOrder: "none", expandToLevel: null, visibleLevels: null };
         return Object.assign({}, defaults, this.state.fieldOptions[key] || {});
     },
 

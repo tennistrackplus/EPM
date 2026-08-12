@@ -378,6 +378,13 @@ const ExcelService = {
             const rrAddress = String(cellValue(grid, 10, 8)).trim();
             const rcAddress = String(cellValue(grid, 10, 14)).trim();
 
+            // ---- Celda de anclaje para la PRIMERA vez que se monta el
+            // informe (EDIT_REPORT!E1). Si está vacía o no es una dirección
+            // válida, se usa A1 (comportamiento anterior). Solo se aplica
+            // cuando todavía no hay rrAddress/rcAddress guardados (ver
+            // RangeAxis.loadFromAddresses en taskpane.js).
+            const anchorAddress = String(cellValue(grid, 1, 5)).trim(); // E1
+
             // ---- Opciones por campo (mostrar totales, orden, expandir hasta
             // nivel, niveles visibles, formato de medida...): un único JSON
             // guardado en S1, clave "zona|dimension|nombre" -> objeto opciones.
@@ -392,7 +399,7 @@ const ExcelService = {
             return {
                 filters, rows, columns,
                 rowsStatic, colsStatic,
-                rrAddress, rcAddress,
+                rrAddress, rcAddress, anchorAddress,
                 fieldOptions
             };
         });
@@ -431,6 +438,16 @@ const ExcelService = {
                 return [subtotal, order];
             };
 
+            // Niveles marcados en "Opciones de campo" para una jerarquía
+            // (clave "<zone>|DIM|NOMBRE"). null = todos los niveles (valor
+            // por defecto: al hacer drag&drop se rellenan todos los
+            // niveles); un array = solo esos niveles se escriben en
+            // EDIT_REPORT (los desmarcados se quitan).
+            const visibleLevelsFor = (zoneId, dimension, name) => {
+                const opts = (state.fieldOptions || {})[`${zoneId}|${dimension}|${name}`] || {};
+                return Array.isArray(opts.visibleLevels) ? opts.visibleLevels : null;
+            };
+
             // ---- SaveFilters: C,D,E,F ----
             let filaFilters = 15;
             for (const f of state.filters) {
@@ -448,10 +465,13 @@ const ExcelService = {
             let filaRows = 15;
             for (const r of state.rows) {
                 if (r.isHierarchy && existsHierarchy(hierGrid, r.dimension, r.name)) {
+                    const visibleLevels = visibleLevelsFor("rows", r.dimension, r.name);
                     const lastRow = lastRowInColumnValues(hierGrid, 4);
                     for (let R = 2; R <= lastRow; R++) {
                         if (String(cellValue(hierGrid, R, 4)).toUpperCase() === r.dimension.toUpperCase()
                             && String(cellValue(hierGrid, R, 2)).toUpperCase() === r.name.toUpperCase()) {
+                            const nivel = Number(cellValue(hierGrid, R, 3));
+                            if (visibleLevels && !visibleLevels.includes(nivel)) continue; // nivel desmarcado: se quita de EDIT_REPORT
                             const row = sheet.getRangeByIndexes(filaRows - 1, 7, 1, 4); // H..K
                             row.values = [[
                                 cellValue(hierGrid, R, 4),  // DIMENSION
@@ -475,10 +495,13 @@ const ExcelService = {
             let filaCols = 15;
             for (const c of state.columns) {
                 if (c.isHierarchy && existsHierarchy(hierGrid, c.dimension, c.name)) {
+                    const visibleLevels = visibleLevelsFor("columns", c.dimension, c.name);
                     const lastRow = lastRowInColumnValues(hierGrid, 4);
                     for (let R = 2; R <= lastRow; R++) {
                         if (String(cellValue(hierGrid, R, 4)).toUpperCase() === c.dimension.toUpperCase()
                             && String(cellValue(hierGrid, R, 2)).toUpperCase() === c.name.toUpperCase()) {
+                            const nivel = Number(cellValue(hierGrid, R, 3));
+                            if (visibleLevels && !visibleLevels.includes(nivel)) continue; // nivel desmarcado: se quita de EDIT_REPORT
                             const row = sheet.getRangeByIndexes(filaCols - 1, 13, 1, 4); // N..Q
                             row.values = [[
                                 cellValue(hierGrid, R, 4),

@@ -7,12 +7,62 @@ let fieldsState = [];
 let currentConfigFieldIndex = null;
 let currentTreeTarget = "FACT"; // "FACT" o "DIM"
 
-Office.onReady((info) => {
+Office.onReady(async (info) => {
     if (info.host === Office.HostType.Excel) {
         initEvents();
+		await ensureCoreModelSheets();
 		loadSemanticModels();
     }
 });
+
+/**
+ * Asegura que existan las hojas técnicas base del modelo semántico:
+ * - MODEL_FACT: si no existe la crea con su cabecera.
+ * - EDIT_REPORT: si no existe la crea vacía, salvo D5 y D6 que llevan "X".
+ * Ambas se ocultan (igual que el resto de hojas MODEL_*).
+ */
+async function ensureCoreModelSheets() {
+
+    await Excel.run(async (context) => {
+
+        const sheets = context.workbook.worksheets;
+
+        // MODEL_FACT
+        let factSheet = sheets.getItemOrNullObject("MODEL_FACT");
+        await context.sync();
+
+        if (factSheet.isNullObject) {
+
+            factSheet = sheets.add("MODEL_FACT");
+
+            factSheet.getRangeByIndexes(0, 0, 1, 4).values = [
+                ["MODEL_NAME", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE"]
+            ];
+
+        }
+
+        factSheet.visibility = Excel.SheetVisibility.hidden;
+
+        // EDIT_REPORT
+        let editSheet = sheets.getItemOrNullObject("EDIT_REPORT");
+        await context.sync();
+
+        if (editSheet.isNullObject) {
+
+            editSheet = sheets.add("EDIT_REPORT");
+
+            editSheet.getRange("D5").values = [["X"]];
+            editSheet.getRange("D6").values = [["X"]];
+
+        }
+
+        editSheet.visibility = Excel.SheetVisibility.hidden;
+
+        await context.sync();
+
+    });
+
+}
 
 function initEvents() {
 
@@ -333,6 +383,8 @@ async function loadSemanticModels()
 
 async function saveModelHeader()
 {
+
+    await ensureCoreModelSheets();
 
     await Excel.run(async(context)=>{
 
@@ -1666,6 +1718,9 @@ async function mergeModelSheet(context, sheets, sheetName, headers, newRows, mod
     if (finalRows.length > 0) {
         sheet.getRangeByIndexes(0, 0, finalRows.length, finalRows[0].length).values = finalRows;
     }
+
+    // Todas las hojas técnicas del modelo semántico se ocultan
+    sheet.visibility = Excel.SheetVisibility.hidden;
 
     return sheet;
 
