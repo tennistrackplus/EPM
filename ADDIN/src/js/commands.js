@@ -2869,7 +2869,7 @@ async function actualizar(event) {
 // el taskpane (p.ej. tras guardar el diseño), no solo desde el ribbon.
 window.ReportActions = {
     actualizar, actualizarInforme, actualizarInformeFixed,
-    toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions, editReport,
+    toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
     convertAxisStaticFormulas, ensureDracoHandlersRegistered
 };
 
@@ -2988,47 +2988,6 @@ async function openReportProperties(event) {
     }
 }
 
-/**
- * Botón del ribbon "Abrir diseño" / "Editar report": guarda en
- * EDIT_REPORT!D1 el nombre de la pestaña (hoja) donde se pulsó, para que
- * ese informe se pinte/actualice sobre ESA hoja (en vez del literal fijo
- * "CSV_RESULT"; ver getDracoResultSheetName/resultSheetNameFromGrid) y
- * después abre el taskpane para diseñarlo, igual que openReportProperties.
- */
-async function editReport(event) {
-    try {
-        await Excel.run(async (context) => {
-            const activeSheet = context.workbook.worksheets.getActiveWorksheet();
-            activeSheet.load("name");
-            await context.sync();
-
-            const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-            editReportSheet.getRange("D1").values = [[activeSheet.name]];
-            await context.sync();
-        });
-
-        console.log("[Draco] editReport: shared runtime ¿activo? ->", typeof TaskPaneApp !== "undefined");
-        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.loadDesignFromSheet) {
-            await TaskPaneApp.loadDesignFromSheet();
-            console.log("[Draco] loadDesignFromSheet() ejecutado directamente (shared runtime OK).");
-        } else {
-            console.warn("[Draco] TaskPaneApp NO existe en este contexto: usando fallback de settings.");
-            const settings = Office.context.document.settings;
-            settings.set("draco_pendingAction", "editReport");
-            await new Promise((resolve) => settings.saveAsync(resolve));
-        }
-        if (Office.addin && Office.addin.showAsTaskpane) {
-            await Office.addin.showAsTaskpane();
-        } else {
-            console.warn("[Draco] Office.addin.showAsTaskpane no está disponible en este runtime.");
-        }
-    } catch (error) {
-        console.error("Error al abrir 'Editar report':", error);
-    } finally {
-        if (event) event.completed();
-    }
-}
-
 async function openFieldOptions(event) {
     try {
         console.log("[Draco] openFieldOptions: shared runtime ¿activo? ->", typeof TaskPaneApp !== "undefined");
@@ -3071,7 +3030,6 @@ try {
     Office.actions.associate("toggleMemberRecognition", toggleMemberRecognition);
     Office.actions.associate("openReportProperties", openReportProperties);
     Office.actions.associate("openFieldOptions", openFieldOptions);
-    Office.actions.associate("editReport", editReport);
 } catch (e) {
     console.warn("Office.actions.associate no disponible en este contexto:", e);
 }

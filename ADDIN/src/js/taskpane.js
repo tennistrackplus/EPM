@@ -209,17 +209,18 @@ const TaskPaneApp = {
     },
 
     /**
-     * Botón "Pausar actualización de datos" del taskpane. Comparte el mismo
-     * flag (Office roaming settings, clave "draco_refreshPaused") que el
-     * botón equivalente del ribbon, así que quedan siempre sincronizados
-     * quedándose marcado/pulsado mientras la pausa esté activa. Mientras
-     * está marcado, runAutoSaveAndRefresh() sigue guardando el diseño pero
-     * NO llama a Actualizar() (no se refrescan los datos).
+     * Botón "Pausar actualización de datos" del TASKPANE. Es
+     * completamente independiente del botón de pausa del ribbon (no
+     * comparte clave de ajuste ni depende del manifest): usa su propia
+     * clave en Office roaming settings solo para recordar el estado
+     * entre aperturas del taskpane. Mientras está marcado,
+     * runAutoSaveAndRefresh() sigue guardando el diseño pero NO llama a
+     * Actualizar() (no se refrescan los datos).
      */
     isRefreshPaused() {
         try {
             const settings = Office.context && Office.context.document && Office.context.document.settings;
-            return !!(settings && settings.get("draco_refreshPaused"));
+            return !!(settings && settings.get("draco_taskpane_refreshPaused"));
         } catch (e) {
             return false;
         }
@@ -241,13 +242,15 @@ const TaskPaneApp = {
             try {
                 const settings = Office.context.document.settings;
                 const nowPaused = !this.isRefreshPaused();
-                settings.set("draco_refreshPaused", nowPaused);
-                settings.saveAsync(() => this.setRefreshPausedUI(nowPaused));
+                settings.set("draco_taskpane_refreshPaused", nowPaused);
+                this.setRefreshPausedUI(nowPaused); // feedback inmediato, sin esperar saveAsync
+                settings.saveAsync();
             } catch (e) {
                 console.warn("No se pudo alternar la pausa de actualización:", e);
             }
         });
     },
+
 
     // Guarda el diseño SIN disparar Actualizar() (BigQuery). Se usa al
     // marcar/desmarcar Estático: el propio botón pide explícitamente que
@@ -267,24 +270,80 @@ const TaskPaneApp = {
         }
     },
 
-    async init() {
-        if (typeof FilterModal !== "undefined" && FilterModal.init) {
-            FilterModal.init();
+    /**
+     * Botón "Editar report" del TASKPANE (no del ribbon: no depende del
+     * manifest). Flujo: el usuario deja activa en Excel la pestaña/hoja
+     * que quiere editar y pulsa este botón aquí; se guarda el nombre de
+     * esa hoja en EDIT_REPORT!D1 (de donde lo leen commands.js
+     * getDracoResultSheetName/resultSheetNameFromGrid en lugar del
+     * literal fijo "CSV_RESULT") y se recarga el diseño existente para
+     * esa hoja.
+     */
+    async editReportFromTaskpane() {
+        const btn = document.getElementById("btnEditReport");
+        try {
+            if (btn) btn.disabled = true;
+            this.setAutoStatus("Editando report…");
+
+            let activeSheetName = "";
+            await Excel.run(async (context) => {
+                const activeSheet = context.workbook.worksheets.getActiveWorksheet();
+                activeSheet.load("name");
+                await context.sync();
+                activeSheetName = activeSheet.name;
+
+                const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+                editReportSheet.getRange("D1").values = [[activeSheetName]];
+                await context.sync();
+            });
+
+            await this.loadDesignFromSheet();
+            this.setAutoStatus(`Editando "${activeSheetName}"`);
+        } catch (err) {
+            console.error("Error en 'Editar report':", err);
+            this.setAutoStatus("Error al editar report");
+            alert("No se pudo guardar la pestaña activa en EDIT_REPORT!D1: " + (err.message || err));
+        } finally {
+            if (btn) btn.disabled = false;
         }
-        this.bindEvents();
-        this.initRefreshPauseButton();
-        this.registerPendingRibbonActionListener();
-        this.loadReportPropertiesFromSettings();
-        await this.loadFields();
-        await this.loadDesignFromSheet();
-        await this.handlePendingRibbonAction();
+    },
+
+    async init() {
+        // Cada paso va en su propio try/catch: un fallo puntual (p.ej. al
+        // leer un ajuste de Office, o al procesar una acción pendiente del
+        // ribbon) NUNCA debe impedir que loadFields() rellene el árbol de
+        // campos disponibles ni que se cargue el diseño existente.
+        const safeStep = async (label, fn) => {
+            try {
+                await fn();
+            } catch (err) {
+                console.error(`Error en init() -> ${label}:`, err);
+            }
+        };
+
+        if (typeof FilterModal !== "undefined" && FilterModal.init) {
+            await safeStep("FilterModal.init", () => FilterModal.init());
+        }
+        await safeStep("bindEvents", () => this.bindEvents());
+        await safeStep("initRefreshPauseButton", () => this.initRefreshPauseButton());
+        await safeStep("registerPendingRibbonActionListener", () => this.registerPendingRibbonActionListener());
+        await safeStep("loadReportPropertiesFromSettings", () => this.loadReportPropertiesFromSettings());
+
+        // loadFields() es lo más importante de esta pantalla (el árbol de
+        // campos de la izquierda): se ejecuta siempre, pase lo que pase
+        // con los pasos anteriores.
+        await safeStep("loadFields", () => this.loadFields());
+        await safeStep("loadDesignFromSheet", () => this.loadDesignFromSheet());
+        await safeStep("handlePendingRibbonAction", () => this.handlePendingRibbonAction());
 
         // Registro temprano de los listeners de reconocimiento de miembros
         // / indicadores +/-, para que funcionen sin necesidad de que el
         // usuario abra el panel ni pulse "Actualizar informe" antes.
-        if (window.ReportActions && window.ReportActions.ensureDracoHandlersRegistered) {
-            window.ReportActions.ensureDracoHandlersRegistered();
-        }
+        await safeStep("ensureDracoHandlersRegistered", async () => {
+            if (window.ReportActions && window.ReportActions.ensureDracoHandlersRegistered) {
+                await window.ReportActions.ensureDracoHandlersRegistered();
+            }
+        });
     },
 
     /**
@@ -320,6 +379,9 @@ const TaskPaneApp = {
 
         const btnSave = document.getElementById("btnSaveDesign");
         if (btnSave) btnSave.addEventListener("click", () => this.saveDesign());
+
+        const btnEditReport = document.getElementById("btnEditReport");
+        if (btnEditReport) btnEditReport.addEventListener("click", () => this.editReportFromTaskpane());
 
         // Checkboxes Estático / Dinámico (Checkrow / CheckCol del VBA): NO
         // disparan Actualizar() (solo guardan el flag), sombrean la zona y
