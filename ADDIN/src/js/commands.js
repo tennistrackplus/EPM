@@ -409,6 +409,9 @@ function loadColumns(editReportGrid) {
 }
 
 function loadReportDefinition(editReportGrid) {
+    ReportState.SubtotalsOnTop =
+        String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
+
     loadFilters(editReportGrid);
     loadRows(editReportGrid);
     loadColumns(editReportGrid);
@@ -1348,35 +1351,105 @@ function buildFinalSelect() {
     let sql = "SELECT" + CRLF + CRLF;
 
     sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
+
     let first = true;
+
+    if (ReportState.SubtotalsOnTop) {
+        sql += CRLF + "            CASE";
+
+        for (const c of ReportState.Columns) {
+            if (c.Subtotal === true) {
+                sql += CRLF +
+                    "                WHEN " +
+                    c.AttributeName +
+                    " IS NULL THEN 0";
+            }
+        }
+
+        for (const r of ReportState.Rows) {
+            if (r.Subtotal === true) {
+                sql += CRLF +
+                    "                WHEN " +
+                    r.AttributeName +
+                    " IS NULL THEN 0";
+            }
+        }
+
+        sql += CRLF + "                ELSE 1";
+        sql += CRLF + "            END," + CRLF;
+    }
+
     for (const c of ReportState.Columns) {
         if (c.Hierarchy > 0) {
-            sql += first ? (CRLF + "            " + c.AttributeName) : ("," + CRLF + "            " + c.AttributeName);
+            sql += first
+                ? (CRLF + "            " + c.AttributeName)
+                : ("," + CRLF + "            " + c.AttributeName);
+
             first = false;
         }
     }
+
     sql += CRLF + "    ) AS ROW_ID," + CRLF + CRLF;
 
     sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
+
     first = true;
+
+    if (ReportState.SubtotalsOnTop) {
+        sql += CRLF + "            CASE";
+
+        for (const r of ReportState.Rows) {
+            if (r.Subtotal === true) {
+                sql += CRLF +
+                    "                WHEN " +
+                    r.AttributeName +
+                    " IS NULL THEN 0";
+            }
+        }
+
+        for (const c of ReportState.Columns) {
+            if (c.Subtotal === true) {
+                sql += CRLF +
+                    "                WHEN " +
+                    c.AttributeName +
+                    " IS NULL THEN 0";
+            }
+        }
+
+        sql += CRLF + "                ELSE 1";
+        sql += CRLF + "            END," + CRLF;
+    }
+
+    first = true;
+
     for (const r of ReportState.Rows) {
         if (r.Hierarchy > 0) {
-            sql += first ? (CRLF + "            " + r.AttributeName) : ("," + CRLF + "            " + r.AttributeName);
+            sql += first
+                ? (CRLF + "            " + r.AttributeName)
+                : ("," + CRLF + "            " + r.AttributeName);
+
             first = false;
         }
     }
+
     sql += CRLF + "    ) AS COLUMN_ID," + CRLF + CRLF;
 
     first = true;
+
     for (const c of ReportState.Columns) {
-        sql += first ? ("    " + c.AttributeName) : ("," + CRLF + "    " + c.AttributeName);
+        sql += first
+            ? ("    " + c.AttributeName)
+            : ("," + CRLF + "    " + c.AttributeName);
+
         first = false;
     }
+
     for (const r of ReportState.Rows) {
         sql += "," + CRLF + "    " + r.AttributeName;
     }
 
-    sql += "," + CRLF + "    IMPORTE" + CRLF + CRLF + "FROM REPORT_DATA";
+    sql += "," + CRLF + "    IMPORTE" + CRLF + CRLF;
+    sql += "FROM REPORT_DATA";
 
     return sql;
 }
