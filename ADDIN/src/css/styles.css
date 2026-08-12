@@ -135,12 +135,36 @@ body {
 }
 
 .dimension-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     font-size: 10px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
     padding: 4px 6px 4px 6px;
+    cursor: pointer;
+    user-select: none;
+    border-radius: var(--radius-sm);
+}
+
+.dimension-header:hover {
+    background-color: var(--brand-primary-light);
+}
+
+.dimension-caret {
+    display: inline-block;
+    width: 10px;
+    font-size: 9px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+/* Dimensión contraída: se ocultan sus atributos/jerarquías, solo queda
+   visible la cabecera con el nombre de la dimensión. */
+.dimension-group.collapsed > .field-item {
+    display: none;
 }
 
 .field-item {
@@ -479,6 +503,36 @@ body {
 .field-options-checkbox-row input {
     accent-color: var(--brand-primary);
     cursor: pointer;
+    flex-shrink: 0;
+}
+
+/* Bloque "etiqueta arriba / control abajo" para selects fuera de un
+   checkbox (p.ej. "Ordenar", "Expandir hasta nivel"): antes el <label>
+   envolvía directamente el texto + el <select>, quedando descuadrado. */
+.field-options-field-block {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.field-options-field-label {
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+/* Filas de "Mostrar niveles": el texto (p.ej. "Nivel 2 — REGION") ya no
+   se parte en 2 líneas centradas dentro del cuadro; se trunca con "…" y
+   el título completo queda disponible como tooltip. */
+.field-options-level-row {
+    align-items: center;
+}
+
+.field-options-level-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
 }
 
 .field-options-levels {
@@ -487,6 +541,7 @@ body {
     gap: 4px;
     max-height: 120px;
     overflow-y: auto;
+    overflow-x: hidden;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
     padding: 6px;
