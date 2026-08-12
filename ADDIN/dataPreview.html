@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vista previa de datos</title>
+    <link rel="stylesheet" href="css/theme.css">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #ffffff;
+            color: #0f172a;
+        }
+
+        .preview-page {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .preview-header {
+            flex-shrink: 0;
+            padding: 12px 16px;
+            border-bottom: 1px solid #e2e8f0;
+            background-color: #f8fafc;
+        }
+
+        .preview-header h3 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 700;
+            color: #0f172a;
+        }
+
+        .preview-subtitle {
+            display: block;
+            margin-top: 2px;
+            font-size: 11px;
+            color: #64748b;
+        }
+
+        .preview-status {
+            padding: 24px 16px;
+            font-size: 12px;
+            color: #64748b;
+            text-align: center;
+        }
+
+        .preview-status.preview-error {
+            color: #b91c1c;
+        }
+
+        .preview-table-wrapper {
+            flex: 1;
+            overflow: auto;
+            padding: 0 16px 16px;
+        }
+
+        table.preview-table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: 11px;
+        }
+
+        table.preview-table thead th {
+            position: sticky;
+            top: 0;
+            background-color: #eff6ff;
+            color: #1e3a8a;
+            text-align: left;
+            padding: 6px 10px;
+            border-bottom: 2px solid #bfdbfe;
+            white-space: nowrap;
+        }
+
+        table.preview-table tbody td {
+            padding: 5px 10px;
+            border-bottom: 1px solid #f1f5f9;
+            white-space: nowrap;
+        }
+
+        table.preview-table tbody tr:hover {
+            background-color: #f8fafc;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="preview-page">
+        <div class="preview-header">
+            <h3 id="previewTitle">Vista previa de datos</h3>
+            <span class="preview-subtitle" id="previewSubtitle"></span>
+        </div>
+
+        <div id="previewStatus" class="preview-status">Cargando datos…</div>
+
+        <div id="previewTableWrapper" class="preview-table-wrapper" style="display:none;">
+            <table class="preview-table" id="previewTable">
+                <thead></thead>
+                <tbody></tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="js/dataPreview.js"></script>
+</body>
+</html>

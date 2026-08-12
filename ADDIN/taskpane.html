@@ -38,6 +38,12 @@
             <div style="display:flex; align-items:center; gap:6px;">
                 <span id="autoStatus" style="font-size: var(--fs-sm, 11px); color:#7045A9; min-width: 90px;"></span>
                 <button id="btnSaveDesign" class="btn-primary" style="padding:6px 14px; font-size: var(--fs-sm);">Guardar</button>
+                <button id="btnPauseRefresh" class="icon-button" title="Pausar actualización de datos" aria-pressed="false">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <rect x="4" y="3" width="3" height="10" rx="1"/>
+                        <rect x="9" y="3" width="3" height="10" rx="1"/>
+                    </svg>
+                </button>
                 <button id="btnReportProperties" class="icon-button" title="Propiedades del informe">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M8 4.75a.75.75 0 01.75.75v3.19l2.22 1.28a.75.75 0 01-.75 1.3l-2.6-1.5a.75.75 0 01-.37-.65V5.5A.75.75 0 018 4.75zM8 1a7 7 0 100 14A7 7 0 008 1z"/>
@@ -163,6 +169,11 @@
             </div>
             <div class="modal-body">
                 <div class="properties-form">
+                    <label class="form-row">
+                        Modelo semántico
+                        <select id="propSemanticModel"></select>
+                    </label>
+
                     <label class="form-row">
                         Nombre del informe
                         <input type="text" id="propReportName" placeholder="Report 001">
