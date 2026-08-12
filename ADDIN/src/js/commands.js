@@ -395,12 +395,14 @@ function loadColumns(editReportGrid) {
             ReportState.ColumnCount++;
 
             const hierRaw = String(cellValue(editReportGrid, R, 10)).trim();
+            const subtotalRaw = String(cellValue(editReportGrid, R, 11)).trim();
 
             ReportState.Columns.push({
                 Position: Number(cellValue(editReportGrid, R, 7)),
                 Dimension: dim,
                 AttributeName: String(cellValue(editReportGrid, R, 9)).trim(),
-                Hierarchy: hierRaw === "" ? 0 : Number(hierRaw)
+                Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
+                Subtotal: subtotalRaw.toUpperCase() === "X"
             });
         }
 
@@ -1141,92 +1143,177 @@ function generateHierarchyCombinations(hierarchies) {
  * Buildconfigsets: construye la cláusula GROUP BY GROUPING SETS (...)
  * combinando niveles de jerarquía de Filas y Columnas.
  */
-function buildConfigSets(relGrid) {
-    // ---- DIMENSIONS: Filas primero, luego Columnas ----
-    const dimensions = [null]; // índice 1-based, dimensions[0] sin usar
+ 
+ function buildConfigSets(relGrid) {
+    const dimensions = [null];
 
     for (const r of ReportState.Rows) {
-        dimensions.push(getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName);
+        dimensions.push(
+            getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName
+        );
     }
+
     for (const c of ReportState.Columns) {
-        dimensions.push(getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName);
+        dimensions.push(
+            getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName
+        );
     }
 
-    // ---- HIERARCHIES: longitud de cada tramo de "misma dimensión consecutiva" ----
-    const hierarchies = [];
+    const subtotalColumns = ReportState.Columns.filter(c => c.Subtotal === true);
 
-    let lastDim = "";
-    let contador = 0;
-    for (const r of ReportState.Rows) {
-        if (r.Dimension !== lastDim) {
-            if (lastDim !== "") hierarchies.push(contador);
-            lastDim = r.Dimension;
-            contador = 1;
-        } else {
-            contador++;
-        }
-    }
-    if (ReportState.Rows.length > 0) hierarchies.push(contador);
+    // SIN X: mantener exactamente la lógica actual
+    if (subtotalColumns.length === 0) {
 
-    lastDim = "";
-    contador = 0;
-    for (const c of ReportState.Columns) {
-        if (c.Dimension !== lastDim) {
-            if (lastDim !== "") hierarchies.push(contador);
-            lastDim = c.Dimension;
-            contador = 1;
-        } else {
-            contador++;
-        }
-    }
-    if (ReportState.Columns.length > 0) hierarchies.push(contador);
+        const hierarchies = [];
 
-    // ---- HIERARCHIES ACUM ----
-    const hierarchiesAcum = [];
-    let acum = 0;
-    for (const h of hierarchies) {
-        acum += h;
-        hierarchiesAcum.push(acum);
-    }
+        let lastDim = "";
+        let contador = 0;
 
-    const combinations = generateHierarchyCombinations(hierarchies);
-
-    let texto = "";
-    let first = true;
-
-    for (const item of combinations) {
-        if (first) {
-            texto += "GROUP BY GROUPING SETS ( ( ";
-            first = false;
-        } else {
-            texto += ",( ";
-        }
-
-        for (let i = 0; i < item.length; i++) {
-            for (let j = 1; j <= item[i]; j++) {
-                if (item[i] > 0) {
-                    if (i !== 0 || j !== 1) {
-                        texto += ", ";
-                    }
-                    if (i === 0) {
-                        texto += dimensions[j];
-                    } else {
-                        texto += dimensions[j + hierarchiesAcum[i - 1]];
-                    }
-                } else {
-                    texto += "[TOTAL]";
+        for (const r of ReportState.Rows) {
+            if (r.Dimension !== lastDim) {
+                if (lastDim !== "") {
+                    hierarchies.push(contador);
                 }
+
+                lastDim = r.Dimension;
+                contador = 1;
+            } else {
+                contador++;
             }
         }
 
+        if (ReportState.Rows.length > 0) {
+            hierarchies.push(contador);
+        }
+
+        lastDim = "";
+        contador = 0;
+
+        for (const c of ReportState.Columns) {
+            if (c.Dimension !== lastDim) {
+                if (lastDim !== "") {
+                    hierarchies.push(contador);
+                }
+
+                lastDim = c.Dimension;
+                contador = 1;
+            } else {
+                contador++;
+            }
+        }
+
+        if (ReportState.Columns.length > 0) {
+            hierarchies.push(contador);
+        }
+
+        const hierarchiesAcum = [];
+        let acum = 0;
+
+        for (const h of hierarchies) {
+            acum += h;
+            hierarchiesAcum.push(acum);
+        }
+
+        const combinations = generateHierarchyCombinations(hierarchies);
+
+        let texto = "";
+        let first = true;
+
+        for (const item of combinations) {
+            if (first) {
+                texto += "GROUP BY GROUPING SETS ( ( ";
+                first = false;
+            } else {
+                texto += ",( ";
+            }
+
+            for (let i = 0; i < item.length; i++) {
+                for (let j = 1; j <= item[i]; j++) {
+                    if (item[i] > 0) {
+                        if (i !== 0 || j !== 1) {
+                            texto += ", ";
+                        }
+
+                        if (i === 0) {
+                            texto += dimensions[j];
+                        } else {
+                            texto += dimensions[j + hierarchiesAcum[i - 1]];
+                        }
+                    }
+                }
+            }
+
+            texto += " )";
+        }
+
         texto += " )";
+
+        return texto;
     }
+
+    // CON X:
+    // Siempre detalle
+    const sets = [];
+
+    const detailSet = [];
+
+    for (let i = 1; i < dimensions.length; i++) {
+        detailSet.push(dimensions[i]);
+    }
+
+    sets.push(detailSet);
+
+    // Cada X genera su correspondiente subtotal
+    for (const subtotalColumn of subtotalColumns) {
+
+        const columnIndex = ReportState.Columns.indexOf(subtotalColumn);
+
+        const subtotalSet = [];
+
+        // Todas las filas
+        for (const r of ReportState.Rows) {
+            subtotalSet.push(
+                getTableAlias(relGrid, r.Dimension) +
+                "." +
+                r.AttributeName
+            );
+        }
+
+        // Columnas anteriores a la X
+        for (let i = 0; i < columnIndex; i++) {
+            const c = ReportState.Columns[i];
+
+            subtotalSet.push(
+                getTableAlias(relGrid, c.Dimension) +
+                "." +
+                c.AttributeName
+            );
+        }
+
+        sets.push(subtotalSet);
+    }
+
+    let texto = "GROUP BY GROUPING SETS ( ";
+
+    sets.forEach((set, index) => {
+        if (index > 0) {
+            texto += ", ";
+        }
+
+        texto += "( ";
+
+        if (set.length > 0) {
+            texto += set.join(", ");
+        }
+
+        texto += " )";
+    });
 
     texto += " )";
 
     return texto;
 }
-
+ 
 /**
  * BuildFinalSelect: traducción literal, incluyendo el cruce ROW_ID/COLUMN_ID
  * "invertido" tal cual está en tu VBA (ROW_ID se calcula a partir del eje
@@ -1276,33 +1363,75 @@ function buildFinalSelect() {
  */
 function buildFinalWhere() {
     let sql = "";
-    let currentDim = "";
-    let first = true;
 
-    // ---- COLUMNAS ----
-    for (const c of ReportState.Columns) {
-        if (c.Hierarchy > 0) {
-            if (currentDim !== c.Dimension.toUpperCase()) {
-                if (currentDim !== "") {
-                    sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
-                } else {
-                    sql += "WHERE NOT (" + CRLF;
+    const hasColumnSubtotals =
+        ReportState.Columns.some(c => c.Subtotal === true);
+
+    // SIN X EN COLUMNAS: mantener exactamente la lógica actual
+    if (!hasColumnSubtotals) {
+        let currentDim = "";
+        let first = true;
+
+        // ---- COLUMNAS ----
+        for (const c of ReportState.Columns) {
+            if (c.Hierarchy > 0) {
+                if (currentDim !== c.Dimension.toUpperCase()) {
+                    if (currentDim !== "") {
+                        sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
+                    } else {
+                        sql += "WHERE NOT (" + CRLF;
+                    }
+
+                    currentDim = c.Dimension.toUpperCase();
+                    first = true;
                 }
-                currentDim = c.Dimension.toUpperCase();
-                first = true;
-            }
 
-            sql += first
-                ? ("    " + c.AttributeName + " IS NULL")
-                : (CRLF + "    AND " + c.AttributeName + " IS NULL");
-            first = false;
+                sql += first
+                    ? ("    " + c.AttributeName + " IS NULL")
+                    : (CRLF + "    AND " + c.AttributeName + " IS NULL");
+
+                first = false;
+            }
         }
+
+        sql += CRLF + ")";
+
+        // ---- FILAS ----
+        currentDim = "";
+
+        for (const r of ReportState.Rows) {
+            if (r.Hierarchy > 0) {
+                if (currentDim !== r.Dimension.toUpperCase()) {
+                    if (currentDim !== "") {
+                        sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
+                    } else {
+                        sql += CRLF + CRLF + "AND NOT (" + CRLF;
+                    }
+
+                    currentDim = r.Dimension.toUpperCase();
+                    first = true;
+                }
+
+                sql += first
+                    ? ("    " + r.AttributeName + " IS NULL")
+                    : (CRLF + "    AND " + r.AttributeName + " IS NULL");
+
+                first = false;
+            }
+        }
+
+        if (currentDim !== "") {
+            sql += CRLF + ")";
+        }
+
+        return sql;
     }
 
-    sql += CRLF + ")";
-
-    // ---- FILAS ----
-    currentDim = "";
+    // CON X EN COLUMNAS:
+    // No filtramos NULL de las columnas porque representan subtotales.
+    // Mantenemos el filtro de NULL de las filas.
+    let currentDim = "";
+    let first = true;
 
     for (const r of ReportState.Rows) {
         if (r.Hierarchy > 0) {
@@ -1310,8 +1439,9 @@ function buildFinalWhere() {
                 if (currentDim !== "") {
                     sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
                 } else {
-                    sql += CRLF + CRLF + "AND NOT (" + CRLF;
+                    sql += "WHERE NOT (" + CRLF;
                 }
+
                 currentDim = r.Dimension.toUpperCase();
                 first = true;
             }
@@ -1319,6 +1449,7 @@ function buildFinalWhere() {
             sql += first
                 ? ("    " + r.AttributeName + " IS NULL")
                 : (CRLF + "    AND " + r.AttributeName + " IS NULL");
+
             first = false;
         }
     }
