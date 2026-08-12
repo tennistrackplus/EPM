@@ -337,9 +337,7 @@ function loadFilters(editReportGrid) {
 function loadRows(editReportGrid) {
     ReportState.RowCount = 0;
     ReportState.AttrRowCount = 0;
-    ReportState.MeasureCount = 0;
     ReportState.Rows = [];
-    ReportState.Measures = [];
 
     let R = 15;
 
@@ -347,26 +345,26 @@ function loadRows(editReportGrid) {
         const dim = String(cellValue(editReportGrid, R, 14)).trim();
 
         if (dim.toUpperCase() === "MEASURE") {
-            ReportState.MeasureCount++;
-            ReportState.Measures.push({
-                Name: String(cellValue(editReportGrid, R, 15)).trim()
-            });
-        } else {
-            ReportState.RowCount++;
-
-            if (Number(cellValue(editReportGrid, R, 16)) === 1) {
-                ReportState.AttrRowCount++;
-            }
-
-            const hierRaw = String(cellValue(editReportGrid, R, 16)).trim();
-
-            ReportState.Rows.push({
-                Position: Number(cellValue(editReportGrid, R, 13)),
-                Dimension: dim,
-                AttributeName: String(cellValue(editReportGrid, R, 15)).trim(),
-                Hierarchy: hierRaw === "" ? 0 : Number(hierRaw)
-            });
+            R++;
+            continue;
         }
+
+        if (Number(cellValue(editReportGrid, R, 16)) === 1) {
+            ReportState.AttrRowCount++;
+        }
+
+        ReportState.RowCount++;
+
+        const hierRaw = String(cellValue(editReportGrid, R, 16)).trim();
+        const subtotalRaw = String(cellValue(editReportGrid, R, 17)).trim();
+
+        ReportState.Rows.push({
+            Position: Number(cellValue(editReportGrid, R, 13)),
+            Dimension: dim,
+            AttributeName: String(cellValue(editReportGrid, R, 15)).trim(),
+            Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
+            Subtotal: subtotalRaw.toUpperCase() === "X"
+        });
 
         R++;
     }
@@ -1160,10 +1158,10 @@ function generateHierarchyCombinations(hierarchies) {
     }
 
     const subtotalColumns = ReportState.Columns.filter(c => c.Subtotal === true);
+    const subtotalRows = ReportState.Rows.filter(r => r.Subtotal === true);
 
-    // SIN X: mantener exactamente la lógica actual
-    if (subtotalColumns.length === 0) {
-
+    // SIN SUBTOTALES: mantener exactamente la lógica actual
+    if (subtotalColumns.length === 0 && subtotalRows.length === 0) {
         const hierarchies = [];
 
         let lastDim = "";
@@ -1171,10 +1169,7 @@ function generateHierarchyCombinations(hierarchies) {
 
         for (const r of ReportState.Rows) {
             if (r.Dimension !== lastDim) {
-                if (lastDim !== "") {
-                    hierarchies.push(contador);
-                }
-
+                if (lastDim !== "") hierarchies.push(contador);
                 lastDim = r.Dimension;
                 contador = 1;
             } else {
@@ -1191,10 +1186,7 @@ function generateHierarchyCombinations(hierarchies) {
 
         for (const c of ReportState.Columns) {
             if (c.Dimension !== lastDim) {
-                if (lastDim !== "") {
-                    hierarchies.push(contador);
-                }
-
+                if (lastDim !== "") hierarchies.push(contador);
                 lastDim = c.Dimension;
                 contador = 1;
             } else {
@@ -1251,10 +1243,9 @@ function generateHierarchyCombinations(hierarchies) {
         return texto;
     }
 
-    // CON X:
-    // Siempre detalle
     const sets = [];
 
+    // DETALLE
     const detailSet = [];
 
     for (let i = 1; i < dimensions.length; i++) {
@@ -1263,14 +1254,12 @@ function generateHierarchyCombinations(hierarchies) {
 
     sets.push(detailSet);
 
-    // Cada X genera su correspondiente subtotal
+    // SUBTOTALES DE COLUMNAS
     for (const subtotalColumn of subtotalColumns) {
-
         const columnIndex = ReportState.Columns.indexOf(subtotalColumn);
 
         const subtotalSet = [];
 
-        // Todas las filas
         for (const r of ReportState.Rows) {
             subtotalSet.push(
                 getTableAlias(relGrid, r.Dimension) +
@@ -1279,7 +1268,6 @@ function generateHierarchyCombinations(hierarchies) {
             );
         }
 
-        // Columnas anteriores a la X
         for (let i = 0; i < columnIndex; i++) {
             const c = ReportState.Columns[i];
 
@@ -1291,6 +1279,42 @@ function generateHierarchyCombinations(hierarchies) {
         }
 
         sets.push(subtotalSet);
+    }
+
+    // SUBTOTALES DE FILAS
+    for (const subtotalRow of subtotalRows) {
+        const rowIndex = ReportState.Rows.indexOf(subtotalRow);
+
+        const subtotalSet = [];
+
+        for (let i = 0; i < rowIndex; i++) {
+            const r = ReportState.Rows[i];
+
+            subtotalSet.push(
+                getTableAlias(relGrid, r.Dimension) +
+                "." +
+                r.AttributeName
+            );
+        }
+
+        for (const c of ReportState.Columns) {
+            subtotalSet.push(
+                getTableAlias(relGrid, c.Dimension) +
+                "." +
+                c.AttributeName
+            );
+        }
+
+        sets.push(subtotalSet);
+    }
+
+    // TOTAL GENERAL
+    if (
+        subtotalColumns.some(c => c.Subtotal === true) &&
+        subtotalColumns.some(c => c.Subtotal === true &&
+            ReportState.Columns.indexOf(c) === 0)
+    ) {
+        sets.push([]);
     }
 
     let texto = "GROUP BY GROUPING SETS ( ";
@@ -1361,18 +1385,20 @@ function buildFinalSelect() {
  * BuildFinalWhere: excluye de cada eje las filas de detalle que no
  * correspondan al grouping-set de totales de esa jerarquía (IS NULL).
  */
-function buildFinalWhere() {
-    let sql = "";
 
+function buildFinalWhere() {
     const hasColumnSubtotals =
         ReportState.Columns.some(c => c.Subtotal === true);
 
-    // SIN X EN COLUMNAS: mantener exactamente la lógica actual
-    if (!hasColumnSubtotals) {
+    const hasRowSubtotals =
+        ReportState.Rows.some(r => r.Subtotal === true);
+
+    // Sin subtotales: comportamiento actual exacto
+    if (!hasColumnSubtotals && !hasRowSubtotals) {
+        let sql = "";
         let currentDim = "";
         let first = true;
 
-        // ---- COLUMNAS ----
         for (const c of ReportState.Columns) {
             if (c.Hierarchy > 0) {
                 if (currentDim !== c.Dimension.toUpperCase()) {
@@ -1396,7 +1422,6 @@ function buildFinalWhere() {
 
         sql += CRLF + ")";
 
-        // ---- FILAS ----
         currentDim = "";
 
         for (const r of ReportState.Rows) {
@@ -1427,39 +1452,10 @@ function buildFinalWhere() {
         return sql;
     }
 
-    // CON X EN COLUMNAS:
-    // No filtramos NULL de las columnas porque representan subtotales.
-    // Mantenemos el filtro de NULL de las filas.
-    let currentDim = "";
-    let first = true;
-
-    for (const r of ReportState.Rows) {
-        if (r.Hierarchy > 0) {
-            if (currentDim !== r.Dimension.toUpperCase()) {
-                if (currentDim !== "") {
-                    sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
-                } else {
-                    sql += "WHERE NOT (" + CRLF;
-                }
-
-                currentDim = r.Dimension.toUpperCase();
-                first = true;
-            }
-
-            sql += first
-                ? ("    " + r.AttributeName + " IS NULL")
-                : (CRLF + "    AND " + r.AttributeName + " IS NULL");
-
-            first = false;
-        }
-    }
-
-    if (currentDim !== "") {
-        sql += CRLF + ")";
-    }
-
-    return sql;
+    // Con subtotales: no eliminar NULL de los ejes
+    return "";
 }
+
 
 /**
  * BuildSQL: ensambla el flujo "Dinámico" completo.
