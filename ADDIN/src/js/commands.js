@@ -2645,8 +2645,7 @@ async function jsonTo3MatricesCore(context, json) {
                     : text;
                 // Sobrescribe si ya había una entrada (mismo comportamiento que
                 // el bucle secuencial original: el último nivel no-nulo gana).
-                const isTotal = text.trim().toUpperCase() === "TOTAL";
-                filasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
+                filasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux });
             }
         }
     }
@@ -2654,10 +2653,8 @@ async function jsonTo3MatricesCore(context, json) {
     // Fusionar el indicador +/- en la misma celda del nivel (nodos con
     // hijos), en vez de una columna aparte: "− España" / "+ España".
     // No aplica si el eje es Estático (esas celdas ya son fórmulas EPM_VALUE
-    // editables a mano; anteponer un glifo de texto las rompería), ni
-    // tampoco si "Sobrescribir formatos" está desactivado (D5): en ese
-    // caso solo se escriben los valores, sin icono de jerarquía.
-    if (!rowsStatic && reportProps.overwriteFormats) {
+    // editables a mano; anteponer un glifo de texto las rompería).
+    if (!rowsStatic) {
         const byLogicalKey = new Map(rowsFilter.indicators.map(it => [it.newId + "_" + it.field, it]));
         for (const [physKey, cell] of filasCells) {
             const newId = cell.row - rowsOffRow;
@@ -2696,16 +2693,14 @@ async function jsonTo3MatricesCore(context, json) {
                 const cellVal = colsStatic
                     ? buildEpmValueFormula(fieldsColumnas[i].dim, fieldsColumnas[i].attr, text)
                     : text;
-                const isTotal = text.trim().toUpperCase() === "TOTAL";
-                columnasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
+                columnasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux });
             }
         }
     }
 
     // Igual que en FILAS: el glifo +/- se fusiona en la propia celda
-    // (salvo eje Estático, y salvo "Sobrescribir formatos" desactivado,
-    // ver comentario arriba).
-    if (!colsStatic && reportProps.overwriteFormats) {
+    // (salvo eje Estático, ver comentario arriba).
+    if (!colsStatic) {
         const byLogicalKey = new Map(colsFilter.indicators.map(it => [it.newId + "_" + it.field, it]));
         for (const [physKey, cell] of columnasCells) {
             const newId = cell.col - colsOffCol;
@@ -2721,13 +2716,6 @@ async function jsonTo3MatricesCore(context, json) {
     await writeCellBlock(context, sheet, columnasCells);
     if (reportProps.overwriteFormats) {
         await writeIndentAndColorRuns(context, sheet, columnasCells, "row", colsOffRow);
-    }
-
-    // ---- Punto 7: fondo RGB(255,255,204) en cabeceras "Total" y en los
-    // valores de fila/columna de total (gateado por "Sobrescribir
-    // formatos", igual que el resto de formato). ----
-    if (reportProps.overwriteFormats) {
-        await applyDracoTotalHighlight(context, sheet, filasCells, columnasCells, factCells);
     }
 
     /* -------------------------------------------------------------
@@ -2760,20 +2748,10 @@ async function jsonTo3MatricesCore(context, json) {
     //    de miembros" sobre las celdas de Draco_001_Rows/Draco_001_Cols.
     await registerDracoSelectionHandler(context, sheet);
 
-    // 7) Autoajustar ancho de columnas (propiedades del informe: D6), solo
-    // de los rangos con nombre Draco_001_Rows y Draco_001_Cols (donde se
-    // pintan las filas/columnas del informe), no de toda la hoja.
+    // 7) Autoajustar ancho de columnas (propiedades del informe), si procede.
     if (reportProps.autoFitColumns) {
         try {
-            const rowsRangeName = context.workbook.names.getItemOrNullObject("Draco_001_Rows");
-            const colsRangeName = context.workbook.names.getItemOrNullObject("Draco_001_Cols");
-            rowsRangeName.load("isNullObject");
-            colsRangeName.load("isNullObject");
-            await context.sync();
-
-            if (!rowsRangeName.isNullObject) rowsRangeName.getRange().format.autofitColumns();
-            if (!colsRangeName.isNullObject) colsRangeName.getRange().format.autofitColumns();
-
+            sheet.getUsedRange().format.autofitColumns();
             await context.sync();
         } catch (e) {
             console.warn("No se pudo autoajustar el ancho de columnas:", e);
@@ -2785,47 +2763,6 @@ async function jsonTo3MatricesCore(context, json) {
         maxRowId, maxColId,
         indicadoresFilas: rowsFilter.indicators.length, indicadoresColumnas: colsFilter.indicators.length
     });
-}
-
-/**
- * Punto 7: fondo RGB(255,255,204) para las celdas de cabecera (filas o
- * columnas) cuyo texto sea "Total" (subtotales/total general generados
- * por SQL con 'TOTAL'), y para las celdas de VALORES que caigan en una
- * fila o columna marcada como total.
- */
-async function applyDracoTotalHighlight(context, sheet, filasCells, columnasCells, factCells) {
-    const TOTAL_FILL = "#FFFFCC"; // RGB(255,255,204)
-
-    const totalRows = new Set();
-    const totalCols = new Set();
-    const headerCells = [];
-
-    for (const cell of filasCells.values()) {
-        if (cell.isTotal) {
-            headerCells.push(cell);
-            totalRows.add(cell.row);
-        }
-    }
-    for (const cell of columnasCells.values()) {
-        if (cell.isTotal) {
-            headerCells.push(cell);
-            totalCols.add(cell.col);
-        }
-    }
-
-    if (totalRows.size === 0 && totalCols.size === 0) return;
-
-    for (const cell of headerCells) {
-        sheet.getRangeByIndexes(cell.row - 1, cell.col - 1, 1, 1).format.fill.color = TOTAL_FILL;
-    }
-
-    for (const cell of factCells.values()) {
-        if (totalRows.has(cell.row) || totalCols.has(cell.col)) {
-            sheet.getRangeByIndexes(cell.row - 1, cell.col - 1, 1, 1).format.fill.color = TOTAL_FILL;
-        }
-    }
-
-    await context.sync();
 }
 
 /* ---------------------------------------------------------------------
