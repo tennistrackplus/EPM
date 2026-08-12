@@ -178,6 +178,14 @@ const TaskPaneApp = {
             this.setAutoStatus("Guardando…");
             await window.ExcelService.saveEditReportDesign(this.collectDesignPayload());
 
+            if (this.isRefreshPaused()) {
+                // Pausa activa (botón de pausa marcado): se guarda el diseño
+                // igualmente, pero NO se actualizan los datos (no se llama a
+                // Actualizar()/BigQuery) hasta que se desmarque la pausa.
+                this.setAutoStatus("Pausado (sin actualizar)");
+                return;
+            }
+
             if (window.ReportActions && typeof window.ReportActions.actualizar === "function") {
                 this.setAutoStatus("Actualizando…");
                 await window.ReportActions.actualizar();
@@ -198,6 +206,47 @@ const TaskPaneApp = {
                 this.scheduleAutoUpdate();
             }
         }
+    },
+
+    /**
+     * Botón "Pausar actualización de datos" del taskpane. Comparte el mismo
+     * flag (Office roaming settings, clave "draco_refreshPaused") que el
+     * botón equivalente del ribbon, así que quedan siempre sincronizados
+     * quedándose marcado/pulsado mientras la pausa esté activa. Mientras
+     * está marcado, runAutoSaveAndRefresh() sigue guardando el diseño pero
+     * NO llama a Actualizar() (no se refrescan los datos).
+     */
+    isRefreshPaused() {
+        try {
+            const settings = Office.context && Office.context.document && Office.context.document.settings;
+            return !!(settings && settings.get("draco_refreshPaused"));
+        } catch (e) {
+            return false;
+        }
+    },
+
+    setRefreshPausedUI(isPaused) {
+        const btn = document.getElementById("btnPauseRefresh");
+        if (!btn) return;
+        btn.classList.toggle("toggle-active", !!isPaused);
+        btn.setAttribute("aria-pressed", isPaused ? "true" : "false");
+        btn.title = isPaused ? "Actualización de datos PAUSADA (clic para reanudar)" : "Pausar actualización de datos";
+    },
+
+    initRefreshPauseButton() {
+        this.setRefreshPausedUI(this.isRefreshPaused());
+        const btn = document.getElementById("btnPauseRefresh");
+        if (!btn) return;
+        btn.addEventListener("click", () => {
+            try {
+                const settings = Office.context.document.settings;
+                const nowPaused = !this.isRefreshPaused();
+                settings.set("draco_refreshPaused", nowPaused);
+                settings.saveAsync(() => this.setRefreshPausedUI(nowPaused));
+            } catch (e) {
+                console.warn("No se pudo alternar la pausa de actualización:", e);
+            }
+        });
     },
 
     // Guarda el diseño SIN disparar Actualizar() (BigQuery). Se usa al
@@ -223,6 +272,7 @@ const TaskPaneApp = {
             FilterModal.init();
         }
         this.bindEvents();
+        this.initRefreshPauseButton();
         this.registerPendingRibbonActionListener();
         this.loadReportPropertiesFromSettings();
         await this.loadFields();
@@ -253,6 +303,7 @@ const TaskPaneApp = {
             if (settings && settings.addHandlerAsync) {
                 settings.addHandlerAsync(Office.EventType.SettingsChanged, () => {
                     this.handlePendingRibbonAction();
+                    this.setRefreshPausedUI(this.isRefreshPaused());
                 });
             }
         } catch (err) {
@@ -524,7 +575,14 @@ const TaskPaneApp = {
 
                 const header = document.createElement("div");
                 header.className = "dimension-header";
-                header.innerText = dim.dimension.toLowerCase();
+                header.innerHTML = `<span class="dimension-caret">▾</span><span>${dim.dimension.toLowerCase()}</span>`;
+                // Contraer/expandir la dimensión oculta sus atributos (y
+                // jerarquías) para dejar el árbol de campos más compacto,
+                // igual que las listas de campos de una tabla dinámica.
+                header.addEventListener("click", () => {
+                    const collapsed = group.classList.toggle("collapsed");
+                    header.querySelector(".dimension-caret").textContent = collapsed ? "▸" : "▾";
+                });
                 group.appendChild(header);
 
                 dim.hierarchies.forEach(hier => {
@@ -579,7 +637,7 @@ const TaskPaneApp = {
     },
 
     /* -------------------------------------------------------------
-     * Drag & drop entre zonas
+     * Drag & drop entre zonas + reordenar dentro de Filas/Columnas/Filtros
      * ----------------------------------------------------------- */
     handleDragOver(e) {
         const zoneId = e.currentTarget.getAttribute("data-zone");
@@ -587,6 +645,37 @@ const TaskPaneApp = {
         e.preventDefault();
         e.dataTransfer.dropEffect = "move";
         e.currentTarget.classList.add("drag-over");
+
+        // Reordenar EN VIVO dentro de la MISMA zona: solo aplica cuando se
+        // está arrastrando una tag ya colocada (sourceTag), no un campo
+        // nuevo desde la lista de la izquierda.
+        const dragged = this.draggedElementData;
+        if (dragged && dragged.sourceTag && dragged.sourceZone === zoneId) {
+            const container = e.currentTarget.querySelector(".dropzone-content");
+            if (container) {
+                const afterElement = this.getDragAfterElement(container, e.clientY);
+                if (afterElement == null) {
+                    container.appendChild(dragged.sourceTag);
+                } else if (afterElement !== dragged.sourceTag) {
+                    container.insertBefore(dragged.sourceTag, afterElement);
+                }
+            }
+        }
+    },
+
+    // Devuelve la tag después de la cual habría que insertar el elemento
+    // arrastrado, según la posición vertical del cursor (algoritmo estándar
+    // de listas "sortable" con drag&drop nativo del navegador).
+    getDragAfterElement(container, y) {
+        const elements = [...container.querySelectorAll(".dropped-tag:not(.dragging)")];
+        return elements.reduce((closest, child) => {
+            const box = child.getBoundingClientRect();
+            const offset = y - box.top - box.height / 2;
+            if (offset < 0 && offset > closest.offset) {
+                return { offset, element: child };
+            }
+            return closest;
+        }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
     },
 
     handleDragLeave(e) {
@@ -615,7 +704,12 @@ const TaskPaneApp = {
         const targetContent = dropzoneBox.querySelector(".dropzone-content");
 
         if (sourceZone === zoneId) {
-            // Mismo eje: no hacer nada
+            // Mismo eje: handleDragOver ya reordenó la tag en el DOM en
+            // vivo; aquí solo hace falta reflejar ese nuevo orden en el
+            // estado (this.state.rows/columns/filters) y relanzar el
+            // guardado + actualización, ya que el orden de los campos
+            // determina el orden de las columnas/niveles del informe.
+            if (sourceTag) this.syncStateOrderFromDom(zoneId, targetContent);
             this.draggedElementData = null;
             return;
         }
@@ -635,6 +729,25 @@ const TaskPaneApp = {
         this.addField(targetContent, zoneId, data);
 
         this.draggedElementData = null;
+    },
+
+    // Reconstruye this.state.<zona> en el mismo orden en que han quedado
+    // las tags en el DOM tras un arrastre de reordenación dentro del mismo
+    // eje, y dispara el autoguardado + autoactualización.
+    syncStateOrderFromDom(zoneId, container) {
+        const list = this.listForZone(zoneId);
+        const domOrder = [...container.querySelectorAll(".dropped-tag")];
+        const newList = domOrder
+            .map(tag => list.find(x => x.dimension === tag.dataset.dim && x.name === tag.dataset.fieldName))
+            .filter(Boolean);
+        // Por seguridad, si algo no casó (no debería pasar), no se pierde
+        // ningún campo: se completa con los que faltasen al final.
+        list.forEach(entry => {
+            if (!newList.includes(entry)) newList.push(entry);
+        });
+        list.length = 0;
+        list.push(...newList);
+        this.scheduleAutoUpdate();
     },
 
     /* -------------------------------------------------------------
@@ -774,9 +887,40 @@ const TaskPaneApp = {
         await new Promise((resolve) => settings.saveAsync(resolve));
     },
 
+    // Rellena el listbox "Modelo semántico" (MODEL_FACT) del modal de
+    // Propiedades del informe. Puramente estético: se deja el primero
+    // seleccionado por defecto y no dispara ninguna acción al cambiarlo.
+    async populateSemanticModelDropdown() {
+        const select = document.getElementById("propSemanticModel");
+        if (!select) return;
+        select.innerHTML = "<option>Cargando…</option>";
+        try {
+            const models = (window.ExcelService && window.ExcelService.getSemanticModels)
+                ? await window.ExcelService.getSemanticModels()
+                : [];
+            select.innerHTML = "";
+            if (models.length === 0) {
+                select.innerHTML = "<option value=\"\">— Sin modelos en MODEL_FACT —</option>";
+                return;
+            }
+            models.forEach(name => {
+                const opt = document.createElement("option");
+                opt.value = name;
+                opt.textContent = name;
+                select.appendChild(opt);
+            });
+            select.selectedIndex = 0; // por defecto, el primero
+        } catch (err) {
+            console.warn("No se pudieron cargar los modelos semánticos de MODEL_FACT:", err);
+            select.innerHTML = "<option value=\"\">— No disponible —</option>";
+        }
+    },
+
     openReportPropertiesModal() {
         const modal = document.getElementById("reportPropertiesModal");
         if (!modal) return;
+
+        this.populateSemanticModelDropdown();
 
         document.getElementById("propReportName").value = this.reportProperties.reportName || "Report 001";
         document.getElementById("propSuppressZeroRows").checked = !!this.reportProperties.suppressZeroRows;
@@ -809,6 +953,9 @@ const TaskPaneApp = {
         try {
             if (btn) { btn.disabled = true; btn.innerText = "Guardando…"; }
             await this.saveReportPropertiesToSettings();
+            if (window.ExcelService && window.ExcelService.saveReportPropertiesToSheetCells) {
+                await window.ExcelService.saveReportPropertiesToSheetCells(this.reportProperties);
+            }
             this.closeReportPropertiesModal();
             // Estas propiedades las lee jsonTo3Matrices en cada refresco real;
             // no hace falta lanzar uno aquí, solo quedan guardadas para el próximo.
@@ -909,23 +1056,26 @@ const TaskPaneApp = {
 
         if (isMeasure) {
             body.appendChild(this.buildMeasureOptionsForm(zoneId, entry, options));
+        } else if (entry.isHierarchy) {
+            // Una jerarquía NO tiene "Mostrar totales" ni "Ordenar": solo
+            // se puede elegir hasta qué nivel expandir y qué niveles se
+            // muestran (subtotales/orden no aplican a nivel de jerarquía
+            // completa, solo tendrían sentido por atributo individual).
+            const levelsBox = document.createElement("div");
+            levelsBox.className = "field-options-group";
+            levelsBox.innerHTML = `<div class="field-options-section-title">Jerarquía</div>
+                <div class="field-options-empty" id="fieldOptionsLevelsLoading">Cargando niveles…</div>`;
+            body.appendChild(levelsBox);
+
+            try {
+                const levels = await window.ExcelService.getHierarchyLevels(entry.dimension, entry.name);
+                this.renderHierarchyLevelControls(levelsBox, zoneId, entry, options, levels);
+            } catch (err) {
+                console.error("Error al leer los niveles de la jerarquía:", err);
+                levelsBox.querySelector("#fieldOptionsLevelsLoading").innerText = "No se pudieron cargar los niveles.";
+            }
         } else {
             body.appendChild(this.buildDimensionOptionsForm(zoneId, entry, options));
-            if (entry.isHierarchy) {
-                const levelsBox = document.createElement("div");
-                levelsBox.className = "field-options-group";
-                levelsBox.innerHTML = `<div class="field-options-section-title">Jerarquía</div>
-                    <div class="field-options-empty" id="fieldOptionsLevelsLoading">Cargando niveles…</div>`;
-                body.appendChild(levelsBox);
-
-                try {
-                    const levels = await window.ExcelService.getHierarchyLevels(entry.dimension, entry.name);
-                    this.renderHierarchyLevelControls(levelsBox, zoneId, entry, options, levels);
-                } catch (err) {
-                    console.error("Error al leer los niveles de la jerarquía:", err);
-                    levelsBox.querySelector("#fieldOptionsLevelsLoading").innerText = "No se pudieron cargar los niveles.";
-                }
-            }
         }
     },
 
@@ -933,18 +1083,23 @@ const TaskPaneApp = {
         const wrap = document.createElement("div");
         wrap.className = "field-options-group";
 
+        // "Subtotales" (antes "Mostrar totales") y "Ordenar" solo aplican a
+        // atributos que NO son jerarquía. Se guardan en EDIT_REPORT en las
+        // columnas L/M (eje Filas) o R/S (eje Columnas) -ver
+        // ExcelService.saveEditReportDesign-, aunque de momento no se usan
+        // todavía para construir el SQL.
         wrap.innerHTML = `
             <div class="field-options-section-title">General</div>
             <label class="field-options-checkbox-row">
                 <input type="checkbox" id="optShowTotals" ${options.showTotals ? "checked" : ""}>
-                Mostrar totales
+                <span>Subtotales</span>
             </label>
-            <label>
-                Ordenar
+            <label class="field-options-field-block">
+                <span class="field-options-field-label">Ordenar</span>
                 <select id="optSortOrder">
                     <option value="none" ${options.sortOrder === "none" ? "selected" : ""}>Sin ordenar</option>
-                    <option value="asc" ${options.sortOrder === "asc" ? "selected" : ""}>Ascendente</option>
-                    <option value="desc" ${options.sortOrder === "desc" ? "selected" : ""}>Descendente</option>
+                    <option value="asc" ${options.sortOrder === "asc" ? "selected" : ""}>Ascendente (UP)</option>
+                    <option value="desc" ${options.sortOrder === "desc" ? "selected" : ""}>Descendente (DOWN)</option>
                 </select>
             </label>
         `;
@@ -975,11 +1130,12 @@ const TaskPaneApp = {
         }
 
         const expandLabel = document.createElement("label");
-        expandLabel.innerHTML = `Expandir hasta nivel`;
+        expandLabel.className = "field-options-field-block";
+        expandLabel.innerHTML = `<span class="field-options-field-label">Expandir hasta nivel</span>`;
         const expandSelect = document.createElement("select");
         expandSelect.id = "optExpandToLevel";
         expandSelect.innerHTML = `<option value="">(todos)</option>` +
-            levels.map(l => `<option value="${l.nivel}" ${String(options.expandToLevel) === String(l.nivel) ? "selected" : ""}>Nivel ${l.nivel} — ${l.attribute}</option>`).join("");
+            levels.map(l => `<option value="${l.nivel}" title="Nivel ${l.nivel} — ${l.attribute}" ${String(options.expandToLevel) === String(l.nivel) ? "selected" : ""}>Nivel ${l.nivel} — ${l.attribute}</option>`).join("");
         expandLabel.appendChild(expandSelect);
         container.appendChild(expandLabel);
 
@@ -995,8 +1151,10 @@ const TaskPaneApp = {
         levelsBox.className = "field-options-levels";
         levels.forEach(l => {
             const row = document.createElement("label");
-            row.className = "field-options-checkbox-row";
-            row.innerHTML = `<input type="checkbox" data-nivel="${l.nivel}" ${visibleLevels.includes(l.nivel) ? "checked" : ""}> Nivel ${l.nivel} — ${l.attribute}`;
+            row.className = "field-options-checkbox-row field-options-level-row";
+            row.title = `Nivel ${l.nivel} — ${l.attribute}`;
+            row.innerHTML = `<input type="checkbox" data-nivel="${l.nivel}" ${visibleLevels.includes(l.nivel) ? "checked" : ""}>
+                <span class="field-options-level-text">Nivel ${l.nivel} — ${l.attribute}</span>`;
             levelsBox.appendChild(row);
         });
         container.appendChild(levelsBox);

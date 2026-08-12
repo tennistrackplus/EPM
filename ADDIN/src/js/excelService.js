@@ -410,8 +410,26 @@ const ExcelService = {
 
             // Limpiar bloques igual que hacía el VBA (ClearContents desde fila 15 hasta el final)
             sheet.getRange("C15:F5000").clear(Excel.ClearApplyTo.contents);
-            sheet.getRange("H15:K5000").clear(Excel.ClearApplyTo.contents);
-            sheet.getRange("N15:Q5000").clear(Excel.ClearApplyTo.contents);
+            // H..K = dim/attr/nivel/jerarquía; L = subtotales; M = orden (UP/DOWN)
+            sheet.getRange("H15:M5000").clear(Excel.ClearApplyTo.contents);
+            // N..Q = dim/attr/nivel/jerarquía; R = subtotales; S = orden (UP/DOWN)
+            // (S1, usada para el JSON de opciones por campo, no se toca: el
+            // borrado empieza en la fila 15)
+            sheet.getRange("N15:S5000").clear(Excel.ClearApplyTo.contents);
+
+            // Devuelve ["X"|"", "UP"|"DOWN"|""] a partir de las opciones de
+            // campo (guardadas por el taskpane con clave "<zone>|DIM|NOMBRE").
+            // Solo tiene sentido para atributos NO jerarquía (ver
+            // renderFieldOptionsBody/buildDimensionOptionsForm): un campo de
+            // jerarquía no tiene ni "Subtotales" ni "Ordenar" en el panel,
+            // así que sus filas expandidas se dejan sin valor en L/M o R/S.
+            // De momento estos valores NO se usan al construir el SQL.
+            const subtotalAndOrder = (zoneId, dimension, name) => {
+                const opts = (state.fieldOptions || {})[`${zoneId}|${dimension}|${name}`] || {};
+                const subtotal = opts.showTotals ? "X" : "";
+                const order = opts.sortOrder === "asc" ? "UP" : (opts.sortOrder === "desc" ? "DOWN" : "");
+                return [subtotal, order];
+            };
 
             // ---- SaveFilters: C,D,E,F ----
             let filaFilters = 15;
@@ -447,6 +465,8 @@ const ExcelService = {
                 } else {
                     const row = sheet.getRangeByIndexes(filaRows - 1, 7, 1, 4);
                     row.values = [[r.dimension, r.name, 1, ""]];
+                    const [subtotal, order] = subtotalAndOrder("rows", r.dimension, r.name);
+                    sheet.getRangeByIndexes(filaRows - 1, 11, 1, 2).values = [[subtotal, order]]; // L,M
                     filaRows++;
                 }
             }
@@ -472,6 +492,8 @@ const ExcelService = {
                 } else {
                     const row = sheet.getRangeByIndexes(filaCols - 1, 13, 1, 4);
                     row.values = [[c.dimension, c.name, 1, ""]];
+                    const [subtotal, order] = subtotalAndOrder("columns", c.dimension, c.name);
+                    sheet.getRangeByIndexes(filaCols - 1, 17, 1, 2).values = [[subtotal, order]]; // R,S
                     filaCols++;
                 }
             }
@@ -488,6 +510,60 @@ const ExcelService = {
             sheet.getRange("S1").values = [[JSON.stringify(state.fieldOptions || {})]];
 
             await context.sync();
+        });
+    },
+
+    /**
+     * Vuelca las "Propiedades del informe" (modal del taskpane) también
+     * como celdas individuales en EDIT_REPORT!D2:D6 (además de guardarlas
+     * en Office roaming settings, que es de donde las sigue leyendo
+     * jsonTo3Matrices/getDracoReportProperties). Cada checkbox se escribe
+     * como "X" (marcado) o "" (desmarcado), igual que el resto de checks
+     * de la hoja (H12/N12 = Estático).
+     *   D2: Suprimir ceros en filas
+     *   D3: Suprimir ceros en columnas
+     *   D4: Mostrar subtotales arriba
+     *   D5: Sobrescribir formatos al actualizar
+     *   D6: Autoajustar ancho de columnas al actualizar
+     */
+    async saveReportPropertiesToSheetCells(props) {
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+            const x = (v) => (v ? "X" : "");
+            sheet.getRange("D2").values = [[x(props.suppressZeroRows)]];
+            sheet.getRange("D3").values = [[x(props.suppressZeroCols)]];
+            sheet.getRange("D4").values = [[x(props.subtotalsOnTop)]];
+            sheet.getRange("D5").values = [[x(props.overwriteFormats)]];
+            sheet.getRange("D6").values = [[x(props.autoFitColumns)]];
+            await context.sync();
+        });
+    },
+
+    /**
+     * Lista de modelos semánticos disponibles (columna A de MODEL_FACT,
+     * sin cabecera, únicos y ordenados). Usado SOLO para rellenar el
+     * listbox "Modelo semántico" de Propiedades del informe: es estético,
+     * de momento no cambia nada al seleccionar uno distinto.
+     */
+    async getSemanticModels() {
+        return await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
+            sheet.load("isNullObject");
+            await context.sync();
+            if (sheet.isNullObject) return [];
+
+            const range = sheet.getUsedRangeOrNullObject();
+            range.load(["values", "isNullObject"]);
+            await context.sync();
+            if (range.isNullObject) return [];
+
+            const rows = range.values;
+            const seen = new Set();
+            for (let i = 1; i < rows.length; i++) { // fila 0 = cabecera
+                const v = String(rows[i][0] || "").trim();
+                if (v) seen.add(v);
+            }
+            return Array.from(seen).sort();
         });
     }
 };

@@ -167,6 +167,36 @@ const ReportState = {
 };
 
 /* ---------------------------------------------------------------------
+ * Nombre de la hoja de resultados ("CSV_RESULT" por defecto): desde que
+ * "Editar report" guarda en EDIT_REPORT!D1 el nombre de la pestaña sobre
+ * la que se pulsó, cada informe puede pintarse en una hoja de resultados
+ * distinta. Todo el código que antes usaba el literal "CSV_RESULT" debe
+ * usar en su lugar el valor de EDIT_REPORT!D1 (con "CSV_RESULT" como
+ * valor por defecto si D1 está vacío, por compatibilidad).
+ * ------------------------------------------------------------------- */
+const DEFAULT_RESULT_SHEET_NAME = "CSV_RESULT";
+
+// Variante SÍNCRONA: a partir de un grid de EDIT_REPORT ya cargado en memoria.
+function resultSheetNameFromGrid(editReportGrid) {
+    const v = String(cellValue(editReportGrid, 1, 4)).trim(); // EDIT_REPORT!D1
+    return v || DEFAULT_RESULT_SHEET_NAME;
+}
+
+// Variante ASÍNCRONA: cuando todavía no hay un grid de EDIT_REPORT cargado
+// en el punto donde hace falta el nombre de la hoja (lee D1 directamente).
+async function getDracoResultSheetName(context) {
+    try {
+        const cell = context.workbook.worksheets.getItem("EDIT_REPORT").getRange("D1");
+        cell.load("values");
+        await context.sync();
+        const v = String((cell.values && cell.values[0] && cell.values[0][0]) || "").trim();
+        return v || DEFAULT_RESULT_SHEET_NAME;
+    } catch (e) {
+        return DEFAULT_RESULT_SHEET_NAME;
+    }
+}
+
+/* ---------------------------------------------------------------------
  * Utilidades de lectura de rangos ("grids") para poder acceder a las
  * celdas por coordenada absoluta (fila,columna) igual que ws.Cells(R,C)
  * ------------------------------------------------------------------- */
@@ -907,7 +937,8 @@ function coerceCellLiteral(text) {
 
 async function jsonPaintValues(context, json) {
     const triples = parseJsonValueTriples(json);
-    const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+    const resultSheetName = await getDracoResultSheetName(context);
+    const sheet = context.workbook.worksheets.getItem(resultSheetName);
 
     for (const t of triples) {
         const range = sheet.getRangeByIndexes(t.row - 1, t.col - 1, 1, 1);
@@ -935,13 +966,14 @@ async function actualizarInformeFixedCore() {
         const relGrid = await getValuesGrid(context, "MODEL_RELATIONSHIP");
         const measuresGrid = await getValuesGrid(context, "MODEL_MEASURES");
         const atributesGrid = await getValuesGrid(context, "MODEL_ATRIBUTES");
-        const csvGrid = await getFormulaGrid(context, "CSV_RESULT");
+        const resultSheetName = resultSheetNameFromGrid(editReportGrid);
+        const csvGrid = await getFormulaGrid(context, resultSheetName);
 
         loadReportDefinition(editReportGrid);
 
         sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
 
-        const csvSheet = context.workbook.worksheets.getItem("CSV_RESULT");
+        const csvSheet = context.workbook.worksheets.getItem(resultSheetName);
         csvSheet.getRange("A1").values = [[sql]];
 
         await context.sync();
@@ -1505,16 +1537,33 @@ function buildEpmValueFormula(dim, attr, text) {
 // {dim, attr} por posición (nivel) de un eje, igual que fieldsFilas/fieldsColumnas
 // en jsonTo3Matrices. Requiere que ReportState ya esté cargado (loadReportDefinition).
 function buildAxisFieldsTable(editReportGrid, axis) {
-    const totalDimFilas = ReportState.ColumnCount; // nº de niveles del eje Filas
-    const totalDimCols = ReportState.RowCount;      // nº de niveles del eje Columnas
+    const totalDimFilas = ReportState.ColumnCount; // nº de entradas EDIT_REPORT del eje Filas (jerarquías expandidas a 1 fila por nivel)
+    const totalDimCols = ReportState.RowCount;      // nº de entradas EDIT_REPORT del eje Columnas
+    // Igual que en jsonTo3Matrices: cada COLUMNA FÍSICA corresponde a una
+    // entrada con NIVEL/flag === 1 (inicio de un campo nuevo); los niveles
+    // siguientes de esa misma jerarquía (flag > 1) se pintan en la MISMA
+    // columna física, así que no deben generar una entrada nueva en la
+    // tabla devuelta (si no, con jerarquías multinivel + campos simples
+    // mezclados, las columnas físicas quedaban desalineadas con el campo
+    // correcto).
     const fields = [];
     if (axis === "rows") {
+        let iAux = 0;
         for (let i = 1; i <= totalDimFilas; i++) {
-            fields[i] = { dim: cellValue(editReportGrid, i + 14, 8), attr: cellValue(editReportGrid, i + 14, 9) };
+            const flag = Number(cellValue(editReportGrid, i + 14, 10)); // J
+            if (flag === 1) {
+                iAux++;
+                fields[iAux] = { dim: cellValue(editReportGrid, i + 14, 8), attr: cellValue(editReportGrid, i + 14, 9) };
+            }
         }
     } else {
+        let iAux = 0;
         for (let i = 1; i <= totalDimCols; i++) {
-            fields[i] = { dim: cellValue(editReportGrid, i + 14, 14), attr: cellValue(editReportGrid, i + 14, 15) };
+            const flag = Number(cellValue(editReportGrid, i + 14, 16)); // P
+            if (flag === 1) {
+                iAux++;
+                fields[iAux] = { dim: cellValue(editReportGrid, i + 14, 14), attr: cellValue(editReportGrid, i + 14, 15) };
+            }
         }
     }
     return fields;
@@ -1600,8 +1649,7 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
 }
 
 // Convierte un número de columna (1-based) en letras de columna Excel ("A", "AB"...)
-function dracoColToLetters(col) {
-    let s = "";
+function dracoColToLetters(col) {    let s = "";
     while (col > 0) {
         const rem = (col - 1) % 26;
         s = String.fromCharCode(65 + rem) + s;
@@ -1611,9 +1659,9 @@ function dracoColToLetters(col) {
 }
 
 /**
- * Limpia todos los comentarios (notas) previos de la hoja y añade uno por
- * cada celda indicadora registrada en DracoIndicatorMap, a modo de tooltip
- * que se ve al pasar el ratón por encima ("esto se puede clicar").
+ * Limpia comentarios (notas) que pudieran haber quedado de versiones
+ * anteriores del add-in. Ya NO se anade ningun tooltip de
+ * "Clic para expandir/contraer" sobre las celdas.
  */
 async function refreshDracoIndicatorTooltips(context, sheet) {
     try {
@@ -1624,21 +1672,7 @@ async function refreshDracoIndicatorTooltips(context, sheet) {
             await context.sync();
         }
     } catch (e) {
-        console.warn("No se pudieron limpiar los tooltips Draco previos:", e);
-        return;
-    }
-
-    if (DracoIndicatorMap.size === 0) return;
-
-    try {
-        for (const key of DracoIndicatorMap.keys()) {
-            const [rowStr, colStr] = key.split("_");
-            const addr = dracoColToLetters(Number(colStr)) + rowStr;
-            context.workbook.comments.add("'CSV_RESULT'!" + addr, "Clic para expandir / contraer");
-        }
-        await context.sync();
-    } catch (e) {
-        console.warn("No se pudieron crear los tooltips Draco:", e);
+        console.warn("No se pudieron limpiar los comentarios previos:", e);
     }
 }
 
@@ -1650,7 +1684,8 @@ async function refreshDracoIndicatorTooltips(context, sheet) {
  * Devuelve null si la celda no pertenece a ninguno de los dos ejes.
  */
 async function locateDracoAxisField(context, addr) {
-    const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+    const resultSheetName = await getDracoResultSheetName(context);
+    const sheet = context.workbook.worksheets.getItem(resultSheetName);
     const cell = sheet.getRange(addr);
     cell.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
@@ -1736,7 +1771,8 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
         let currentText = "";
 
         await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+            const resultSheetName = await getDracoResultSheetName(context);
+            const sheet = context.workbook.worksheets.getItem(resultSheetName);
             const cell = sheet.getRange(addr);
             cell.load(["rowCount", "columnCount", "values", "formulas"]);
             await context.sync();
@@ -1779,7 +1815,8 @@ async function handleDracoMemberRecognitionSelection(eventArgs) {
         let located = null;
 
         await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+            const resultSheetName = await getDracoResultSheetName(context);
+            const sheet = context.workbook.worksheets.getItem(resultSheetName);
             const cell = sheet.getRange(addr);
             cell.load(["rowCount", "columnCount", "values"]);
             await context.sync();
@@ -1925,7 +1962,8 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         closeDialog();
                         try {
                             await Excel.run(async (context) => {
-                                const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+                                const resultSheetName = await getDracoResultSheetName(context);
+                                const sheet = context.workbook.worksheets.getItem(resultSheetName);
                                 const cell = sheet.getRange(addr);
                                 cell.values = [[buildEpmValueFormula(located.dim, payload.attribute, payload.value)]];
                                 await context.sync();
@@ -2040,15 +2078,16 @@ async function ensureDracoHandlersRegistered() {
     if (DracoHandlerRegistered) return;
     try {
         await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItemOrNullObject("CSV_RESULT");
+            const resultSheetName = await getDracoResultSheetName(context);
+            const sheet = context.workbook.worksheets.getItemOrNullObject(resultSheetName);
             sheet.load("isNullObject");
             await context.sync();
             if (sheet.isNullObject) {
-                console.log("[Draco] ensureDracoHandlersRegistered: CSV_RESULT no existe todavía (sin refresco previo).");
+                console.log("[Draco] ensureDracoHandlersRegistered: " + resultSheetName + " no existe todavía (sin refresco previo).");
                 return;
             }
             await registerDracoSelectionHandler(context, sheet);
-            console.log("[Draco] Listeners de CSV_RESULT registrados de forma temprana (sin necesidad de refrescar).");
+            console.log("[Draco] Listeners de " + resultSheetName + " registrados de forma temprana (sin necesidad de refrescar).");
         });
     } catch (e) {
         console.warn("[Draco] No se pudieron registrar los listeners de forma temprana:", e);
@@ -2069,7 +2108,8 @@ async function handleDracoSelectionChanged(eventArgs) {
         if (!addr) return;
 
         await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+            const resultSheetName = await getDracoResultSheetName(context);
+            const sheet = context.workbook.worksheets.getItem(resultSheetName);
             const range = sheet.getRange(addr);
             range.load(["rowCount", "columnCount", "rowIndex", "columnIndex"]);
             await context.sync();
@@ -2261,7 +2301,7 @@ async function jsonTo3MatricesCore(context, json) {
         filasVisibles: rowsFilter.dict.size, columnasVisibles: colsFilter.dict.size
     });
 
-    const sheet = context.workbook.worksheets.getItem("CSV_RESULT");
+    const sheet = context.workbook.worksheets.getItem(resultSheetNameFromGrid(editReportGrid));
 
     // Antes de refrescar: borrar formato Y contenido de los rangos con
     // nombre Draco_001_Rows / Draco_001_Cols / Draco_001_Values de la
@@ -2416,16 +2456,24 @@ async function jsonTo3MatricesCore(context, json) {
      *    salvo que "Sobrescribir formatos" esté desactivado en las
      *    propiedades del informe (entonces solo se (re)definen los rangos).
      * ----------------------------------------------------------- */
+    // Nº de COLUMNAS/FILAS físicamente pintadas: NO es totalDimFilas/totalDimCols
+    // (eso cuenta cada NIVEL de una jerarquía como una entrada distinta, ya que
+    // MODEL_HIER se expande a varias filas en EDIT_REPORT), sino el nº de
+    // campos "de primer nivel" (flag/NIVEL === 1): cada campo -aunque sea una
+    // jerarquía completa con varios niveles- se pinta en UNA sola columna
+    // (los niveles siguientes solo añaden indentación dentro de esa misma
+    // columna). Usar totalDimFilas/totalDimCols aquí generaba rangos con
+    // nombre (Draco_001_Rows/Cols) más anchos/altos de lo realmente pintado.
+    const paintedFilasCols = flagsFilas.filter(f => f === 1).length;
+    const paintedColsRows = flagsColumnas.filter(f => f === 1).length;
+
     await applyDracoNamedRanges(context, sheet, {
-        RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId,
+        RRows, RCols,
+        totalDimFilas: paintedFilasCols,
+        totalDimCols: paintedColsRows,
+        maxRowId, maxColId,
         applyVisualFormat: reportProps.overwriteFormats
     });
-
-    /* -------------------------------------------------------------
-     * 5) Tooltip al pasar el ratón ("Clic para expandir / contraer")
-     *    sobre cada celda que lleva el indicador +/- fusionado.
-     * ----------------------------------------------------------- */
-    await refreshDracoIndicatorTooltips(context, sheet);
 
     // 6) Registrar (una sola vez por sesión) los listeners de clic/edición:
     //    resuelven los indicadores +/- pintados arriba y el "Reconocimiento
@@ -2733,6 +2781,7 @@ async function writeIndentRuns(context, sheet, cellsMap) {
  */
 async function actualizarInformeCore() {
     let sql;
+    let resultSheetName;
 
     await Excel.run(async (context) => {
         const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
@@ -2740,13 +2789,14 @@ async function actualizarInformeCore() {
         const measuresGrid = await getValuesGrid(context, "MODEL_MEASURES");
         const atributesGrid = await getValuesGrid(context, "MODEL_ATRIBUTES");
 
+        resultSheetName = resultSheetNameFromGrid(editReportGrid);
         loadReportDefinition(editReportGrid);
 
         sql = buildSQL(relGrid, measuresGrid, atributesGrid);
 
         console.log("BuildSQL ->", sql);
 
-        const csvSheet = context.workbook.worksheets.getItem("CSV_RESULT");
+        const csvSheet = context.workbook.worksheets.getItem(resultSheetName);
         csvSheet.getRange("A1").values = [[sql]];
 
         await context.sync();
@@ -2757,7 +2807,7 @@ async function actualizarInformeCore() {
     console.log("JSON de BigQuery ->", json);
 
     await Excel.run(async (context) => {
-        const csvSheet = context.workbook.worksheets.getItem("CSV_RESULT");
+        const csvSheet = context.workbook.worksheets.getItem(resultSheetName);
         const EXCEL_CELL_CHAR_LIMIT = 32000; // límite real de Excel: 32767
         const jsonForCell = json.length > EXCEL_CELL_CHAR_LIMIT
             ? json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
@@ -2819,7 +2869,7 @@ async function actualizar(event) {
 // el taskpane (p.ej. tras guardar el diseño), no solo desde el ribbon.
 window.ReportActions = {
     actualizar, actualizarInforme, actualizarInformeFixed,
-    toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
+    toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions, editReport,
     convertAxisStaticFormulas, ensureDracoHandlersRegistered
 };
 
@@ -2938,6 +2988,47 @@ async function openReportProperties(event) {
     }
 }
 
+/**
+ * Botón del ribbon "Abrir diseño" / "Editar report": guarda en
+ * EDIT_REPORT!D1 el nombre de la pestaña (hoja) donde se pulsó, para que
+ * ese informe se pinte/actualice sobre ESA hoja (en vez del literal fijo
+ * "CSV_RESULT"; ver getDracoResultSheetName/resultSheetNameFromGrid) y
+ * después abre el taskpane para diseñarlo, igual que openReportProperties.
+ */
+async function editReport(event) {
+    try {
+        await Excel.run(async (context) => {
+            const activeSheet = context.workbook.worksheets.getActiveWorksheet();
+            activeSheet.load("name");
+            await context.sync();
+
+            const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+            editReportSheet.getRange("D1").values = [[activeSheet.name]];
+            await context.sync();
+        });
+
+        console.log("[Draco] editReport: shared runtime ¿activo? ->", typeof TaskPaneApp !== "undefined");
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.loadDesignFromSheet) {
+            await TaskPaneApp.loadDesignFromSheet();
+            console.log("[Draco] loadDesignFromSheet() ejecutado directamente (shared runtime OK).");
+        } else {
+            console.warn("[Draco] TaskPaneApp NO existe en este contexto: usando fallback de settings.");
+            const settings = Office.context.document.settings;
+            settings.set("draco_pendingAction", "editReport");
+            await new Promise((resolve) => settings.saveAsync(resolve));
+        }
+        if (Office.addin && Office.addin.showAsTaskpane) {
+            await Office.addin.showAsTaskpane();
+        } else {
+            console.warn("[Draco] Office.addin.showAsTaskpane no está disponible en este runtime.");
+        }
+    } catch (error) {
+        console.error("Error al abrir 'Editar report':", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
 async function openFieldOptions(event) {
     try {
         console.log("[Draco] openFieldOptions: shared runtime ¿activo? ->", typeof TaskPaneApp !== "undefined");
@@ -2980,6 +3071,7 @@ try {
     Office.actions.associate("toggleMemberRecognition", toggleMemberRecognition);
     Office.actions.associate("openReportProperties", openReportProperties);
     Office.actions.associate("openFieldOptions", openFieldOptions);
+    Office.actions.associate("editReport", editReport);
 } catch (e) {
     console.warn("Office.actions.associate no disponible en este contexto:", e);
 }
