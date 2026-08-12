@@ -293,7 +293,7 @@ const TaskPaneApp = {
                 activeSheetName = activeSheet.name;
 
                 const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-                editReportSheet.getRange("D1").values = "[[activeSheetName]]";
+                editReportSheet.getRange("D1").values = [[activeSheetName]];
                 await context.sync();
             });
 

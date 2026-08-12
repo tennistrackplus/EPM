@@ -337,7 +337,9 @@ function loadFilters(editReportGrid) {
 function loadRows(editReportGrid) {
     ReportState.RowCount = 0;
     ReportState.AttrRowCount = 0;
+    ReportState.MeasureCount = 0;
     ReportState.Rows = [];
+    ReportState.Measures = [];
 
     let R = 15;
 
@@ -345,26 +347,30 @@ function loadRows(editReportGrid) {
         const dim = String(cellValue(editReportGrid, R, 14)).trim();
 
         if (dim.toUpperCase() === "MEASURE") {
-            R++;
-            continue;
+            ReportState.MeasureCount++;
+            ReportState.Measures.push({
+                Name: String(cellValue(editReportGrid, R, 15)).trim()
+            });
+        } else {
+            ReportState.RowCount++;
+
+            if (Number(cellValue(editReportGrid, R, 16)) === 1) {
+                ReportState.AttrRowCount++;
+            }
+
+            const hierRaw = String(cellValue(editReportGrid, R, 16)).trim();
+
+            ReportState.Rows.push({
+                Position: Number(cellValue(editReportGrid, R, 13)),
+                Dimension: dim,
+                AttributeName: String(cellValue(editReportGrid, R, 15)).trim(),
+                Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
+                // Columna R de EDIT_REPORT: "X" = generar subtotal para este
+                // campo (ver buildConfigSetsWithSubtotals). No se usa en
+                // absoluto si NINGÚN campo del informe tiene esta marca.
+                Subtotal: String(cellValue(editReportGrid, R, 18)).trim().toUpperCase() === "X"
+            });
         }
-
-        if (Number(cellValue(editReportGrid, R, 16)) === 1) {
-            ReportState.AttrRowCount++;
-        }
-
-        ReportState.RowCount++;
-
-        const hierRaw = String(cellValue(editReportGrid, R, 16)).trim();
-        const subtotalRaw = String(cellValue(editReportGrid, R, 17)).trim();
-
-        ReportState.Rows.push({
-            Position: Number(cellValue(editReportGrid, R, 13)),
-            Dimension: dim,
-            AttributeName: String(cellValue(editReportGrid, R, 15)).trim(),
-            Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
-            Subtotal: subtotalRaw.toUpperCase() === "X"
-        });
 
         R++;
     }
@@ -393,14 +399,15 @@ function loadColumns(editReportGrid) {
             ReportState.ColumnCount++;
 
             const hierRaw = String(cellValue(editReportGrid, R, 10)).trim();
-            const subtotalRaw = String(cellValue(editReportGrid, R, 11)).trim();
 
             ReportState.Columns.push({
                 Position: Number(cellValue(editReportGrid, R, 7)),
                 Dimension: dim,
                 AttributeName: String(cellValue(editReportGrid, R, 9)).trim(),
                 Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
-                Subtotal: subtotalRaw.toUpperCase() === "X"
+                // Columna L de EDIT_REPORT: "X" = generar subtotal para este
+                // campo (ver buildConfigSetsWithSubtotals).
+                Subtotal: String(cellValue(editReportGrid, R, 12)).trim().toUpperCase() === "X"
             });
         }
 
@@ -409,9 +416,6 @@ function loadColumns(editReportGrid) {
 }
 
 function loadReportDefinition(editReportGrid) {
-    ReportState.SubtotalsOnTop =
-        String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
-
     loadFilters(editReportGrid);
     loadRows(editReportGrid);
     loadColumns(editReportGrid);
@@ -1144,203 +1148,150 @@ function generateHierarchyCombinations(hierarchies) {
  * Buildconfigsets: construye la cláusula GROUP BY GROUPING SETS (...)
  * combinando niveles de jerarquía de Filas y Columnas.
  */
- 
- function buildConfigSets(relGrid) {
-    const dimensions = [null];
+function computeGroupingSetDimensionsAndHierarchies(relGrid) {
+    // ---- DIMENSIONS: Filas primero, luego Columnas ----
+    const dimensions = [null]; // índice 1-based, dimensions[0] sin usar
 
     for (const r of ReportState.Rows) {
-        dimensions.push(
-            getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName
-        );
+        dimensions.push(getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName);
     }
-
     for (const c of ReportState.Columns) {
-        dimensions.push(
-            getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName
-        );
+        dimensions.push(getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName);
     }
 
-    const subtotalColumns = ReportState.Columns.filter(c => c.Subtotal === true);
-    const subtotalRows = ReportState.Rows.filter(r => r.Subtotal === true);
+    // ---- HIERARCHIES: longitud de cada tramo de "misma dimensión consecutiva" ----
+    const hierarchies = [];
 
-    // SIN SUBTOTALES: mantener exactamente la lógica actual
-    if (subtotalColumns.length === 0 && subtotalRows.length === 0) {
-        const hierarchies = [];
-
-        let lastDim = "";
-        let contador = 0;
-
-        for (const r of ReportState.Rows) {
-            if (r.Dimension !== lastDim) {
-                if (lastDim !== "") hierarchies.push(contador);
-                lastDim = r.Dimension;
-                contador = 1;
-            } else {
-                contador++;
-            }
+    let lastDim = "";
+    let contador = 0;
+    for (const r of ReportState.Rows) {
+        if (r.Dimension !== lastDim) {
+            if (lastDim !== "") hierarchies.push(contador);
+            lastDim = r.Dimension;
+            contador = 1;
+        } else {
+            contador++;
         }
+    }
+    if (ReportState.Rows.length > 0) hierarchies.push(contador);
 
-        if (ReportState.Rows.length > 0) {
-            hierarchies.push(contador);
+    lastDim = "";
+    contador = 0;
+    for (const c of ReportState.Columns) {
+        if (c.Dimension !== lastDim) {
+            if (lastDim !== "") hierarchies.push(contador);
+            lastDim = c.Dimension;
+            contador = 1;
+        } else {
+            contador++;
         }
+    }
+    if (ReportState.Columns.length > 0) hierarchies.push(contador);
 
-        lastDim = "";
-        contador = 0;
+    // ---- HIERARCHIES ACUM ----
+    const hierarchiesAcum = [];
+    let acum = 0;
+    for (const h of hierarchies) {
+        acum += h;
+        hierarchiesAcum.push(acum);
+    }
 
-        for (const c of ReportState.Columns) {
-            if (c.Dimension !== lastDim) {
-                if (lastDim !== "") hierarchies.push(contador);
-                lastDim = c.Dimension;
-                contador = 1;
-            } else {
-                contador++;
-            }
-        }
+    const combinations = generateHierarchyCombinations(hierarchies);
 
-        if (ReportState.Columns.length > 0) {
-            hierarchies.push(contador);
-        }
+    return { dimensions, hierarchies, hierarchiesAcum, combinations };
+}
 
-        const hierarchiesAcum = [];
-        let acum = 0;
+function buildConfigSets(relGrid) {
+    const { dimensions, hierarchiesAcum, combinations } = computeGroupingSetDimensionsAndHierarchies(relGrid);
 
-        for (const h of hierarchies) {
-            acum += h;
-            hierarchiesAcum.push(acum);
-        }
+    const tuples = combinations.map(item => groupingSetTupleToColumnList(item, dimensions, hierarchiesAcum));
+    return groupingSetTuplesToText(tuples);
+}
 
-        const combinations = generateHierarchyCombinations(hierarchies);
-
-        let texto = "";
-        let first = true;
-
-        for (const item of combinations) {
-            if (first) {
-                texto += "GROUP BY GROUPING SETS ( ( ";
-                first = false;
-            } else {
-                texto += ",( ";
-            }
-
-            for (let i = 0; i < item.length; i++) {
-                for (let j = 1; j <= item[i]; j++) {
-                    if (item[i] > 0) {
-                        if (i !== 0 || j !== 1) {
-                            texto += ", ";
-                        }
-
-                        if (i === 0) {
-                            texto += dimensions[j];
-                        } else {
-                            texto += dimensions[j + hierarchiesAcum[i - 1]];
-                        }
-                    }
+/**
+ * Convierte UNA combinación del "odómetro" (generateHierarchyCombinations)
+ * en la lista de columnas ("alias.attr") que le corresponden. Extraído de
+ * buildConfigSets para poder reutilizarlo también al añadir los conjuntos
+ * extra de subtotales (buildConfigSetsWithSubtotals).
+ */
+function groupingSetTupleToColumnList(item, dimensions, hierarchiesAcum) {
+    const cols = [];
+    for (let i = 0; i < item.length; i++) {
+        for (let j = 1; j <= item[i]; j++) {
+            if (item[i] > 0) {
+                if (i === 0) {
+                    cols.push(dimensions[j]);
+                } else {
+                    cols.push(dimensions[j + hierarchiesAcum[i - 1]]);
                 }
             }
-
-            texto += " )";
+            // item[i] === 0 no ocurre nunca en el flujo normal (generateHierarchyCombinations
+            // nunca baja de 1): se deja sin aportar columnas, en vez del literal "[TOTAL]"
+            // que tenía el código original (nunca llegaba a ejecutarse).
         }
-
-        texto += " )";
-
-        return texto;
     }
+    return cols;
+}
 
-    const sets = [];
-
-    // DETALLE
-    const detailSet = [];
-
-    for (let i = 1; i < dimensions.length; i++) {
-        detailSet.push(dimensions[i]);
-    }
-
-    sets.push(detailSet);
-
-    // SUBTOTALES DE COLUMNAS
-    for (const subtotalColumn of subtotalColumns) {
-        const columnIndex = ReportState.Columns.indexOf(subtotalColumn);
-
-        const subtotalSet = [];
-
-        for (const r of ReportState.Rows) {
-            subtotalSet.push(
-                getTableAlias(relGrid, r.Dimension) +
-                "." +
-                r.AttributeName
-            );
-        }
-
-        for (let i = 0; i < columnIndex; i++) {
-            const c = ReportState.Columns[i];
-
-            subtotalSet.push(
-                getTableAlias(relGrid, c.Dimension) +
-                "." +
-                c.AttributeName
-            );
-        }
-
-        sets.push(subtotalSet);
-    }
-
-    // SUBTOTALES DE FILAS
-    for (const subtotalRow of subtotalRows) {
-        const rowIndex = ReportState.Rows.indexOf(subtotalRow);
-
-        const subtotalSet = [];
-
-        for (let i = 0; i < rowIndex; i++) {
-            const r = ReportState.Rows[i];
-
-            subtotalSet.push(
-                getTableAlias(relGrid, r.Dimension) +
-                "." +
-                r.AttributeName
-            );
-        }
-
-        for (const c of ReportState.Columns) {
-            subtotalSet.push(
-                getTableAlias(relGrid, c.Dimension) +
-                "." +
-                c.AttributeName
-            );
-        }
-
-        sets.push(subtotalSet);
-    }
-
-    // TOTAL GENERAL
-    if (
-        subtotalColumns.some(c => c.Subtotal === true) &&
-        subtotalColumns.some(c => c.Subtotal === true &&
-            ReportState.Columns.indexOf(c) === 0)
-    ) {
-        sets.push([]);
-    }
-
-    let texto = "GROUP BY GROUPING SETS ( ";
-
-    sets.forEach((set, index) => {
-        if (index > 0) {
-            texto += ", ";
-        }
-
-        texto += "( ";
-
-        if (set.length > 0) {
-            texto += set.join(", ");
-        }
-
+// Une una lista de tuplas (cada una: array de "alias.attr") en el texto
+// final "GROUP BY GROUPING SETS ( (...), (...), ... )".
+function groupingSetTuplesToText(tuples) {
+    let texto = "";
+    tuples.forEach((cols, idx) => {
+        texto += idx === 0 ? "GROUP BY GROUPING SETS ( ( " : ",( ";
+        texto += cols.join(", ");
         texto += " )";
     });
-
     texto += " )";
-
     return texto;
 }
- 
+
+/**
+ * Nombre de la columna GROUPING(...) para un campo dado, usada tanto en
+ * buildSelectWithSubtotals como en buildFinalSelectWithSubtotals.
+ */
+function subtotalFlagName(attributeName) {
+    return "IS_SUBTOTAL_" + String(attributeName).toUpperCase().replace(/[^A-Z0-9_]/g, "_");
+}
+
+/**
+ * Variante de buildConfigSets() que AÑADE conjuntos extra de agrupación
+ * para los campos marcados con "X" en EDIT_REPORT columnas L (eje de
+ * ReportState.Columns) o R (eje de ReportState.Rows) -ver loadColumns/
+ * loadRows-. Los conjuntos que ya generaba buildConfigSets (jerarquías)
+ * se mantienen exactamente igual; esto solo AÑADE combinaciones nuevas,
+ * nunca quita ni modifica las existentes.
+ *
+ * Semántica de una marca en el campo situado en la posición i de su eje:
+ * añade UN conjunto de agrupación con el "prefijo" de campos de ESE MISMO
+ * eje anteriores a i (puede quedar vacío = total general de ese eje),
+ * combinado con el OTRO eje a su detalle COMPLETO. Así, marcar dos campos
+ * consecutivos de un eje genera dos subtotales distintos (uno por cada
+ * nivel), en vez de todas las combinaciones cruzadas posibles.
+ */
+function buildConfigSetsWithSubtotals(relGrid) {
+    const { dimensions, hierarchiesAcum, combinations } = computeGroupingSetDimensionsAndHierarchies(relGrid);
+    const baseTuples = combinations.map(item => groupingSetTupleToColumnList(item, dimensions, hierarchiesAcum));
+
+    const colsAxisFields = ReportState.Columns.map(c => getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName);
+    const rowsAxisFields = ReportState.Rows.map(r => getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName);
+
+    const extraTuples = [];
+
+    ReportState.Columns.forEach((c, idx) => {
+        if (c.Subtotal) {
+            extraTuples.push([...colsAxisFields.slice(0, idx), ...rowsAxisFields]);
+        }
+    });
+    ReportState.Rows.forEach((r, idx) => {
+        if (r.Subtotal) {
+            extraTuples.push([...colsAxisFields, ...rowsAxisFields.slice(0, idx)]);
+        }
+    });
+
+    return groupingSetTuplesToText([...baseTuples, ...extraTuples]);
+}
+
 /**
  * BuildFinalSelect: traducción literal, incluyendo el cruce ROW_ID/COLUMN_ID
  * "invertido" tal cual está en tu VBA (ROW_ID se calcula a partir del eje
@@ -1351,105 +1302,35 @@ function buildFinalSelect() {
     let sql = "SELECT" + CRLF + CRLF;
 
     sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
-
     let first = true;
-
-    if (ReportState.SubtotalsOnTop) {
-        sql += CRLF + "            CASE";
-
-        for (const c of ReportState.Columns) {
-            if (c.Subtotal === true) {
-                sql += CRLF +
-                    "                WHEN " +
-                    c.AttributeName +
-                    " IS NULL THEN 0";
-            }
-        }
-
-        for (const r of ReportState.Rows) {
-            if (r.Subtotal === true) {
-                sql += CRLF +
-                    "                WHEN " +
-                    r.AttributeName +
-                    " IS NULL THEN 0";
-            }
-        }
-
-        sql += CRLF + "                ELSE 1";
-        sql += CRLF + "            END," + CRLF;
-    }
-
     for (const c of ReportState.Columns) {
         if (c.Hierarchy > 0) {
-            sql += first
-                ? (CRLF + "            " + c.AttributeName)
-                : ("," + CRLF + "            " + c.AttributeName);
-
+            sql += first ? (CRLF + "            " + c.AttributeName) : ("," + CRLF + "            " + c.AttributeName);
             first = false;
         }
     }
-
     sql += CRLF + "    ) AS ROW_ID," + CRLF + CRLF;
 
     sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
-
     first = true;
-
-    if (ReportState.SubtotalsOnTop) {
-        sql += CRLF + "            CASE";
-
-        for (const r of ReportState.Rows) {
-            if (r.Subtotal === true) {
-                sql += CRLF +
-                    "                WHEN " +
-                    r.AttributeName +
-                    " IS NULL THEN 0";
-            }
-        }
-
-        for (const c of ReportState.Columns) {
-            if (c.Subtotal === true) {
-                sql += CRLF +
-                    "                WHEN " +
-                    c.AttributeName +
-                    " IS NULL THEN 0";
-            }
-        }
-
-        sql += CRLF + "                ELSE 1";
-        sql += CRLF + "            END," + CRLF;
-    }
-
-    first = true;
-
     for (const r of ReportState.Rows) {
         if (r.Hierarchy > 0) {
-            sql += first
-                ? (CRLF + "            " + r.AttributeName)
-                : ("," + CRLF + "            " + r.AttributeName);
-
+            sql += first ? (CRLF + "            " + r.AttributeName) : ("," + CRLF + "            " + r.AttributeName);
             first = false;
         }
     }
-
     sql += CRLF + "    ) AS COLUMN_ID," + CRLF + CRLF;
 
     first = true;
-
     for (const c of ReportState.Columns) {
-        sql += first
-            ? ("    " + c.AttributeName)
-            : ("," + CRLF + "    " + c.AttributeName);
-
+        sql += first ? ("    " + c.AttributeName) : ("," + CRLF + "    " + c.AttributeName);
         first = false;
     }
-
     for (const r of ReportState.Rows) {
         sql += "," + CRLF + "    " + r.AttributeName;
     }
 
-    sql += "," + CRLF + "    IMPORTE" + CRLF + CRLF;
-    sql += "FROM REPORT_DATA";
+    sql += "," + CRLF + "    IMPORTE" + CRLF + CRLF + "FROM REPORT_DATA";
 
     return sql;
 }
@@ -1458,20 +1339,200 @@ function buildFinalSelect() {
  * BuildFinalWhere: excluye de cada eje las filas de detalle que no
  * correspondan al grouping-set de totales de esa jerarquía (IS NULL).
  */
-
 function buildFinalWhere() {
-    const hasColumnSubtotals =
-        ReportState.Columns.some(c => c.Subtotal === true);
+    let sql = "";
+    let currentDim = "";
+    let first = true;
 
-    const hasRowSubtotals =
-        ReportState.Rows.some(r => r.Subtotal === true);
+    // ---- COLUMNAS ----
+    for (const c of ReportState.Columns) {
+        if (c.Hierarchy > 0) {
+            if (currentDim !== c.Dimension.toUpperCase()) {
+                if (currentDim !== "") {
+                    sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
+                } else {
+                    sql += "WHERE NOT (" + CRLF;
+                }
+                currentDim = c.Dimension.toUpperCase();
+                first = true;
+            }
 
-    // Sin subtotales: comportamiento actual exacto
-    if (!hasColumnSubtotals && !hasRowSubtotals) {
-        let sql = "";
-        let currentDim = "";
-        let first = true;
+            sql += first
+                ? ("    " + c.AttributeName + " IS NULL")
+                : (CRLF + "    AND " + c.AttributeName + " IS NULL");
+            first = false;
+        }
+    }
 
+    sql += CRLF + ")";
+
+    // ---- FILAS ----
+    currentDim = "";
+
+    for (const r of ReportState.Rows) {
+        if (r.Hierarchy > 0) {
+            if (currentDim !== r.Dimension.toUpperCase()) {
+                if (currentDim !== "") {
+                    sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
+                } else {
+                    sql += CRLF + CRLF + "AND NOT (" + CRLF;
+                }
+                currentDim = r.Dimension.toUpperCase();
+                first = true;
+            }
+
+            sql += first
+                ? ("    " + r.AttributeName + " IS NULL")
+                : (CRLF + "    AND " + r.AttributeName + " IS NULL");
+            first = false;
+        }
+    }
+
+    if (currentDim !== "") {
+        sql += CRLF + ")";
+    }
+
+    return sql;
+}
+
+/* =======================================================================
+ * SUBTOTALES "NO JERARQUICOS" (EDIT_REPORT columnas L/R = subtotal,
+ * M/S = orden -- de momento M/S no se usan aqui, solo subtotal).
+ * Estas funciones NUEVAS solo se usan cuando hay AL MENOS UN campo con
+ * Subtotal=true en cualquiera de los dos ejes (ver buildSQL). Si no hay
+ * ninguno, buildSQL sigue llamando a las funciones de siempre (buildSelect,
+ * buildFinalSelect, buildFinalWhere, buildConfigSets) sin ningun cambio,
+ * asi que el SQL generado es exactamente igual que antes de este cambio.
+ * ===================================================================== */
+
+function hasAnySubtotalMarked() {
+    return (ReportState.Columns || []).some(c => c.Subtotal) || (ReportState.Rows || []).some(r => r.Subtotal);
+}
+
+/**
+ * Igual que buildSelect(), pero anadiendo un GROUPING(campo) por cada
+ * campo de AMBOS ejes (no solo los marcados con X): un campo situado
+ * DESPUES de otro marcado, dentro del mismo eje, tambien puede quedar
+ * excluido de un grouping set concreto (ver buildConfigSetsWithSubtotals),
+ * asi que necesita su propio indicador para poder etiquetarse como
+ * "TOTAL" en buildFinalSelectWithSubtotals.
+ */
+function buildSelectWithSubtotals(measuresGrid, relGrid) {
+    let sql = buildSelect(measuresGrid, relGrid);
+
+    for (const c of ReportState.Columns) {
+        sql += "," + CRLF + "    GROUPING(" + getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName + ") AS " + subtotalFlagName(c.AttributeName);
+    }
+    for (const r of ReportState.Rows) {
+        sql += "," + CRLF + "    GROUPING(" + getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName + ") AS " + subtotalFlagName(r.AttributeName);
+    }
+
+    return sql;
+}
+
+// Necesita CAST(... AS STRING) para poder mostrar 'TOTAL' en su lugar?
+function attributeNeedsStringCast(atributesGrid, dimension, attributeName) {
+    const tipo = getAttributeType(atributesGrid, dimension, attributeName);
+    return UNQUOTED_TYPES.includes(tipo);
+}
+
+function fieldFinalExpressionWithSubtotal(atributesGrid, field) {
+    const flag = subtotalFlagName(field.AttributeName);
+    const rawExpr = attributeNeedsStringCast(atributesGrid, field.Dimension, field.AttributeName)
+        ? ("CAST(" + field.AttributeName + " AS STRING)")
+        : field.AttributeName;
+    return "CASE WHEN " + flag + " = 1 THEN 'TOTAL' ELSE " + rawExpr + " END AS " + field.AttributeName;
+}
+
+/**
+ * ORDER BY interno de un DENSE_RANK para UN eje (ReportState.Columns o
+ * ReportState.Rows), colocando sus filas de subtotal justo antes o despues
+ * del grupo de detalle al que resumen, segun "Mostrar subtotales arriba"
+ * (EDIT_REPORT!D4 -> subtotalsOnTop). Si ese eje no tiene NINGUN campo
+ * marcado, devuelve exactamente lo mismo que el bucle original de
+ * buildFinalSelect (misma lista de nombres de campo, sin nada anadido).
+ */
+function buildAxisOrderByWithSubtotals(fields, subtotalsOnTop) {
+    if (!fields.some(f => f.Subtotal)) {
+        return fields.filter(f => f.Hierarchy > 0).map(f => f.AttributeName);
+    }
+
+    const topVal = subtotalsOnTop ? 0 : 1;
+    const bottomVal = subtotalsOnTop ? 1 : 0;
+    const parts = [];
+
+    // Si el PRIMER campo del eje esta marcado, su fila de "total general del
+    // eje" (todos los campos de este eje colapsados a la vez) se ordena la
+    // primera (o la ultima) de todas.
+    if (fields.length > 0 && fields[0].Subtotal) {
+        parts.push("CASE WHEN " + subtotalFlagName(fields[0].AttributeName) + " = 1 THEN " + topVal + " ELSE " + bottomVal + " END");
+    }
+
+    fields.forEach((f, idx) => {
+        if (idx > 0) {
+            // El subtotal de ESTE campo (si esta marcado) se intercala junto
+            // al grupo del campo anterior.
+            parts.push(subtotalFlagName(f.AttributeName) + (subtotalsOnTop ? " DESC" : " ASC"));
+        }
+        if (f.Hierarchy > 0) parts.push(f.AttributeName);
+    });
+
+    return parts;
+}
+
+/**
+ * Igual que buildFinalSelect(), pero:
+ *   - Los ORDER BY internos de ROW_ID/COLUMN_ID usan
+ *     buildAxisOrderByWithSubtotals (arriba) en vez de la lista simple.
+ *   - Cada campo se etiqueta 'TOTAL' cuando su GROUPING(...) = 1
+ *     (fieldFinalExpressionWithSubtotal), en vez de mostrarse tal cual.
+ */
+function buildFinalSelectWithSubtotals(atributesGrid, subtotalsOnTop) {
+    let sql = "SELECT" + CRLF + CRLF;
+
+    const rowOrderParts = buildAxisOrderByWithSubtotals(ReportState.Columns, subtotalsOnTop);
+    sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
+    rowOrderParts.forEach((part, idx) => {
+        sql += idx === 0 ? (CRLF + "            " + part) : ("," + CRLF + "            " + part);
+    });
+    sql += CRLF + "    ) AS ROW_ID," + CRLF + CRLF;
+
+    const colOrderParts = buildAxisOrderByWithSubtotals(ReportState.Rows, subtotalsOnTop);
+    sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
+    colOrderParts.forEach((part, idx) => {
+        sql += idx === 0 ? (CRLF + "            " + part) : ("," + CRLF + "            " + part);
+    });
+    sql += CRLF + "    ) AS COLUMN_ID," + CRLF + CRLF;
+
+    let first = true;
+    for (const c of ReportState.Columns) {
+        sql += first ? ("    " + fieldFinalExpressionWithSubtotal(atributesGrid, c)) : ("," + CRLF + "    " + fieldFinalExpressionWithSubtotal(atributesGrid, c));
+        first = false;
+    }
+    for (const r of ReportState.Rows) {
+        sql += "," + CRLF + "    " + fieldFinalExpressionWithSubtotal(atributesGrid, r);
+    }
+
+    sql += "," + CRLF + "    IMPORTE" + CRLF + CRLF + "FROM REPORT_DATA";
+
+    return sql;
+}
+
+/**
+ * Igual que buildFinalWhere(), pero el eje que tenga algun campo marcado
+ * con subtotal NO excluye sus filas "todo NULL": esas son precisamente los
+ * totales/subtotales que ahora queremos conservar. El otro eje (si no
+ * tiene marcas) conserva el filtrado de siempre, sin ningun cambio.
+ */
+function buildFinalWhereWithSubtotals() {
+    let sql = "";
+    let currentDim = "";
+    let first = true;
+
+    const colsHaveSubtotal = ReportState.Columns.some(c => c.Subtotal);
+    const rowsHaveSubtotal = ReportState.Rows.some(r => r.Subtotal);
+
+    if (!colsHaveSubtotal) {
         for (const c of ReportState.Columns) {
             if (c.Hierarchy > 0) {
                 if (currentDim !== c.Dimension.toUpperCase()) {
@@ -1480,7 +1541,6 @@ function buildFinalWhere() {
                     } else {
                         sql += "WHERE NOT (" + CRLF;
                     }
-
                     currentDim = c.Dimension.toUpperCase();
                     first = true;
                 }
@@ -1488,24 +1548,23 @@ function buildFinalWhere() {
                 sql += first
                     ? ("    " + c.AttributeName + " IS NULL")
                     : (CRLF + "    AND " + c.AttributeName + " IS NULL");
-
                 first = false;
             }
         }
+        if (currentDim !== "") sql += CRLF + ")";
+    }
 
-        sql += CRLF + ")";
+    currentDim = "";
 
-        currentDim = "";
-
+    if (!rowsHaveSubtotal) {
         for (const r of ReportState.Rows) {
             if (r.Hierarchy > 0) {
                 if (currentDim !== r.Dimension.toUpperCase()) {
                     if (currentDim !== "") {
                         sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
                     } else {
-                        sql += CRLF + CRLF + "AND NOT (" + CRLF;
+                        sql += (sql.trim() !== "" ? (CRLF + CRLF + "AND NOT (" + CRLF) : ("WHERE NOT (" + CRLF));
                     }
-
                     currentDim = r.Dimension.toUpperCase();
                     first = true;
                 }
@@ -1513,42 +1572,39 @@ function buildFinalWhere() {
                 sql += first
                     ? ("    " + r.AttributeName + " IS NULL")
                     : (CRLF + "    AND " + r.AttributeName + " IS NULL");
-
                 first = false;
             }
         }
-
-        if (currentDim !== "") {
-            sql += CRLF + ")";
-        }
-
-        return sql;
+        if (currentDim !== "") sql += CRLF + ")";
     }
 
-    // Con subtotales: no eliminar NULL de los ejes
-    return "";
+    return sql;
 }
 
-
 /**
- * BuildSQL: ensambla el flujo "Dinámico" completo.
+ * BuildSQL: ensambla el flujo "Dinamico" completo. Si NINGUN campo tiene
+ * marcado un subtotal (columnas L/R de EDIT_REPORT), usa exactamente las
+ * mismas funciones de siempre (SQL identico al de antes de este cambio).
+ * Si hay al menos uno, usa las variantes "WithSubtotals" de arriba.
  */
-function buildSQL(relGrid, measuresGrid, atributesGrid) {
+function buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop) {
     let sql = "";
+    const withSubtotals = hasAnySubtotalMarked();
 
     sql += "WITH REPORT_DATA AS (" + CRLF + CRLF;
-    sql += buildSelect(measuresGrid, relGrid) + CRLF + CRLF;
+    sql += (withSubtotals ? buildSelectWithSubtotals(measuresGrid, relGrid) : buildSelect(measuresGrid, relGrid)) + CRLF + CRLF;
     sql += buildFrom(measuresGrid) + CRLF + CRLF;
     sql += buildJoins(relGrid) + CRLF + CRLF;
     sql += buildWhere(atributesGrid, relGrid) + CRLF + CRLF;
-    sql += buildConfigSets(relGrid) + CRLF + CRLF;
+    sql += (withSubtotals ? buildConfigSetsWithSubtotals(relGrid) : buildConfigSets(relGrid)) + CRLF + CRLF;
     sql += ")" + CRLF + CRLF;
-    sql += buildFinalSelect() + CRLF + CRLF;
-    sql += buildFinalWhere() + CRLF + CRLF;
+    sql += (withSubtotals ? buildFinalSelectWithSubtotals(atributesGrid, !!subtotalsOnTop) : buildFinalSelect()) + CRLF + CRLF;
+    sql += (withSubtotals ? buildFinalWhereWithSubtotals() : buildFinalWhere()) + CRLF + CRLF;
     sql += "ORDER BY" + CRLF + "    ROW_ID," + CRLF + "    COLUMN_ID";
 
     return sql;
 }
+
 
 /* ---------------------------------------------------------------------
  * Expandir/Contraer jerarquías (Filas/Columnas) sin ocultar filas de
@@ -2992,7 +3048,12 @@ async function actualizarInformeCore() {
         resultSheetName = resultSheetNameFromGrid(editReportGrid);
         loadReportDefinition(editReportGrid);
 
-        sql = buildSQL(relGrid, measuresGrid, atributesGrid);
+        // EDIT_REPORT!D4 = "Mostrar subtotales arriba" (Propiedades del
+        // informe). Solo tiene efecto real cuando además hay algún campo
+        // marcado con subtotal en L/R (ver hasAnySubtotalMarked/buildSQL).
+        const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
+
+        sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
 
         console.log("BuildSQL ->", sql);
 
