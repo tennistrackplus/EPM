@@ -1956,11 +1956,71 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
     });
 }
 
+
+async function handleEditReportMemberPickerRequest(eventArgs) {
+    try {
+        if (!eventArgs || !eventArgs.address) return;
+
+        if (!eventArgs.address.toUpperCase().includes("A5")) return;
+
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+
+            const values = sheet.getRange("A1:A5");
+            values.load("values");
+
+            await context.sync();
+
+            const dimension = String(values.values[0][0] || "").trim();
+            const attribute = String(values.values[1][0] || "").trim();
+            const searchValue = String(values.values[2][0] || "").trim();
+            const addr = String(values.values[3][0] || "").trim();
+            const request = String(values.values[4][0] || "").trim().toUpperCase();
+
+            if (request !== "X") return;
+
+            // Consumimos la petición
+            sheet.getRange("A5").clear(Excel.ClearApplyTo.contents);
+            await context.sync();
+
+            if (!dimension || !attribute || !addr) return;
+
+            await openMemberRecognitionPicker(
+                addr,
+                {
+                    dim: dimension,
+                    attr: attribute
+                },
+                searchValue
+            );
+        });
+
+    } catch (error) {
+        console.error(
+            "[Draco] Error procesando petición Member Picker:",
+            error
+        );
+    }
+}
+
+
+
 async function registerDracoSelectionHandler(context, sheet) {
     if (DracoHandlerRegistered) return;
+
     sheet.onSelectionChanged.add(handleDracoSelectionChanged);
     sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
     sheet.onChanged.add(handleDracoMemberRecognitionChanged);
+
+    // NUEVO: petición de apertura del Member Picker desde EDIT_REPORT
+    const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+    editReport.load("isNullObject");
+    await context.sync();
+
+    if (!editReport.isNullObject) {
+        editReport.onChanged.add(handleEditReportMemberPickerRequest);
+    }
+
     await context.sync();
     DracoHandlerRegistered = true;
 }
