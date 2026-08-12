@@ -473,15 +473,7 @@ function sqlValue(atributesGrid, dimension, atributo, valor) {
 // evitando además que un argumento inesperado sin comillas provoque un
 // context.sync() fallido a mitad de la construcción del SQL, lo que podía
 // dejar el resto del lote en un estado inestable.
-function getFormulaArgumentValue(arg) {
-    arg = String(arg).trim();
 
-    if (arg.charAt(0) === '"' && arg.charAt(arg.length - 1) === '"' && arg.length >= 2) {
-        return arg.substring(1, arg.length - 1);
-    }
-
-    return arg.replace(/"/g, "");
-}
 
 /* ---------------------------------------------------------------------
  * ReadRowDefinitions / ReadColumnDefinitions
@@ -491,6 +483,29 @@ function getFormulaArgumentValue(arg) {
 function replaceAll(text, search) {
     return text.split(search).join("");
 }
+
+
+
+async function getFormulaArgumentValue(context, arg) {
+    arg = String(arg).trim();
+
+    // Si empieza por comillas, es texto literal
+    if (arg.charAt(0) === '"') {
+        return arg.substring(1, arg.length - 1);
+    }
+
+    // Si no tiene comillas, es una referencia a una celda
+    const range = context.workbook.worksheets
+        .getActiveWorksheet()
+        .getRange(arg);
+
+    range.load("values");
+
+    await context.sync();
+
+    return range.values[0][0];
+}
+
 
 async function readRowDefinitions(context, editReportGrid, csvGrid) {
     const items = [];
@@ -502,30 +517,36 @@ async function readRowDefinitions(context, editReportGrid, csvGrid) {
 
     for (let R = RRows.row; R <= lastRow; R++) {
         for (let Col = RRows.col; Col <= lastCol; Col++) {
+
             if (cellHasFormula(csvGrid, R, Col)) {
+
                 let F = String(cellFormula(csvGrid, R, Col));
 
                 F = replaceAll(F, "=@");
                 F = replaceAll(F, "=EPM_VALUE(");
                 F = replaceAll(F, ")");
 
-                const V = F.indexOf(";") !== -1 ? F.split(";") : F.split(",");
+                const V = F.indexOf(";") !== -1
+                    ? F.split(";")
+                    : F.split(",");
 
                 items.push({
                     R: R,
-                    Dimension: getFormulaArgumentValue(V[0]),
-                    AttributeName: getFormulaArgumentValue(V[1]),
-                    Value: getFormulaArgumentValue(V[2]),
-                    Display: getFormulaArgumentValue(V[3])
+                    Dimension: await getFormulaArgumentValue(context, V[0]),
+                    AttributeName: await getFormulaArgumentValue(context, V[1]),
+                    Value: await getFormulaArgumentValue(context, V[2]),
+                    Display: await getFormulaArgumentValue(context, V[3])
                 });
+
             } else {
-                break; // Exit For (solo la iteración de columnas)
+                break;
             }
         }
     }
 
     return items;
 }
+
 
 async function readColumnDefinitions(context, editReportGrid, csvGrid) {
     const items = [];
@@ -537,31 +558,35 @@ async function readColumnDefinitions(context, editReportGrid, csvGrid) {
 
     for (let Col = RCols.col; Col <= lastCol; Col++) {
         for (let R = RCols.row; R <= lastRow; R++) {
+
             if (cellHasFormula(csvGrid, R, Col)) {
+
                 let F = String(cellFormula(csvGrid, R, Col));
 
                 F = replaceAll(F, "=@");
                 F = replaceAll(F, "=EPM_VALUE(");
                 F = replaceAll(F, ")");
 
-                const V = F.indexOf(";") !== -1 ? F.split(";") : F.split(",");
+                const V = F.indexOf(";") !== -1
+                    ? F.split(";")
+                    : F.split(",");
 
                 items.push({
                     R: Col,
-                    Dimension: getFormulaArgumentValue(V[0]),
-                    AttributeName: getFormulaArgumentValue(V[1]),
-                    Value: getFormulaArgumentValue(V[2]),
-                    Display: getFormulaArgumentValue(V[3])
+                    Dimension: await getFormulaArgumentValue(context, V[0]),
+                    AttributeName: await getFormulaArgumentValue(context, V[1]),
+                    Value: await getFormulaArgumentValue(context, V[2]),
+                    Display: await getFormulaArgumentValue(context, V[3])
                 });
+
             } else {
-                break; // Exit For (solo la iteración de filas)
+                break;
             }
         }
     }
 
     return items;
 }
-
 /* ---------------------------------------------------------------------
  * BuildSelectBase / BuildFrom / BuildJoins / BuildBaseWhere /
  * BuildGroupByBase / BuildBaseRow / BuildColumns / BuildSQL_Fixed
