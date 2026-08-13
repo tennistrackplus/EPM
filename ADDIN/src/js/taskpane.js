@@ -278,6 +278,57 @@ const TaskPaneApp = {
     },
 
     /**
+     * Se ejecuta automáticamente en init(), es decir, cada vez que este
+     * taskpane se CARGA de nuevo (botón del ribbon "Editar informe" ->
+     * ShowTaskpane -> TaskpaneId="Taskpane"). Abrir un taskpane no toca la
+     * hoja activa ni la selección de Excel, así que en este punto siguen
+     * siendo las que tenía el usuario en el momento de pulsar el botón.
+     * Guarda:
+     *   EDIT_REPORT!D1 <- nombre de la hoja activa   (p.ej. "CSV_RESULT")
+     *   EDIT_REPORT!E1 <- celda seleccionada         (p.ej. "C3")
+     *
+     * Nota: si el panel YA estaba abierto, Excel solo lo trae al frente
+     * (no recarga la página ni vuelve a llamar a init()), así que este
+     * paso no se repite en ese caso; para eso sigue estando el botón
+     * manual "Editar report" (btnEditReport) dentro del propio panel.
+     */
+    async captureActiveEditContext() {
+        try {
+            let activeSheetName = "";
+            let selectedCellAddress = "";
+
+            await Excel.run(async (context) => {
+                const activeSheet = context.workbook.worksheets.getActiveWorksheet();
+                activeSheet.load("name");
+
+                const selectedRange = context.workbook.getSelectedRange();
+                selectedRange.load("address");
+
+                await context.sync();
+
+                activeSheetName = activeSheet.name;
+
+                // selectedRange.address llega como "Hoja1!C3" (o
+                // "Hoja1!C3:D5" si hay un rango de varias celdas
+                // seleccionado); nos quedamos solo con la referencia de
+                // celda ("C3"), la esquina superior izquierda si es rango.
+                const rawAddress = selectedRange.address.split("!").pop();
+                selectedCellAddress = rawAddress.split(":")[0];
+
+                const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+                editReportSheet.getRange("D1").values = [[activeSheetName]];
+                editReportSheet.getRange("E1").values = [[selectedCellAddress]];
+
+                await context.sync();
+            });
+
+            console.log(`[Draco] Editar informe: EDIT_REPORT!D1="${activeSheetName}", EDIT_REPORT!E1="${selectedCellAddress}"`);
+        } catch (err) {
+            console.error("Error guardando la hoja/celda activa en EDIT_REPORT (D1/E1):", err);
+        }
+    },
+
+    /**
      * Botón "Editar report" del TASKPANE (no del ribbon: no depende del
      * manifest). Flujo: el usuario deja activa en Excel la pestaña/hoja
      * que quiere editar y pulsa este botón aquí; se guarda el nombre de
@@ -335,6 +386,14 @@ const TaskPaneApp = {
         await safeStep("initRefreshPauseButton", () => this.initRefreshPauseButton());
         await safeStep("registerPendingRibbonActionListener", () => this.registerPendingRibbonActionListener());
         await safeStep("loadReportPropertiesFromSettings", () => this.loadReportPropertiesFromSettings());
+
+        // Botón del ribbon "Editar informe" (EditarInformeButton -> Show
+        // Taskpane -> TaskpaneId="Taskpane"): abrir el taskpane NO cambia
+        // la hoja activa ni la selección de Excel, así que aquí, nada más
+        // cargar la página, siguen siendo las que tenía el usuario al
+        // pulsar el botón. Las guardamos en EDIT_REPORT!D1/E1 antes de
+        // cargar el diseño.
+        await safeStep("captureActiveEditContext", () => this.captureActiveEditContext());
 
         // loadFields() es lo más importante de esta pantalla (el árbol de
         // campos de la izquierda): se ejecuta siempre, pase lo que pase
