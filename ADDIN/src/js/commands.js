@@ -1632,7 +1632,8 @@ const DracoCollapseState = {
 };
 
 let DracoLastJson = null;           // último JSON de BigQuery, para repintar sin re-consultar
-let DracoHandlerRegistered = false; // evita registrar el listener de clic más de una vez
+let DracoHandlerRegistered = false; // evita registrar los listeners de CSV_RESULT (clic +/-, reconocimiento) más de una vez
+let DracoEditReportHandlerRegistered = false; // evita registrar el listener de EDIT_REPORT!A5 (picker) más de una vez — INDEPENDIENTE de DracoHandlerRegistered: no depende de que exista CSV_RESULT ni de que se haya refrescado nunca
 let DracoSuppressChangeEvents = false; // true mientras jsonTo3Matrices pinta celdas (evita que el reconocimiento de miembros reaccione a nuestras propias escrituras)
 let DracoIndicatorMap = new Map();  // "row_col" -> { axis, nodeKey } de los indicadores +/- pintados
 
@@ -2267,6 +2268,8 @@ async function handleEditReportMemberPickerRequest(eventArgs) {
     try {
         if (!eventArgs || !eventArgs.address) return;
 
+        console.log("[Draco] handleEditReportMemberPickerRequest: onChanged en EDIT_REPORT, address =", eventArgs.address);
+
         if (!eventArgs.address.toUpperCase().includes("A5")) return;
 
         await Excel.run(async (context) => {
@@ -2283,13 +2286,21 @@ async function handleEditReportMemberPickerRequest(eventArgs) {
             const addr = String(values.values[3][0] || "").trim();
             const request = String(values.values[4][0] || "").trim().toUpperCase();
 
-            if (request !== "X") return;
+            console.log("[Draco] handleEditReportMemberPickerRequest: A1:A5 =", { dimension, attribute, searchValue, addr, request });
+
+            if (request !== "X") {
+                console.log("[Draco] handleEditReportMemberPickerRequest: A5 no es 'X' (valor real: '" + request + "'), se ignora.");
+                return;
+            }
 
             // Consumimos la petición
             sheet.getRange("A5").clear(Excel.ClearApplyTo.contents);
             await context.sync();
 
-            if (!dimension || !attribute || !addr) return;
+            if (!dimension || !attribute || !addr) {
+                console.warn("[Draco] handleEditReportMemberPickerRequest: falta dimension/attribute/addr, no se abre el picker.", { dimension, attribute, addr });
+                return;
+            }
 
             await openMemberRecognitionPicker(
                 addr,
@@ -2311,6 +2322,36 @@ async function handleEditReportMemberPickerRequest(eventArgs) {
 
 
 
+/**
+ * Registra (una sola vez) el listener de EDIT_REPORT!A5 que abre el
+ * Member Picker. Es INDEPENDIENTE de registerDracoSelectionHandler/
+ * DracoHandlerRegistered a propósito: antes estaba dentro de esa misma
+ * función y compartía su flag, lo que significaba que si CSV_RESULT
+ * (la hoja de resultados) todavía no existía —p.ej. sesión recién
+ * abierta, sin haber pulsado nunca "Actualizar"— el picker de A5 NO se
+ * registraba, aunque EDIT_REPORT sí existiera y el usuario ya estuviera
+ * rellenando A1/A2/A4/A5. Con esta función aparte, ensureDracoHandlersRegistered
+ * puede engancharla sin depender de que exista CSV_RESULT.
+ */
+async function registerEditReportPickerHandler(context) {
+    if (DracoEditReportHandlerRegistered) return;
+
+    const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+    editReport.load("isNullObject");
+    await context.sync();
+
+    if (editReport.isNullObject) {
+        console.log("[Draco] registerEditReportPickerHandler: EDIT_REPORT no existe todavía.");
+        return;
+    }
+
+    editReport.onChanged.add(handleEditReportMemberPickerRequest);
+    await context.sync();
+
+    DracoEditReportHandlerRegistered = true;
+    console.log("[Draco] Listener de EDIT_REPORT!A5 (Member Picker) registrado.");
+}
+
 async function registerDracoSelectionHandler(context, sheet) {
     if (DracoHandlerRegistered) return;
 
@@ -2319,13 +2360,7 @@ async function registerDracoSelectionHandler(context, sheet) {
     sheet.onChanged.add(handleDracoMemberRecognitionChanged);
 
     // NUEVO: petición de apertura del Member Picker desde EDIT_REPORT
-    const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
-    editReport.load("isNullObject");
-    await context.sync();
-
-    if (!editReport.isNullObject) {
-        editReport.onChanged.add(handleEditReportMemberPickerRequest);
-    }
+    await registerEditReportPickerHandler(context);
 
     await context.sync();
     DracoHandlerRegistered = true;
@@ -2343,6 +2378,16 @@ async function registerDracoSelectionHandler(context, sheet) {
  * pinte la primera tabla.
  */
 async function ensureDracoHandlersRegistered() {
+    // El picker de EDIT_REPORT!A5 no depende de que exista CSV_RESULT ni de
+    // que se haya refrescado nunca: se intenta registrar siempre, aparte.
+    try {
+        await Excel.run(async (context) => {
+            await registerEditReportPickerHandler(context);
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo registrar el listener de EDIT_REPORT!A5 de forma temprana:", e);
+    }
+
     if (DracoHandlerRegistered) return;
     try {
         await Excel.run(async (context) => {
@@ -3371,13 +3416,13 @@ function toggleDracoSetting(key) {
     return new Promise((resolve) => settings.saveAsync(() => resolve(!current)));
 }
 
-async function requestRibbonLabelUpdate(controlId, label) {
+async function requestRibbonLabelUpdate(controlId, label, groupId) {
     try {
         if (Office.ribbon && Office.ribbon.requestUpdate) {
             await Office.ribbon.requestUpdate({
                 tabs: [{
                     id: "DracoBITab",
-                    groups: [{ id: "GroupOpcionesInforme", controls: [{ id: controlId, label }] }]
+                    groups: [{ id: groupId || "EdicionGroup", controls: [{ id: controlId, label }] }]
                 }]
             });
         }
@@ -3398,11 +3443,44 @@ async function toggleRefreshPaused(event) {
     }
 }
 
+/**
+ * Escribe "X" (ON) o "" (OFF) en EDIT_REPORT!B1, para que el resto del
+ * flujo (SQL/reconocimiento) pueda leer el estado directamente de la
+ * hoja si lo necesita, además del guardado en Office roaming settings.
+ * Si EDIT_REPORT no existe todavía no falla: simplemente no escribe nada.
+ */
+async function writeMemberRecognitionFlagToSheet(nowOn) {
+    try {
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+            sheet.load("isNullObject");
+            await context.sync();
+
+            if (sheet.isNullObject) {
+                console.log("[Draco] writeMemberRecognitionFlagToSheet: EDIT_REPORT no existe todavía, no se escribe B1.");
+                return;
+            }
+
+            sheet.getRange("B1").values = [[nowOn ? "X" : ""]];
+            await context.sync();
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo escribir el estado de Reconocimiento de miembros en EDIT_REPORT!B1:", e);
+    }
+}
+
 async function toggleMemberRecognition(event) {
     try {
         const nowOn = await toggleDracoSetting("draco_memberRecognition");
         console.log("Reconocimiento de miembros:", nowOn ? "activado" : "desactivado");
-        await requestRibbonLabelUpdate("BtnReconocimientoMiembros", nowOn ? "Miembros: activado" : "Reconoc. de miembros");
+
+        await writeMemberRecognitionFlagToSheet(nowOn);
+
+        await requestRibbonLabelUpdate(
+            "ReconocimientoMiembrosButton",
+            nowOn ? "Reconocimiento de miembros (ON)" : "Reconocimiento de miembros (OFF)",
+            "EdicionGroup"
+        );
     } catch (error) {
         console.error("Error al alternar 'Reconocimiento de miembros':", error);
     } finally {
