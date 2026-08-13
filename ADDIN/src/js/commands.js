@@ -2405,6 +2405,96 @@ async function handleDracoSelectionChanged(eventArgs) {
 }
 
 /**
+ * Recorre físicamente las filas de EDIT_REPORT de un eje (H/I/J para
+ * Filas, N/O/P para Columnas) empezando en la fila 15, IGUAL que
+ * loadRows/loadColumns, pero sin descartar las filas "MEASURE": las
+ * incluye en la lista, en el orden físico real, marcadas con
+ * isMeasure=true. Esto es necesario porque loadRows/loadColumns cuentan
+ * MEASURE aparte (ReportState.MeasureCount) sin que quede constancia de
+ * EN QUÉ POSICIÓN del eje iba esa fila MEASURE, y jsonTo3Matrices
+ * necesita esa posición para pintar correctamente cuando MEASURE no es
+ * la última fila del eje (ver computeAxisPaintPlan).
+ */
+function buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol) {
+    const levels = [];
+    let R = 15;
+    while (String(cellValue(editReportGrid, R, dimCol)).trim() !== "") {
+        const dim = String(cellValue(editReportGrid, R, dimCol)).trim();
+        levels.push({
+            isMeasure: dim.toUpperCase() === "MEASURE",
+            dim,
+            attr: String(cellValue(editReportGrid, R, attrCol)).trim(),
+            flag: Number(cellValue(editReportGrid, R, hierCol))
+        });
+        R++;
+    }
+    return levels;
+}
+
+/**
+ * Firma de un eje (para expandir/contraer) calculada a partir de los
+ * levels ya leídos (en vez de releer EDIT_REPORT con un `count` que
+ * excluía las filas MEASURE, lo que producía firmas que no reflejaban
+ * la fila MEASURE ni su posición).
+ */
+function computeDracoAxisSignatureFromLevels(levels) {
+    return levels
+        .map(l => (l.isMeasure ? "MEASURE" : String(l.dim).toUpperCase()) + "." + String(l.attr).toUpperCase() + ":" + (l.isMeasure ? "" : String(l.flag)))
+        .join("|");
+}
+
+/**
+ * A partir de los levels físicos de un eje (dimensiones reales + filas
+ * MEASURE intercaladas), calcula todo lo que jsonTo3Matrices necesita
+ * para pintar:
+ *  - flagsReal / fieldsReal / iauxReal: iguales a los antiguos
+ *    flagsFilas/fieldsFilas/flagsColumnas/fieldsColumnas pero indexados
+ *    1..N SOLO sobre las dimensiones reales (excluyendo MEASURE), que es
+ *    el mismo orden en que aparecen los valores V[i] del FACT/dict.
+ *  - flag1OrdinalToIaux: para remapear el `field` que devuelve
+ *    filterAndCompactDracoAxis (que cuenta solo dimensiones reales con
+ *    NIVEL=1) a la columna/fila física real ya pintada (iAux), que SÍ
+ *    incluye el hueco de las filas MEASURE.
+ *  - measureLevels: una entrada por cada fila MEASURE del eje, con la
+ *    columna/fila física (iAux) que le corresponde y la etiqueta a
+ *    pintar (el nombre de medida, ej. "IMPORTE").
+ *  - totalIaux: nº total de columnas/filas físicas pintadas en este eje
+ *    (dimensiones reales de NIVEL=1 + filas MEASURE), para
+ *    Draco_001_Rows/Cols.
+ */
+function computeAxisPaintPlan(levels) {
+    const flagsReal = [];
+    const fieldsReal = [];
+    const iauxReal = [];
+    const flag1OrdinalToIaux = [];
+    const measureLevels = [];
+
+    let iAux = 0;
+    let dimIdx = 0;
+    let ordinal = 0;
+
+    for (const level of levels) {
+        if (level.isMeasure) {
+            iAux++;
+            measureLevels.push({ iAux, label: (level.attr || level.dim || "").trim() || "MEASURE" });
+            continue;
+        }
+        dimIdx++;
+        const flag = level.flag;
+        if (flag === 1) {
+            iAux++;
+            ordinal++;
+            flag1OrdinalToIaux[ordinal] = iAux;
+        }
+        flagsReal[dimIdx] = flag;
+        fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr };
+        iauxReal[dimIdx] = iAux;
+    }
+
+    return { flagsReal, fieldsReal, iauxReal, flag1OrdinalToIaux, measureLevels, totalIaux: iAux, dimCount: dimIdx };
+}
+
+/**
  * JSON_To_3_Matrices: traducción literal, incluyendo el mismo cruce
  * "invertido" H/N que usa el resto del módulo (total_dim_filas=ColumnCount
  * leído de columnas H/I/J; total_dim_cols=RowCount leído de columnas N/O/P).
@@ -2507,25 +2597,33 @@ async function jsonTo3MatricesCore(context, json) {
 
     // Precalcular una sola vez el flag (NIVEL) de cada posición del eje,
     // en vez de releerlo de EDIT_REPORT en cada iteración de cada ROW_ID/COLUMN_ID.
-    const flagsFilas = [];
-    const fieldsFilas = []; // {dim, attr} por posición — solo hace falta si el eje es Estático (fórmulas EPM_VALUE)
-    for (let i = 1; i <= totalDimFilas; i++) {
-        flagsFilas[i] = Number(cellValue(editReportGrid, i + 14, 10)); // J
-        fieldsFilas[i] = { dim: cellValue(editReportGrid, i + 14, 8), attr: cellValue(editReportGrid, i + 14, 9) }; // H, I
-    }
+    // Se lee el eje completo (incluidas las filas MEASURE, si las hay) con
+    // buildDracoAxisLevels/computeAxisPaintPlan: iterar 1..totalDimFilas y
+    // leer directamente la fila (i+14) — como se hacía antes — asume que
+    // TODAS las filas físicas del eje son dimensiones reales; en cuanto
+    // aparece una fila MEASURE intercalada, esa asunción deja de ser
+    // cierta y desalinea el resto de dimensiones (y de paso nunca llega a
+    // pintarse la propia etiqueta de la medida). Por eso ahora se recorre
+    // el eje físico completo una vez (con las filas MEASURE incluidas) y
+    // se deriva de ahí tanto la correspondencia {dim, attr, NIVEL} de cada
+    // dimensión real como la columna/fila física de cada etiqueta MEASURE.
+    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10);      // H/I/J
+    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16); // N/O/P
 
-    const flagsColumnas = [];
-    const fieldsColumnas = [];
-    for (let i = 1; i <= totalDimCols; i++) {
-        flagsColumnas[i] = Number(cellValue(editReportGrid, i + 14, 16)); // P
-        fieldsColumnas[i] = { dim: cellValue(editReportGrid, i + 14, 14), attr: cellValue(editReportGrid, i + 14, 15) }; // N, O
-    }
+    const planFilas = computeAxisPaintPlan(levelsFilas);
+    const planColumnas = computeAxisPaintPlan(levelsColumnas);
+
+    const flagsFilas = planFilas.flagsReal;
+    const fieldsFilas = planFilas.fieldsReal; // {dim, attr} por posición — solo hace falta si el eje es Estático (fórmulas EPM_VALUE)
+
+    const flagsColumnas = planColumnas.flagsReal;
+    const fieldsColumnas = planColumnas.fieldsReal;
 
     // ---- Expandir/Contraer: si el eje (misma lista de campos) no ha
     // cambiado desde el último refresco, se respeta qué nodos estaban
     // contraídos; si ha cambiado, se resetea (todo expandido) para ESE eje.
-    const rowsSignature = computeDracoAxisSignature(editReportGrid, 8, 9, 10, totalDimFilas);
-    const colsSignature = computeDracoAxisSignature(editReportGrid, 14, 15, 16, totalDimCols);
+    const rowsSignature = computeDracoAxisSignatureFromLevels(levelsFilas);
+    const colsSignature = computeDracoAxisSignatureFromLevels(levelsColumnas);
     resetDracoCollapseIfAxisChanged("rows", rowsSignature);
     resetDracoCollapseIfAxisChanged("cols", colsSignature);
 
@@ -2628,10 +2726,9 @@ async function jsonTo3MatricesCore(context, json) {
     for (const V of rowsFilter.dict.values()) {
         if (Number(V[0]) > maxRowId) maxRowId = Number(V[0]);
 
-        let iAux = 0;
         for (let i = 1; i <= totalDimFilas; i++) {
             const flag = flagsFilas[i];
-            if (flag === 1) iAux++;
+            const iAux = planFilas.iauxReal[i];
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
                 const row = Number(V[0]) + rowsOffRow;
@@ -2645,9 +2742,23 @@ async function jsonTo3MatricesCore(context, json) {
                     : text;
                 // Sobrescribe si ya había una entrada (mismo comportamiento que
                 // el bucle secuencial original: el último nivel no-nulo gana).
-                const isTotal = text.trim().toUpperCase() === "TOTAL";
+                // OJO: coerceCellLiteral puede devolver un Number (p.ej. cuando
+                // la dimensión es INTEGER, como YEAR), y Number no tiene
+                // .trim() — sin el String(...) esto lanzaba una excepción a
+                // media pintura (se pintaban los valores del FACT, pero se
+                // interrumpía antes de pintar/formatear este eje).
+                const isTotal = String(text).trim().toUpperCase() === "TOTAL";
                 filasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
             }
+        }
+
+        // Filas MEASURE del eje (p.ej. "MEASURE" -> "IMPORTE"): no vienen del
+        // dict (no son un valor variable por ROW_ID), se pintan como etiqueta
+        // constante en su propia columna física, para TODOS los ROW_ID.
+        for (const m of planFilas.measureLevels) {
+            const row = Number(V[0]) + rowsOffRow;
+            const col = m.iAux + rowsOffCol;
+            filasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
         }
     }
 
@@ -2658,7 +2769,11 @@ async function jsonTo3MatricesCore(context, json) {
     // tampoco si "Sobrescribir formatos" está desactivado (D5): en ese
     // caso solo se escriben los valores, sin icono de jerarquía.
     if (!rowsStatic && reportProps.overwriteFormats) {
-        const byLogicalKey = new Map(rowsFilter.indicators.map(it => [it.newId + "_" + it.field, it]));
+        // it.field (de filterAndCompactDracoAxis) es el ordinal entre las
+        // dimensiones reales de NIVEL=1 (no cuenta las filas MEASURE);
+        // se remapea a la columna física real (iAux) con flag1OrdinalToIaux,
+        // que sí tiene en cuenta el hueco que dejan las filas MEASURE.
+        const byLogicalKey = new Map(rowsFilter.indicators.map(it => [it.newId + "_" + planFilas.flag1OrdinalToIaux[it.field], it]));
         for (const [physKey, cell] of filasCells) {
             const newId = cell.row - rowsOffRow;
             const ind = byLogicalKey.get(newId + "_" + cell.field);
@@ -2683,10 +2798,9 @@ async function jsonTo3MatricesCore(context, json) {
     for (const V of colsFilter.dict.values()) {
         if (Number(V[0]) > maxColId) maxColId = Number(V[0]);
 
-        let iAux = 0;
         for (let i = 1; i <= totalDimCols; i++) {
             const flag = flagsColumnas[i];
-            if (flag === 1) iAux++;
+            const iAux = planColumnas.iauxReal[i];
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
                 const row = iAux + colsOffRow;
@@ -2696,9 +2810,22 @@ async function jsonTo3MatricesCore(context, json) {
                 const cellVal = colsStatic
                     ? buildEpmValueFormula(fieldsColumnas[i].dim, fieldsColumnas[i].attr, text)
                     : text;
-                const isTotal = text.trim().toUpperCase() === "TOTAL";
+                // Ver comentario equivalente en el bloque de FILAS: text puede
+                // ser un Number (dimensión INTEGER) y no tiene .trim().
+                const isTotal = String(text).trim().toUpperCase() === "TOTAL";
                 columnasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
             }
+        }
+
+        // Filas MEASURE del eje columnas (p.ej. "MEASURE" -> "IMPORTE"):
+        // etiqueta constante en su propia fila física, para TODOS los
+        // COLUMN_ID (respeta la posición configurada en EDIT_REPORT: por
+        // encima o por debajo de ESCENARIO, según dónde esté la fila
+        // MEASURE en N/O/P).
+        for (const m of planColumnas.measureLevels) {
+            const row = m.iAux + colsOffRow;
+            const col = Number(V[0]) + colsOffCol;
+            columnasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
         }
     }
 
@@ -2706,7 +2833,7 @@ async function jsonTo3MatricesCore(context, json) {
     // (salvo eje Estático, y salvo "Sobrescribir formatos" desactivado,
     // ver comentario arriba).
     if (!colsStatic && reportProps.overwriteFormats) {
-        const byLogicalKey = new Map(colsFilter.indicators.map(it => [it.newId + "_" + it.field, it]));
+        const byLogicalKey = new Map(colsFilter.indicators.map(it => [it.newId + "_" + planColumnas.flag1OrdinalToIaux[it.field], it]));
         for (const [physKey, cell] of columnasCells) {
             const newId = cell.col - colsOffCol;
             const ind = byLogicalKey.get(newId + "_" + cell.field);
@@ -2744,8 +2871,11 @@ async function jsonTo3MatricesCore(context, json) {
     // (los niveles siguientes solo añaden indentación dentro de esa misma
     // columna). Usar totalDimFilas/totalDimCols aquí generaba rangos con
     // nombre (Draco_001_Rows/Cols) más anchos/altos de lo realmente pintado.
-    const paintedFilasCols = flagsFilas.filter(f => f === 1).length;
-    const paintedColsRows = flagsColumnas.filter(f => f === 1).length;
+    // Incluye tanto las dimensiones reales de NIVEL=1 como las filas MEASURE
+    // (planFilas/planColumnas.totalIaux ya suma ambas), porque una fila
+    // MEASURE también ocupa su propia columna/fila física pintada.
+    const paintedFilasCols = planFilas.totalIaux;
+    const paintedColsRows = planColumnas.totalIaux;
 
     await applyDracoNamedRanges(context, sheet, {
         RRows, RCols,
@@ -3241,32 +3371,13 @@ function toggleDracoSetting(key) {
     return new Promise((resolve) => settings.saveAsync(() => resolve(!current)));
 }
 
-/**
- * Actualiza en caliente la etiqueta (texto) de un control del ribbon.
- *
- * IMPORTANTE — limitación de la plataforma: Office.ribbon.requestUpdate
- * (RibbonAPI 1.1) SOLO permite cambiar "label" y "enabled" de un control;
- * NO permite cambiar su icono en tiempo de ejecución. Por eso el estado
- * "activado/desactivado" de un pulsador tipo toggle (p.ej. Reconocimiento
- * de miembros) se comunica cambiando el TEXTO del botón, no su icono: el
- * icono se queda fijo (btn-reconocimiento-off-*.png) y es la etiqueta la
- * que indica si está encendido o apagado.
- *
- * @param {string} controlId  Id del <Control> en el manifiesto.
- * @param {string} label      Nuevo texto del botón.
- * @param {string} [groupId]  Id del <Group> que contiene el control (por
- *                            defecto, "EdicionGroup", donde vive el botón
- *                            de Reconocimiento de miembros).
- * @param {string} [tabId]    Id del <CustomTab> (por defecto, "DracoTab",
- *                            el mismo id que usa manifest.xml).
- */
-async function requestRibbonLabelUpdate(controlId, label, groupId, tabId) {
+async function requestRibbonLabelUpdate(controlId, label) {
     try {
         if (Office.ribbon && Office.ribbon.requestUpdate) {
             await Office.ribbon.requestUpdate({
                 tabs: [{
-                    id: tabId || "DracoTab",
-                    groups: [{ id: groupId || "EdicionGroup", controls: [{ id: controlId, label }] }]
+                    id: "DracoBITab",
+                    groups: [{ id: "GroupOpcionesInforme", controls: [{ id: controlId, label }] }]
                 }]
             });
         }
@@ -3291,10 +3402,7 @@ async function toggleMemberRecognition(event) {
     try {
         const nowOn = await toggleDracoSetting("draco_memberRecognition");
         console.log("Reconocimiento de miembros:", nowOn ? "activado" : "desactivado");
-        // El icono del botón (ReconocimientoMiembrosButton) no puede cambiar en
-        // caliente (ver nota en requestRibbonLabelUpdate); el estado on/off se
-        // refleja en su etiqueta.
-        await requestRibbonLabelUpdate("ReconocimientoMiembrosButton", nowOn ? "Miembros: activado" : "Reconoc. de miembros", "EdicionGroup", "DracoTab");
+        await requestRibbonLabelUpdate("BtnReconocimientoMiembros", nowOn ? "Miembros: activado" : "Reconoc. de miembros");
     } catch (error) {
         console.error("Error al alternar 'Reconocimiento de miembros':", error);
     } finally {
