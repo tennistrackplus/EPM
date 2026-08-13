@@ -2807,6 +2807,7 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
     const runKeyName = axis === "col" ? "row" : "col";
 
     const groups = new Map();
+
     for (const c of cellsMap.values()) {
         const g = c[groupKeyName];
         if (!groups.has(g)) groups.set(g, []);
@@ -2815,26 +2816,46 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
 
     for (const [g, list] of groups) {
         list.sort((a, b) => a[runKeyName] - b[runKeyName]);
-        const fieldBase1 = g - fieldOffset; // 1-based: posición del campo en el eje
+
+        const fieldBase1 = g - fieldOffset;
 
         let runStart = 0;
+
         for (let k = 1; k <= list.length; k++) {
-            const endOfRun = k === list.length
+            const endOfRun =
+                k === list.length
                 || list[k][runKeyName] !== list[k - 1][runKeyName] + 1
                 || list[k].indent !== list[k - 1].indent;
 
             if (endOfRun) {
                 const first = list[runStart];
                 const last = list[k - 1];
-                const style = dracoColorForLevel(fieldBase1, first.indent);
+
+                const style = dracoColorForLevel(
+                    fieldBase1,
+                    first.indent
+                );
 
                 let range;
+
                 if (axis === "col") {
                     const numRows = last.row - first.row + 1;
-                    range = sheet.getRangeByIndexes(first.row - 1, g - 1, numRows, 1);
+
+                    range = sheet.getRangeByIndexes(
+                        first.row - 1,
+                        g - 1,
+                        numRows,
+                        1
+                    );
                 } else {
                     const numCols = last.col - first.col + 1;
-                    range = sheet.getRangeByIndexes(g - 1, first.col - 1, 1, numCols);
+
+                    range = sheet.getRangeByIndexes(
+                        g - 1,
+                        first.col - 1,
+                        1,
+                        numCols
+                    );
                 }
 
                 range.format.indentLevel = first.indent;
@@ -2843,6 +2864,27 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
                 range.format.fill.color = style.fill;
                 range.format.font.color = style.font;
 
+                // -------------------------------------------------
+                // TOTAL → amarillo
+                // -------------------------------------------------
+                for (const c of list.slice(runStart, k)) {
+                    const texto = String(c.value)
+                        .replace(/^[▸▾]\s*/, "")
+                        .trim()
+                        .toUpperCase();
+
+                    if (texto === "TOTAL") {
+                        const totalCell = sheet.getRangeByIndexes(
+                            c.row - 1,
+                            c.col - 1,
+                            1,
+                            1
+                        );
+
+                        totalCell.format.fill.color = "#FFFF00";
+                    }
+                }
+
                 runStart = k;
             }
         }
@@ -2850,7 +2892,6 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
 
     await context.sync();
 }
-
 /**
  * Borra (formato + contenido) los rangos de la ejecución anterior a los
  * que apuntaban los nombres Draco_001_Rows/Cols/Values, si existen.
@@ -3290,6 +3331,73 @@ async function openFieldOptions(event) {
     }
 }
 
+/**
+ * Botón del ribbon "Editar informe" (EditarInformeButton, manifest.xml).
+ *
+ * Gracias al Shared Runtime (ver <Runtimes> en el manifiesto, resid=
+ * "TaskpaneUrl") esta función se ejecuta en el MISMO contexto JS que
+ * taskpane.js, lo que permite en un solo click:
+ *   1) Leer la hoja activa y la celda seleccionada en Excel.
+ *   2) Guardarlas en EDIT_REPORT!D1 (hoja) y EDIT_REPORT!E1 (celda),
+ *      p.ej. D1="CSV_RESULT", E1="C3".
+ *   3) Recargar el diseño existente para esa hoja (TaskPaneApp.
+ *      loadDesignFromSheet), igual que hace el botón "Editar report" del
+ *      propio taskpane.
+ *   4) Traer el taskpane al frente con Office.addin.showAsTaskpane()
+ *      (API que exige Shared Runtime).
+ */
+async function editarInformeRibbon(event) {
+    try {
+        let activeSheetName = "";
+        let selectedCellAddress = "";
+
+        await Excel.run(async (context) => {
+            const activeSheet = context.workbook.worksheets.getActiveWorksheet();
+            activeSheet.load("name");
+
+            const selectedRange = context.workbook.getSelectedRange();
+            selectedRange.load("address");
+
+            await context.sync();
+
+            activeSheetName = activeSheet.name;
+
+            // selectedRange.address llega como "Hoja1!C3" (o "Hoja1!C3:D5"
+            // si hay un rango seleccionado); nos quedamos solo con la
+            // referencia de celda ("C3"), tomando la esquina superior
+            // izquierda si hay varias celdas seleccionadas.
+            const rawAddress = selectedRange.address.split("!").pop();
+            selectedCellAddress = rawAddress.split(":")[0];
+
+            const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+            editReportSheet.getRange("D1").values = [[activeSheetName]];
+            editReportSheet.getRange("E1").values = [[selectedCellAddress]];
+
+            await context.sync();
+        });
+
+        console.log(`[Draco] Editar informe (ribbon): EDIT_REPORT!D1="${activeSheetName}", EDIT_REPORT!E1="${selectedCellAddress}"`);
+
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.loadDesignFromSheet) {
+            await TaskPaneApp.loadDesignFromSheet();
+            console.log("[Draco] loadDesignFromSheet() ejecutado directamente (shared runtime OK).");
+        } else {
+            console.warn("[Draco] TaskPaneApp NO existe en este contexto: el taskpane recargará el diseño al abrirse (¿manifest sin Runtimes recargado?).");
+        }
+
+        if (Office.addin && Office.addin.showAsTaskpane) {
+            await Office.addin.showAsTaskpane();
+            console.log("[Draco] showAsTaskpane() resuelto sin error.");
+        } else {
+            console.warn("[Draco] Office.addin.showAsTaskpane no está disponible en este runtime.");
+        }
+    } catch (error) {
+        console.error("Error en 'Editar informe' (ribbon):", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
 // Nota: este fichero se carga tanto en el runtime de comandos (commands.html)
 // como, ahora, dentro del propio taskpane (taskpane.html), para poder
 // disparar Actualizar()/ActualizarInforme() (y por tanto jsonTo3Matrices)
@@ -3307,6 +3415,7 @@ try {
     Office.actions.associate("toggleMemberRecognition", toggleMemberRecognition);
     Office.actions.associate("openReportProperties", openReportProperties);
     Office.actions.associate("openFieldOptions", openFieldOptions);
+    Office.actions.associate("editarInformeRibbon", editarInformeRibbon);
 } catch (e) {
     console.warn("Office.actions.associate no disponible en este contexto:", e);
 }
