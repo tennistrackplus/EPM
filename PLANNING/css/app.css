@@ -1,0 +1,420 @@
+/* ==========================================================
+   DRACO PLANNING — LAYOUT DE APLICACIÓN
+   ========================================================== */
+
+body {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+}
+
+/* ---------- Barra de proyecto ---------- */
+.project-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 20px;
+    background: var(--surface-card);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+}
+
+.project-bar label {
+    font-size: var(--fs-sm);
+    font-weight: 700;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.project-bar select {
+    min-width: 240px;
+    max-width: 340px;
+}
+
+.project-bar-desc {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    margin-left: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+    min-width: 100px;
+}
+
+/* ---------- Grid de bloques ---------- */
+.blocks-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    padding: 16px 20px 20px;
+    min-height: 0;
+    align-items: start;
+}
+
+@media (max-width: 900px) {
+    .blocks-grid { grid-template-columns: 1fr; }
+}
+
+.block {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 520px;
+    transition: max-height var(--transition-base);
+}
+
+.block.collapsed .block-body {
+    display: none;
+}
+
+.block.collapsed {
+    min-height: 0;
+}
+
+.block.maximized {
+    position: fixed;
+    inset: 76px 16px 16px 16px;
+    z-index: 500;
+    min-height: 0;
+}
+
+.blocks-grid.has-maximized .block:not(.maximized) {
+    display: none;
+}
+
+.block-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-sunken);
+    flex-shrink: 0;
+}
+
+.block-header h2 {
+    font-size: var(--fs-lg);
+    font-weight: 700;
+}
+
+.block-header-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.icon-btn {
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-default);
+    background: var(--surface-card);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.icon-btn:hover {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+
+.block-body {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+}
+
+/* ---------- Bloque Administración: menú lateral ---------- */
+.admin-menu {
+    width: 190px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border-subtle);
+    background: var(--surface-sunken);
+    display: flex;
+    flex-direction: column;
+    padding: 8px;
+    gap: 2px;
+    overflow-y: auto;
+}
+
+.admin-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px 10px;
+    border-radius: var(--radius-sm);
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--fs-base);
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.admin-menu-item:hover {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+
+.admin-menu-item.active {
+    background: var(--brand-primary-light);
+    color: var(--brand-primary-hover);
+}
+
+.admin-menu-icon {
+    width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+    font-size: 13px;
+}
+
+.admin-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 18px;
+    min-width: 0;
+}
+
+/* ---------- Cabecera de módulo (Dimensiones / Cubos / etc.) ---------- */
+.module-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.module-header h3 {
+    font-size: var(--fs-lg);
+    font-weight: 700;
+}
+
+.module-header p {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.module-empty {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--text-muted);
+    font-size: var(--fs-base);
+}
+
+.module-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+    gap: 8px;
+}
+
+.module-placeholder .placeholder-icon {
+    font-size: 28px;
+    opacity: 0.5;
+}
+
+/* Listado tipo tabla */
+.data-list {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.data-list table { font-size: var(--fs-sm); }
+
+.row-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.row-actions button {
+    background: none;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--text-secondary);
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.row-actions button:hover {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+
+.row-actions button.danger:hover {
+    background: var(--color-danger-light);
+    color: var(--color-danger);
+    border-color: var(--color-danger);
+}
+
+.table-tag {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 10.5px;
+    background: var(--gray-100);
+    color: var(--text-secondary);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+}
+
+/* ---------- Bloque Mi Progreso ---------- */
+.progress-panel {
+    padding: 18px;
+    width: 100%;
+    overflow-y: auto;
+}
+
+.progress-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 40px 20px;
+    font-size: var(--fs-base);
+}
+
+.progress-summary {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 20px;
+}
+
+.progress-ring {
+    width: 56px;
+    height: 56px;
+    flex-shrink: 0;
+}
+
+.progress-summary-text strong {
+    font-size: var(--fs-lg);
+    display: block;
+}
+
+.progress-summary-text span {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+}
+
+.progress-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.progress-step {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--border-subtle);
+    background: var(--surface-card);
+}
+
+.progress-step + .progress-step {
+    margin-top: 8px;
+}
+
+.progress-step-check {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--gray-100);
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.progress-step.done .progress-step-check {
+    background: var(--color-success-light);
+    color: var(--color-success);
+}
+
+.progress-step-body strong {
+    display: block;
+    font-size: var(--fs-base);
+    color: var(--text-primary);
+}
+
+.progress-step-body span {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+}
+
+.progress-step.done .progress-step-body strong {
+    color: var(--text-secondary);
+    text-decoration: line-through;
+    text-decoration-color: var(--gray-300);
+}
+
+/* ---------- Toasts ---------- */
+.toast-container {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 340px;
+}
+
+.toast {
+    padding: 11px 14px;
+    border-radius: var(--radius-md);
+    font-size: var(--fs-sm);
+    box-shadow: var(--shadow-md);
+    background: var(--gray-900);
+    color: var(--text-inverse);
+    animation: toast-in 0.2s ease;
+}
+
+.toast.success { background: var(--color-success); }
+.toast.error { background: var(--color-danger); }
+.toast.info { background: var(--brand-primary); }
+
+@keyframes toast-in {
+    from { opacity: 0; transform: translateY(-6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* ---------- Spinner ---------- */
+.spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--gray-200);
+    border-top-color: var(--brand-primary);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}

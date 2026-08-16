@@ -1,0 +1,463 @@
+/* ==========================================================
+   EPM DATA STUDIO — DESIGN SYSTEM
+   Tokens y componentes base compartidos por todas las pantallas
+   del complemento (login, taskpane, modelo semántico, auth).
+   ========================================================== */
+
+:root {
+    /* Marca */
+    --brand-navy: #0F1B33;
+    --brand-navy-2: #16233F;
+    --brand-primary: #2A5BD7;
+    --brand-primary-hover: #2049B0;
+    --brand-primary-light: #EAF0FE;
+    --brand-accent: #12B886;
+    --brand-accent-light: #E4F8F1;
+
+    /* Estado */
+    --color-danger: #D8342A;
+    --color-danger-light: #FBEAE9;
+    --color-warning: #B5690A;
+    --color-warning-light: #FDF2E3;
+    --color-success: #12805C;
+    --color-success-light: #E4F8F1;
+    --color-info: #2A5BD7;
+    --color-info-light: #EAF0FE;
+
+    /* Neutros */
+    --gray-0: #FFFFFF;
+    --gray-25: #FBFCFD;
+    --gray-50: #F6F7F9;
+    --gray-100: #EFF1F4;
+    --gray-200: #E3E6EC;
+    --gray-300: #D0D5DD;
+    --gray-400: #AFB6C3;
+    --gray-500: #838EA1;
+    --gray-600: #5B6577;
+    --gray-700: #3D4657;
+    --gray-800: #262E3D;
+    --gray-900: #151B27;
+
+    /* Texto */
+    --text-primary: #1A2233;
+    --text-secondary: #5B6577;
+    --text-muted: #8A93A6;
+    --text-inverse: #FFFFFF;
+
+    /* Superficies */
+    --surface-page: #F4F6F9;
+    --surface-card: #FFFFFF;
+    --surface-sunken: #F8F9FB;
+    --border-subtle: #E4E7EC;
+    --border-default: #D8DCE3;
+
+    /* Tipografía */
+    --font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Roboto, sans-serif;
+    --fs-xs: 10.5px;
+    --fs-sm: 11.5px;
+    --fs-base: 12.5px;
+    --fs-md: 13.5px;
+    --fs-lg: 15px;
+    --fs-xl: 17px;
+
+    /* Espaciado */
+    --space-1: 4px;
+    --space-2: 6px;
+    --space-3: 8px;
+    --space-4: 12px;
+    --space-5: 16px;
+    --space-6: 20px;
+
+    /* Bordes / radios */
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 10px;
+    --radius-pill: 999px;
+
+    /* Sombras */
+    --shadow-xs: 0 1px 2px rgba(16, 24, 40, 0.05);
+    --shadow-sm: 0 1px 3px rgba(16, 24, 40, 0.08), 0 1px 2px rgba(16, 24, 40, 0.04);
+    --shadow-md: 0 4px 12px rgba(16, 24, 40, 0.10);
+    --shadow-lg: 0 12px 32px rgba(16, 24, 40, 0.16);
+
+    --transition-fast: 0.12s ease;
+    --transition-base: 0.18s ease;
+}
+
+/* ---------- Reset base ---------- */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+html, body {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-family);
+    font-size: var(--fs-base);
+    color: var(--text-primary);
+    background-color: var(--surface-page);
+    -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    margin: 0;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+p {
+    margin: 0;
+}
+
+button {
+    font-family: inherit;
+}
+
+input, select, textarea {
+    font-family: inherit;
+    color: var(--text-primary);
+}
+
+::selection {
+    background-color: var(--brand-primary-light);
+    color: var(--brand-primary-hover);
+}
+
+/* Scrollbars discretos, coherentes en toda la app */
+* {
+    scrollbar-width: thin;
+    scrollbar-color: var(--gray-300) transparent;
+}
+
+*::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+    background-color: var(--gray-300);
+    border-radius: var(--radius-pill);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+    background-color: var(--gray-400);
+    background-clip: padding-box;
+}
+
+a {
+    color: var(--brand-primary);
+}
+
+/* ==========================================================
+   BARRA DE MARCA (App Topbar)
+   Se repite de forma idéntica en cada pantalla para transmitir
+   que forman parte de una misma aplicación.
+   ========================================================== */
+.app-topbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: 10px 14px;
+    background: linear-gradient(135deg, var(--brand-navy) 0%, var(--brand-navy-2) 100%);
+    color: var(--text-inverse);
+}
+
+.app-topbar-brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+}
+
+.app-logo {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    border-radius: 7px;
+    background: linear-gradient(160deg, var(--brand-primary) 0%, #5A8DFF 100%);
+    color: var(--text-inverse);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.app-logo svg {
+    display: block;
+}
+
+.app-topbar-titles {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+}
+
+.app-topbar-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    letter-spacing: 0.2px;
+    color: var(--text-inverse);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.app-topbar-subtitle {
+    font-size: 10.5px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.62);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.app-topbar-status {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 9px;
+    border-radius: var(--radius-pill);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    background: rgba(255, 255, 255, 0.10);
+    color: rgba(255, 255, 255, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    white-space: nowrap;
+}
+
+.app-topbar-status .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--gray-400);
+    flex-shrink: 0;
+}
+
+.app-topbar-status.is-live .dot {
+    background: var(--brand-accent);
+    box-shadow: 0 0 0 3px rgba(18, 184, 134, 0.25);
+}
+
+.app-topbar-action {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-sm);
+    border: none;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.85);
+    cursor: pointer;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.app-topbar-action:hover {
+    background: rgba(255, 255, 255, 0.16);
+    color: var(--text-inverse);
+}
+
+.app-topbar-action svg {
+    display: block;
+}
+
+/* ==========================================================
+   COMPONENTES REUTILIZABLES
+   ========================================================== */
+
+/* Botones */
+.btn,
+button.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: var(--fs-base);
+    font-weight: 600;
+    line-height: 1;
+    padding: 9px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast),
+        box-shadow var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
+    white-space: nowrap;
+}
+
+.btn:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 3px var(--brand-primary-light), 0 0 0 1px var(--brand-primary);
+}
+
+.btn-primary,
+.btn {
+    background-color: var(--brand-primary);
+    color: var(--text-inverse);
+    box-shadow: var(--shadow-xs);
+}
+
+.btn-primary:hover,
+.btn:hover {
+    background-color: var(--brand-primary-hover);
+}
+
+.btn-secondary {
+    background-color: var(--surface-card);
+    color: var(--text-primary);
+    border-color: var(--border-default);
+}
+
+.btn-secondary:hover {
+    background-color: var(--gray-50);
+    border-color: var(--gray-400);
+}
+
+.btn-sm {
+    padding: 5px 10px;
+    font-size: var(--fs-sm);
+    width: auto;
+    box-shadow: none;
+}
+
+.btn:disabled {
+    background-color: var(--gray-200);
+    color: var(--text-muted);
+    cursor: not-allowed;
+    box-shadow: none;
+    border-color: transparent;
+}
+
+/* Tarjetas */
+.card {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+}
+
+/* Insignias de estado */
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.2px;
+    padding: 3px 9px;
+    border-radius: var(--radius-pill);
+    background-color: var(--gray-100);
+    color: var(--text-secondary);
+}
+
+.badge.success {
+    background-color: var(--color-success-light);
+    color: var(--color-success);
+}
+
+.badge.danger {
+    background-color: var(--color-danger-light);
+    color: var(--color-danger);
+}
+
+/* Inputs de texto genéricos */
+.input,
+input[type="text"],
+input[type="search"],
+input[type="password"] {
+    width: 100%;
+    padding: 8px 10px;
+    background-color: var(--surface-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-base);
+    color: var(--text-primary);
+    outline: none;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+input[type="text"]:hover,
+input[type="search"]:hover,
+select:hover {
+    border-color: var(--gray-400);
+}
+
+input[type="text"]:focus,
+input[type="search"]:focus,
+select:focus {
+    border-color: var(--brand-primary);
+    box-shadow: 0 0 0 3px var(--brand-primary-light);
+}
+
+input[type="text"]:read-only {
+    background-color: var(--surface-sunken);
+    cursor: pointer;
+}
+
+select {
+    padding: 8px 10px;
+    background-color: var(--surface-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-base);
+}
+
+input[type="checkbox"],
+input[type="radio"] {
+    accent-color: var(--brand-primary);
+    cursor: pointer;
+}
+
+/* Tablas genéricas (usadas por el modelo semántico) */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-base);
+}
+
+th {
+    background-color: var(--surface-sunken);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    font-size: 10px;
+    font-weight: 700;
+    text-align: left;
+    padding: 9px 10px;
+    border-bottom: 1px solid var(--border-default);
+}
+
+td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text-primary);
+    vertical-align: middle;
+}
+
+tbody tr:hover {
+    background-color: var(--surface-sunken);
+}
+
+.checkbox-cell {
+    text-align: center;
+}
