@@ -228,3 +228,89 @@
 .confirm-text strong {
     color: var(--color-danger);
 }
+
+/* Caja de la clave principal (dimensión) */
+.key-field-box {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--brand-primary-light);
+    border: 1px solid #C9DAF8;
+    border-radius: var(--radius-md);
+}
+
+.key-field-box-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.key-field-badge {
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.4px;
+    background: var(--brand-primary);
+    color: var(--text-inverse);
+    padding: 2px 7px;
+    border-radius: var(--radius-pill);
+    flex-shrink: 0;
+}
+
+.key-field-box-info strong {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    color: var(--brand-primary-hover);
+    font-size: var(--fs-base);
+}
+
+.key-field-hint {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+}
+
+.key-field-box select {
+    flex-shrink: 0;
+    width: 130px;
+}
+
+/* Selector de dimensiones (formulario de cubo) */
+.dim-picker {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 180px;
+    overflow-y: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 6px;
+}
+
+.dim-picker-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+}
+
+.dim-picker-item:hover {
+    background: var(--gray-100);
+}
+
+.dim-picker-item span:nth-child(2) {
+    flex: 1;
+    font-weight: 600;
+}
+
+/* Modal de elección (importar: sustituir / incremental) */
+.choice-modal-options {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+    justify-content: flex-end;
+}

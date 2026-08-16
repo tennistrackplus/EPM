@@ -418,3 +418,278 @@ body {
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
+
+/* ---------- Botón "volver" en sub-pantallas ---------- */
+.btn-back {
+    background: none;
+    border: none;
+    color: var(--brand-primary-hover);
+    font-size: var(--fs-sm);
+    font-weight: 700;
+    cursor: pointer;
+    padding: 0;
+    margin-bottom: 6px;
+    display: inline-block;
+}
+
+.btn-back:hover { text-decoration: underline; }
+
+.col-type {
+    font-size: 10px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.key-dot { font-size: 10px; }
+
+/* ---------- Rejilla de valores de dimensión ---------- */
+.values-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+}
+
+.values-toolbar-spacer { flex: 1; }
+
+.values-row-count {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+}
+
+.values-grid-wrap {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: auto;
+    max-height: 460px;
+    margin-top: 10px;
+}
+
+table.values-grid {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: var(--fs-sm);
+}
+
+table.values-grid thead th {
+    position: sticky;
+    top: 0;
+    background: var(--surface-sunken);
+    border-bottom: 1px solid var(--border-subtle);
+    border-right: 1px solid var(--border-subtle);
+    padding: 6px 8px;
+    text-align: left;
+    white-space: nowrap;
+    font-size: 11px;
+    z-index: 1;
+}
+
+table.values-grid td {
+    border-bottom: 1px solid var(--border-subtle);
+    border-right: 1px solid var(--border-subtle);
+    padding: 0;
+}
+
+table.values-grid td input {
+    width: 100%;
+    min-width: 110px;
+    border: none;
+    padding: 6px 8px;
+    font-size: var(--fs-sm);
+    background: transparent;
+    outline: none;
+    border-radius: 0;
+}
+
+table.values-grid td input:focus {
+    background: var(--brand-primary-light);
+    box-shadow: inset 0 0 0 1.5px var(--brand-primary);
+}
+
+.values-row-remove {
+    text-align: center;
+    width: 32px;
+}
+
+.values-row-remove button {
+    background: none;
+    border: none;
+    color: var(--color-danger);
+    cursor: pointer;
+    width: 26px;
+    height: 26px;
+}
+
+.values-row-remove button:hover { background: var(--color-danger-light); border-radius: var(--radius-sm); }
+
+/* ---------- Editor de jerarquías ---------- */
+.hier-chip-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.hier-chip-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-card);
+}
+
+.hier-chip-levels {
+    display: block;
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.hier-editor-box {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+.hierarchy-editor {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1.2fr;
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.hierarchy-col-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+
+.hierarchy-pool-list, .hierarchy-levels-list {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 8px;
+    min-height: 160px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    background: var(--surface-sunken);
+}
+
+.hier-chip {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 10px;
+    background: var(--surface-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+    text-align: left;
+}
+
+.hier-chip:hover { border-color: var(--brand-primary); }
+
+.hier-level-chip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    background: var(--surface-card);
+    border: 1px solid var(--brand-primary);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-sm);
+    cursor: grab;
+}
+
+.hier-level-chip.dragging { opacity: 0.4; }
+
+.hier-level-num {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: var(--brand-primary);
+    color: var(--text-inverse);
+    font-size: 10px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}
+
+.hier-level-name { flex: 1; font-weight: 600; }
+
+.hierarchy-chip-btn-remove {
+    background: none;
+    border: none;
+    color: var(--color-danger);
+    cursor: pointer;
+}
+
+.hierarchy-pool-empty, .hierarchy-levels-empty {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    text-align: center;
+    padding: 20px 8px;
+}
+
+.hierarchy-preview-tree {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 10px;
+    min-height: 160px;
+    max-height: 320px;
+    overflow: auto;
+    background: var(--surface-card);
+}
+
+ul.hier-preview-root, ul.hier-preview-children {
+    list-style: none;
+    margin: 0;
+    padding-left: 0;
+}
+
+ul.hier-preview-children {
+    padding-left: 16px;
+    border-left: 1px dashed var(--border-default);
+    margin-left: 6px;
+}
+
+li.hier-preview-node { margin: 2px 0; }
+
+.hier-preview-label {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    padding: 3px 6px;
+    border-radius: 5px;
+    font-size: var(--fs-sm);
+}
+
+.hier-preview-label:hover { background-color: var(--gray-100); }
+
+.hier-preview-level-tag {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    min-width: 22px;
+}
+
+.hier-preview-value {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+@media (max-width: 1100px) {
+    .hierarchy-editor { grid-template-columns: 1fr; }
+}
