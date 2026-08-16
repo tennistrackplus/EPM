@@ -28,11 +28,28 @@ lenguaje visual que vuestra app anterior (EPM Data Studio).
   equivalente está en `sql/00_control_schema.sql`.
 - **Panel principal (`app.html`)**: barra de proyecto (crear/eliminar),
   bloques **Administración** y **Mi Progreso** (maximizables/contraíbles),
-  y dentro de Administración: **Dimensiones** y **Cubos** completamente
-  funcionales (alta/edición con diseñador de campos, crea/recrea la tabla
-  física y guarda los metadatos). El resto de módulos del menú (Cargas de
-  datos, Flujos de carga, Funciones, Flujos de proceso, Workflows, Roles)
-  son pantallas "próximamente".
+  y dentro de Administración:
+  - **Dimensiones**: la clave principal de la tabla es siempre el propio
+    nombre de la dimensión (ej. dimensión `CUENTA` → columna `CUENTA`,
+    clave). El resto de columnas son "Atributos", y cualquiera de ellos
+    también se puede marcar como clave para soportar claves compuestas
+    (ej. Clase de coste + Sociedad).
+    - **Valores** (icono ▤): rejilla editable de los datos físicos —
+      añadir filas, pegar bloques copiados de Excel, exportar a CSV/Excel,
+      importar desde archivo (sustituyendo todo o de forma incremental
+      por clave). "Guardar" vuelca la rejilla completa a la tabla.
+    - **Jerarquías** (icono ⛓): arrastra atributos a una lista de niveles
+      (superior → inferior) con vista previa en vivo sobre los datos
+      reales de la dimensión.
+  - **Cubos**: se seleccionan dimensiones ya creadas en el proyecto (cada
+    una aporta su columna clave como FK) y se definen medidas libres
+    (nombre + tipo), igual que antes.
+  - El resto de módulos del menú (Cargas de datos, Flujos de carga,
+    Funciones, Flujos de proceso, Workflows, Roles) son pantallas
+    "próximamente".
+
+El grid de valores usa **SheetJS** (cargado por CDN en `app.html`) para
+leer/escribir CSV y Excel sin necesitar backend.
 
 ⚠️ **Importante**: al editar una dimensión o cubo, la tabla física se recrea
 con `CREATE OR REPLACE TABLE`, lo que **borra los datos existentes** si
@@ -94,6 +111,13 @@ Snowflake):
 | `PROYECTOS`   | PROYECTO_ID, PROYECTO, DESCRIPCION, DATASET, USUARIO, FECHA_CREACION            |
 | `DIMENSIONES` | DIMENSION_ID, PROYECTO_ID, DIMENSION, DESCRIPCION, TABLA, CAMPOS_JSON, ...      |
 | `CUBOS`       | CUBO_ID, PROYECTO_ID, CUBOS, DESCRIPCION, TABLA, CAMPOS_JSON, ...               |
+| `JERARQUIAS`  | JERARQUIA_ID, DIMENSION_ID, PROYECTO_ID, JERARQUIA, NIVELES_JSON, ...           |
+
+`DIMENSIONES.CAMPOS_JSON` guarda un array; el primer elemento es siempre la
+clave principal (`__isPrimaryName: true`, nombre = identificador de la
+dimensión). `CUBOS.CAMPOS_JSON` guarda un objeto `{ dimensions: [...],
+measures: [...] }`. `JERARQUIAS.NIVELES_JSON` guarda el array ordenado de
+identificadores de columna, nivel superior primero.
 
 Añadí `CAMPOS_JSON` (definición de columnas en JSON) sobre las 3 columnas
 que pediste, para poder recargar el diseñador de campos al editar.
