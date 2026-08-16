@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Draco Planning · Conexión de datos</title>
+    <link rel="stylesheet" href="css/theme.css">
+    <style>
+        html, body { height: 100%; }
+
+        .login-page {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100%;
+            padding: 32px 16px;
+        }
+
+        .login-shell {
+            width: 100%;
+            max-width: 460px;
+            background: var(--surface-card);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            overflow: hidden;
+            border: 1px solid var(--border-subtle);
+        }
+
+        .login-hero {
+            padding: 26px 28px 20px;
+            background: linear-gradient(135deg, var(--brand-navy) 0%, var(--brand-navy-2) 100%);
+            color: var(--text-inverse);
+        }
+
+        .login-hero-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+
+        .login-hero .app-logo {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+        }
+
+        .login-hero-brand h1 {
+            font-size: 19px;
+            font-weight: 800;
+            letter-spacing: 0.2px;
+        }
+
+        .login-hero-brand span {
+            display: block;
+            font-size: 11px;
+            color: rgba(255,255,255,0.6);
+            font-weight: 500;
+            margin-top: 2px;
+        }
+
+        .login-hero p {
+            font-size: var(--fs-base);
+            color: rgba(255,255,255,0.75);
+            line-height: 1.5;
+        }
+
+        .login-container {
+            padding: 20px 28px 26px;
+        }
+
+        .login-lead {
+            margin-bottom: 14px;
+        }
+
+        .login-lead h2 {
+            font-size: var(--fs-lg);
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .login-lead p {
+            font-size: var(--fs-sm);
+            color: var(--text-muted);
+        }
+
+        .connectors-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .connector-card {
+            background: var(--surface-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-xs);
+            padding: 12px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            transition: border-color var(--transition-base), box-shadow var(--transition-base), background-color var(--transition-base);
+            user-select: none;
+        }
+
+        .connector-card:hover {
+            border-color: var(--brand-primary);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .connector-card.selected {
+            border: 1.5px solid var(--brand-primary);
+            background-color: var(--brand-primary-light);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .connector-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .connector-icon {
+            width: 36px;
+            height: 36px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            background: var(--surface-sunken);
+        }
+
+        .connector-icon img {
+            width: 22px;
+            height: 22px;
+            object-fit: contain;
+            display: block;
+        }
+
+        .connector-details h3 {
+            font-size: var(--fs-md);
+            font-weight: 600;
+            margin: 0;
+            color: var(--text-primary);
+        }
+
+        .connector-details span {
+            font-size: var(--fs-sm);
+            color: var(--text-muted);
+        }
+
+        .badge-status {
+            flex-shrink: 0;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 3px 9px;
+            border-radius: var(--radius-pill);
+            background-color: var(--gray-100);
+            color: var(--text-secondary);
+        }
+
+        .badge-status.connected {
+            background-color: var(--color-success-light);
+            color: var(--color-success);
+        }
+
+        .toast-message {
+            display: none;
+            padding: 9px 12px;
+            border-radius: var(--radius-md);
+            font-size: var(--fs-sm);
+            margin-bottom: 12px;
+            word-break: break-word;
+        }
+
+        .toast-message.visible { display: block; }
+
+        .toast-message.info {
+            background-color: var(--color-info-light);
+            color: var(--brand-primary-hover);
+            border: 1px solid #D7E3FC;
+        }
+
+        .toast-message.error {
+            background-color: var(--color-danger-light);
+            color: var(--color-danger);
+            border: 1px solid #F3C9C6;
+        }
+
+        .action-footer {
+            padding-top: 14px;
+            border-top: 1px solid var(--border-subtle);
+        }
+
+        .btn-action {
+            background-color: var(--brand-primary);
+            color: var(--text-inverse);
+            border: none;
+            padding: 13px;
+            border-radius: var(--radius-md);
+            font-weight: 700;
+            font-size: var(--fs-base);
+            cursor: pointer;
+            width: 100%;
+            transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .btn-action:hover { background-color: var(--brand-primary-hover); }
+        .btn-action.disconnect-mode { background-color: var(--color-danger); }
+        .btn-action.disconnect-mode:hover { background-color: #B62A22; }
+        .btn-action:disabled {
+            background-color: var(--gray-200);
+            color: var(--text-muted);
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        .gcp-project-picker {
+            margin-top: 14px;
+            display: none;
+        }
+
+        .gcp-project-picker.visible { display: block; }
+
+        .gcp-project-picker label {
+            font-size: var(--fs-sm);
+            font-weight: 600;
+            color: var(--text-secondary);
+            display: block;
+            margin-bottom: 6px;
+        }
+
+        .gcp-project-picker select {
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-page">
+        <div class="login-shell">
+            <div class="login-hero">
+                <div class="login-hero-brand">
+                    <div class="app-logo">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" stroke="white" stroke-width="1.6" stroke-linejoin="round"/>
+                            <path d="M3 7l9 5 9-5M12 12v10" stroke="white" stroke-width="1.6" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                    <div>
+                        <h1>Draco Planning</h1>
+                        <span>Modelado y planificación semántica</span>
+                    </div>
+                </div>
+                <p>Conecta tu almacén de datos para empezar a modelar dimensiones, cubos y flujos de carga sobre tus proyectos.</p>
+            </div>
+
+            <div class="login-container">
+                <div class="login-lead">
+                    <h2>Inicio de sesión</h2>
+                    <p>Selecciona el servicio de datos para conectar o gestionar la sesión:</p>
+                </div>
+
+                <div class="connectors-grid" id="connectorsContainer">
+                    <div class="connector-card" data-provider="bigquery">
+                        <div class="connector-info">
+                            <div class="connector-icon">
+                                <img src="https://www.vectorlogo.zone/logos/google_bigquery/google_bigquery-icon.svg" alt="BigQuery">
+                            </div>
+                            <div class="connector-details">
+                                <h3>BigQuery</h3>
+                                <span>Google Cloud Platform</span>
+                            </div>
+                        </div>
+                        <span class="badge-status" id="badge-bigquery">Disponible</span>
+                    </div>
+
+                    <div class="connector-card" data-provider="snowflake">
+                        <div class="connector-info">
+                            <div class="connector-icon">
+                                <img src="https://app.eu.peliqan.io/img/db/snowflake.svg" alt="Snowflake">
+                            </div>
+                            <div class="connector-details">
+                                <h3>Snowflake</h3>
+                                <span>Cloud Data Platform</span>
+                            </div>
+                        </div>
+                        <span class="badge-status" id="badge-snowflake">Disponible</span>
+                    </div>
+
+                    <div class="connector-card" data-provider="fabric">
+                        <div class="connector-info">
+                            <div class="connector-icon">
+                                <img src="https://community.fabric.microsoft.com/html/assets/fabric-expo-icon.svg" alt="Microsoft Fabric">
+                            </div>
+                            <div class="connector-details">
+                                <h3>Microsoft Fabric</h3>
+                                <span>OneLake / Power BI</span>
+                            </div>
+                        </div>
+                        <span class="badge-status" id="badge-fabric">Disponible</span>
+                    </div>
+
+                    <div class="connector-card" data-provider="amazon">
+                        <div class="connector-info">
+                            <div class="connector-icon">
+                                <img src="https://www.vectorlogo.zone/logos/amazon_aws/amazon_aws-icon.svg" alt="AWS">
+                            </div>
+                            <div class="connector-details">
+                                <h3>Amazon</h3>
+                                <span>AWS Redshift / S3</span>
+                            </div>
+                        </div>
+                        <span class="badge-status" id="badge-amazon">Disponible</span>
+                    </div>
+
+                    <div class="connector-card" data-provider="datasphere">
+                        <div class="connector-info">
+                            <div class="connector-icon">
+                                <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg" alt="SAP Datasphere">
+                            </div>
+                            <div class="connector-details">
+                                <h3>SAP Datasphere</h3>
+                                <span>SAP Business Warehouse</span>
+                            </div>
+                        </div>
+                        <span class="badge-status" id="badge-datasphere">Disponible</span>
+                    </div>
+                </div>
+
+                <div id="toastMessage" class="toast-message"></div>
+
+                <div class="gcp-project-picker" id="gcpProjectPicker">
+                    <label for="gcpProjectSelect">Proyecto de Google Cloud</label>
+                    <select id="gcpProjectSelect"></select>
+                </div>
+
+                <div class="gcp-project-picker" id="snowflakeConfigPanel">
+                    <label for="sfAccount">Identificador de cuenta Snowflake</label>
+                    <input type="text" id="sfAccount" placeholder="ej. xy12345.eu-west-1 u orgname-accountname">
+                    <label for="sfWarehouse" style="margin-top:10px;">Warehouse</label>
+                    <input type="text" id="sfWarehouse" placeholder="ej. COMPUTE_WH">
+                    <label for="sfDatabase" style="margin-top:10px;">Base de datos Draco</label>
+                    <input type="text" id="sfDatabase" placeholder="DRACO">
+                    <label for="sfRole" style="margin-top:10px;">Rol (opcional)</label>
+                    <input type="text" id="sfRole" placeholder="ej. SYSADMIN">
+                </div>
+
+                <div class="action-footer">
+                    <button id="btnAction" class="btn-action" disabled>1. Selecciona una fuente de datos</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/bigquery.js"></script>
+    <script src="js/snowflake.js"></script>
+    <script src="js/provider.js"></script>
+    <script src="js/schema.js"></script>
+    <script src="js/auth.js"></script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Draco Planning · Autenticando con Snowflake...</title>
+    <link rel="stylesheet" href="css/theme.css">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: var(--surface-page);
+        }
+        .box {
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: var(--fs-md);
+        }
+    </style>
+</head>
+<body>
+    <div class="box">Completando el inicio de sesión con Snowflake...</div>
+    <script>
+        (function () {
+            const params = new URLSearchParams(window.location.search);
+            const payload = params.get("error")
+                ? JSON.stringify({ status: "error", provider: "snowflake", error: params.get("error_description") || params.get("error") })
+                : JSON.stringify({ status: "success", provider: "snowflake", code: params.get("code"), state: params.get("state") });
+
+            if (window.opener) {
+                window.opener.postMessage(payload, window.location.origin);
+                window.close();
+            } else {
+                document.querySelector(".box").textContent =
+                    "Autenticación completada. Puedes cerrar esta ventana.";
+            }
+        })();
+    </script>
+</body>
+</html>

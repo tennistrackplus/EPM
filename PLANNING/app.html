@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Draco Planning</title>
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/modal.css">
+    <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+
+    <!-- ===================== TOPBAR ===================== -->
+    <header class="app-topbar">
+        <div class="app-topbar-brand">
+            <div class="app-logo">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" stroke="white" stroke-width="1.8" stroke-linejoin="round"/>
+                    <path d="M3 7l9 5 9-5M12 12v10" stroke="white" stroke-width="1.8" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="app-topbar-titles">
+                <span class="app-topbar-title">Draco Planning</span>
+                <span class="app-topbar-subtitle" id="gcpProjectLabel">Conectando...</span>
+            </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+            <span class="app-topbar-status is-live" id="connStatus"><span class="dot"></span>BigQuery</span>
+            <button class="app-topbar-action" id="btnLogout" title="Cerrar sesión">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
+                    <path d="M16 17l5-5-5-5"/>
+                    <path d="M21 12H9"/>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- ===================== BARRA DE PROYECTO ===================== -->
+    <div class="project-bar">
+        <label for="projectSelect">Proyecto</label>
+        <select id="projectSelect">
+            <option value="">Cargando proyectos...</option>
+        </select>
+        <button class="btn btn-secondary btn-sm" id="btnNewProject">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
+            Nuevo
+        </button>
+        <button class="btn btn-secondary btn-sm" id="btnDeleteProject">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0l-1 14a2 2 0 01-2 2H7a2 2 0 01-2-2L4 6"/></svg>
+            Eliminar
+        </button>
+        <div class="project-bar-desc" id="projectDescription"></div>
+    </div>
+
+    <!-- ===================== BLOQUES PRINCIPALES ===================== -->
+    <main class="blocks-grid" id="blocksGrid">
+
+        <!-- BLOQUE 1: ADMINISTRACIÓN -->
+        <section class="block" id="blockAdmin">
+            <div class="block-header">
+                <h2>Administración</h2>
+                <div class="block-header-actions">
+                    <button class="icon-btn" data-action="maximize" title="Maximizar / restaurar">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+                    </button>
+                    <button class="icon-btn" data-action="collapse" title="Contraer / expandir">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <div class="block-body">
+                <nav class="admin-menu" id="adminMenu">
+                    <button class="admin-menu-item active" data-module="dimensiones">
+                        <span class="admin-menu-icon">◆</span>Dimensiones
+                    </button>
+                    <button class="admin-menu-item" data-module="cubos">
+                        <span class="admin-menu-icon">▣</span>Cubos
+                    </button>
+                    <button class="admin-menu-item" data-module="cargas">
+                        <span class="admin-menu-icon">⇩</span>Cargas de datos
+                    </button>
+                    <button class="admin-menu-item" data-module="flujos-carga">
+                        <span class="admin-menu-icon">⇉</span>Flujos de carga
+                    </button>
+                    <button class="admin-menu-item" data-module="funciones">
+                        <span class="admin-menu-icon">ƒ</span>Funciones
+                    </button>
+                    <button class="admin-menu-item" data-module="flujos-proceso">
+                        <span class="admin-menu-icon">⟲</span>Flujos de proceso
+                    </button>
+                    <button class="admin-menu-item" data-module="workflows">
+                        <span class="admin-menu-icon">⛓</span>Workflows
+                    </button>
+                    <button class="admin-menu-item" data-module="roles">
+                        <span class="admin-menu-icon">☺</span>Roles
+                    </button>
+                </nav>
+
+                <div class="admin-content" id="adminContent">
+                    <!-- Inyectado por dimensions.js / cubes.js / app.js -->
+                </div>
+            </div>
+        </section>
+
+        <!-- BLOQUE 2: MI PROGRESO -->
+        <section class="block" id="blockProgress">
+            <div class="block-header">
+                <h2>Mi Progreso</h2>
+                <div class="block-header-actions">
+                    <button class="icon-btn" data-action="maximize" title="Maximizar / restaurar">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3"/></svg>
+                    </button>
+                    <button class="icon-btn" data-action="collapse" title="Contraer / expandir">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M6 9l6 6 6-6"/></svg>
+                    </button>
+                </div>
+            </div>
+
+            <div class="block-body">
+                <div class="progress-panel" id="progressPanel">
+                    <p class="progress-empty">Selecciona o crea un proyecto para ver tu progreso.</p>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- ===================== MODAL: CREAR/ELIMINAR PROYECTO ===================== -->
+    <div class="modal-overlay" id="projectModal">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3>Nuevo proyecto Draco</h3>
+                <button class="modal-close" id="closeProjectModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Nombre del proyecto (modelo)</label>
+                    <input type="text" id="newProjectName" placeholder="Ej. Ventas Retail 2026">
+                </div>
+                <div class="form-group">
+                    <label>Descripción</label>
+                    <textarea id="newProjectDesc" rows="3" placeholder="Describe brevemente el alcance del proyecto..."></textarea>
+                </div>
+                <p class="form-hint" id="newProjectDatasetPreview"></p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="cancelNewProject">Cancelar</button>
+                <button class="btn btn-primary" id="saveNewProject">Crear proyecto</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="js/config.js"></script>
+    <script src="js/bigquery.js"></script>
+    <script src="js/snowflake.js"></script>
+    <script src="js/provider.js"></script>
+    <script src="js/schema.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/dimensions.js"></script>
+    <script src="js/cubes.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

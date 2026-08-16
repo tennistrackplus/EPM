@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Draco Planning · Autenticando...</title>
+    <link rel="stylesheet" href="css/theme.css">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: var(--surface-page);
+        }
+        .box {
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: var(--fs-md);
+        }
+    </style>
+</head>
+<body>
+    <div class="box">Completando el inicio de sesión...</div>
+    <script>
+        (function () {
+            function parseHashParams(hash) {
+                const params = {};
+                (hash || "").replace(/^#/, "").split("&").forEach(pair => {
+                    if (!pair) return;
+                    const [k, v] = pair.split("=");
+                    params[decodeURIComponent(k)] = decodeURIComponent(v || "");
+                });
+                return params;
+            }
+
+            const params = parseHashParams(window.location.hash);
+            let payload;
+
+            if (params.access_token) {
+                payload = JSON.stringify({
+                    status: "success",
+                    provider: "bigquery",
+                    token: params.access_token,
+                    expiresIn: params.expires_in || "3600"
+                });
+            } else {
+                payload = JSON.stringify({
+                    status: "error",
+                    provider: "bigquery",
+                    error: params.error || "No se recibió ningún token de acceso."
+                });
+            }
+
+            if (window.opener) {
+                window.opener.postMessage(payload, window.location.origin);
+                window.close();
+            } else {
+                // Fallback: guarda directamente y redirige (por si el navegador bloqueó window.opener)
+                document.querySelector(".box").textContent =
+                    "Autenticación completada. Puedes cerrar esta ventana.";
+                try {
+                    const data = JSON.parse(payload);
+                    if (data.status === "success") {
+                        localStorage.setItem("bigquery_access_token", data.token);
+                        localStorage.setItem("bigquery_token_expires", Date.now() + (parseInt(data.expiresIn, 10) * 1000));
+                    }
+                } catch (e) { /* noop */ }
+            }
+        })();
+    </script>
+</body>
+</html>
