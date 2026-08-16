@@ -45,6 +45,17 @@ const DracoSchema = {
                     USUARIO STRING,
                     FECHA_CREACION TIMESTAMP,
                     FECHA_MODIFICACION TIMESTAMP
+                )`,
+            JERARQUIAS: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    JERARQUIA_ID STRING NOT NULL,
+                    DIMENSION_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    JERARQUIA STRING NOT NULL,
+                    NIVELES_JSON STRING,
+                    USUARIO STRING,
+                    FECHA_CREACION TIMESTAMP,
+                    FECHA_MODIFICACION TIMESTAMP
                 )`
         };
         return ddl[table];
@@ -54,7 +65,7 @@ const DracoSchema = {
         const exists = await Provider.containerExists(DracoConfig.controlDataset);
         if (!exists) return false;
         try {
-            for (const name of ["PROYECTOS", "DIMENSIONES", "CUBOS"]) {
+            for (const name of ["PROYECTOS", "DIMENSIONES", "CUBOS", "JERARQUIAS"]) {
                 await Provider.runQuery(`SELECT 1 FROM ${Provider.qualifyControl(name)} LIMIT 1`);
             }
             return true;
@@ -72,10 +83,10 @@ const DracoSchema = {
         const exists = await Provider.containerExists(DracoConfig.controlDataset);
         if (!exists) {
             onProgress(`Creando ${DracoConfig.controlDataset}...`);
-            await Provider.createContainer(DracoConfig.controlDataset, "Dataset/esquema de control de Draco Planning (proyectos, dimensiones, cubos)");
+            await Provider.createContainer(DracoConfig.controlDataset, "Dataset/esquema de control de Draco Planning (proyectos, dimensiones, cubos, jerarquías)");
         }
 
-        for (const name of ["PROYECTOS", "DIMENSIONES", "CUBOS"]) {
+        for (const name of ["PROYECTOS", "DIMENSIONES", "CUBOS", "JERARQUIAS"]) {
             onProgress(`Verificando tabla ${name}...`);
             await Provider.runQuery(this.ddl(name));
         }

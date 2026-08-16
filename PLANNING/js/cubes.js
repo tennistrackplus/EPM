@@ -1,12 +1,16 @@
 /**
- * Módulo de Cubos. Misma mecánica que Dimensiones, a través de Provider
- * (funciona igual sobre BigQuery o Snowflake).
+ * Módulo de Cubos. Un cubo se compone de:
+ *  - Dimensiones: seleccionadas entre las ya creadas en el proyecto.
+ *    Cada una aporta una columna FK (misma clave e igual tipo que la
+ *    clave principal de esa dimensión).
+ *  - Medidas: campos numéricos/otros definidos libremente, como antes.
  */
 const Cubes = {
     TABLE: "CUBOS",
     NAME_COL: "CUBOS",
     ID_COL: "CUBO_ID",
     list: [],
+    dimensionsCache: [],
 
     async render(container, project) {
         this.container = container;
@@ -26,7 +30,16 @@ const Cubes = {
         `;
 
         document.getElementById("btnNewCubo").addEventListener("click", () => this.openForm());
+        await this.loadDimensions();
         await this.loadList();
+    },
+
+    async loadDimensions() {
+        const sql = `SELECT DIMENSION_ID, DIMENSION, TABLA, CAMPOS_JSON
+                     FROM ${Provider.qualifyControl("DIMENSIONES")}
+                     WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                     ORDER BY DIMENSION`;
+        this.dimensionsCache = await Provider.runQuery(sql);
     },
 
     async loadList() {
@@ -46,12 +59,15 @@ const Cubes = {
             wrap.innerHTML = `
                 <div class="data-list">
                     <table>
-                        <thead><tr><th>Cubo</th><th>Descripción</th><th>Tabla</th><th></th></tr></thead>
+                        <thead><tr><th>Cubo</th><th>Dimensiones</th><th>Medidas</th><th>Tabla</th><th></th></tr></thead>
                         <tbody>
-                            ${this.list.map(c => `
+                            ${this.list.map(c => {
+                                const spec = this.parseSpec(c);
+                                return `
                                 <tr>
-                                    <td><strong>${UI.escapeHtml(c[this.NAME_COL])}</strong></td>
-                                    <td>${UI.escapeHtml(c.DESCRIPCION || "—")}</td>
+                                    <td><strong>${UI.escapeHtml(c[this.NAME_COL])}</strong><br><span class="col-type">${UI.escapeHtml(c.DESCRIPCION || "")}</span></td>
+                                    <td>${spec.dimensions.map(d => `<span class="table-tag">${UI.escapeHtml(d.name)}</span>`).join(" ") || "—"}</td>
+                                    <td>${spec.measures.map(m => `<span class="table-tag">${UI.escapeHtml(m.name)}</span>`).join(" ") || "—"}</td>
                                     <td><span class="table-tag">${UI.escapeHtml(c.TABLA)}</span></td>
                                     <td>
                                         <div class="row-actions">
@@ -59,8 +75,8 @@ const Cubes = {
                                             <button data-del="${c[this.ID_COL]}" class="danger" title="Eliminar">🗑</button>
                                         </div>
                                     </td>
-                                </tr>
-                            `).join("")}
+                                </tr>`;
+                            }).join("")}
                         </tbody>
                     </table>
                 </div>`;
@@ -74,20 +90,30 @@ const Cubes = {
         }
     },
 
+    parseSpec(cubo) {
+        try {
+            const spec = JSON.parse(cubo.CAMPOS_JSON || "{}");
+            return { dimensions: spec.dimensions || [], measures: spec.measures || [] };
+        } catch (e) {
+            return { dimensions: [], measures: [] };
+        }
+    },
+
     async openForm(editId = null) {
         const editing = editId ? this.list.find(c => c[this.ID_COL] === editId) : null;
-        let fields = [];
-        if (editing && editing.CAMPOS_JSON) {
-            try { fields = JSON.parse(editing.CAMPOS_JSON); } catch (e) { fields = []; }
+        const spec = editing ? this.parseSpec(editing) : { dimensions: [], measures: [] };
+
+        if (!this.dimensionsCache.length) {
+            UI.toast("Aviso: este proyecto todavía no tiene dimensiones creadas.", "info");
         }
 
-        const result = await UI.openEntityFormModal({
+        const result = await UI.openCubeFormModal({
             title: editing ? `Editar cubo: ${editing[this.NAME_COL]}` : "Nuevo cubo",
-            nameLabel: "Nombre del cubo",
-            namePlaceholder: "Ej. Ventas",
             name: editing ? editing[this.NAME_COL] : "",
             description: editing ? (editing.DESCRIPCION || "") : "",
-            fields,
+            dimensionsList: this.dimensionsCache,
+            selectedDimensionIds: spec.dimensions.map(d => d.id),
+            measures: spec.measures,
             nameEditable: !editing
         });
 
@@ -95,7 +121,7 @@ const Cubes = {
         await this.save(editing, result);
     },
 
-    async save(editing, { name, description, fields }) {
+    async save(editing, { name, description, dimensionIds, measures }) {
         const ident = Provider.toIdentifier(name);
         if (!ident) {
             UI.toast("El nombre del cubo no es válido.", "error");
@@ -104,15 +130,32 @@ const Cubes = {
         const tableName = `${DracoConfig.prefix}${ident}`;
         const fullTable = Provider.qualify(this.project.DATASET, tableName);
 
-        const colDefs = fields.map(f => {
-            const colIdent = Provider.toIdentifier(f.name);
-            return `${colIdent} ${Provider.mapFieldType(f.type)}`;
-        }).join(", ");
+        const selectedDims = dimensionIds.map(id => this.dimensionsCache.find(d => d.DIMENSION_ID === id)).filter(Boolean);
+        const dimSpecs = selectedDims.map(d => {
+            const fields = Dimensions.parseFields(d);
+            const keyField = fields[0] || { type: "STRING" };
+            return {
+                id: d.DIMENSION_ID,
+                name: d.DIMENSION,
+                colId: Provider.toIdentifier(d.DIMENSION),
+                type: keyField.type || "STRING"
+            };
+        });
+
+        const dimColDefs = dimSpecs.map(d => `${d.colId} ${Provider.mapFieldType(d.type)}`);
+        const measureColDefs = measures.map(f => `${Provider.toIdentifier(f.name)} ${Provider.mapFieldType(f.type)}`);
+        const colDefs = [...dimColDefs, ...measureColDefs].join(", ");
+
+        if (!colDefs) {
+            UI.toast("El cubo necesita al menos una dimensión o una medida.", "error");
+            return;
+        }
 
         try {
             await Provider.runQuery(`CREATE OR REPLACE TABLE ${fullTable} (${colDefs})`);
 
-            const camposJson = JSON.stringify(fields).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+            const spec = { dimensions: dimSpecs, measures };
+            const camposJson = JSON.stringify(spec).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 
             if (editing) {
                 const sql = `UPDATE ${Provider.qualifyControl(this.TABLE)}
