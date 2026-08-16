@@ -18,7 +18,7 @@
 const SF = {
     // Si despliegas un proxy, cambia esto por su URL base (ej. "https://mi-proxy.workers.dev").
     // Si lo dejas vacío, se llama directamente a Snowflake.
-    apiBase: "",
+    apiBase: "https://draco-snowflake-proxy.zipiwars.workers.dev",
 
     getAccount() {
         return localStorage.getItem("sf_account") || "";
