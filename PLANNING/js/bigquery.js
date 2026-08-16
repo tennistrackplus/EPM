@@ -1,0 +1,144 @@
+/**
+ * ============================================================
+ * DRACO PLANNING — CLIENTE BIGQUERY (REST API)
+ * ============================================================
+ * Envuelve las llamadas a la API REST de BigQuery usando el token
+ * OAuth guardado en localStorage por el módulo de login.
+ * No usa ninguna librería externa: solo fetch().
+ */
+const BQ = {
+    BASE: "https://bigquery.googleapis.com/bigquery/v2",
+
+    getToken() {
+        const token = localStorage.getItem("bigquery_access_token");
+        const expires = localStorage.getItem("bigquery_token_expires");
+        if (!token || !expires || Date.now() >= parseInt(expires, 10)) {
+            return null;
+        }
+        return token;
+    },
+
+    getGcpProject() {
+        return localStorage.getItem("draco_gcp_project") || "";
+    },
+
+    setGcpProject(projectId) {
+        localStorage.setItem("draco_gcp_project", projectId);
+    },
+
+    isConnected() {
+        return !!this.getToken();
+    },
+
+    async request(path, options = {}) {
+        const token = this.getToken();
+        if (!token) {
+            const err = new Error("Sesión de BigQuery no válida o expirada.");
+            err.code = "NO_AUTH";
+            throw err;
+        }
+        const response = await fetch(`${this.BASE}${path}`, {
+            ...options,
+            headers: {
+                "Authorization": `Bearer ${token}`,
+                "Content-Type": "application/json",
+                ...(options.headers || {})
+            }
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.error) {
+            const msg = (data.error && data.error.message) || `Error HTTP ${response.status}`;
+            const err = new Error(msg);
+            err.details = data.error;
+            throw err;
+        }
+        return data;
+    },
+
+    /** Lista los proyectos GCP visibles para el usuario autenticado */
+    async listProjects() {
+        const data = await this.request("/projects?maxResults=200");
+        return data.projects || [];
+    },
+
+    async listDatasets(projectId) {
+        const data = await this.request(`/projects/${encodeURIComponent(projectId)}/datasets?maxResults=500`);
+        return data.datasets || [];
+    },
+
+    async datasetExists(projectId, datasetId) {
+        try {
+            await this.request(`/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(datasetId)}`);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    },
+
+    async createDataset(projectId, datasetId, description = "") {
+        return this.request(`/projects/${encodeURIComponent(projectId)}/datasets`, {
+            method: "POST",
+            body: JSON.stringify({
+                datasetReference: { projectId, datasetId },
+                description,
+                friendlyName: datasetId
+            })
+        });
+    },
+
+    async deleteDataset(projectId, datasetId) {
+        return this.request(
+            `/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(datasetId)}?deleteContents=true`,
+            { method: "DELETE" }
+        );
+    },
+
+    async listTables(projectId, datasetId) {
+        const data = await this.request(`/projects/${encodeURIComponent(projectId)}/datasets/${encodeURIComponent(datasetId)}/tables?maxResults=500`);
+        return data.tables || [];
+    },
+
+    /** Ejecuta una consulta SQL (SELECT, DDL o DML) de forma síncrona */
+    async query(projectId, sql, params = {}) {
+        const data = await this.request(`/projects/${encodeURIComponent(projectId)}/queries`, {
+            method: "POST",
+            body: JSON.stringify({
+                query: sql,
+                useLegacySql: false,
+                timeoutMs: 30000,
+                ...params
+            })
+        });
+        return data;
+    },
+
+    /** Convierte el resultado de jobs.query en un array de objetos { columna: valor } */
+    rowsToObjects(result) {
+        const fields = (result.schema && result.schema.fields) || [];
+        const rows = result.rows || [];
+        return rows.map(r => {
+            const obj = {};
+            (r.f || []).forEach((cell, i) => {
+                obj[fields[i].name] = cell.v;
+            });
+            return obj;
+        });
+    },
+
+    /** Escapa comillas simples para literales SQL */
+    esc(value) {
+        if (value === null || value === undefined) return "";
+        return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    },
+
+    /** Convierte un texto libre en un identificador válido de BigQuery (dataset/tabla/columna) */
+    toIdentifier(text) {
+        return String(text || "")
+            .trim()
+            .toUpperCase()
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // quita acentos
+            .replace(/[^A-Z0-9_]+/g, "_")
+            .replace(/^_+|_+$/g, "")
+            .replace(/^(\d)/, "N$1"); // los identificadores no pueden empezar por número
+    }
+};
