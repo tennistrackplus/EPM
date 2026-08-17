@@ -479,6 +479,234 @@ const UI = {
         });
     },
 
+    /**
+     * Prompt de una sola línea reutilizable (ej. valor de una constante).
+     * Devuelve Promise<string|null>.
+     */
+    openTextPromptModal({ title, label = "Valor", value = "", placeholder = "" }) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("textPromptModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "textPromptModal";
+                document.body.appendChild(overlay);
+            }
+            overlay.innerHTML = `
+                <div class="modal-box">
+                    <div class="modal-header">
+                        <h3>${UI.escapeHtml(title)}</h3>
+                        <button class="modal-close" id="textPromptClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label>${UI.escapeHtml(label)}</label>
+                            <input type="text" id="textPromptInput" placeholder="${UI.escapeHtml(placeholder)}" value="${UI.escapeHtml(value)}">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" id="textPromptCancel">Cancelar</button>
+                        <button class="btn btn-primary" id="textPromptSave">Guardar</button>
+                    </div>
+                </div>`;
+            overlay.classList.add("visible");
+            const input = overlay.querySelector("#textPromptInput");
+            setTimeout(() => { input.focus(); input.select(); }, 50);
+
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+            overlay.querySelector("#textPromptClose").onclick = () => cleanup(null);
+            overlay.querySelector("#textPromptCancel").onclick = () => cleanup(null);
+            overlay.querySelector("#textPromptSave").onclick = () => cleanup(input.value);
+            input.onkeydown = (e) => { if (e.key === "Enter") cleanup(input.value); };
+        });
+    },
+
+    /**
+     * Editor de código Python (mockup, sin ejecución real). Reutilizado para
+     * las funciones "cambiar datos input/output", mapeo por código y función
+     * de campo. Devuelve Promise<string|null>.
+     */
+    openCodeEditorModal({ title, subtitle = "", code = "" }) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("codeEditorModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "codeEditorModal";
+                document.body.appendChild(overlay);
+            }
+            const defaultCode = code || `def transformar(df):\n    # df: pandas.DataFrame de entrada\n    # ... tu lógica aquí ...\n    return df\n`;
+            overlay.innerHTML = `
+                <div class="modal-box modal-wide">
+                    <div class="modal-header">
+                        <div>
+                            <h3>${UI.escapeHtml(title)}</h3>
+                            ${subtitle ? `<span class="modal-subtitle">${UI.escapeHtml(subtitle)}</span>` : ""}
+                        </div>
+                        <button class="modal-close" id="codeEditorClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="form-hint">Editor de Python (mockup) — todavía no se ejecuta, solo se guarda el código junto a la carga de datos.</p>
+                        <textarea id="codeEditorArea" class="code-editor-area" spellcheck="false">${UI.escapeHtml(defaultCode)}</textarea>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" id="codeEditorCancel">Cancelar</button>
+                        <button class="btn btn-primary" id="codeEditorSave">Guardar código</button>
+                    </div>
+                </div>`;
+            overlay.classList.add("visible");
+
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+            overlay.querySelector("#codeEditorClose").onclick = () => cleanup(null);
+            overlay.querySelector("#codeEditorCancel").onclick = () => cleanup(null);
+            overlay.querySelector("#codeEditorSave").onclick = () => cleanup(overlay.querySelector("#codeEditorArea").value);
+        });
+    },
+
+    FORMULA_FUNCTIONS: {
+        "Números": ["SUMA(a, b)", "RESTA(a, b)", "MULTIPLICAR(a, b)", "DIVIDIR(a, b)", "REDONDEAR(valor, decimales)", "ABS(valor)"],
+        "Texto": ["CONCATENAR(a, b)", "SI(condicion, si_si, si_no)", "MAYUSCULAS(texto)", "MINUSCULAS(texto)", "SUBCADENA(texto, inicio, longitud)", "TRIM(texto)"]
+    },
+
+    /**
+     * Editor de fórmulas tipo Excel (mockup): funciones numéricas/texto +
+     * campos del input insertables. Devuelve Promise<string|null>.
+     */
+    openFormulaEditorModal({ title, inputFields = [], value = "" }) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("formulaEditorModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "formulaEditorModal";
+                document.body.appendChild(overlay);
+            }
+            overlay.innerHTML = `
+                <div class="modal-box modal-wide">
+                    <div class="modal-header">
+                        <h3>${UI.escapeHtml(title)}</h3>
+                        <button class="modal-close" id="formulaClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label>Fórmula</label>
+                            <textarea id="formulaArea" rows="3" placeholder="Ej. CONCATENAR([NOMBRE], &quot; &quot;, [APELLIDO])">${UI.escapeHtml(value)}</textarea>
+                        </div>
+                        <div class="formula-editor-cols">
+                            <div class="formula-editor-col">
+                                <div class="hierarchy-col-label">Funciones</div>
+                                <div class="formula-fn-groups" id="formulaFnGroups"></div>
+                            </div>
+                            <div class="formula-editor-col">
+                                <div class="hierarchy-col-label">Campos de entrada</div>
+                                <div class="formula-field-chips" id="formulaFieldChips">
+                                    ${inputFields.length ? inputFields.map(f => `<button type="button" class="hier-chip" data-insert-field="${UI.escapeHtml(f.name)}">${UI.escapeHtml(f.name)}</button>`).join("") : `<div class="hierarchy-pool-empty">No hay campos de entrada todavía.</div>`}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" id="formulaCancel">Cancelar</button>
+                        <button class="btn btn-primary" id="formulaSave">Guardar fórmula</button>
+                    </div>
+                </div>`;
+
+            const groupsEl = overlay.querySelector("#formulaFnGroups");
+            groupsEl.innerHTML = Object.entries(UI.FORMULA_FUNCTIONS).map(([group, fns]) => `
+                <div class="formula-fn-group">
+                    <span class="formula-fn-group-title">${group}</span>
+                    <div class="formula-fn-list">
+                        ${fns.map(fn => `<button type="button" class="hier-chip" data-insert-fn="${UI.escapeHtml(fn)}">${UI.escapeHtml(fn)}</button>`).join("")}
+                    </div>
+                </div>`).join("");
+
+            const textarea = overlay.querySelector("#formulaArea");
+            const insertAtCursor = (text) => {
+                const start = textarea.selectionStart ?? textarea.value.length;
+                const end = textarea.selectionEnd ?? textarea.value.length;
+                textarea.value = textarea.value.slice(0, start) + text + textarea.value.slice(end);
+                textarea.focus();
+                textarea.selectionStart = textarea.selectionEnd = start + text.length;
+            };
+
+            overlay.querySelectorAll("[data-insert-fn]").forEach(btn =>
+                btn.addEventListener("click", () => insertAtCursor(btn.dataset.insertFn)));
+            overlay.querySelectorAll("[data-insert-field]").forEach(btn =>
+                btn.addEventListener("click", () => insertAtCursor(`[${btn.dataset.insertField}]`)));
+
+            overlay.classList.add("visible");
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+            overlay.querySelector("#formulaClose").onclick = () => cleanup(null);
+            overlay.querySelector("#formulaCancel").onclick = () => cleanup(null);
+            overlay.querySelector("#formulaSave").onclick = () => cleanup(textarea.value.trim());
+        });
+    },
+
+    /**
+     * Popup de selección de tabla origen (BigQuery o Snowflake). Mockup:
+     * lista de tablas de ejemplo con buscador, igual que el picker de
+     * dimensiones. Devuelve Promise<{tableName, fields}|null>.
+     */
+    openTablePickerModal({ connector, tables = [] }) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("tablePickerModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "tablePickerModal";
+                document.body.appendChild(overlay);
+            }
+
+            overlay.innerHTML = `
+                <div class="modal-box modal-wide">
+                    <div class="modal-header">
+                        <div>
+                            <h3>Seleccionar tabla de origen</h3>
+                            <span class="modal-subtitle">Conector: ${UI.escapeHtml(connector)}</span>
+                        </div>
+                        <button class="modal-close" id="tablePickerClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <input type="text" id="tablePickerSearch" class="dim-picker-search" placeholder="Buscar tabla...">
+                        <div class="dim-picker-table-wrap">
+                            <table class="dim-picker-table">
+                                <thead><tr><th>Tabla</th><th>Columnas</th></tr></thead>
+                                <tbody id="tablePickerRows"></tbody>
+                            </table>
+                        </div>
+                        <p class="form-hint">Listado de ejemplo (mockup) — todavía no consulta el catálogo real de ${UI.escapeHtml(connector)}.</p>
+                    </div>
+                </div>`;
+
+            const searchInput = overlay.querySelector("#tablePickerSearch");
+            const rowsEl = overlay.querySelector("#tablePickerRows");
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+
+            const renderRows = (filterText = "") => {
+                const f = filterText.trim().toLowerCase();
+                const filtered = !f ? tables : tables.filter(t => t.name.toLowerCase().includes(f));
+                rowsEl.innerHTML = filtered.length
+                    ? filtered.map((t, i) => `
+                        <tr data-pick="${i}">
+                            <td><strong>${UI.escapeHtml(t.name)}</strong></td>
+                            <td>${t.fields.map(f2 => `<span class="table-tag">${UI.escapeHtml(f2.name)}</span>`).join(" ")}</td>
+                        </tr>`).join("")
+                    : `<tr><td colspan="2" class="dim-picker-empty">Sin resultados.</td></tr>`;
+                rowsEl.querySelectorAll("[data-pick]").forEach(tr => {
+                    tr.addEventListener("click", () => cleanup(tables[parseInt(tr.dataset.pick, 10)]));
+                });
+            };
+
+            searchInput.value = "";
+            searchInput.oninput = () => renderRows(searchInput.value);
+            renderRows();
+
+            overlay.classList.add("visible");
+            setTimeout(() => searchInput.focus(), 50);
+            overlay.querySelector("#tablePickerClose").onclick = () => cleanup(null);
+        });
+    },
+
     /** Activa el comportamiento de maximizar/contraer para todos los .block de la página */
     initBlockControls() {
         const grid = document.getElementById("blocksGrid");

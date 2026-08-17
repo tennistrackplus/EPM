@@ -211,10 +211,10 @@ const Draco = {
         const modules = {
             dimensiones: () => Dimensions.render(container, this.currentProject),
             cubos: () => Cubes.render(container, this.currentProject),
+            cargas: () => Loads.render(container, this.currentProject),
         };
 
         const labels = {
-            cargas: ["Cargas de datos", "⇩"],
             "flujos-carga": ["Flujos de carga", "⇉"],
             funciones: ["Funciones", "ƒ"],
             "flujos-proceso": ["Flujos de proceso", "⟲"],
