@@ -36,10 +36,10 @@
 }
 
 .modal-box.modal-full {
-    width: 95vw;
-    max-width: 1500px;
-    height: 90vh;
-    max-height: 90vh;
+    width: 95vw !important;
+    max-width: 1500px !important;
+    height: 90vh !important;
+    max-height: 90vh !important;
 }
 
 .modal-box.modal-full .modal-body {
@@ -303,22 +303,21 @@
 }
 
 /* Selector de dimensiones (formulario de cubo) */
-.dim-add-row {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 8px;
-}
-
-.dim-add-row select {
-    flex: 1;
-}
-
 .dim-picker {
     display: flex;
     flex-direction: column;
     gap: 4px;
     max-height: 220px;
     overflow-y: auto;
+    padding: 6px;
+}
+
+.dim-picker:empty::before {
+    content: "Todavía no has añadido ninguna dimensión.";
+    display: block;
+    padding: 10px 6px;
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
 }
 
 .dim-picker-item {
@@ -350,6 +349,61 @@
 
 .dim-picker-remove:hover {
     background: var(--color-danger-light);
+}
+
+/* Popup de selección de dimensión (buscador + tabla) */
+.dim-picker-search {
+    width: 100%;
+    margin-bottom: 10px;
+}
+
+.dim-picker-table-wrap {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    max-height: 360px;
+    overflow-y: auto;
+}
+
+table.dim-picker-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-sm);
+}
+
+table.dim-picker-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--surface-sunken);
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--text-secondary);
+}
+
+table.dim-picker-table tbody tr {
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-subtle);
+    transition: background-color var(--transition-fast);
+}
+
+table.dim-picker-table tbody tr:last-child { border-bottom: none; }
+
+table.dim-picker-table tbody tr:hover {
+    background: var(--brand-primary-light);
+}
+
+table.dim-picker-table td {
+    padding: 8px 12px;
+}
+
+.dim-picker-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 24px 12px;
+    cursor: default;
 }
 
 /* Modal de elección (importar: sustituir / incremental) */
