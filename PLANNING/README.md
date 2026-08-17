@@ -34,15 +34,21 @@ lenguaje visual que vuestra app anterior (EPM Data Studio).
     clave). El resto de columnas son "Atributos", y cualquiera de ellos
     también se puede marcar como clave para soportar claves compuestas
     (ej. Clase de coste + Sociedad).
-    - **Valores** (icono ▤): rejilla editable de los datos físicos —
-      añadir filas, pegar bloques copiados de Excel, exportar a CSV/Excel,
-      importar desde archivo (sustituyendo todo o de forma incremental
-      por clave). "Guardar" vuelca la rejilla completa a la tabla.
+    - **Valores** (icono ▤): ahora se abre en un **popup casi a pantalla
+      completa**. Rejilla editable de los datos físicos — añadir filas,
+      pegar bloques copiados de Excel, exportar a CSV/Excel, importar
+      desde archivo (sustituyendo todo o de forma incremental por clave).
+      "Guardar" vuelca la rejilla completa a la tabla. **Valida que la
+      clave sea única antes de guardar** (ni BigQuery ni Snowflake la
+      fuerzan a nivel de motor): si hay valores de clave repetidos, las
+      filas se marcan en rojo y el guardado se bloquea hasta corregirlas.
     - **Jerarquías** (icono ⛓): arrastra atributos a una lista de niveles
       (superior → inferior) con vista previa en vivo sobre los datos
       reales de la dimensión.
-  - **Cubos**: se seleccionan dimensiones ya creadas en el proyecto (cada
-    una aporta su columna clave como FK) y se definen medidas libres
+  - **Cubos**: las dimensiones se van **añadiendo progresivamente** con un
+    selector + botón "Añadir dimensión" (pensado para proyectos con muchas
+    dimensiones, en vez de listarlas todas con checkboxes) — cada una
+    aporta su columna clave como FK. Las medidas se definen libremente
     (nombre + tipo), igual que antes.
   - El resto de módulos del menú (Cargas de datos, Flujos de carga,
     Funciones, Flujos de proceso, Workflows, Roles) son pantallas
