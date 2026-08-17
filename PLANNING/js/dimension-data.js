@@ -13,38 +13,47 @@
 const DimensionData = {
     MAX_ROWS_LOAD: 2000,
 
-    async render(container, project, dim, onBack) {
-        this.container = container;
+    async render(project, dim) {
         this.project = project;
         this.dim = dim;
-        this.onBack = onBack;
         this.fields = Dimensions.parseFields(dim).map(f => ({ ...f, colId: Provider.toIdentifier(f.name) }));
         this.fullTable = Provider.qualify(project.DATASET, dim.TABLA);
         this.rows = []; // array de objetos { COLID: valor, ... }
 
-        container.innerHTML = `
-            <div class="module-header">
-                <div>
-                    <button class="btn-back" id="btnBackToDims">← Dimensiones</button>
-                    <h3>Valores: ${UI.escapeHtml(dim[Dimensions.NAME_COL])}</h3>
-                    <p>Tabla ${dim.TABLA} · ${this.fields.length} columna(s)</p>
-                </div>
-            </div>
-            <div class="values-toolbar">
-                <button class="btn btn-secondary btn-sm" id="btnAddRow">+ Añadir fila</button>
-                <button class="btn btn-secondary btn-sm" id="btnExportCsv">Exportar CSV</button>
-                <button class="btn btn-secondary btn-sm" id="btnExportXlsx">Exportar Excel</button>
-                <button class="btn btn-secondary btn-sm" id="btnImportFile">Importar archivo</button>
-                <input type="file" id="importFileInput" accept=".csv,.xlsx,.xls" style="display:none;">
-                <span class="values-toolbar-spacer"></span>
-                <span class="values-row-count" id="valuesRowCount"></span>
-                <button class="btn btn-primary btn-sm" id="btnSaveValues">Guardar cambios</button>
-            </div>
-            <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). "Guardar" sustituye por completo el contenido de la tabla con lo que ves aquí.</p>
-            <div class="values-grid-wrap" id="valuesGridWrap"><span class="spinner"></span></div>
-        `;
+        let overlay = document.getElementById("valuesModal");
+        if (!overlay) {
+            overlay = document.createElement("div");
+            overlay.className = "modal-overlay";
+            overlay.id = "valuesModal";
+            document.body.appendChild(overlay);
+        }
 
-        document.getElementById("btnBackToDims").addEventListener("click", () => this.onBack());
+        overlay.innerHTML = `
+            <div class="modal-box modal-full">
+                <div class="modal-header">
+                    <div>
+                        <h3>Valores: ${UI.escapeHtml(dim[Dimensions.NAME_COL])}</h3>
+                        <span class="modal-subtitle">Tabla ${dim.TABLA} · ${this.fields.length} columna(s)</span>
+                    </div>
+                    <button class="modal-close" id="btnCloseValuesModal">&times;</button>
+                </div>
+                <div class="modal-body modal-body-flush">
+                    <div class="values-toolbar">
+                        <button class="btn btn-secondary btn-sm" id="btnAddRow">+ Añadir fila</button>
+                        <button class="btn btn-secondary btn-sm" id="btnExportCsv">Exportar CSV</button>
+                        <button class="btn btn-secondary btn-sm" id="btnExportXlsx">Exportar Excel</button>
+                        <button class="btn btn-secondary btn-sm" id="btnImportFile">Importar archivo</button>
+                        <input type="file" id="importFileInput" accept=".csv,.xlsx,.xls" style="display:none;">
+                        <span class="values-toolbar-spacer"></span>
+                        <span class="values-row-count" id="valuesRowCount"></span>
+                        <button class="btn btn-primary btn-sm" id="btnSaveValues">Guardar cambios</button>
+                    </div>
+                    <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). "Guardar" sustituye por completo el contenido de la tabla con lo que ves aquí. La clave debe ser única: las filas con clave repetida se marcan en rojo y bloquean el guardado.</p>
+                    <div class="values-grid-wrap values-grid-wrap--modal" id="valuesGridWrap"><span class="spinner"></span></div>
+                </div>
+            </div>`;
+
+        document.getElementById("btnCloseValuesModal").addEventListener("click", () => this.close());
         document.getElementById("btnAddRow").addEventListener("click", () => { this.addEmptyRow(); this.renderGrid(); });
         document.getElementById("btnExportCsv").addEventListener("click", () => this.exportCsv());
         document.getElementById("btnExportXlsx").addEventListener("click", () => this.exportXlsx());
@@ -52,7 +61,13 @@ const DimensionData = {
         document.getElementById("importFileInput").addEventListener("change", (e) => this.handleImportFile(e));
         document.getElementById("btnSaveValues").addEventListener("click", () => this.save());
 
+        overlay.classList.add("visible");
         await this.loadData();
+    },
+
+    close() {
+        const overlay = document.getElementById("valuesModal");
+        if (overlay) overlay.classList.remove("visible");
     },
 
     async loadData() {
@@ -309,6 +324,21 @@ const DimensionData = {
         return `'${Provider.esc(v)}'`;
     },
 
+    highlightDuplicateRows(validRows, sigOf, dupSignatures) {
+        const tbody = document.getElementById("valuesGridBody");
+        if (!tbody) return;
+        tbody.querySelectorAll("tr").forEach(tr => tr.classList.remove("duplicate-row"));
+
+        // Mapea cada fila válida (por índice dentro de this.rows) a su posición real en el DOM
+        this.rows.forEach((r, idx) => {
+            if (!validRows.includes(r)) return;
+            if (dupSignatures.has(sigOf(r))) {
+                const tr = tbody.querySelector(`tr[data-row-idx="${idx}"]`);
+                if (tr) tr.classList.add("duplicate-row");
+            }
+        });
+    },
+
     async save() {
         this.syncRowsFromDom();
 
@@ -319,6 +349,27 @@ const DimensionData = {
 
         if (!validRows.length) {
             UI.toast("No hay filas válidas que guardar (revisa que la clave no esté vacía).", "error");
+            return;
+        }
+
+        // Validación de clave única: ni BigQuery ni Snowflake la fuerzan a nivel
+        // de motor, así que la comprobamos aquí antes de guardar.
+        const sigOf = (r) => keyCols_.map(c => String(r[c] ?? "").trim().toUpperCase()).join(" | ");
+        const seen = new Map();
+        const dupSignatures = new Set();
+        validRows.forEach((r, i) => {
+            const s = sigOf(r);
+            if (seen.has(s)) dupSignatures.add(s);
+            else seen.set(s, i);
+        });
+
+        if (dupSignatures.size) {
+            this.highlightDuplicateRows(validRows, sigOf, dupSignatures);
+            const sample = Array.from(dupSignatures).slice(0, 5).join(" · ");
+            UI.toast(
+                `No se puede guardar: hay ${dupSignatures.size} valor(es) de clave repetidos (${sample}${dupSignatures.size > 5 ? "…" : ""}). Corrige o elimina las filas duplicadas (marcadas en rojo).`,
+                "error"
+            );
             return;
         }
 

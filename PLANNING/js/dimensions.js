@@ -183,7 +183,7 @@ const Dimensions = {
     openDataEditor(id) {
         const dim = this.list.find(d => d[this.ID_COL] === id);
         if (!dim) return;
-        DimensionData.render(this.container, this.project, dim, () => this.render(this.container, this.project));
+        DimensionData.render(this.project, dim);
     },
 
     openHierarchyManager(id) {

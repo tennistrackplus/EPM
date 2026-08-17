@@ -241,6 +241,10 @@ const UI = {
                             </div>
                             <div class="form-group">
                                 <label>Dimensiones</label>
+                                <div class="dim-add-row">
+                                    <select id="cuboDimSelect"></select>
+                                    <button type="button" class="btn btn-secondary btn-sm" id="cuboDimAdd">+ Añadir dimensión</button>
+                                </div>
                                 <div class="dim-picker" id="cuboFormDims"></div>
                             </div>
                             <div class="form-group">
@@ -265,17 +269,56 @@ const UI = {
             }
 
             const rowsContainer = overlay.querySelector("#cuboFormRows");
-            const dimsContainer = overlay.querySelector("#cuboFormDims");
+            const dimsList = overlay.querySelector("#cuboFormDims");
+            const dimSelect = overlay.querySelector("#cuboDimSelect");
             const nameInput = overlay.querySelector("#cuboFormName");
 
-            dimsContainer.innerHTML = dimensionsList.length
-                ? dimensionsList.map(d => `
-                    <label class="dim-picker-item">
-                        <input type="checkbox" value="${d.DIMENSION_ID}" ${selectedDimensionIds.includes(d.DIMENSION_ID) ? "checked" : ""}>
-                        <span>${UI.escapeHtml(d.DIMENSION)}</span>
-                        <span class="table-tag">${UI.escapeHtml(d.TABLA)}</span>
-                    </label>`).join("")
-                : `<p class="form-hint">Todavía no hay dimensiones en este proyecto. Crea alguna primero desde el menú "Dimensiones".</p>`;
+            // Estado local: dimensiones ya añadidas al cubo (se va construyendo con "+ Añadir dimensión")
+            let addedIds = dimensionsList.length
+                ? dimensionsList.filter(d => selectedDimensionIds.includes(d.DIMENSION_ID)).map(d => d.DIMENSION_ID)
+                : [];
+
+            const renderDimSelect = () => {
+                const available = dimensionsList.filter(d => !addedIds.includes(d.DIMENSION_ID));
+                dimSelect.innerHTML = available.length
+                    ? available.map(d => `<option value="${d.DIMENSION_ID}">${UI.escapeHtml(d.DIMENSION)}</option>`).join("")
+                    : `<option value="">No quedan más dimensiones</option>`;
+                dimSelect.disabled = !available.length;
+                document.getElementById("cuboDimAdd").disabled = !available.length;
+            };
+
+            const renderDimsList = () => {
+                dimsList.innerHTML = addedIds.length
+                    ? addedIds.map(id => {
+                        const d = dimensionsList.find(x => x.DIMENSION_ID === id);
+                        if (!d) return "";
+                        return `
+                            <div class="dim-picker-item">
+                                <span>${UI.escapeHtml(d.DIMENSION)}</span>
+                                <span class="table-tag">${UI.escapeHtml(d.TABLA)}</span>
+                                <button type="button" class="dim-picker-remove" data-remove-dim="${id}" title="Quitar">✕</button>
+                            </div>`;
+                    }).join("")
+                    : `<p class="form-hint">${dimensionsList.length ? "Todavía no has añadido ninguna dimensión a este cubo." : 'Este proyecto todavía no tiene dimensiones. Créalas primero desde el menú "Dimensiones".'}</p>`;
+
+                dimsList.querySelectorAll("[data-remove-dim]").forEach(btn => {
+                    btn.addEventListener("click", () => {
+                        addedIds = addedIds.filter(id => id !== btn.dataset.removeDim);
+                        renderDimSelect();
+                        renderDimsList();
+                    });
+                });
+            };
+
+            overlay.querySelector("#cuboDimAdd").onclick = () => {
+                if (!dimSelect.value) return;
+                addedIds.push(dimSelect.value);
+                renderDimSelect();
+                renderDimsList();
+            };
+
+            renderDimSelect();
+            renderDimsList();
 
             const addRow = (f) => rowsContainer.appendChild(UI._fieldRow(f, { showKey: false }));
             rowsContainer.innerHTML = "";
@@ -303,18 +346,17 @@ const UI = {
                     UI.toast("Indica un nombre para el cubo.", "error");
                     return;
                 }
-                const dimensionIds = Array.from(dimsContainer.querySelectorAll("input[type=checkbox]:checked")).map(c => c.value);
                 const measureRows = UI._readFieldRows(rowsContainer);
 
-                if (!dimensionIds.length && !measureRows.length) {
-                    UI.toast("Selecciona al menos una dimensión o añade una medida.", "error");
+                if (!addedIds.length && !measureRows.length) {
+                    UI.toast("Añade al menos una dimensión o una medida.", "error");
                     return;
                 }
 
                 cleanup({
                     name: nameVal,
                     description: overlay.querySelector("#cuboFormDesc").value.trim(),
-                    dimensionIds,
+                    dimensionIds: addedIds,
                     measures: measureRows
                 });
             };
