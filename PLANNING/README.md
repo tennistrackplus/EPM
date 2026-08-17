@@ -45,11 +45,12 @@ lenguaje visual que vuestra app anterior (EPM Data Studio).
     - **Jerarquías** (icono ⛓): arrastra atributos a una lista de niveles
       (superior → inferior) con vista previa en vivo sobre los datos
       reales de la dimensión.
-  - **Cubos**: las dimensiones se van **añadiendo progresivamente** con un
-    selector + botón "Añadir dimensión" (pensado para proyectos con muchas
-    dimensiones, en vez de listarlas todas con checkboxes) — cada una
-    aporta su columna clave como FK. Las medidas se definen libremente
-    (nombre + tipo), igual que antes.
+  - **Cubos**: para añadir dimensiones se pulsa "+ Añadir dimensión", lo
+    que abre un **popup con buscador** y una tabla (Dimensión /
+    Descripción) — clic en una fila la añade y cierra el popup. Pensado
+    para proyectos con muchas dimensiones (probado con 200 simuladas: se
+    filtra al instante). Cada dimensión añadida se puede quitar con la ✕.
+    Las medidas se definen libremente (nombre + tipo), igual que antes.
   - El resto de módulos del menú (Cargas de datos, Flujos de carga,
     Funciones, Flujos de proceso, Workflows, Roles) son pantallas
     "próximamente".
