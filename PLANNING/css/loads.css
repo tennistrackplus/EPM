@@ -66,18 +66,37 @@
     border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
-/* ---------- Cabecera del formulario (nombre / cubo / origen) ---------- */
-.load-form-top {
+/* ---------- Cabecera del modal grande: título + botón editar básicos ---------- */
+.modal-header-right {
     display: flex;
-    gap: 14px;
-    flex-wrap: wrap;
-    padding-bottom: 4px;
+    align-items: center;
+    gap: 10px;
 }
 
-.load-form-top .form-group {
-    flex: 1;
-    min-width: 200px;
-    margin-bottom: 0;
+.link-btn {
+    border: none;
+    background: none;
+    color: var(--brand-primary);
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+}
+
+.link-btn:hover {
+    text-decoration: underline;
+}
+
+.form-group--check {
+    min-width: fit-content;
+}
+
+.form-group--check label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+    font-weight: 500;
 }
 
 .segmented {
@@ -112,28 +131,48 @@
     background-color: var(--surface-sunken);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
-    padding: 12px;
-    margin: 4px 0 10px;
+    padding: 8px 12px;
+    margin: 0 0 8px;
+}
+
+.load-file-params-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding-bottom: 4px;
 }
 
 .load-origin-row {
     display: flex;
-    gap: 12px;
+    gap: 10px;
     flex-wrap: wrap;
     align-items: flex-end;
 }
 
 .load-origin-row + .load-origin-row {
-    margin-top: 10px;
+    margin-top: 8px;
 }
 
 .load-origin-row .form-group {
     margin-bottom: 0;
-    min-width: 140px;
+    min-width: 110px;
 }
 
 .load-origin-row--file .form-group {
     flex: 1;
+}
+
+.load-origin-row--file.is-collapsed {
+    display: none;
+}
+
+.load-origin-row--sample {
+    align-items: center;
 }
 
 .load-table-picker {
@@ -166,22 +205,30 @@
     font-weight: 600;
 }
 
-/* ---------- Columnas de mapeo (input / output) ---------- */
+/* ---------- Columnas de mapeo (input / conector / output) ---------- */
 .load-mapping-cols {
     display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
+    grid-template-columns: 1fr 90px 1.3fr;
+    gap: 0;
     flex: 1;
     min-height: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
 }
 
 .load-mapping-col {
     display: flex;
     flex-direction: column;
     min-height: 0;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    overflow: hidden;
+}
+
+.load-mapping-col--input {
+    border-right: 1px solid var(--border-subtle);
+}
+
+.load-mapping-col--output {
+    border-left: 1px solid var(--border-subtle);
 }
 
 .load-mapping-col-header {
@@ -189,11 +236,13 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    padding: 8px 10px;
+    padding: 6px 10px;
     background-color: var(--surface-sunken);
     border-bottom: 1px solid var(--border-subtle);
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
     font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
     color: var(--text-secondary);
 }
 
@@ -201,23 +250,55 @@
 .load-output-fields {
     flex: 1;
     overflow-y: auto;
-    padding: 8px;
+    padding: 6px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
 }
 
-.load-mapping-cols.is-code-mode .load-output-fields {
-    opacity: 0.45;
+.load-mapping-cols.is-code-mode .load-output-fields,
+.load-mapping-cols.is-code-mode .load-mapping-connector {
+    opacity: 0.35;
     pointer-events: none;
 }
 
-/* ---------- Filas de campos de entrada ---------- */
+/* ---------- Columna conector (líneas entre input y output mapeados) ---------- */
+.load-mapping-connector {
+    position: relative;
+    background: repeating-linear-gradient(
+        to bottom,
+        var(--surface-sunken) 0px,
+        var(--surface-sunken) 1px,
+        transparent 1px,
+        transparent 100%
+    );
+    background-color: var(--surface-page);
+}
+
+.load-mapping-connector svg {
+    position: absolute;
+    inset: 0;
+    display: block;
+}
+
+.load-connector-line {
+    fill: none;
+    stroke: var(--brand-primary);
+    stroke-width: 1.6;
+    opacity: 0.55;
+}
+
+.load-connector-dot {
+    fill: var(--brand-primary);
+    opacity: 0.8;
+}
+
+/* ---------- Filas de campos de entrada (compactas) ---------- */
 .load-input-field-row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 5px 6px;
+    gap: 4px;
+    padding: 3px 4px;
     background-color: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
@@ -230,44 +311,80 @@
 
 .load-drag-handle {
     color: var(--text-muted);
-    font-size: 13px;
+    font-size: 12px;
     cursor: grab;
+    flex: 0 0 auto;
 }
 
 .load-field-name {
     flex: 1;
     min-width: 0;
-    font-size: var(--fs-sm);
+    font-size: var(--fs-xs);
+    padding: 3px 5px;
 }
 
 .load-field-type {
     font-size: var(--fs-xs);
-    max-width: 100px;
+    max-width: 62px;
+    padding: 2px 3px;
+    flex: 0 0 auto;
 }
 
-/* ---------- Filas de campos de salida ---------- */
+.load-manual-dot {
+    color: var(--brand-accent);
+    font-size: 8px;
+    flex: 0 0 auto;
+}
+
+/* ---------- Filas de campos de salida (compactas, sin "Dim String") ---------- */
 .load-output-field-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 7px 8px;
+    gap: 6px;
+    padding: 4px 6px;
     background-color: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
 }
 
+.load-output-group-tag {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 9px;
+    font-weight: 700;
+    border-radius: var(--radius-sm);
+    color: var(--text-inverse);
+}
+
+.load-output-group-tag--D { background-color: var(--brand-primary); }
+.load-output-group-tag--M { background-color: var(--brand-accent); }
+
 .load-output-field-name {
-    flex: 0 0 30%;
-    font-size: var(--fs-sm);
+    flex: 0 0 26%;
+    min-width: 0;
+    font-size: var(--fs-xs);
     font-weight: 600;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.load-output-type-abbr {
+    margin-left: 4px;
+    font-size: 9px;
+    font-weight: 500;
+    color: var(--text-muted);
+    text-transform: uppercase;
 }
 
 .load-map-type {
-    flex: 0 0 130px;
+    flex: 0 0 108px;
     font-size: var(--fs-xs);
+    padding: 3px 4px;
 }
 
 .load-map-target {
@@ -275,17 +392,23 @@
     min-width: 0;
     font-size: var(--fs-xs);
     color: var(--text-secondary);
-    padding: 5px 8px;
+    padding: 4px 8px;
     border-radius: var(--radius-sm);
-    border: 1px dashed transparent;
+    border: 1px dashed var(--border-default);
+    background-color: var(--surface-sunken);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    transition: border-color var(--transition-fast), background-color var(--transition-fast);
 }
 
-.load-map-target.is-dropzone {
-    border-color: var(--border-default);
-    background-color: var(--surface-sunken);
+.load-mapping-cols.is-drag-active .load-map-target {
+    border-color: var(--brand-primary);
+}
+
+.load-map-target.is-drop-hover {
+    border-color: var(--brand-primary);
+    background-color: var(--brand-primary-light);
 }
 
 .load-map-target code {
