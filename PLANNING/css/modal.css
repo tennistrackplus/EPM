@@ -35,6 +35,32 @@
     width: 720px;
 }
 
+.modal-box.modal-full {
+    width: 95vw;
+    max-width: 1500px;
+    height: 90vh;
+    max-height: 90vh;
+}
+
+.modal-box.modal-full .modal-body {
+    flex: 1;
+    min-height: 0;
+}
+
+.modal-body.modal-body-flush {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.modal-subtitle {
+    display: block;
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    font-weight: 500;
+    margin-top: 2px;
+}
+
 .modal-header {
     padding: 14px 18px;
     border-bottom: 1px solid var(--border-subtle);
@@ -277,34 +303,53 @@
 }
 
 /* Selector de dimensiones (formulario de cubo) */
+.dim-add-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.dim-add-row select {
+    flex: 1;
+}
+
 .dim-picker {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    max-height: 180px;
+    max-height: 220px;
     overflow-y: auto;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    padding: 6px;
 }
 
 .dim-picker-item {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 6px 8px;
+    padding: 7px 10px;
     border-radius: var(--radius-sm);
+    border: 1px solid var(--border-subtle);
+    background: var(--surface-sunken);
     font-size: var(--fs-sm);
-    cursor: pointer;
 }
 
-.dim-picker-item:hover {
-    background: var(--gray-100);
-}
-
-.dim-picker-item span:nth-child(2) {
+.dim-picker-item span:first-child {
     flex: 1;
     font-weight: 600;
+}
+
+.dim-picker-remove {
+    background: none;
+    border: none;
+    color: var(--color-danger);
+    cursor: pointer;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+}
+
+.dim-picker-remove:hover {
+    background: var(--color-danger-light);
 }
 
 /* Modal de elección (importar: sustituir / incremental) */

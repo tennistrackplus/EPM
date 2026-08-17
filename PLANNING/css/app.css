@@ -466,6 +466,13 @@ body {
     margin-top: 10px;
 }
 
+.values-grid-wrap--modal {
+    max-height: none;
+    flex: 1;
+    min-height: 0;
+    margin-top: 0;
+}
+
 table.values-grid {
     border-collapse: collapse;
     width: 100%;
@@ -522,6 +529,15 @@ table.values-grid td input:focus {
 }
 
 .values-row-remove button:hover { background: var(--color-danger-light); border-radius: var(--radius-sm); }
+
+table.values-grid tr.duplicate-row td {
+    background: var(--color-danger-light);
+}
+
+table.values-grid tr.duplicate-row td input {
+    color: var(--color-danger);
+    font-weight: 600;
+}
 
 /* ---------- Editor de jerarquías ---------- */
 .hier-chip-list {
