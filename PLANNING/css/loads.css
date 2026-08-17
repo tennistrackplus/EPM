@@ -1,0 +1,350 @@
+/* ==========================================================
+   DRACO PLANNING — CARGAS DE DATOS (MOCKUP)
+   ========================================================== */
+
+.mock-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 7px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: var(--color-warning);
+    background-color: var(--color-warning-light);
+    border-radius: var(--radius-pill);
+    vertical-align: middle;
+}
+
+/* ---------- Toolbar de filtro ---------- */
+.loads-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+}
+
+.loads-toolbar label {
+    font-size: var(--fs-sm);
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.loads-toolbar select {
+    min-width: 220px;
+}
+
+/* ---------- Agrupación por cubo ---------- */
+.load-cube-group {
+    margin-bottom: 18px;
+}
+
+.load-cube-group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background-color: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-bottom: none;
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    font-size: var(--fs-base);
+}
+
+.load-cube-group .data-list {
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+.load-cube-group .data-list table {
+    border-top: none;
+}
+
+.module-empty--inline {
+    padding: 14px 10px;
+    text-align: left;
+    border: 1px solid var(--border-subtle);
+    border-top: none;
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+/* ---------- Cabecera del formulario (nombre / cubo / origen) ---------- */
+.load-form-top {
+    display: flex;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding-bottom: 4px;
+}
+
+.load-form-top .form-group {
+    flex: 1;
+    min-width: 200px;
+    margin-bottom: 0;
+}
+
+.segmented {
+    display: inline-flex;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.segmented-btn {
+    border: none;
+    background-color: var(--surface-card);
+    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    padding: 7px 16px;
+    cursor: pointer;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.segmented-btn + .segmented-btn {
+    border-left: 1px solid var(--border-default);
+}
+
+.segmented-btn.active {
+    background-color: var(--brand-primary);
+    color: var(--text-inverse);
+}
+
+/* ---------- Panel de origen (tabla / fichero) ---------- */
+.load-origin-panel {
+    background-color: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 12px;
+    margin: 4px 0 10px;
+}
+
+.load-origin-row {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: flex-end;
+}
+
+.load-origin-row + .load-origin-row {
+    margin-top: 10px;
+}
+
+.load-origin-row .form-group {
+    margin-bottom: 0;
+    min-width: 140px;
+}
+
+.load-origin-row--file .form-group {
+    flex: 1;
+}
+
+.load-table-picker {
+    display: flex;
+    gap: 6px;
+}
+
+.load-table-picker input {
+    flex: 1;
+    background-color: var(--surface-card);
+}
+
+/* ---------- Toolbar de funciones (input/output/código) ---------- */
+.load-fn-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 0;
+    border-top: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 10px;
+}
+
+.load-fn-toolbar-spacer {
+    flex: 1;
+}
+
+#mappingModeHint {
+    color: var(--color-warning);
+    font-weight: 600;
+}
+
+/* ---------- Columnas de mapeo (input / output) ---------- */
+.load-mapping-cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    flex: 1;
+    min-height: 0;
+}
+
+.load-mapping-col {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.load-mapping-col-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    background-color: var(--surface-sunken);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--fs-sm);
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+
+.load-input-fields,
+.load-output-fields {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.load-mapping-cols.is-code-mode .load-output-fields {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
+/* ---------- Filas de campos de entrada ---------- */
+.load-input-field-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 6px;
+    background-color: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    cursor: grab;
+}
+
+.load-input-field-row.dragging {
+    opacity: 0.4;
+}
+
+.load-drag-handle {
+    color: var(--text-muted);
+    font-size: 13px;
+    cursor: grab;
+}
+
+.load-field-name {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-sm);
+}
+
+.load-field-type {
+    font-size: var(--fs-xs);
+    max-width: 100px;
+}
+
+/* ---------- Filas de campos de salida ---------- */
+.load-output-field-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 8px;
+    background-color: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+}
+
+.load-output-field-name {
+    flex: 0 0 30%;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.load-map-type {
+    flex: 0 0 130px;
+    font-size: var(--fs-xs);
+}
+
+.load-map-target {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+    padding: 5px 8px;
+    border-radius: var(--radius-sm);
+    border: 1px dashed transparent;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.load-map-target.is-dropzone {
+    border-color: var(--border-default);
+    background-color: var(--surface-sunken);
+}
+
+.load-map-target code {
+    background: none;
+    color: var(--text-secondary);
+}
+
+.load-map-empty {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+/* ---------- Editor de código Python (mockup) ---------- */
+.code-editor-area {
+    width: 100%;
+    min-height: 320px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    background-color: var(--gray-900);
+    color: #D6E2F0;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-md);
+    padding: 12px;
+    resize: vertical;
+    tab-size: 4;
+}
+
+/* ---------- Editor de fórmula ---------- */
+.formula-editor-cols {
+    display: flex;
+    gap: 14px;
+    margin-top: 10px;
+}
+
+.formula-editor-col {
+    flex: 1;
+    min-width: 0;
+}
+
+.formula-fn-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.formula-fn-group-title {
+    display: block;
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    margin-bottom: 4px;
+}
+
+.formula-fn-list,
+.formula-field-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
