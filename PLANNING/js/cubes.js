@@ -35,7 +35,7 @@ const Cubes = {
     },
 
     async loadDimensions() {
-        const sql = `SELECT DIMENSION_ID, DIMENSION, TABLA, CAMPOS_JSON
+        const sql = `SELECT DIMENSION_ID, DIMENSION, DESCRIPCION, TABLA, CAMPOS_JSON
                      FROM ${Provider.qualifyControl("DIMENSIONES")}
                      WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
                      ORDER BY DIMENSION`;

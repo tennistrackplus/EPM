@@ -241,11 +241,17 @@ const UI = {
                             </div>
                             <div class="form-group">
                                 <label>Dimensiones</label>
-                                <div class="dim-add-row">
-                                    <select id="cuboDimSelect"></select>
-                                    <button type="button" class="btn btn-secondary btn-sm" id="cuboDimAdd">+ Añadir dimensión</button>
+                                <div class="fields-builder">
+                                    <div class="fields-builder-header" style="grid-template-columns: 1fr;">
+                                        <span>Dimensiones añadidas al cubo</span>
+                                    </div>
+                                    <div class="fields-builder-rows">
+                                        <div class="dim-picker" id="cuboFormDims"></div>
+                                    </div>
+                                    <div class="fields-builder-footer">
+                                        <button type="button" class="btn btn-secondary btn-sm" id="cuboDimAddBtn">+ Añadir dimensión</button>
+                                    </div>
                                 </div>
-                                <div class="dim-picker" id="cuboFormDims"></div>
                             </div>
                             <div class="form-group">
                                 <label>Medidas</label>
@@ -270,22 +276,12 @@ const UI = {
 
             const rowsContainer = overlay.querySelector("#cuboFormRows");
             const dimsList = overlay.querySelector("#cuboFormDims");
-            const dimSelect = overlay.querySelector("#cuboDimSelect");
             const nameInput = overlay.querySelector("#cuboFormName");
 
             // Estado local: dimensiones ya añadidas al cubo (se va construyendo con "+ Añadir dimensión")
             let addedIds = dimensionsList.length
                 ? dimensionsList.filter(d => selectedDimensionIds.includes(d.DIMENSION_ID)).map(d => d.DIMENSION_ID)
                 : [];
-
-            const renderDimSelect = () => {
-                const available = dimensionsList.filter(d => !addedIds.includes(d.DIMENSION_ID));
-                dimSelect.innerHTML = available.length
-                    ? available.map(d => `<option value="${d.DIMENSION_ID}">${UI.escapeHtml(d.DIMENSION)}</option>`).join("")
-                    : `<option value="">No quedan más dimensiones</option>`;
-                dimSelect.disabled = !available.length;
-                document.getElementById("cuboDimAdd").disabled = !available.length;
-            };
 
             const renderDimsList = () => {
                 dimsList.innerHTML = addedIds.length
@@ -304,20 +300,20 @@ const UI = {
                 dimsList.querySelectorAll("[data-remove-dim]").forEach(btn => {
                     btn.addEventListener("click", () => {
                         addedIds = addedIds.filter(id => id !== btn.dataset.removeDim);
-                        renderDimSelect();
                         renderDimsList();
                     });
                 });
             };
 
-            overlay.querySelector("#cuboDimAdd").onclick = () => {
-                if (!dimSelect.value) return;
-                addedIds.push(dimSelect.value);
-                renderDimSelect();
+            const addBtn = overlay.querySelector("#cuboDimAddBtn");
+            addBtn.onclick = async () => {
+                const picked = await UI.openDimensionPickerModal({ dimensionsList, excludeIds: addedIds });
+                if (!picked) return;
+                addedIds.push(picked);
                 renderDimsList();
             };
+            addBtn.disabled = !dimensionsList.length;
 
-            renderDimSelect();
             renderDimsList();
 
             const addRow = (f) => rowsContainer.appendChild(UI._fieldRow(f, { showKey: false }));
@@ -409,6 +405,77 @@ const UI = {
             overlay.querySelectorAll("[data-choice]").forEach(btn => {
                 btn.onclick = () => cleanup(btn.dataset.choice);
             });
+        });
+    },
+
+    /**
+     * Popup de selección de una dimensión con buscador + tabla (Dimensión / Descripción).
+     * Pensado para proyectos con muchas dimensiones (fácil de encontrar por texto).
+     * Devuelve una Promise<dimensionId|null>.
+     */
+    openDimensionPickerModal({ dimensionsList = [], excludeIds = [] }) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("dimPickerModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "dimPickerModal";
+                document.body.appendChild(overlay);
+            }
+
+            const available = dimensionsList.filter(d => !excludeIds.includes(d.DIMENSION_ID));
+
+            overlay.innerHTML = `
+                <div class="modal-box modal-wide">
+                    <div class="modal-header">
+                        <h3>Seleccionar dimensión</h3>
+                        <button class="modal-close" id="dimPickerClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <input type="text" id="dimPickerSearch" class="dim-picker-search" placeholder="Buscar por nombre o descripción...">
+                        <div class="dim-picker-table-wrap">
+                            <table class="dim-picker-table">
+                                <thead><tr><th>Dimensión</th><th>Descripción</th></tr></thead>
+                                <tbody id="dimPickerRows"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>`;
+
+            const searchInput = overlay.querySelector("#dimPickerSearch");
+            const rowsEl = overlay.querySelector("#dimPickerRows");
+
+            const cleanup = (result) => {
+                overlay.classList.remove("visible");
+                resolve(result);
+            };
+
+            const renderRows = (filterText = "") => {
+                const f = filterText.trim().toLowerCase();
+                const filtered = !f ? available : available.filter(d =>
+                    (d.DIMENSION || "").toLowerCase().includes(f) || (d.DESCRIPCION || "").toLowerCase().includes(f));
+
+                rowsEl.innerHTML = filtered.length
+                    ? filtered.map(d => `
+                        <tr data-pick="${d.DIMENSION_ID}">
+                            <td><strong>${UI.escapeHtml(d.DIMENSION)}</strong></td>
+                            <td>${UI.escapeHtml(d.DESCRIPCION || "—")}</td>
+                        </tr>`).join("")
+                    : `<tr><td colspan="2" class="dim-picker-empty">${available.length ? "Sin resultados para esa búsqueda." : "No quedan más dimensiones por añadir."}</td></tr>`;
+
+                rowsEl.querySelectorAll("[data-pick]").forEach(tr => {
+                    tr.addEventListener("click", () => cleanup(tr.dataset.pick));
+                });
+            };
+
+            searchInput.value = "";
+            searchInput.oninput = () => renderRows(searchInput.value);
+            renderRows();
+
+            overlay.classList.add("visible");
+            setTimeout(() => searchInput.focus(), 50);
+
+            overlay.querySelector("#dimPickerClose").onclick = () => cleanup(null);
         });
     },
 
