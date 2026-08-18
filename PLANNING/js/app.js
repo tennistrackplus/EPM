@@ -212,10 +212,10 @@ const Draco = {
             dimensiones: () => Dimensions.render(container, this.currentProject),
             cubos: () => Cubes.render(container, this.currentProject),
             cargas: () => Loads.render(container, this.currentProject),
+            "flujos-carga": () => Flows.render(container, this.currentProject),
         };
 
         const labels = {
-            "flujos-carga": ["Flujos de carga", "⇉"],
             funciones: ["Funciones", "ƒ"],
             "flujos-proceso": ["Flujos de proceso", "⟲"],
             workflows: ["Workflows", "⛓"],
@@ -255,12 +255,16 @@ const Draco = {
             return;
         }
 
+        let loadsCount = 0, flowsCount = 0;
+        try { loadsCount = (JSON.parse(localStorage.getItem(`draco_mock_loads_${pid}`) || "[]")).length; } catch (e) { loadsCount = 0; }
+        try { flowsCount = (JSON.parse(localStorage.getItem(`draco_mock_flows_${pid}`) || "[]")).length; } catch (e) { flowsCount = 0; }
+
         const steps = [
             { done: true, title: "Crear proyecto", desc: `Proyecto "${this.currentProject.PROYECTO}" creado` },
             { done: dimCount > 0, title: "Definir dimensiones", desc: dimCount > 0 ? `${dimCount} dimensión(es) definida(s)` : "Aún no has creado ninguna dimensión" },
             { done: cuboCount > 0, title: "Definir cubos", desc: cuboCount > 0 ? `${cuboCount} cubo(s) definido(s)` : "Aún no has creado ningún cubo" },
-            { done: false, title: "Configurar cargas de datos", desc: "Próximamente" },
-            { done: false, title: "Diseñar flujos de carga", desc: "Próximamente" },
+            { done: loadsCount > 0, title: "Configurar interfaces", desc: loadsCount > 0 ? `${loadsCount} interfaz(ces) definida(s)` : "Aún no has creado ninguna interfaz" },
+            { done: flowsCount > 0, title: "Diseñar flujos de carga", desc: flowsCount > 0 ? `${flowsCount} flujo(s) definido(s)` : "Aún no has creado ningún flujo" },
             { done: false, title: "Definir workflows y roles", desc: "Próximamente" }
         ];
 

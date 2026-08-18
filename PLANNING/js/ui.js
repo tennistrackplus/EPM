@@ -522,6 +522,94 @@ const UI = {
     },
 
     /**
+     * Popup de filtro para un campo de entrada: permite elegir si el filtro
+     * se resuelve por una constante (con valor) o por una variable (por
+     * ahora solo se guarda que es de tipo variable, sin catálogo todavía).
+     * Devuelve Promise<{type, value}|"remove"|null>.
+     */
+    openFilterFieldModal({ title = "Filtro de campo", fieldName = "", current = null }) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("filterFieldModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "filterFieldModal";
+                document.body.appendChild(overlay);
+            }
+
+            let type = current && current.type ? current.type : "constante";
+            let value = current && current.type === "constante" ? (current.value || "") : "";
+
+            const renderBody = () => {
+                const valueBlock = type === "constante"
+                    ? `<div class="form-group">
+                            <label>Valor constante</label>
+                            <input type="text" id="filterFieldValue" placeholder="Ej. 2024" value="${UI.escapeHtml(value)}">
+                       </div>`
+                    : `<p class="form-hint">Filtro por variable: la selección del catálogo de variables se desarrollará más adelante. Por ahora solo se guarda que el campo se filtra por variable.</p>`;
+
+                overlay.innerHTML = `
+                    <div class="modal-box">
+                        <div class="modal-header">
+                            <div>
+                                <h3>${UI.escapeHtml(title)}</h3>
+                                ${fieldName ? `<span class="modal-subtitle">${UI.escapeHtml(fieldName)}</span>` : ""}
+                            </div>
+                            <button class="modal-close" id="filterFieldClose">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="form-group">
+                                <label>Tipo de filtro</label>
+                                <div class="segmented" id="filterFieldType">
+                                    <button type="button" class="segmented-btn ${type === "constante" ? "active" : ""}" data-ftype="constante">Constante</button>
+                                    <button type="button" class="segmented-btn ${type === "variable" ? "active" : ""}" data-ftype="variable">Variable</button>
+                                </div>
+                            </div>
+                            ${valueBlock}
+                        </div>
+                        <div class="modal-footer">
+                            ${current ? `<button class="btn btn-secondary" id="filterFieldRemove">Quitar filtro</button><span class="load-fn-toolbar-spacer"></span>` : ""}
+                            <button class="btn btn-secondary" id="filterFieldCancel">Cancelar</button>
+                            <button class="btn btn-primary" id="filterFieldSave">Guardar</button>
+                        </div>
+                    </div>`;
+
+                overlay.querySelectorAll("#filterFieldType [data-ftype]").forEach(btn => {
+                    btn.addEventListener("click", () => {
+                        if (btn.dataset.ftype === type) return;
+                        if (type === "constante") {
+                            const valInput = overlay.querySelector("#filterFieldValue");
+                            if (valInput) value = valInput.value;
+                        }
+                        type = btn.dataset.ftype;
+                        renderBody();
+                    });
+                });
+
+                const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+                overlay.querySelector("#filterFieldClose").onclick = () => cleanup(null);
+                overlay.querySelector("#filterFieldCancel").onclick = () => cleanup(null);
+                const removeBtn = overlay.querySelector("#filterFieldRemove");
+                if (removeBtn) removeBtn.onclick = () => cleanup("remove");
+                overlay.querySelector("#filterFieldSave").onclick = () => {
+                    if (type === "constante") {
+                        const valInput = overlay.querySelector("#filterFieldValue");
+                        cleanup({ type: "constante", value: valInput ? valInput.value : "" });
+                    } else {
+                        cleanup({ type: "variable", value: "" });
+                    }
+                };
+
+                const focusInput = overlay.querySelector("#filterFieldValue");
+                if (focusInput) setTimeout(() => { focusInput.focus(); focusInput.select(); }, 50);
+            };
+
+            renderBody();
+            overlay.classList.add("visible");
+        });
+    },
+
+    /**
      * Editor de código Python (mockup, sin ejecución real). Reutilizado para
      * las funciones "cambiar datos input/output", mapeo por código y función
      * de campo. Devuelve Promise<string|null>.
@@ -705,6 +793,432 @@ const UI = {
             setTimeout(() => searchInput.focus(), 50);
             overlay.querySelector("#tablePickerClose").onclick = () => cleanup(null);
         });
+    },
+
+    // ==========================================================
+    // Modales específicos de FLUJOS DE CARGA
+    // ==========================================================
+
+    /**
+     * Planificador de ejecución para flujos automáticos. Devuelve
+     * Promise<schedule|"remove"|null>.
+     */
+    openScheduleModal({ current = null } = {}) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("scheduleModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "scheduleModal";
+                document.body.appendChild(overlay);
+            }
+
+            const s = Object.assign({
+                startDate: "", startTime: "06:00", repeat: "ninguna",
+                weekDays: [], dayOfMonth: 1, intervalValue: 1, intervalUnit: "horas", active: true
+            }, current || {});
+
+            const weekDayLabels = ["L", "M", "X", "J", "V", "S", "D"];
+
+            const renderBody = () => {
+                overlay.innerHTML = `
+                    <div class="modal-box">
+                        <div class="modal-header">
+                            <h3>Planificar ejecución</h3>
+                            <button class="modal-close" id="scheduleClose">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="load-origin-row">
+                                <div class="form-group">
+                                    <label>Fecha de inicio</label>
+                                    <input type="date" id="schedDate" value="${UI.escapeHtml(s.startDate)}">
+                                </div>
+                                <div class="form-group">
+                                    <label>Hora de inicio</label>
+                                    <input type="time" id="schedTime" value="${UI.escapeHtml(s.startTime)}">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Repetición</label>
+                                <select id="schedRepeat">
+                                    <option value="ninguna" ${s.repeat === "ninguna" ? "selected" : ""}>No repetir (una sola vez)</option>
+                                    <option value="diaria" ${s.repeat === "diaria" ? "selected" : ""}>Diaria</option>
+                                    <option value="semanal" ${s.repeat === "semanal" ? "selected" : ""}>Semanal</option>
+                                    <option value="mensual" ${s.repeat === "mensual" ? "selected" : ""}>Mensual</option>
+                                    <option value="personalizada" ${s.repeat === "personalizada" ? "selected" : ""}>Personalizada (cada X)</option>
+                                </select>
+                            </div>
+                            ${s.repeat === "semanal" ? `
+                                <div class="form-group">
+                                    <label>Días de la semana</label>
+                                    <div class="weekday-picker" id="schedWeekDays">
+                                        ${weekDayLabels.map((d, i) => `<button type="button" class="weekday-btn ${s.weekDays.includes(i) ? "active" : ""}" data-day="${i}">${d}</button>`).join("")}
+                                    </div>
+                                </div>` : ""}
+                            ${s.repeat === "mensual" ? `
+                                <div class="form-group">
+                                    <label>Día del mes</label>
+                                    <input type="number" id="schedDayOfMonth" min="1" max="31" value="${s.dayOfMonth}">
+                                </div>` : ""}
+                            ${s.repeat === "personalizada" ? `
+                                <div class="load-origin-row">
+                                    <div class="form-group">
+                                        <label>Cada</label>
+                                        <input type="number" id="schedIntervalValue" min="1" value="${s.intervalValue}">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Unidad</label>
+                                        <select id="schedIntervalUnit">
+                                            <option value="minutos" ${s.intervalUnit === "minutos" ? "selected" : ""}>Minutos</option>
+                                            <option value="horas" ${s.intervalUnit === "horas" ? "selected" : ""}>Horas</option>
+                                            <option value="dias" ${s.intervalUnit === "dias" ? "selected" : ""}>Días</option>
+                                        </select>
+                                    </div>
+                                </div>` : ""}
+                            <div class="form-group form-group--check">
+                                <label><input type="checkbox" id="schedActive" ${s.active ? "checked" : ""}> Planificación activa</label>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            ${current ? `<button class="btn btn-secondary" id="schedRemove">Quitar planificación</button><span class="load-fn-toolbar-spacer"></span>` : ""}
+                            <button class="btn btn-secondary" id="schedCancel">Cancelar</button>
+                            <button class="btn btn-primary" id="schedSave">Guardar</button>
+                        </div>
+                    </div>`;
+
+                const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+                overlay.querySelector("#scheduleClose").onclick = () => cleanup(null);
+                overlay.querySelector("#schedCancel").onclick = () => cleanup(null);
+                const removeBtn = overlay.querySelector("#schedRemove");
+                if (removeBtn) removeBtn.onclick = () => cleanup("remove");
+
+                overlay.querySelector("#schedRepeat").addEventListener("change", (e) => {
+                    s.repeat = e.target.value;
+                    syncFromInputs();
+                    renderBody();
+                });
+
+                const weekWrap = overlay.querySelector("#schedWeekDays");
+                if (weekWrap) {
+                    weekWrap.querySelectorAll("[data-day]").forEach(btn => {
+                        btn.addEventListener("click", () => {
+                            const day = parseInt(btn.dataset.day, 10);
+                            const idx = s.weekDays.indexOf(day);
+                            if (idx >= 0) s.weekDays.splice(idx, 1); else s.weekDays.push(day);
+                            btn.classList.toggle("active");
+                        });
+                    });
+                }
+
+                const syncFromInputs = () => {
+                    s.startDate = overlay.querySelector("#schedDate").value;
+                    s.startTime = overlay.querySelector("#schedTime").value;
+                    const dom = overlay.querySelector("#schedDayOfMonth");
+                    if (dom) s.dayOfMonth = parseInt(dom.value, 10) || 1;
+                    const iv = overlay.querySelector("#schedIntervalValue");
+                    if (iv) s.intervalValue = parseInt(iv.value, 10) || 1;
+                    const iu = overlay.querySelector("#schedIntervalUnit");
+                    if (iu) s.intervalUnit = iu.value;
+                    s.active = overlay.querySelector("#schedActive").checked;
+                };
+
+                overlay.querySelector("#schedSave").onclick = () => {
+                    syncFromInputs();
+                    if (!s.startDate) { UI.toast("Indica una fecha de inicio.", "error"); return; }
+                    cleanup({ ...s });
+                };
+            };
+
+            renderBody();
+            overlay.classList.add("visible");
+        });
+    },
+
+    /**
+     * Selector de interfaz (carga de datos) para añadir a la cadena de un
+     * flujo. Devuelve Promise<interfaceObj|null>.
+     */
+    openInterfacePickerModal({ interfaces = [], cubeNameById = {} }) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("interfacePickerModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "interfacePickerModal";
+                document.body.appendChild(overlay);
+            }
+
+            overlay.innerHTML = `
+                <div class="modal-box modal-wide">
+                    <div class="modal-header">
+                        <h3>Añadir interfaz a la cadena</h3>
+                        <button class="modal-close" id="ifacePickerClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <input type="text" id="ifacePickerSearch" class="dim-picker-search" placeholder="Buscar interfaz...">
+                        <div class="dim-picker-table-wrap">
+                            <table class="dim-picker-table">
+                                <thead><tr><th>Interfaz</th><th>Cubo</th><th>Origen</th></tr></thead>
+                                <tbody id="ifacePickerRows"></tbody>
+                            </table>
+                        </div>
+                        <p class="form-hint">La misma interfaz se puede añadir varias veces a la cadena.</p>
+                    </div>
+                </div>`;
+
+            const searchInput = overlay.querySelector("#ifacePickerSearch");
+            const rowsEl = overlay.querySelector("#ifacePickerRows");
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+
+            const renderRows = (filterText = "") => {
+                const f = filterText.trim().toLowerCase();
+                const filtered = !f ? interfaces : interfaces.filter(i => i.name.toLowerCase().includes(f));
+                rowsEl.innerHTML = filtered.length
+                    ? filtered.map((i, idx) => `
+                        <tr data-pick="${idx}">
+                            <td><strong>${UI.escapeHtml(i.name)}</strong></td>
+                            <td>${UI.escapeHtml(cubeNameById[i.cuboId] || "—")}</td>
+                            <td><span class="table-tag">${i.originType === "tabla" ? "Tabla" : "Fichero"}</span></td>
+                        </tr>`).join("")
+                    : `<tr><td colspan="3" class="dim-picker-empty">${interfaces.length ? "Sin resultados." : "Todavía no hay interfaces creadas."}</td></tr>`;
+                rowsEl.querySelectorAll("[data-pick]").forEach(tr => {
+                    tr.addEventListener("click", () => cleanup(filtered[parseInt(tr.dataset.pick, 10)]));
+                });
+            };
+
+            searchInput.value = "";
+            searchInput.oninput = () => renderRows(searchInput.value);
+            renderRows();
+
+            overlay.classList.add("visible");
+            setTimeout(() => searchInput.focus(), 50);
+            overlay.querySelector("#ifacePickerClose").onclick = () => cleanup(null);
+        });
+    },
+
+    /**
+     * Popup para asignar el valor de un "target" del bloque de mapeo de un
+     * flujo (variables de fichero / filtro / mapeo de cada paso de la
+     * cadena): por constante, o por una variable de la pantalla (si el
+     * flujo es manual y hay variables definidas). Devuelve
+     * Promise<{type,value}|"remove"|null>.
+     */
+    openFlowTargetModal({ title = "Asignar valor", targetLabel = "", screenVariables = [], current = null }) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("flowTargetModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "flowTargetModal";
+                document.body.appendChild(overlay);
+            }
+
+            const hasVars = screenVariables.length > 0;
+            let type = current && current.type === "variable" && hasVars ? "variable" : "constante";
+            let constValue = current && current.type === "constante" ? (current.value || "") : "";
+            let varValue = current && current.type === "variable" ? (current.value || "") : (hasVars ? screenVariables[0].name : "");
+
+            const renderBody = () => {
+                const valueBlock = type === "constante"
+                    ? `<div class="form-group">
+                            <label>Valor constante</label>
+                            <input type="text" id="flowTargetValue" value="${UI.escapeHtml(constValue)}">
+                       </div>`
+                    : `<div class="form-group">
+                            <label>Variable de pantalla</label>
+                            <select id="flowTargetVar">
+                                ${screenVariables.map(v => `<option value="${UI.escapeHtml(v.name)}" ${v.name === varValue ? "selected" : ""}>${UI.escapeHtml(v.label || v.name)}</option>`).join("")}
+                            </select>
+                       </div>`;
+
+                overlay.innerHTML = `
+                    <div class="modal-box">
+                        <div class="modal-header">
+                            <div>
+                                <h3>${UI.escapeHtml(title)}</h3>
+                                ${targetLabel ? `<span class="modal-subtitle">${UI.escapeHtml(targetLabel)}</span>` : ""}
+                            </div>
+                            <button class="modal-close" id="flowTargetClose">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            ${hasVars ? `
+                                <div class="form-group">
+                                    <label>Origen del valor</label>
+                                    <div class="segmented" id="flowTargetType">
+                                        <button type="button" class="segmented-btn ${type === "constante" ? "active" : ""}" data-vtype="constante">Constante</button>
+                                        <button type="button" class="segmented-btn ${type === "variable" ? "active" : ""}" data-vtype="variable">Variable</button>
+                                    </div>
+                                </div>` : `<p class="form-hint">Flujo sin pantalla: el valor solo se puede fijar por constante.</p>`}
+                            ${valueBlock}
+                        </div>
+                        <div class="modal-footer">
+                            ${current ? `<button class="btn btn-secondary" id="flowTargetRemove">Quitar</button><span class="load-fn-toolbar-spacer"></span>` : ""}
+                            <button class="btn btn-secondary" id="flowTargetCancel">Cancelar</button>
+                            <button class="btn btn-primary" id="flowTargetSave">Guardar</button>
+                        </div>
+                    </div>`;
+
+                const typeWrap = overlay.querySelector("#flowTargetType");
+                if (typeWrap) {
+                    typeWrap.querySelectorAll("[data-vtype]").forEach(btn => {
+                        btn.addEventListener("click", () => {
+                            if (btn.dataset.vtype === type) return;
+                            if (type === "constante") { const i = overlay.querySelector("#flowTargetValue"); if (i) constValue = i.value; }
+                            else { const s = overlay.querySelector("#flowTargetVar"); if (s) varValue = s.value; }
+                            type = btn.dataset.vtype;
+                            renderBody();
+                        });
+                    });
+                }
+
+                const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+                overlay.querySelector("#flowTargetClose").onclick = () => cleanup(null);
+                overlay.querySelector("#flowTargetCancel").onclick = () => cleanup(null);
+                const removeBtn = overlay.querySelector("#flowTargetRemove");
+                if (removeBtn) removeBtn.onclick = () => cleanup("remove");
+                overlay.querySelector("#flowTargetSave").onclick = () => {
+                    if (type === "constante") {
+                        const i = overlay.querySelector("#flowTargetValue");
+                        cleanup({ type: "constante", value: i ? i.value : "" });
+                    } else {
+                        const s = overlay.querySelector("#flowTargetVar");
+                        cleanup({ type: "variable", value: s ? s.value : "" });
+                    }
+                };
+
+                const focusInput = overlay.querySelector("#flowTargetValue");
+                if (focusInput) setTimeout(() => { focusInput.focus(); focusInput.select(); }, 50);
+            };
+
+            renderBody();
+            overlay.classList.add("visible");
+        });
+    },
+
+    /**
+     * Alta/edición de una variable de pantalla (nombre técnico, etiqueta y
+     * tipo). Devuelve Promise<{name,label,type}|null>.
+     */
+    openScreenVariableModal({ current = null } = {}) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("screenVarModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "screenVarModal";
+                document.body.appendChild(overlay);
+            }
+
+            const v = Object.assign({ name: "", label: "", type: "STRING" }, current || {});
+
+            overlay.innerHTML = `
+                <div class="modal-box">
+                    <div class="modal-header">
+                        <h3>${current ? "Editar variable" : "Nueva variable"}</h3>
+                        <button class="modal-close" id="svClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label>Nombre técnico</label>
+                            <input type="text" id="svName" placeholder="ej. fecha_desde" value="${UI.escapeHtml(v.name)}">
+                        </div>
+                        <div class="form-group">
+                            <label>Etiqueta en pantalla</label>
+                            <input type="text" id="svLabel" placeholder="ej. Fecha desde" value="${UI.escapeHtml(v.label)}">
+                        </div>
+                        <div class="form-group">
+                            <label>Tipo</label>
+                            <select id="svType">
+                                ${UI.FIELD_TYPES.map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" id="svCancel">Cancelar</button>
+                        <button class="btn btn-primary" id="svSave">Guardar</button>
+                    </div>
+                </div>`;
+
+            overlay.classList.add("visible");
+            const nameInput = overlay.querySelector("#svName");
+            setTimeout(() => { nameInput.focus(); }, 50);
+
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+            overlay.querySelector("#svClose").onclick = () => cleanup(null);
+            overlay.querySelector("#svCancel").onclick = () => cleanup(null);
+            overlay.querySelector("#svSave").onclick = () => {
+                const name = overlay.querySelector("#svName").value.trim();
+                const label = overlay.querySelector("#svLabel").value.trim();
+                const type = overlay.querySelector("#svType").value;
+                if (!name) { UI.toast("Indica un nombre técnico para la variable.", "error"); return; }
+                cleanup({ name, label: label || name, type });
+            };
+        });
+    },
+
+    /**
+     * Editor de texto explicativo con formato mínimo (negrita/cursiva vía
+     * marcadores tipo markdown). Devuelve Promise<string|null>.
+     */
+    openScreenTextModal({ current = "" } = {}) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("screenTextModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "screenTextModal";
+                document.body.appendChild(overlay);
+            }
+
+            overlay.innerHTML = `
+                <div class="modal-box modal-wide">
+                    <div class="modal-header">
+                        <h3>Texto explicativo</h3>
+                        <button class="modal-close" id="stClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="load-fn-toolbar" style="border:none; padding:0 0 8px;">
+                            <button type="button" class="btn btn-secondary btn-sm" id="stBold"><strong>N</strong></button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="stItalic"><em>K</em></button>
+                            <span class="form-hint">Selecciona texto y pulsa N / K para aplicar negrita o cursiva.</span>
+                        </div>
+                        <textarea id="stArea" rows="6" style="width:100%; font-family:inherit; font-size:var(--fs-base); padding:8px 10px; border:1px solid var(--border-default); border-radius:var(--radius-sm);">${UI.escapeHtml(current)}</textarea>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" id="stCancel">Cancelar</button>
+                        <button class="btn btn-primary" id="stSave">Guardar</button>
+                    </div>
+                </div>`;
+
+            overlay.classList.add("visible");
+            const area = overlay.querySelector("#stArea");
+            setTimeout(() => area.focus(), 50);
+
+            const wrapSelection = (marker) => {
+                const start = area.selectionStart, end = area.selectionEnd;
+                const text = area.value;
+                const selected = text.slice(start, end) || "texto";
+                area.value = text.slice(0, start) + marker + selected + marker + text.slice(end);
+                area.focus();
+                area.selectionStart = start + marker.length;
+                area.selectionEnd = start + marker.length + selected.length;
+            };
+            overlay.querySelector("#stBold").onclick = () => wrapSelection("**");
+            overlay.querySelector("#stItalic").onclick = () => wrapSelection("_");
+
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+            overlay.querySelector("#stClose").onclick = () => cleanup(null);
+            overlay.querySelector("#stCancel").onclick = () => cleanup(null);
+            overlay.querySelector("#stSave").onclick = () => cleanup(area.value);
+        });
+    },
+
+    /** Convierte marcadores **negrita** / _cursiva_ a HTML simple, escapando el resto. */
+    renderFormattedText(text) {
+        let html = UI.escapeHtml(text || "");
+        html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+        html = html.replace(/_(.+?)_/g, "<em>$1</em>");
+        return html.replace(/\n/g, "<br>");
     },
 
     /** Activa el comportamiento de maximizar/contraer para todos los .block de la página */

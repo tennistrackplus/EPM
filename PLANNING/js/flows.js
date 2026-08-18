@@ -1,0 +1,837 @@
+/**
+ * ============================================================
+ * DRACO PLANNING — FLUJOS DE CARGA (MOCKUP)
+ * ============================================================
+ * Listado de flujos (procesos) agrupados en "Automáticos" y
+ * "Manuales", con alta/edición en dos pasos:
+ *   1) Modal pequeño: nombre del proceso y tipo (automático/manual).
+ *   2) Modal a pantalla completa con 4 bloques:
+ *      A) Cabecera: nombre/tipo, y si es automático, planificación
+ *         y ejecución.
+ *      B) Cadena de interfaces (cargas de datos) a ejecutar, en
+ *         orden, sin bifurcaciones — se puede reordenar arrastrando.
+ *      C) Pantalla de entrada de variables (solo flujos manuales):
+ *         título, variables sueltas, agrupadas en "frames" y textos
+ *         explicativos con formato mínimo.
+ *      D) Mapeo: variables de fichero/filtro/mapeo de cada paso de
+ *         la cadena, asignadas por constante o arrastrando una
+ *         variable de pantalla (si el flujo es manual).
+ * Todo esto es, por ahora, MOCKUP: se guarda en localStorage, no
+ * en tablas de control reales. Lee las interfaces (cargas de datos)
+ * también desde localStorage, tal y como las guarda js/loads.js.
+ */
+const Flows = {
+    list: [],
+    interfaces: [],
+    cubes: [],
+    editing: null,
+    editingIsNew: true,
+    collapsed: { automatico: false, manual: false },
+    dragChainIdx: null,
+    dragBlockIdx: null,
+    dragScreenVar: null,
+
+    async render(container, project) {
+        this.container = container;
+        this.project = project;
+
+        container.innerHTML = `
+            <div class="module-header">
+                <div>
+                    <h3>Flujos de carga</h3>
+                    <p>Proyecto: ${UI.escapeHtml(project.PROYECTO)} · dataset ${project.DATASET} <span class="mock-badge">MOCKUP</span></p>
+                </div>
+                <button class="btn btn-primary btn-sm" id="btnNewFlow">+ Nuevo flujo</button>
+            </div>
+            <div id="flowsListWrap"><span class="spinner"></span></div>
+        `;
+
+        document.getElementById("btnNewFlow").addEventListener("click", () => this.openForm());
+
+        await this.loadInterfacesAndCubes();
+        this.loadMockList();
+        this.renderList();
+    },
+
+    // ------------------------------------------------------------
+    // Persistencia mockup (localStorage por proyecto)
+    // ------------------------------------------------------------
+    storageKey() {
+        return `draco_mock_flows_${this.project.PROYECTO_ID}`;
+    },
+
+    loadMockList() {
+        try {
+            this.list = JSON.parse(localStorage.getItem(this.storageKey()) || "[]");
+        } catch (e) {
+            this.list = [];
+        }
+    },
+
+    saveMockList() {
+        localStorage.setItem(this.storageKey(), JSON.stringify(this.list));
+    },
+
+    /** Interfaces (cargas de datos) y cubos del proyecto, para poder listarlas y leer sus campos. */
+    async loadInterfacesAndCubes() {
+        try {
+            this.interfaces = JSON.parse(localStorage.getItem(`draco_mock_loads_${this.project.PROYECTO_ID}`) || "[]");
+        } catch (e) {
+            this.interfaces = [];
+        }
+
+        try {
+            const sql = `SELECT CUBO_ID, CUBOS, CAMPOS_JSON
+                         FROM ${Provider.qualifyControl("CUBOS")}
+                         WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                         ORDER BY CUBOS`;
+            this.cubes = await Provider.runQuery(sql);
+        } catch (err) {
+            this.cubes = [];
+            UI.toast("Error al cargar los cubos: " + err.message, "error");
+        }
+    },
+
+    cubeNameById() {
+        const map = {};
+        this.cubes.forEach(c => { map[c.CUBO_ID] = c.CUBOS; });
+        return map;
+    },
+
+    cuboFields(cuboId) {
+        const cubo = this.cubes.find(c => c.CUBO_ID === cuboId);
+        if (!cubo) return [];
+        try {
+            const spec = JSON.parse(cubo.CAMPOS_JSON || "{}");
+            const dims = (spec.dimensions || []).map(d => ({ id: d.colId, name: d.name }));
+            const meas = (spec.measures || []).map(m => ({ id: Provider.toIdentifier(m.name), name: m.name }));
+            return [...dims, ...meas];
+        } catch (e) {
+            return [];
+        }
+    },
+
+    interfaceById(id) {
+        return this.interfaces.find(i => i.id === id);
+    },
+
+    // ------------------------------------------------------------
+    // Listado agrupado (automáticos / manuales), contraíble
+    // ------------------------------------------------------------
+    renderList() {
+        const wrap = document.getElementById("flowsListWrap");
+        if (!wrap) return;
+
+        const autos = this.list.filter(f => f.type === "automatico");
+        const manuals = this.list.filter(f => f.type === "manual");
+
+        wrap.innerHTML =
+            this.groupHtml("automatico", "Flujos automáticos", "⟲", autos) +
+            this.groupHtml("manual", "Flujos manuales", "☺", manuals);
+
+        wrap.querySelectorAll("[data-toggle-group]").forEach(btn => btn.addEventListener("click", () => {
+            const key = btn.dataset.toggleGroup;
+            this.collapsed[key] = !this.collapsed[key];
+            this.renderList();
+        }));
+        wrap.querySelectorAll("[data-edit-flow]").forEach(btn =>
+            btn.addEventListener("click", () => this.openForm(btn.dataset.editFlow)));
+        wrap.querySelectorAll("[data-del-flow]").forEach(btn =>
+            btn.addEventListener("click", () => this.remove(btn.dataset.delFlow)));
+    },
+
+    groupHtml(key, label, icon, items) {
+        const collapsed = this.collapsed[key];
+        return `
+            <div class="flow-group">
+                <button type="button" class="flow-group-header" data-toggle-group="${key}">
+                    <span class="flow-group-caret ${collapsed ? "is-collapsed" : ""}">▾</span>
+                    <span class="admin-menu-icon">${icon}</span>
+                    <strong>${label}</strong>
+                    <span class="col-type">${items.length} flujo${items.length === 1 ? "" : "s"}</span>
+                </button>
+                ${!collapsed ? (items.length ? `
+                    <div class="data-list">
+                        <table>
+                            <thead><tr><th>Flujo</th><th>Estado</th><th>Cadena</th><th></th></tr></thead>
+                            <tbody>
+                                ${items.map(f => `
+                                    <tr>
+                                        <td><strong>${UI.escapeHtml(f.name)}</strong></td>
+                                        <td>${this.statusHtml(f)}</td>
+                                        <td>${f.chain.length} paso${f.chain.length === 1 ? "" : "s"}</td>
+                                        <td>
+                                            <div class="row-actions">
+                                                <button data-edit-flow="${f.id}" title="Editar">✎</button>
+                                                <button data-del-flow="${f.id}" class="danger" title="Eliminar">🗑</button>
+                                            </div>
+                                        </td>
+                                    </tr>`).join("")}
+                            </tbody>
+                        </table>
+                    </div>` : `<div class="module-empty module-empty--inline">Todavía no hay flujos ${key === "automatico" ? "automáticos" : "manuales"}.</div>`) : ""}
+            </div>`;
+    },
+
+    statusHtml(f) {
+        if (f.type !== "automatico") return `<span class="table-tag">Manual</span>`;
+        if (f.schedule && f.schedule.active) return `<span class="table-tag flow-status-scheduled">⏱ Planificado</span>`;
+        return `<span class="table-tag">Sin planificar</span>`;
+    },
+
+    async remove(id) {
+        const flow = this.list.find(f => f.id === id);
+        if (!flow) return;
+        const ok = await UI.confirm("Eliminar flujo", `Se eliminará el flujo <strong>${UI.escapeHtml(flow.name)}</strong> (mockup, no afecta a ninguna ejecución real).`);
+        if (!ok) return;
+        this.list = this.list.filter(f => f.id !== id);
+        this.saveMockList();
+        this.renderList();
+        UI.toast(`Flujo "${flow.name}" eliminado.`, "success");
+    },
+
+    // ------------------------------------------------------------
+    // Datos "en blanco" de un flujo nuevo
+    // ------------------------------------------------------------
+    blankFlow() {
+        return {
+            id: Provider.newId(),
+            name: "",
+            type: "automatico",
+            schedule: null,
+            chain: [],
+            screen: { title: "", blocks: [] }
+        };
+    },
+
+    // ------------------------------------------------------------
+    // Paso 1: modal pequeño — nombre y tipo
+    // ------------------------------------------------------------
+    openBasicsModal(initial, isNew) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("flowBasicsModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "flowBasicsModal";
+                document.body.appendChild(overlay);
+            }
+
+            overlay.innerHTML = `
+                <div class="modal-box">
+                    <div class="modal-header">
+                        <h3>${isNew ? "Nuevo flujo" : "Datos básicos del flujo"}</h3>
+                        <button class="modal-close" id="flowBasicsClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label>Nombre del proceso</label>
+                            <input type="text" id="flowBasicsName" placeholder="Ej. Carga diaria ventas" value="${UI.escapeHtml(initial.name || "")}">
+                        </div>
+                        <div class="form-group">
+                            <label>Tipo de flujo</label>
+                            <div class="segmented" id="flowBasicsType">
+                                <button type="button" class="segmented-btn ${initial.type !== "manual" ? "active" : ""}" data-ftype="automatico">Automático</button>
+                                <button type="button" class="segmented-btn ${initial.type === "manual" ? "active" : ""}" data-ftype="manual">Manual</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" id="flowBasicsCancel">Cancelar</button>
+                        <button class="btn btn-primary" id="flowBasicsNext">Continuar</button>
+                    </div>
+                </div>`;
+
+            let type = initial.type === "manual" ? "manual" : "automatico";
+            overlay.querySelectorAll("#flowBasicsType [data-ftype]").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    type = btn.dataset.ftype;
+                    overlay.querySelectorAll("#flowBasicsType [data-ftype]").forEach(b => b.classList.toggle("active", b === btn));
+                });
+            });
+
+            overlay.classList.add("visible");
+            const nameInput = overlay.querySelector("#flowBasicsName");
+            setTimeout(() => { nameInput.focus(); nameInput.select(); }, 50);
+
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+            overlay.querySelector("#flowBasicsClose").onclick = () => cleanup(null);
+            overlay.querySelector("#flowBasicsCancel").onclick = () => cleanup(null);
+            overlay.querySelector("#flowBasicsNext").onclick = () => {
+                const name = nameInput.value.trim();
+                if (!name) { UI.toast("Indica un nombre para el flujo.", "error"); return; }
+                cleanup({ name, type });
+            };
+            nameInput.onkeydown = (e) => { if (e.key === "Enter") overlay.querySelector("#flowBasicsNext").click(); };
+        });
+    },
+
+    // ------------------------------------------------------------
+    // Orquesta los 2 pasos de alta/edición
+    // ------------------------------------------------------------
+    async openForm(editId = null) {
+        const existing = editId ? this.list.find(f => f.id === editId) : null;
+        this.editingIsNew = !existing;
+        const draft = existing ? JSON.parse(JSON.stringify(existing)) : this.blankFlow();
+
+        const basics = await this.openBasicsModal(draft, this.editingIsNew);
+        if (!basics) return;
+        Object.assign(draft, basics);
+
+        this.editing = draft;
+        this.openMainModal();
+    },
+
+    /** Reabre el paso 1 desde dentro del modal grande, sin perder cadena/pantalla/mapeo. */
+    async editBasicsInline() {
+        const basics = await this.openBasicsModal(this.editing, false);
+        if (!basics) return;
+        Object.assign(this.editing, basics);
+
+        this.updateModalHeader();
+        this.renderHeaderPart();
+        this.renderScreenBlock();
+        this.renderMappingBlock();
+    },
+
+    // ------------------------------------------------------------
+    // Paso 2: modal grande (4 bloques)
+    // ------------------------------------------------------------
+    openMainModal() {
+        let overlay = document.getElementById("flowFormModal");
+        if (!overlay) {
+            overlay = document.createElement("div");
+            overlay.className = "modal-overlay";
+            overlay.id = "flowFormModal";
+            document.body.appendChild(overlay);
+        }
+        this.overlay = overlay;
+
+        overlay.innerHTML = `
+            <div class="modal-box modal-full">
+                <div class="modal-header">
+                    <div>
+                        <h3 id="flowModalTitle"></h3>
+                        <span class="modal-subtitle" id="flowModalSubtitle"></span>
+                    </div>
+                    <div class="modal-header-right">
+                        <button class="btn btn-secondary btn-sm" id="btnEditFlowBasics">✎ Nombre / tipo</button>
+                        <button class="modal-close" id="flowFormClose">&times;</button>
+                    </div>
+                </div>
+                <div class="modal-body modal-body-flush">
+                    <div id="flowHeaderPart" class="flow-part flow-part--header"></div>
+                    <div id="flowChainPart" class="flow-part flow-part--chain"></div>
+                    <div id="flowScreenPart" class="flow-part flow-part--screen"></div>
+                    <div id="flowMappingPart" class="flow-part flow-part--mapping"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="flowFormCancel">Cancelar</button>
+                    <button class="btn btn-primary" id="flowFormSave">Guardar flujo</button>
+                </div>
+            </div>`;
+
+        document.getElementById("flowFormClose").addEventListener("click", () => this.closeForm());
+        document.getElementById("flowFormCancel").addEventListener("click", () => this.closeForm());
+        document.getElementById("flowFormSave").addEventListener("click", () => this.save());
+        document.getElementById("btnEditFlowBasics").addEventListener("click", () => this.editBasicsInline());
+
+        overlay.classList.add("visible");
+
+        this.updateModalHeader();
+        this.renderHeaderPart();
+        this.renderChainBlock();
+        this.renderScreenBlock();
+        this.renderMappingBlock();
+    },
+
+    updateModalHeader() {
+        document.getElementById("flowModalTitle").textContent = this.editing.name;
+        document.getElementById("flowModalSubtitle").innerHTML =
+            `Tipo: <strong>${this.editing.type === "automatico" ? "Automático" : "Manual"}</strong>`;
+    },
+
+    closeForm() {
+        if (this.overlay) this.overlay.classList.remove("visible");
+        this.editing = null;
+    },
+
+    // ------------------------------------------------------------
+    // A) Cabecera: nombre/tipo ya está en el título del modal;
+    //    aquí van planificación y ejecución (solo automáticos)
+    // ------------------------------------------------------------
+    renderHeaderPart() {
+        const part = document.getElementById("flowHeaderPart");
+        const f = this.editing;
+
+        if (f.type !== "automatico") {
+            part.innerHTML = `
+                <div class="flow-header-row">
+                    <span class="table-tag">Flujo manual</span>
+                    <span class="form-hint">Se lanza desde la pantalla de variables (asignada por workflow / rol).</span>
+                </div>`;
+            return;
+        }
+
+        const scheduled = !!(f.schedule && f.schedule.active);
+        const statusText = scheduled ? this.scheduleSummary(f.schedule) : "Sin planificar";
+
+        part.innerHTML = `
+            <div class="flow-header-row">
+                <span class="table-tag">Flujo automático</span>
+                <span class="flow-schedule-status ${scheduled ? "is-active" : ""}">⏱ ${UI.escapeHtml(statusText)}</span>
+                <span class="load-fn-toolbar-spacer"></span>
+                <button class="btn btn-secondary btn-sm" id="btnPlanFlow">📅 Planificar</button>
+                <button class="btn btn-primary btn-sm" id="btnRunFlow">▶ Ejecutar</button>
+            </div>`;
+
+        document.getElementById("btnPlanFlow").addEventListener("click", async () => {
+            const result = await UI.openScheduleModal({ current: f.schedule });
+            if (result === null) return;
+            f.schedule = result === "remove" ? null : result;
+            this.renderHeaderPart();
+        });
+        document.getElementById("btnRunFlow").addEventListener("click", () => {
+            UI.toast(`Ejecución de "${f.name}" lanzada (mockup, no ejecuta nada real).`, "success");
+        });
+    },
+
+    scheduleSummary(s) {
+        if (s.repeat === "ninguna") return `una vez el ${s.startDate || "—"} a las ${s.startTime}`;
+        if (s.repeat === "diaria") return `cada día a las ${s.startTime}`;
+        if (s.repeat === "semanal") {
+            const names = ["L", "M", "X", "J", "V", "S", "D"];
+            const days = (s.weekDays || []).slice().sort().map(d => names[d]).join(", ");
+            return `semanal (${days || "sin días"}) a las ${s.startTime}`;
+        }
+        if (s.repeat === "mensual") return `día ${s.dayOfMonth} de cada mes a las ${s.startTime}`;
+        if (s.repeat === "personalizada") return `cada ${s.intervalValue} ${s.intervalUnit}`;
+        return "";
+    },
+
+    // ------------------------------------------------------------
+    // B) Cadena de interfaces — sin bifurcaciones, drag&drop
+    // ------------------------------------------------------------
+    renderChainBlock() {
+        const part = document.getElementById("flowChainPart");
+        const f = this.editing;
+        const cubeNames = this.cubeNameById();
+
+        const cards = f.chain.map((step, idx) => {
+            const iface = this.interfaceById(step.interfaceId);
+            const label = this.chainInstanceLabel(idx);
+            const card = `
+                <div class="flow-chain-card" draggable="true" data-chain-idx="${idx}">
+                    <div class="flow-chain-card-name">${iface ? UI.escapeHtml(iface.name) : "<em>Interfaz eliminada</em>"}</div>
+                    <div class="flow-chain-card-meta">${iface ? UI.escapeHtml(cubeNames[iface.cuboId] || "—") : ""} · ${UI.escapeHtml(label)}</div>
+                    <button type="button" class="flow-chain-card-remove" data-remove-chain="${idx}" title="Quitar de la cadena">✕</button>
+                </div>`;
+            const arrow = idx < f.chain.length - 1 ? `<div class="flow-chain-arrow">→</div>` : "";
+            return card + arrow;
+        }).join("");
+
+        part.innerHTML = `
+            <div class="flow-part-header"><span>Cadena de interfaces</span></div>
+            <div class="flow-chain-wrap" id="flowChainWrap">
+                ${cards}
+                <button type="button" class="flow-chain-add" id="btnAddChainStep">+ Añadir</button>
+            </div>`;
+
+        document.getElementById("btnAddChainStep").addEventListener("click", async () => {
+            const picked = await UI.openInterfacePickerModal({ interfaces: this.interfaces, cubeNameById: cubeNames });
+            if (!picked) return;
+            f.chain.push({ id: Provider.newId(), interfaceId: picked.id, targets: { file: {}, filter: {}, mapping: {} } });
+            this.renderChainBlock();
+            this.renderMappingBlock();
+        });
+
+        part.querySelectorAll("[data-remove-chain]").forEach(btn => btn.addEventListener("click", () => {
+            const idx = parseInt(btn.dataset.removeChain, 10);
+            f.chain.splice(idx, 1);
+            this.renderChainBlock();
+            this.renderMappingBlock();
+        }));
+
+        part.querySelectorAll(".flow-chain-card").forEach(card => {
+            card.addEventListener("dragstart", () => {
+                this.dragChainIdx = parseInt(card.dataset.chainIdx, 10);
+                card.classList.add("dragging");
+            });
+            card.addEventListener("dragend", () => card.classList.remove("dragging"));
+            card.addEventListener("dragover", (e) => e.preventDefault());
+            card.addEventListener("drop", (e) => {
+                e.preventDefault();
+                const targetIdx = parseInt(card.dataset.chainIdx, 10);
+                if (this.dragChainIdx === null || this.dragChainIdx === targetIdx) return;
+                const [moved] = f.chain.splice(this.dragChainIdx, 1);
+                f.chain.splice(targetIdx, 0, moved);
+                this.dragChainIdx = null;
+                this.renderChainBlock();
+                this.renderMappingBlock();
+            });
+        });
+    },
+
+    /** Etiqueta de instancia "(n)" — cuenta cuántas veces aparece esa misma interfaz hasta esta posición. */
+    chainInstanceLabel(idx) {
+        const f = this.editing;
+        const step = f.chain[idx];
+        let n = 0;
+        for (let i = 0; i <= idx; i++) if (f.chain[i].interfaceId === step.interfaceId) n++;
+        return `(${n})`;
+    },
+
+    // ------------------------------------------------------------
+    // C) Pantalla de entrada de variables (solo flujos manuales)
+    // ------------------------------------------------------------
+    renderScreenBlock() {
+        const part = document.getElementById("flowScreenPart");
+        const f = this.editing;
+
+        if (f.type !== "manual") {
+            part.innerHTML = "";
+            part.style.display = "none";
+            return;
+        }
+        part.style.display = "";
+
+        part.innerHTML = `
+            <div class="flow-part-header"><span>Pantalla de entrada de variables</span></div>
+            <div class="flow-screen-box">
+                <div class="form-group">
+                    <label>Título de la pantalla</label>
+                    <input type="text" id="screenTitle" placeholder="Ej. Parámetros de carga mensual" value="${UI.escapeHtml(f.screen.title || "")}">
+                </div>
+                <div class="flow-screen-toolbar">
+                    <button class="btn btn-secondary btn-sm" id="btnAddScreenVar">+ Variable</button>
+                    <button class="btn btn-secondary btn-sm" id="btnAddScreenFrame">+ Frame</button>
+                    <button class="btn btn-secondary btn-sm" id="btnAddScreenText">+ Texto</button>
+                </div>
+                <div class="flow-screen-blocks" id="flowScreenBlocks"></div>
+            </div>`;
+
+        document.getElementById("screenTitle").addEventListener("input", (e) => { f.screen.title = e.target.value; });
+
+        document.getElementById("btnAddScreenVar").addEventListener("click", async () => {
+            const v = await UI.openScreenVariableModal({});
+            if (!v) return;
+            f.screen.blocks.push({ id: Provider.newId(), kind: "variable", variable: { id: Provider.newId(), ...v } });
+            this.renderScreenBlocksList();
+            this.renderMappingBlock();
+        });
+        document.getElementById("btnAddScreenFrame").addEventListener("click", () => {
+            f.screen.blocks.push({ id: Provider.newId(), kind: "frame", title: "Nuevo frame", variables: [] });
+            this.renderScreenBlocksList();
+        });
+        document.getElementById("btnAddScreenText").addEventListener("click", async () => {
+            const text = await UI.openScreenTextModal({ current: "" });
+            if (text === null) return;
+            f.screen.blocks.push({ id: Provider.newId(), kind: "text", text });
+            this.renderScreenBlocksList();
+        });
+
+        this.renderScreenBlocksList();
+    },
+
+    renderScreenBlocksList() {
+        const wrap = document.getElementById("flowScreenBlocks");
+        const f = this.editing;
+        if (!wrap) return;
+
+        if (!f.screen.blocks.length) {
+            wrap.innerHTML = `<div class="module-empty module-empty--inline">Añade variables, frames o textos para construir la pantalla.</div>`;
+            return;
+        }
+
+        wrap.innerHTML = f.screen.blocks.map((b, idx) => this.screenBlockHtml(b, idx)).join("");
+        this.bindScreenBlocksEvents();
+    },
+
+    screenBlockHtml(b, idx) {
+        if (b.kind === "variable") {
+            return `
+                <div class="flow-screen-block flow-screen-block--var" draggable="true" data-block-idx="${idx}">
+                    <span class="load-drag-handle">⠿</span>
+                    ${this.screenVarChipHtml(b.variable)}
+                    <span class="load-fn-toolbar-spacer"></span>
+                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                </div>`;
+        }
+        if (b.kind === "text") {
+            return `
+                <div class="flow-screen-block flow-screen-block--text" draggable="true" data-block-idx="${idx}">
+                    <span class="load-drag-handle">⠿</span>
+                    <div class="flow-screen-text-content" data-edit-text="${idx}" title="Clic para editar">${UI.renderFormattedText(b.text)}</div>
+                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                </div>`;
+        }
+        // frame
+        return `
+            <div class="flow-screen-block flow-screen-block--frame" draggable="true" data-block-idx="${idx}">
+                <div class="flow-frame-header">
+                    <span class="load-drag-handle">⠿</span>
+                    <strong data-edit-frame-title="${idx}" title="Clic para renombrar">${UI.escapeHtml(b.title || "Frame")}</strong>
+                    <span class="load-fn-toolbar-spacer"></span>
+                    <button type="button" class="btn btn-secondary btn-sm" data-add-frame-var="${idx}">+ Variable</button>
+                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar frame">✕</button>
+                </div>
+                <div class="flow-frame-vars">
+                    ${b.variables.length ? b.variables.map((v, vi) => `
+                        <div class="flow-frame-var-row">
+                            ${this.screenVarChipHtml(v)}
+                            <button type="button" class="field-remove" data-remove-frame-var="${idx}:${vi}" title="Eliminar">✕</button>
+                        </div>`).join("") : `<div class="hierarchy-pool-empty">Sin variables en este frame.</div>`}
+                </div>
+            </div>`;
+    },
+
+    screenVarChipHtml(v) {
+        return `<span class="flow-screen-var-chip"><strong>${UI.escapeHtml(v.label || v.name)}</strong><span class="load-output-type-abbr">${UI.escapeHtml(v.type)}</span></span>`;
+    },
+
+    bindScreenBlocksEvents() {
+        const wrap = document.getElementById("flowScreenBlocks");
+        const f = this.editing;
+
+        wrap.querySelectorAll("[data-remove-block]").forEach(btn => btn.addEventListener("click", () => {
+            const idx = parseInt(btn.dataset.removeBlock, 10);
+            f.screen.blocks.splice(idx, 1);
+            this.renderScreenBlocksList();
+            this.renderMappingBlock();
+        }));
+
+        wrap.querySelectorAll("[data-add-frame-var]").forEach(btn => btn.addEventListener("click", async () => {
+            const idx = parseInt(btn.dataset.addFrameVar, 10);
+            const v = await UI.openScreenVariableModal({});
+            if (!v) return;
+            f.screen.blocks[idx].variables.push({ id: Provider.newId(), ...v });
+            this.renderScreenBlocksList();
+            this.renderMappingBlock();
+        }));
+
+        wrap.querySelectorAll("[data-remove-frame-var]").forEach(btn => btn.addEventListener("click", () => {
+            const [bIdx, vIdx] = btn.dataset.removeFrameVar.split(":").map(Number);
+            f.screen.blocks[bIdx].variables.splice(vIdx, 1);
+            this.renderScreenBlocksList();
+            this.renderMappingBlock();
+        }));
+
+        wrap.querySelectorAll("[data-edit-frame-title]").forEach(el => el.addEventListener("click", async () => {
+            const idx = parseInt(el.dataset.editFrameTitle, 10);
+            const val = await UI.openTextPromptModal({ title: "Nombre del frame", label: "Título", value: f.screen.blocks[idx].title || "" });
+            if (val === null) return;
+            f.screen.blocks[idx].title = val || "Frame";
+            this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll("[data-edit-text]").forEach(el => el.addEventListener("click", async () => {
+            const idx = parseInt(el.dataset.editText, 10);
+            const val = await UI.openScreenTextModal({ current: f.screen.blocks[idx].text || "" });
+            if (val === null) return;
+            f.screen.blocks[idx].text = val;
+            this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll(".flow-screen-block").forEach(block => {
+            block.addEventListener("dragstart", () => {
+                this.dragBlockIdx = parseInt(block.dataset.blockIdx, 10);
+                block.classList.add("dragging");
+            });
+            block.addEventListener("dragend", () => block.classList.remove("dragging"));
+            block.addEventListener("dragover", (e) => e.preventDefault());
+            block.addEventListener("drop", (e) => {
+                e.preventDefault();
+                const targetIdx = parseInt(block.dataset.blockIdx, 10);
+                if (this.dragBlockIdx === null || this.dragBlockIdx === targetIdx) return;
+                const [moved] = f.screen.blocks.splice(this.dragBlockIdx, 1);
+                f.screen.blocks.splice(targetIdx, 0, moved);
+                this.dragBlockIdx = null;
+                this.renderScreenBlocksList();
+            });
+        });
+    },
+
+    /** Lista plana de variables de pantalla (sueltas + las de todos los frames), para arrastrar/mapear. */
+    flatScreenVariables() {
+        const f = this.editing;
+        if (f.type !== "manual") return [];
+        const out = [];
+        f.screen.blocks.forEach(b => {
+            if (b.kind === "variable") out.push(b.variable);
+            else if (b.kind === "frame") out.push(...b.variables);
+        });
+        return out;
+    },
+
+    // ------------------------------------------------------------
+    // D) Mapeo: variables de cada paso de la cadena, por constante
+    //    o arrastrando una variable de pantalla (si hay pantalla)
+    // ------------------------------------------------------------
+    renderMappingBlock() {
+        const part = document.getElementById("flowMappingPart");
+        const f = this.editing;
+        const screenVars = this.flatScreenVariables();
+        const isManual = f.type === "manual";
+
+        const leftHtml = isManual ? `
+            <div class="flow-mapping-col flow-mapping-col--vars">
+                <div class="load-mapping-col-header"><span>Variables de pantalla</span></div>
+                <div class="flow-mapping-vars-list">
+                    ${screenVars.length ? screenVars.map(v => `
+                        <div class="load-input-field-row flow-screen-var-drag" draggable="true" data-var-name="${UI.escapeHtml(v.name)}">
+                            <span class="load-drag-handle">⠿</span>
+                            ${this.screenVarChipHtml(v)}
+                        </div>`).join("") : `<div class="hierarchy-pool-empty">Añade variables en el bloque de pantalla.</div>`}
+                </div>
+            </div>` : "";
+
+        const rightHtml = `
+            <div class="flow-mapping-col flow-mapping-col--targets">
+                <div class="load-mapping-col-header"><span>Variables por paso de la cadena</span></div>
+                <div class="flow-mapping-steps" id="flowMappingSteps">
+                    ${f.chain.length ? f.chain.map((step, idx) => this.stepMappingHtml(step, idx)).join("") : `<div class="hierarchy-pool-empty">Añade interfaces a la cadena para poder mapear sus variables.</div>`}
+                </div>
+            </div>`;
+
+        part.innerHTML = `
+            <div class="flow-part-header">
+                <span>Mapeo de variables</span>
+                ${!isManual ? `<span class="form-hint">Flujo automático: solo se puede asignar por constante.</span>` : ""}
+            </div>
+            <div class="flow-mapping-cols ${!isManual ? "is-background-only" : ""}">
+                ${leftHtml}
+                ${rightHtml}
+            </div>`;
+
+        if (isManual) {
+            part.querySelectorAll(".flow-screen-var-drag").forEach(row => {
+                row.addEventListener("dragstart", () => {
+                    this.dragScreenVar = row.dataset.varName;
+                    row.classList.add("dragging");
+                });
+                row.addEventListener("dragend", () => row.classList.remove("dragging"));
+            });
+        }
+
+        this.bindMappingTargets();
+    },
+
+    stepMappingHtml(step, idx) {
+        const iface = this.interfaceById(step.interfaceId);
+        const label = `${iface ? iface.name : "Interfaz eliminada"} ${this.chainInstanceLabel(idx)}`;
+
+        if (!iface) {
+            return `
+                <div class="flow-step-card">
+                    <div class="flow-step-title">${UI.escapeHtml(label)}</div>
+                    <p class="form-hint">Esta interfaz ya no existe; quítala de la cadena.</p>
+                </div>`;
+        }
+
+        step.targets = step.targets || { file: {}, filter: {}, mapping: {} };
+
+        const isFile = iface.originType === "fichero";
+        const filterFields = (iface.origin.fields || []).filter(fl => fl.filter && fl.filter.type === "variable");
+        const cubeFields = this.cuboFields(iface.cuboId);
+        const mappingFields = cubeFields.filter(cf => iface.outputMappings && iface.outputMappings[cf.id] && iface.outputMappings[cf.id].type === "variable");
+
+        const groupRows = (groupKey, entries) => entries.map(entry => {
+            const m = step.targets[groupKey][entry.key];
+            const valueHtml = m
+                ? (m.type === "constante"
+                    ? `Constante: <strong>${UI.escapeHtml(m.value || "—")}</strong>`
+                    : `Variable: <strong>${UI.escapeHtml(m.value || "—")}</strong>`)
+                : `<span class="load-map-empty">Sin asignar</span>`;
+            return `
+                <div class="flow-target-row" data-step="${step.id}" data-group="${groupKey}" data-key="${UI.escapeHtml(entry.key)}">
+                    <span class="flow-target-label">${UI.escapeHtml(entry.label)}</span>
+                    <div class="load-map-target flow-target-drop">${valueHtml}</div>
+                </div>`;
+        }).join("");
+
+        let fileHtml = "";
+        if (isFile) {
+            fileHtml = `
+                <div class="flow-step-group">
+                    <div class="flow-step-group-title">Variables de fichero</div>
+                    ${groupRows("file", [{ key: "localOrServer", label: "Local / Servidor" }, { key: "ruta", label: "Ruta" }])}
+                </div>`;
+        }
+
+        const filterHtml = filterFields.length ? `
+            <div class="flow-step-group">
+                <div class="flow-step-group-title">Variables de filtro</div>
+                ${groupRows("filter", filterFields.map(fl => ({ key: fl.name, label: fl.name })))}
+            </div>` : "";
+
+        const mappingHtml = mappingFields.length ? `
+            <div class="flow-step-group">
+                <div class="flow-step-group-title">Variables de mapeo</div>
+                ${groupRows("mapping", mappingFields.map(cf => ({ key: cf.id, label: cf.name })))}
+            </div>` : "";
+
+        const nothingToMap = !isFile && !filterFields.length && !mappingFields.length;
+
+        return `
+            <div class="flow-step-card">
+                <div class="flow-step-title">${UI.escapeHtml(label)}</div>
+                ${fileHtml}${filterHtml}${mappingHtml}
+                ${nothingToMap ? `<p class="form-hint">Esta interfaz no tiene variables que asignar.</p>` : ""}
+            </div>`;
+    },
+
+    bindMappingTargets() {
+        const f = this.editing;
+        const screenVars = this.flatScreenVariables();
+
+        document.querySelectorAll(".flow-target-drop").forEach(zone => {
+            const row = zone.closest(".flow-target-row");
+            const stepId = row.dataset.step, groupKey = row.dataset.group, key = row.dataset.key;
+
+            zone.addEventListener("dragover", (e) => e.preventDefault());
+            zone.addEventListener("dragenter", () => zone.classList.add("is-drop-hover"));
+            zone.addEventListener("dragleave", () => zone.classList.remove("is-drop-hover"));
+            zone.addEventListener("drop", (e) => {
+                e.preventDefault();
+                zone.classList.remove("is-drop-hover");
+                if (!this.dragScreenVar) return;
+                const step = f.chain.find(s => s.id === stepId);
+                step.targets[groupKey][key] = { type: "variable", value: this.dragScreenVar };
+                this.dragScreenVar = null;
+                this.renderMappingBlock();
+            });
+
+            zone.addEventListener("click", async () => {
+                const step = f.chain.find(s => s.id === stepId);
+                const current = step.targets[groupKey][key] || null;
+                const result = await UI.openFlowTargetModal({
+                    title: "Asignar valor",
+                    targetLabel: row.querySelector(".flow-target-label").textContent,
+                    screenVariables: screenVars,
+                    current
+                });
+                if (result === null) return;
+                if (result === "remove") delete step.targets[groupKey][key];
+                else step.targets[groupKey][key] = result;
+                this.renderMappingBlock();
+            });
+        });
+    },
+
+    // ------------------------------------------------------------
+    // Guardado (mockup → localStorage)
+    // ------------------------------------------------------------
+    save() {
+        const f = this.editing;
+        if (!f.name) { UI.toast("El flujo necesita un nombre.", "error"); return; }
+
+        const idx = this.list.findIndex(x => x.id === f.id);
+        if (idx >= 0) this.list[idx] = f; else this.list.push(f);
+
+        this.saveMockList();
+        const name = f.name;
+        this.closeForm();
+        this.renderList();
+        UI.toast(`Flujo "${name}" guardado (mockup).`, "success");
+    }
+};

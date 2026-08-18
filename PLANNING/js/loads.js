@@ -1,9 +1,9 @@
 /**
  * ============================================================
- * DRACO PLANNING — CARGAS DE DATOS (MOCKUP)
+ * DRACO PLANNING — INTERFACES (MOCKUP)
  * ============================================================
- * Listado de cargas de datos agrupadas por cubo, con alta/edición
- * en dos pasos:
+ * Listado de interfaces (cargas de datos) agrupadas por cubo, con
+ * alta/edición en dos pasos:
  *   1) Modal pequeño: nombre, origen (tabla/fichero) y cubo destino.
  *   2) Modal casi a pantalla completa (mapeo), que ya no repite esos
  *      3 campos como inputs — se muestran en el título para ganar
@@ -43,10 +43,10 @@ const Loads = {
         container.innerHTML = `
             <div class="module-header">
                 <div>
-                    <h3>Cargas de datos</h3>
+                    <h3>Interfaces</h3>
                     <p>Proyecto: ${UI.escapeHtml(project.PROYECTO)} · dataset ${project.DATASET} <span class="mock-badge">MOCKUP</span></p>
                 </div>
-                <button class="btn btn-primary btn-sm" id="btnNewLoad">+ Nueva carga de datos</button>
+                <button class="btn btn-primary btn-sm" id="btnNewLoad">+ Nueva interfaz</button>
             </div>
             <div class="loads-toolbar">
                 <label for="loadsCuboFilter">Filtrar por cubo</label>
@@ -129,7 +129,7 @@ const Loads = {
         if (!wrap) return;
 
         if (!this.cubes.length) {
-            wrap.innerHTML = `<div class="module-empty">Este proyecto todavía no tiene cubos. Crea al menos un cubo antes de definir cargas de datos.</div>`;
+            wrap.innerHTML = `<div class="module-empty">Este proyecto todavía no tiene cubos. Crea al menos un cubo antes de definir interfaces.</div>`;
             return;
         }
 
@@ -143,7 +143,7 @@ const Loads = {
         }).filter(g => this.filterCuboId || g.loads.length);
 
         if (!groups.length) {
-            wrap.innerHTML = `<div class="module-empty">Todavía no hay cargas de datos. Crea la primera con "+ Nueva carga de datos".</div>`;
+            wrap.innerHTML = `<div class="module-empty">Todavía no hay interfaces. Crea la primera con "+ Nueva interfaz".</div>`;
             return;
         }
 
@@ -152,12 +152,12 @@ const Loads = {
                 <div class="load-cube-group-header">
                     <span class="admin-menu-icon">▣</span>
                     <strong>${UI.escapeHtml(cubo.CUBOS)}</strong>
-                    <span class="col-type">${loads.length} carga(s)</span>
+                    <span class="col-type">${loads.length} interfaz${loads.length === 1 ? "" : "es"}</span>
                 </div>
                 ${loads.length ? `
                     <div class="data-list">
                         <table>
-                            <thead><tr><th>Carga de datos</th><th>Origen</th><th>Detalle</th><th>Campos mapeados</th><th></th></tr></thead>
+                            <thead><tr><th>Interfaz</th><th>Origen</th><th>Detalle</th><th>Campos mapeados</th><th></th></tr></thead>
                             <tbody>
                                 ${loads.map(l => `
                                     <tr>
@@ -199,16 +199,16 @@ const Loads = {
     async remove(id) {
         const load = this.list.find(l => l.id === id);
         if (!load) return;
-        const ok = await UI.confirm("Eliminar carga de datos", `Se eliminará la carga <strong>${UI.escapeHtml(load.name)}</strong> (mockup, no afecta a ninguna tabla física).`);
+        const ok = await UI.confirm("Eliminar interfaz", `Se eliminará la interfaz <strong>${UI.escapeHtml(load.name)}</strong> (mockup, no afecta a ninguna tabla física).`);
         if (!ok) return;
         this.list = this.list.filter(l => l.id !== id);
         this.saveMockList();
         this.renderList();
-        UI.toast(`Carga "${load.name}" eliminada.`, "success");
+        UI.toast(`Interfaz "${load.name}" eliminada.`, "success");
     },
 
     // ------------------------------------------------------------
-    // Datos "en blanco" de una carga nueva
+    // Datos "en blanco" de una interfaz nueva
     // ------------------------------------------------------------
     blankLoad() {
         return {
@@ -251,13 +251,13 @@ const Loads = {
             overlay.innerHTML = `
                 <div class="modal-box">
                     <div class="modal-header">
-                        <h3>${isNew ? "Nueva carga de datos" : "Datos básicos de la carga"}</h3>
+                        <h3>${isNew ? "Nueva interfaz" : "Datos básicos de la interfaz"}</h3>
                         <button class="modal-close" id="loadBasicsClose">&times;</button>
                     </div>
                     <div class="modal-body">
                         <div class="form-group">
-                            <label>Nombre de la carga de datos</label>
-                            <input type="text" id="basicsName" placeholder="Ej. Carga ventas línea" value="${UI.escapeHtml(initial.name || "")}">
+                            <label>Nombre de la interfaz</label>
+                            <input type="text" id="basicsName" placeholder="Ej. Interfaz ventas línea" value="${UI.escapeHtml(initial.name || "")}">
                         </div>
                         <div class="form-group">
                             <label>Origen</label>
@@ -297,7 +297,7 @@ const Loads = {
             overlay.querySelector("#basicsNext").onclick = () => {
                 const name = nameInput.value.trim();
                 const cuboId = overlay.querySelector("#basicsCubo").value;
-                if (!name) { UI.toast("Indica un nombre para la carga de datos.", "error"); return; }
+                if (!name) { UI.toast("Indica un nombre para la interfaz.", "error"); return; }
                 if (!cuboId) { UI.toast("Selecciona un cubo destino.", "error"); return; }
                 cleanup({ name, cuboId, originType });
             };
@@ -310,7 +310,7 @@ const Loads = {
     // ------------------------------------------------------------
     async openForm(editId = null) {
         if (!this.cubes.length) {
-            UI.toast("Crea al menos un cubo antes de definir una carga de datos.", "error");
+            UI.toast("Crea al menos un cubo antes de definir una interfaz.", "error");
             return;
         }
 
@@ -418,7 +418,7 @@ const Loads = {
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" id="loadFormCancel">Cancelar</button>
-                    <button class="btn btn-primary" id="loadFormSave">Guardar carga de datos</button>
+                    <button class="btn btn-primary" id="loadFormSave">Guardar interfaz</button>
                 </div>
             </div>`;
 
@@ -509,7 +509,7 @@ const Loads = {
                 const picked = await UI.openTablePickerModal({ connector: o.connector === "snowflake" ? "Snowflake" : "BigQuery", tables });
                 if (!picked) return;
                 o.tableName = picked.name;
-                o.fields = picked.fields.map(f => ({ ...f, custom: false }));
+                o.fields = picked.fields.map(f => ({ ...f, custom: false, filter: null }));
                 document.getElementById("originTableName").value = o.tableName;
                 this.renderInputFields();
                 UI.toast(`Tabla "${picked.name}" seleccionada (mockup).`, "success");
@@ -625,7 +625,7 @@ const Loads = {
                 return;
             }
 
-            o.fields = headerNames.filter(Boolean).map(n => ({ name: n, type: "STRING", custom: false }));
+            o.fields = headerNames.filter(Boolean).map(n => ({ name: n, type: "STRING", custom: false, filter: null }));
             this.renderInputFields();
             UI.toast(`${o.fields.length} campo(s) detectado(s) del fichero de ejemplo.`, "success");
         } catch (err) {
@@ -644,7 +644,7 @@ const Loads = {
 
         actions.innerHTML = `<button class="btn btn-secondary btn-sm" id="btnAddInputField">+ Añadir${isTable ? " (visual)" : ""}</button>`;
         document.getElementById("btnAddInputField").addEventListener("click", () => {
-            o.fields.push({ name: `campo_${o.fields.length + 1}`, type: "STRING", custom: true });
+            o.fields.push({ name: `campo_${o.fields.length + 1}`, type: "STRING", custom: true, filter: null });
             this.renderInputFields();
         });
 
@@ -654,16 +654,25 @@ const Loads = {
             return;
         }
 
-        wrap.innerHTML = o.fields.map((f, idx) => `
+        wrap.innerHTML = o.fields.map((f, idx) => {
+            const hasFilter = !!(f.filter && f.filter.type);
+            const filterTitle = hasFilter
+                ? `Filtro: ${f.filter.type === "constante" ? `constante (${f.filter.value || "—"})` : "variable"}`
+                : "Sin filtro — clic para añadir uno";
+            return `
             <div class="load-input-field-row" draggable="true" data-idx="${idx}" data-name="${UI.escapeHtml(f.name)}">
                 <span class="load-drag-handle" title="Arrastra a un campo de salida">⠿</span>
                 <input type="text" class="load-field-name" data-idx="${idx}" value="${UI.escapeHtml(f.name)}">
                 <select class="load-field-type" data-idx="${idx}">
                     ${UI.FIELD_TYPES.map(t => `<option value="${t}" ${t === f.type ? "selected" : ""}>${this.TYPE_ABBR[t] || t}</option>`).join("")}
                 </select>
+                <button type="button" class="load-filter-btn ${hasFilter ? "has-filter" : ""}" data-filter-idx="${idx}" title="${UI.escapeHtml(filterTitle)}">
+                    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true"><path d="M1.5 2.5h13l-4.8 5.6v4.4l-3.4 1.8V8.1z"/></svg>
+                </button>
                 ${f.custom ? '<span class="load-manual-dot" title="Campo añadido manualmente">●</span>' : ""}
                 <button type="button" class="field-remove" data-remove="${idx}" title="Eliminar">✕</button>
-            </div>`).join("");
+            </div>`;
+        }).join("");
 
         wrap.querySelectorAll(".load-field-name").forEach(inp => inp.addEventListener("input", (e) => {
             const idx = parseInt(e.target.dataset.idx, 10);
@@ -688,6 +697,18 @@ const Loads = {
             });
             this.renderInputFields();
             this.renderOutputFields();
+        }));
+        wrap.querySelectorAll("[data-filter-idx]").forEach(btn => btn.addEventListener("click", async () => {
+            const idx = parseInt(btn.dataset.filterIdx, 10);
+            const field = o.fields[idx];
+            const result = await UI.openFilterFieldModal({
+                title: "Filtro de campo",
+                fieldName: field.name,
+                current: field.filter
+            });
+            if (result === null) return;
+            field.filter = result === "remove" ? null : result;
+            this.renderInputFields();
         }));
 
         wrap.querySelectorAll(".load-input-field-row").forEach(row => {
@@ -845,7 +866,7 @@ const Loads = {
 
         const code = await UI.openCodeEditorModal({
             title: "Mapeo por código",
-            subtitle: "Todo el mapeo de esta carga se resolverá por código Python, en lugar de campo a campo.",
+            subtitle: "Todo el mapeo de esta interfaz se resolverá por código Python, en lugar de campo a campo.",
             code: this.editing.mappingCode || `def mapear(df_input):\n    # Devuelve un DataFrame con las columnas del cubo de destino\n    df_output = df_input.copy()\n    return df_output\n`
         });
         if (code === null) return;
@@ -935,6 +956,6 @@ const Loads = {
         const name = this.editing.name;
         this.closeForm();
         this.renderList();
-        UI.toast(`Carga de datos "${name}" guardada (mockup).`, "success");
+        UI.toast(`Interfaz "${name}" guardada (mockup).`, "success");
     }
 };
