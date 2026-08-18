@@ -1840,8 +1840,29 @@ function buildAxisFieldsTable(editReportGrid, axis) {
 
 async function convertAxisStaticFormulas(axis, makeStatic) {
     const rangeName = axis === "rows" ? "Draco_001_Rows" : "Draco_001_Cols";
+    // DracoCollapseState/DracoIndicatorMap usan "rows"/"cols" como clave de
+    // eje (no "columns"), a diferencia del parámetro `axis` de esta función.
+    const stateAxis = axis === "rows" ? "rows" : "cols";
     DracoSuppressChangeEvents = true;
     try {
+
+    if (makeStatic) {
+        // El eje pasa a Estático: se quita el glifo +/- de sus celdas (más
+        // abajo) y deja de tener sentido "contraer/expandir", así que hay
+        // que OLVIDAR tanto los indicadores ya registrados de ese eje como
+        // su estado de contraído — si no, quedan entradas obsoletas en
+        // DracoIndicatorMap que siguen apuntando a esas mismas posiciones
+        // de celda (ahora con fórmula EPM_VALUE, sin jerarquía), y un clic
+        // del usuario ahí dispara handleDracoSelectionChanged, que las
+        // toma por buenas e intenta un repintado/"refresco" con el último
+        // JSON, aunque el eje ya no tenga jerarquías desplegables.
+        for (const [key, meta] of DracoIndicatorMap) {
+            if (meta.axis === stateAxis) DracoIndicatorMap.delete(key);
+        }
+        const st = DracoCollapseState[stateAxis];
+        st.signature = null;
+        st.collapsed = new Set();
+    }
 
     await Excel.run(async (context) => {
         const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
@@ -2424,7 +2445,7 @@ async function handleDracoSelectionChanged(eventArgs) {
             const resultSheetName = await getDracoResultSheetName(context);
             const sheet = context.workbook.worksheets.getItem(resultSheetName);
             const range = sheet.getRange(addr);
-            range.load(["rowCount", "columnCount", "rowIndex", "columnIndex"]);
+            range.load(["rowCount", "columnCount", "rowIndex", "columnIndex", "formulas"]);
             await context.sync();
 
             if (range.rowCount !== 1 || range.columnCount !== 1) return;
@@ -2432,6 +2453,13 @@ async function handleDracoSelectionChanged(eventArgs) {
             const key = (range.rowIndex + 1) + "_" + (range.columnIndex + 1);
             const meta = DracoIndicatorMap.get(key);
             if (!meta) return;
+
+            // Salvaguarda adicional: una celda de eje Estático es una
+            // fórmula EPM_VALUE (sin glifo +/-); si por lo que sea quedara
+            // una entrada obsoleta en DracoIndicatorMap apuntando aquí, no
+            // se actúa (evita el repintado/"refresco" fantasma en Estático).
+            const formula = range.formulas[0][0];
+            if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) return;
 
             const st = DracoCollapseState[meta.axis];
             if (st.collapsed.has(meta.nodeKey)) {
