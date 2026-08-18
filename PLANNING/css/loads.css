@@ -1,5 +1,5 @@
 /* ==========================================================
-   DRACO PLANNING — CARGAS DE DATOS (MOCKUP)
+   DRACO PLANNING — INTERFACES (MOCKUP)
    ========================================================== */
 
 .mock-badge {
@@ -208,7 +208,7 @@
 /* ---------- Columnas de mapeo (input / conector / output) ---------- */
 .load-mapping-cols {
     display: grid;
-    grid-template-columns: 1fr 90px 1.3fr;
+    grid-template-columns: 1fr 90px 1fr;
     gap: 0;
     flex: 1;
     min-height: 0;
@@ -336,12 +336,44 @@
     flex: 0 0 auto;
 }
 
-/* ---------- Filas de campos de salida (compactas, sin "Dim String") ---------- */
+/* ---------- Botón de filtro por campo de entrada ---------- */
+.load-filter-btn {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color var(--transition-fast), background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.load-filter-btn svg {
+    fill: currentColor;
+}
+
+.load-filter-btn:hover {
+    color: var(--text-secondary);
+    background-color: var(--surface-sunken);
+}
+
+.load-filter-btn.has-filter {
+    color: var(--brand-accent);
+    border-color: var(--brand-accent);
+    background-color: var(--brand-accent-light, var(--surface-sunken));
+}
+
+/* ---------- Filas de campos de salida (compactas, mismo alto que input) ---------- */
 .load-output-field-row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 4px 6px;
+    gap: 4px;
+    padding: 3px 4px;
     background-color: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
@@ -349,12 +381,12 @@
 
 .load-output-group-tag {
     flex: 0 0 auto;
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 9px;
+    font-size: 8px;
     font-weight: 700;
     border-radius: var(--radius-sm);
     color: var(--text-inverse);
@@ -364,7 +396,7 @@
 .load-output-group-tag--M { background-color: var(--brand-accent); }
 
 .load-output-field-name {
-    flex: 0 0 26%;
+    flex: 0 0 22%;
     min-width: 0;
     font-size: var(--fs-xs);
     font-weight: 600;
@@ -374,17 +406,17 @@
 }
 
 .load-output-type-abbr {
-    margin-left: 4px;
-    font-size: 9px;
+    margin-left: 3px;
+    font-size: 8.5px;
     font-weight: 500;
     color: var(--text-muted);
     text-transform: uppercase;
 }
 
 .load-map-type {
-    flex: 0 0 108px;
+    flex: 0 0 92px;
     font-size: var(--fs-xs);
-    padding: 3px 4px;
+    padding: 2px 3px;
 }
 
 .load-map-target {
@@ -392,7 +424,7 @@
     min-width: 0;
     font-size: var(--fs-xs);
     color: var(--text-secondary);
-    padding: 4px 8px;
+    padding: 3px 6px;
     border-radius: var(--radius-sm);
     border: 1px dashed var(--border-default);
     background-color: var(--surface-sunken);
