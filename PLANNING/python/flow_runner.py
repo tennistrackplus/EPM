@@ -317,7 +317,7 @@ def run_flow(
 
 def main(session, flujo_id: str, variables_json: str, run_id: Optional[str] = None,
          control_database: str = "DRACO", control_schema: str = "DRACO_CONTROL",
-         stage_name: str = "@DRACO_CONTROL.FILES") -> str:
+         stage_name: str = "@DRACO_LANDING") -> str:
     """Punto de entrada pensado para desplegarse como Snowflake Python
     Stored Procedure y ser llamado con `CALL` desde flow_run.html:
 
@@ -331,9 +331,18 @@ def main(session, flujo_id: str, variables_json: str, run_id: Optional[str] = No
                    '@DRACO_CONTROL.LIBS/storage_io.py',
                    '@DRACO_CONTROL.LIBS/flow_runner.py')
         HANDLER = 'flow_runner.main';
+
+    Como el procedure de arriba solo declara 3 argumentos, `stage_name`
+    se queda en su valor por defecto ("@DRACO_LANDING"): debe ser el
+    MISMO stage que DracoConfig.snowflakeUploadStage (js/config.js) y
+    que STAGE_NAME al llamar a SP_FINALIZE_FILE_UPLOAD (ver
+    sql/02_snowflake_file_upload.sql), o los flujos no encontrarán los
+    ficheros que suba el navegador. Si usas otro stage, cambia el valor
+    por defecto de `stage_name` aquí arriba (o añade STAGE_NAME como
+    4º argumento del procedure) y el de snowflakeUploadStage a la vez.
     """
     engine = SnowflakeEngine(session, control_database=control_database, control_schema=control_schema)
-    storage = SnowflakeStageStorage(session)
+    storage = SnowflakeStageStorage(session, stage_name=stage_name)
     variables = json.loads(variables_json) if variables_json else {}
     result = run_flow(engine, flujo_id, variables, storage=storage, run_id=run_id)
     return json.dumps(result, default=str)

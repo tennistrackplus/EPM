@@ -82,22 +82,36 @@ class LocalFsStorage:
 
 
 class SnowflakeStageStorage:
-    """Adaptador sobre un stage interno de Snowflake (ej. `@DRACO_CONTROL.FILES`).
+    """Adaptador sobre un stage interno de Snowflake (ej. `@DRACO_LANDING`).
     Pensado para ejecutarse DENTRO de un Stored Procedure Snowpark: el
     sandbox del proc tiene su propio filesystem temporal (`/tmp` por
     defecto), al que `session.file.get` descarga el fichero antes de
-    leerlo con pandas."""
+    leerlo con pandas.
 
-    def __init__(self, session, default_local_dir: str = "/tmp"):
+    `storage_path` (el valor que guarda la variable de pantalla de tipo
+    FILE, ver js/storage.js::buildPath) es SIEMPRE una ruta relativa
+    dentro del stage (ej. "flows/<flujo_id>/<var>/<fichero>"), nunca
+    incluye el nombre del stage: este adaptador es quien antepone
+    `stage_name` en cada operación. Debe coincidir con el stage al que
+    sube el navegador (DracoConfig.snowflakeUploadStage en js/config.js
+    y STAGE_NAME en sql/02_snowflake_file_upload.sql — por defecto
+    `@DRACO_LANDING` en ambos sitios)."""
+
+    def __init__(self, session, stage_name: str = "@DRACO_LANDING", default_local_dir: str = "/tmp"):
         self.session = session
+        self.stage_name = stage_name if stage_name.startswith("@") else f"@{stage_name}"
         self.default_local_dir = default_local_dir
 
+    def _stage_path(self, storage_path: str) -> str:
+        return f"{self.stage_name.rstrip('/')}/{storage_path.lstrip('/')}"
+
     def download(self, storage_path: str, local_path: Optional[str] = None) -> str:
+        stage_path = self._stage_path(storage_path)
         target_dir = os.path.dirname(local_path) if local_path else self.default_local_dir
         os.makedirs(target_dir or ".", exist_ok=True)
-        results = self.session.file.get(storage_path, target_dir)
+        results = self.session.file.get(stage_path, target_dir)
         if not results:
-            raise FileNotFoundError(f"No se pudo descargar del storage: {storage_path}")
+            raise FileNotFoundError(f"No se pudo descargar del storage: {stage_path}")
         downloaded = os.path.join(target_dir, os.path.basename(results[0].file))
         if local_path and os.path.abspath(downloaded) != os.path.abspath(local_path):
             os.replace(downloaded, local_path)
@@ -105,7 +119,8 @@ class SnowflakeStageStorage:
         return downloaded
 
     def upload(self, local_path: str, storage_path: str) -> None:
-        stage_dir = storage_path.rsplit("/", 1)[0] if "/" in storage_path else storage_path
+        stage_path = self._stage_path(storage_path)
+        stage_dir = stage_path.rsplit("/", 1)[0] if "/" in stage_path else stage_path
         self.session.file.put(local_path, stage_dir, auto_compress=False, overwrite=True)
 
 
