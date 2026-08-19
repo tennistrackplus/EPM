@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * DRACO PLANNING — INTERFACES (MOCKUP)
+ * DRACO PLANNING — INTERFACES
  * ============================================================
  * Listado de interfaces (cargas de datos) agrupadas por cubo, con
  * alta/edición en dos pasos:
@@ -8,11 +8,20 @@
  *   2) Modal casi a pantalla completa (mapeo), que ya no repite esos
  *      3 campos como inputs — se muestran en el título para ganar
  *      espacio vertical.
- * Todo lo relativo al origen, el mapeo y las funciones Python es,
- * por ahora, MOCKUP: se guarda en localStorage, no en las tablas de
- * control reales. Cuando el mockup guste, se decide cómo persistirlo.
+ * Persistencia real en DRACO_CONTROL, repartida en 5 tablas:
+ *   - INTERFACES               cabecera (nombre, tipo, origen, cubo destino)
+ *   - INTERFACES_VALUES        características del origen (separadores, encoding...)
+ *   - INTERFACES_INPUT         campos de entrada esperados
+ *   - INTERFACES_INPUT_FILTERS filtros sobre esos campos (valor fijo o variable)
+ *   - INTERFACES_MAPPING       mapeo campo a campo hacia el cubo destino
+ * El buscador de tablas de origen (MOCK_TABLES) sigue siendo mockup.
  */
 const Loads = {
+    // El nombre se usa para generar funciones Python, así que debe ser
+    // un identificador corto: empieza por letra, solo letras/números/"_".
+    NAME_RE: /^[A-Za-z][A-Za-z0-9_]{0,29}$/,
+
+
     list: [],
     cubes: [],
     filterCuboId: "",
@@ -44,7 +53,7 @@ const Loads = {
             <div class="module-header">
                 <div>
                     <h3>Interfaces</h3>
-                    <p>Proyecto: ${UI.escapeHtml(project.PROYECTO)} · dataset ${project.DATASET} <span class="mock-badge">MOCKUP</span></p>
+                    <p>Proyecto: ${UI.escapeHtml(project.PROYECTO)} · dataset ${project.DATASET}</p>
                 </div>
                 <button class="btn btn-primary btn-sm" id="btnNewLoad">+ Nueva interfaz</button>
             </div>
@@ -64,7 +73,7 @@ const Loads = {
         });
 
         await this.loadCubes();
-        this.loadMockList();
+        await this.loadList();
         this.renderList();
     },
 
@@ -103,22 +112,95 @@ const Loads = {
     },
 
     // ------------------------------------------------------------
-    // Persistencia mockup (localStorage por proyecto)
+    // Carga del listado (resumen) desde las tablas de control
     // ------------------------------------------------------------
-    storageKey() {
-        return `draco_mock_loads_${this.project.PROYECTO_ID}`;
-    },
-
-    loadMockList() {
+    async loadList() {
         try {
-            this.list = JSON.parse(localStorage.getItem(this.storageKey()) || "[]");
-        } catch (e) {
+            const rows = await Provider.runQuery(`
+                SELECT INTERFAZ_ID, INTERFAZ, TIPO, ORIGEN, CUBO_ID, MAPPING_MODE
+                FROM ${Provider.qualifyControl("INTERFACES")}
+                WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                ORDER BY INTERFAZ`);
+
+            let sepByIface = {}, countByIface = {};
+            if (rows.length) {
+                const sep = await Provider.runQuery(`
+                    SELECT INTERFAZ_ID, VALOR
+                    FROM ${Provider.qualifyControl("INTERFACES_VALUES")}
+                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}' AND CARACTERISTICA = 'SEPARADOR_CAMPO'`);
+                sep.forEach(r => { sepByIface[r.INTERFAZ_ID] = r.VALOR; });
+
+                const counts = await Provider.runQuery(`
+                    SELECT INTERFAZ_ID, COUNT(*) AS N
+                    FROM ${Provider.qualifyControl("INTERFACES_MAPPING")}
+                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                    GROUP BY INTERFAZ_ID`);
+                counts.forEach(r => { countByIface[r.INTERFAZ_ID] = parseInt(r.N || "0", 10); });
+            }
+
+            this.list = rows.map(r => ({
+                id: r.INTERFAZ_ID,
+                name: r.INTERFAZ,
+                cuboId: r.CUBO_ID,
+                originType: r.TIPO === "FICHERO" ? "fichero" : "tabla",
+                origin: {
+                    tableName: r.TIPO === "TABLA" ? (r.ORIGEN || "") : "",
+                    fileType: r.TIPO === "FICHERO" ? (r.ORIGEN || "") : "",
+                    fieldSeparator: sepByIface[r.INTERFAZ_ID] || ""
+                },
+                mappingMode: (r.MAPPING_MODE || "VISUAL").toLowerCase(),
+                mappedFieldsCount: countByIface[r.INTERFAZ_ID] || 0
+            }));
+        } catch (err) {
             this.list = [];
+            UI.toast("Error al cargar las interfaces: " + err.message, "error");
         }
     },
 
-    saveMockList() {
-        localStorage.setItem(this.storageKey(), JSON.stringify(this.list));
+    /** Carga el detalle completo de una interfaz (para editarla) en la forma que espera el editor. */
+    async loadDetail(id) {
+        const rows = await Provider.runQuery(`SELECT * FROM ${Provider.qualifyControl("INTERFACES")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+        const row = rows[0];
+        if (!row) return null;
+
+        const values = await Provider.runQuery(`SELECT CARACTERISTICA, VALOR FROM ${Provider.qualifyControl("INTERFACES_VALUES")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+        const valMap = {};
+        values.forEach(v => { valMap[v.CARACTERISTICA] = v.VALOR; });
+
+        const inputs = await Provider.runQuery(`SELECT CAMPO, TIPO, ORDEN FROM ${Provider.qualifyControl("INTERFACES_INPUT")} WHERE INTERFAZ_ID = '${Provider.esc(id)}' ORDER BY ORDEN`);
+        const filters = await Provider.runQuery(`SELECT CAMPO, TIPO, VALOR FROM ${Provider.qualifyControl("INTERFACES_INPUT_FILTERS")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+        const filterByCampo = {};
+        filters.forEach(f => { filterByCampo[f.CAMPO] = { type: f.TIPO === "VARIABLE" ? "variable" : "constante", value: f.VALOR || "" }; });
+
+        const mapping = await Provider.runQuery(`SELECT CAMPO_DESTINO, TIPO, VALOR, CODIGO FROM ${Provider.qualifyControl("INTERFACES_MAPPING")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+        const outputMappings = {};
+        mapping.forEach(m => {
+            const type = (m.TIPO || "").toLowerCase();
+            outputMappings[m.CAMPO_DESTINO] = { type, value: type === "funcion" ? (m.CODIGO || "") : (m.VALOR || "") };
+        });
+
+        return {
+            id: row.INTERFAZ_ID,
+            name: row.INTERFAZ,
+            cuboId: row.CUBO_ID,
+            originType: row.TIPO === "FICHERO" ? "fichero" : "tabla",
+            origin: {
+                connector: row.CONECTOR || Provider.key(),
+                tableName: row.TIPO === "TABLA" ? (row.ORIGEN || "") : "",
+                fileType: row.TIPO === "FICHERO" ? (row.ORIGEN || "csv") : "csv",
+                hasHeader: valMap.TIENE_CABECERA !== "false",
+                headerLines: parseInt(valMap.LINEAS_CABECERA || "1", 10),
+                fieldSeparator: valMap.SEPARADOR_CAMPO || ",",
+                decimalSeparator: valMap.SEPARADOR_DECIMAL || ".",
+                encoding: valMap.CODIFICACION || "UTF-8",
+                fields: inputs.map(i => ({ name: i.CAMPO, type: i.TIPO || "STRING", custom: false, filter: filterByCampo[i.CAMPO] || null }))
+            },
+            inputTransformCode: row.INPUT_TRANSFORM_CODE || "",
+            outputTransformCode: row.OUTPUT_TRANSFORM_CODE || "",
+            mappingMode: (row.MAPPING_MODE || "VISUAL").toLowerCase(),
+            mappingCode: row.MAPPING_CODE || "",
+            outputMappings
+        };
     },
 
     // ------------------------------------------------------------
@@ -192,19 +274,24 @@ const Loads = {
 
     mappedCount(l) {
         const total = this.cuboFields(l.cuboId).length;
-        const mapped = Object.values(l.outputMappings || {}).filter(m => m && m.type).length;
-        return l.mappingMode === "code" ? "por código" : `${mapped}/${total}`;
+        return l.mappingMode === "code" ? "por código" : `${l.mappedFieldsCount || 0}/${total}`;
     },
 
     async remove(id) {
         const load = this.list.find(l => l.id === id);
         if (!load) return;
-        const ok = await UI.confirm("Eliminar interfaz", `Se eliminará la interfaz <strong>${UI.escapeHtml(load.name)}</strong> (mockup, no afecta a ninguna tabla física).`);
+        const ok = await UI.confirm("Eliminar interfaz", `Se eliminará la interfaz <strong>${UI.escapeHtml(load.name)}</strong> y toda su configuración de origen, filtros y mapeo.`);
         if (!ok) return;
-        this.list = this.list.filter(l => l.id !== id);
-        this.saveMockList();
-        this.renderList();
-        UI.toast(`Interfaz "${load.name}" eliminada.`, "success");
+        try {
+            for (const table of ["INTERFACES_MAPPING", "INTERFACES_INPUT_FILTERS", "INTERFACES_INPUT", "INTERFACES_VALUES", "INTERFACES"]) {
+                await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl(table)} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+            }
+            await this.loadList();
+            this.renderList();
+            UI.toast(`Interfaz "${load.name}" eliminada.`, "success");
+        } catch (err) {
+            UI.toast("Error al eliminar la interfaz: " + err.message, "error");
+        }
     },
 
     // ------------------------------------------------------------
@@ -298,6 +385,10 @@ const Loads = {
                 const name = nameInput.value.trim();
                 const cuboId = overlay.querySelector("#basicsCubo").value;
                 if (!name) { UI.toast("Indica un nombre para la interfaz.", "error"); return; }
+                if (!this.NAME_RE.test(name)) {
+                    UI.toast("El nombre debe empezar por una letra y contener solo letras, números y \"_\" (sin espacios ni otros caracteres), máx. 30. Se usará para generar funciones Python.", "error");
+                    return;
+                }
                 if (!cuboId) { UI.toast("Selecciona un cubo destino.", "error"); return; }
                 cleanup({ name, cuboId, originType });
             };
@@ -314,9 +405,14 @@ const Loads = {
             return;
         }
 
-        const existing = editId ? this.list.find(l => l.id === editId) : null;
-        this.editingIsNew = !existing;
-        const draft = existing ? JSON.parse(JSON.stringify(existing)) : this.blankLoad();
+        this.editingIsNew = !editId;
+        let draft;
+        if (editId) {
+            draft = await this.loadDetail(editId);
+            if (!draft) { UI.toast("No se ha podido cargar la interfaz.", "error"); return; }
+        } else {
+            draft = this.blankLoad();
+        }
 
         const basics = await this.openBasicsModal(draft, this.editingIsNew);
         if (!basics) return;
@@ -435,7 +531,7 @@ const Loads = {
             });
             if (code !== null) {
                 this.editing.inputTransformCode = code;
-                UI.toast("Código de transformación de input guardado (mockup).", "success");
+                UI.toast("Código de transformación de input listo — se guardará al pulsar \"Guardar interfaz\".", "success");
             }
         });
 
@@ -447,7 +543,7 @@ const Loads = {
             });
             if (code !== null) {
                 this.editing.outputTransformCode = code;
-                UI.toast("Código de transformación de output guardado (mockup).", "success");
+                UI.toast("Código de transformación de output listo — se guardará al pulsar \"Guardar interfaz\".", "success");
             }
         });
 
@@ -945,17 +1041,104 @@ const Loads = {
     },
 
     // ------------------------------------------------------------
-    // Guardado (mockup → localStorage)
+    // Guardado — reparte los datos en las 5 tablas de control
     // ------------------------------------------------------------
-    save() {
-        const idx = this.list.findIndex(l => l.id === this.editing.id);
-        if (idx >= 0) this.list[idx] = this.editing;
-        else this.list.push(this.editing);
+    async save() {
+        const btn = document.getElementById("loadFormSave");
+        if (btn) { btn.disabled = true; btn.textContent = "Guardando…"; }
+        try {
+            await this.persist();
+            const name = this.editing.name;
+            this.editingIsNew = false;
+            this.closeForm();
+            await this.loadList();
+            this.renderList();
+            if (window.Draco && Draco.renderProgress) Draco.renderProgress();
+            UI.toast(`Interfaz "${name}" guardada.`, "success");
+        } catch (err) {
+            UI.toast("Error al guardar la interfaz: " + err.message, "error");
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = "Guardar interfaz"; }
+        }
+    },
 
-        this.saveMockList();
-        const name = this.editing.name;
-        this.closeForm();
-        this.renderList();
-        UI.toast(`Interfaz "${name}" guardada (mockup).`, "success");
+    async persist() {
+        const e = this.editing;
+        const id = e.id;
+        const pid = this.project.PROYECTO_ID;
+        const tipo = e.originType === "fichero" ? "FICHERO" : "TABLA";
+        const origen = e.originType === "fichero" ? e.origin.fileType : e.origin.tableName;
+        const conector = e.originType === "tabla" ? e.origin.connector : "";
+        const mappingMode = e.mappingMode === "code" ? "CODIGO" : "VISUAL";
+
+        // 1) Cabecera --------------------------------------------------
+        if (this.editingIsNew) {
+            const sql = `INSERT INTO ${Provider.qualifyControl("INTERFACES")}
+                (INTERFAZ_ID, PROYECTO_ID, INTERFAZ, TIPO, ORIGEN, CONECTOR, CUBO_ID, MAPPING_MODE, MAPPING_CODE, INPUT_TRANSFORM_CODE, OUTPUT_TRANSFORM_CODE, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
+                VALUES ('${Provider.esc(id)}', '${Provider.esc(pid)}', '${Provider.esc(e.name)}', '${Provider.esc(tipo)}',
+                        '${Provider.esc(origen)}', '${Provider.esc(conector)}', '${Provider.esc(e.cuboId)}', '${Provider.esc(mappingMode)}',
+                        '${Provider.esc(e.mappingCode)}', '${Provider.esc(e.inputTransformCode)}', '${Provider.esc(e.outputTransformCode)}',
+                        ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`;
+            await Provider.runQuery(sql);
+        } else {
+            const sql = `UPDATE ${Provider.qualifyControl("INTERFACES")}
+                SET INTERFAZ = '${Provider.esc(e.name)}',
+                    TIPO = '${Provider.esc(tipo)}',
+                    ORIGEN = '${Provider.esc(origen)}',
+                    CONECTOR = '${Provider.esc(conector)}',
+                    CUBO_ID = '${Provider.esc(e.cuboId)}',
+                    MAPPING_MODE = '${Provider.esc(mappingMode)}',
+                    MAPPING_CODE = '${Provider.esc(e.mappingCode)}',
+                    INPUT_TRANSFORM_CODE = '${Provider.esc(e.inputTransformCode)}',
+                    OUTPUT_TRANSFORM_CODE = '${Provider.esc(e.outputTransformCode)}',
+                    FECHA_MODIFICACION = CURRENT_TIMESTAMP()
+                WHERE INTERFAZ_ID = '${Provider.esc(id)}'`;
+            await Provider.runQuery(sql);
+        }
+
+        // 2) Características del origen (INTERFACES_VALUES) ------------
+        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_VALUES")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+        if (e.originType === "fichero") {
+            const valueRows = [
+                ["TIENE_CABECERA", e.origin.hasHeader ? "true" : "false"],
+                ["LINEAS_CABECERA", String(e.origin.headerLines)],
+                ["SEPARADOR_CAMPO", e.origin.fieldSeparator],
+                ["SEPARADOR_DECIMAL", e.origin.decimalSeparator],
+                ["CODIFICACION", e.origin.encoding]
+            ];
+            const vals = valueRows.map(([car, val]) =>
+                `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(car)}', '${Provider.esc(val)}')`).join(",\n");
+            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_VALUES")} (PROYECTO_ID, INTERFAZ_ID, CARACTERISTICA, VALOR) VALUES ${vals}`);
+        }
+
+        // 3) Campos de entrada (INTERFACES_INPUT) -----------------------
+        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_INPUT")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+        if (e.origin.fields.length) {
+            const vals = e.origin.fields.map((f, idx) =>
+                `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(f.name)}', '${Provider.esc(f.type)}', ${idx})`).join(",\n");
+            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_INPUT")} (PROYECTO_ID, INTERFAZ_ID, CAMPO, TIPO, ORDEN) VALUES ${vals}`);
+        }
+
+        // 4) Filtros sobre los campos de entrada (INTERFACES_INPUT_FILTERS)
+        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_INPUT_FILTERS")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+        const filterRows = e.origin.fields.filter(f => f.filter && f.filter.type);
+        if (filterRows.length) {
+            const vals = filterRows.map(f =>
+                `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(f.name)}', '${Provider.esc(f.filter.type === "variable" ? "VARIABLE" : "VALOR")}', '${Provider.esc(f.filter.value)}')`).join(",\n");
+            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_INPUT_FILTERS")} (PROYECTO_ID, INTERFAZ_ID, CAMPO, TIPO, VALOR) VALUES ${vals}`);
+        }
+
+        // 5) Mapeo campo a campo hacia el cubo (INTERFACES_MAPPING) -----
+        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_MAPPING")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+        const mapRows = Object.entries(e.outputMappings || {}).filter(([, m]) => m && m.type);
+        if (mapRows.length) {
+            const vals = mapRows.map(([campoDestino, m]) => {
+                const t = m.type.toUpperCase();
+                const valor = t === "FUNCION" ? "" : (m.value || "");
+                const codigo = t === "FUNCION" ? (m.value || "") : "";
+                return `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(campoDestino)}', '${Provider.esc(t)}', '${Provider.esc(valor)}', '${Provider.esc(codigo)}')`;
+            }).join(",\n");
+            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_MAPPING")} (PROYECTO_ID, INTERFAZ_ID, CAMPO_DESTINO, TIPO, VALOR, CODIGO) VALUES ${vals}`);
+        }
     }
 };

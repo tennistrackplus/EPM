@@ -256,8 +256,14 @@ const Draco = {
         }
 
         let loadsCount = 0, flowsCount = 0;
-        try { loadsCount = (JSON.parse(localStorage.getItem(`draco_mock_loads_${pid}`) || "[]")).length; } catch (e) { loadsCount = 0; }
-        try { flowsCount = (JSON.parse(localStorage.getItem(`draco_mock_flows_${pid}`) || "[]")).length; } catch (e) { flowsCount = 0; }
+        try {
+            const r3 = await Provider.runQuery(`SELECT COUNT(*) AS N FROM ${Provider.qualifyControl("INTERFACES")} WHERE PROYECTO_ID='${Provider.esc(pid)}'`);
+            loadsCount = parseInt(r3[0]?.N || "0", 10);
+        } catch (e) { loadsCount = 0; }
+        try {
+            const r4 = await Provider.runQuery(`SELECT COUNT(*) AS N FROM ${Provider.qualifyControl("FLUJOS")} WHERE PROYECTO_ID='${Provider.esc(pid)}'`);
+            flowsCount = parseInt(r4[0]?.N || "0", 10);
+        } catch (e) { flowsCount = 0; }
 
         const steps = [
             { done: true, title: "Crear proyecto", desc: `Proyecto "${this.currentProject.PROYECTO}" creado` },

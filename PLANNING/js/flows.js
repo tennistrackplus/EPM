@@ -1,6 +1,6 @@
 /**
  * ============================================================
- * DRACO PLANNING — FLUJOS DE CARGA (MOCKUP)
+ * DRACO PLANNING — FLUJOS DE CARGA
  * ============================================================
  * Listado de flujos (procesos) agrupados en "Automáticos" y
  * "Manuales", con alta/edición en dos pasos:
@@ -16,9 +16,14 @@
  *      D) Mapeo: variables de fichero/filtro/mapeo de cada paso de
  *         la cadena, asignadas por constante o arrastrando una
  *         variable de pantalla (si el flujo es manual).
- * Todo esto es, por ahora, MOCKUP: se guarda en localStorage, no
- * en tablas de control reales. Lee las interfaces (cargas de datos)
- * también desde localStorage, tal y como las guarda js/loads.js.
+ * Persistencia real en DRACO_CONTROL, repartida en 5 tablas:
+ *   - FLUJOS                    cabecera (nombre, tipo, planificación, pantalla)
+ *   - FLUJOS_CHAIN              cadena de interfaces, ordenada
+ *   - FLUJOS_CHAIN_TARGETS      variables asignadas por paso (fichero/filtro/mapeo)
+ *   - FLUJOS_SCREEN_BLOCKS      bloques de la pantalla de variables (var/frame/texto)
+ *   - FLUJOS_SCREEN_VARIABLES   variables sueltas o dentro de un frame
+ * La ejecución real (lanzar/planificar en el orquestador) sigue sin
+ * implementarse: el botón "Ejecutar" es un aviso, no dispara nada.
  */
 const Flows = {
     list: [],
@@ -39,7 +44,7 @@ const Flows = {
             <div class="module-header">
                 <div>
                     <h3>Flujos de carga</h3>
-                    <p>Proyecto: ${UI.escapeHtml(project.PROYECTO)} · dataset ${project.DATASET} <span class="mock-badge">MOCKUP</span></p>
+                    <p>Proyecto: ${UI.escapeHtml(project.PROYECTO)} · dataset ${project.DATASET}</p>
                 </div>
                 <button class="btn btn-primary btn-sm" id="btnNewFlow">+ Nuevo flujo</button>
             </div>
@@ -49,33 +54,156 @@ const Flows = {
         document.getElementById("btnNewFlow").addEventListener("click", () => this.openForm());
 
         await this.loadInterfacesAndCubes();
-        this.loadMockList();
+        await this.loadList();
         this.renderList();
     },
 
     // ------------------------------------------------------------
-    // Persistencia mockup (localStorage por proyecto)
+    // Carga del listado (resumen) desde las tablas de control
     // ------------------------------------------------------------
-    storageKey() {
-        return `draco_mock_flows_${this.project.PROYECTO_ID}`;
-    },
-
-    loadMockList() {
+    async loadList() {
         try {
-            this.list = JSON.parse(localStorage.getItem(this.storageKey()) || "[]");
-        } catch (e) {
+            const rows = await Provider.runQuery(`
+                SELECT FLUJO_ID, FLUJO, TIPO, SCHEDULE_JSON
+                FROM ${Provider.qualifyControl("FLUJOS")}
+                WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                ORDER BY FLUJO`);
+
+            let chainCounts = {};
+            if (rows.length) {
+                const chains = await Provider.runQuery(`
+                    SELECT FLUJO_ID, COUNT(*) AS N
+                    FROM ${Provider.qualifyControl("FLUJOS_CHAIN")}
+                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                    GROUP BY FLUJO_ID`);
+                chains.forEach(c => { chainCounts[c.FLUJO_ID] = parseInt(c.N || "0", 10); });
+            }
+
+            this.list = rows.map(r => {
+                let schedule = null;
+                if (r.SCHEDULE_JSON) { try { schedule = JSON.parse(r.SCHEDULE_JSON); } catch (e) { schedule = null; } }
+                return {
+                    id: r.FLUJO_ID,
+                    name: r.FLUJO,
+                    type: r.TIPO === "MANUAL" ? "manual" : "automatico",
+                    schedule,
+                    chainCount: chainCounts[r.FLUJO_ID] || 0
+                };
+            });
+        } catch (err) {
             this.list = [];
+            UI.toast("Error al cargar los flujos: " + err.message, "error");
         }
     },
 
-    saveMockList() {
-        localStorage.setItem(this.storageKey(), JSON.stringify(this.list));
+    /** Carga el detalle completo de un flujo (para editarlo) en la forma que espera el editor. */
+    async loadDetail(id) {
+        const rows = await Provider.runQuery(`SELECT * FROM ${Provider.qualifyControl("FLUJOS")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
+        const row = rows[0];
+        if (!row) return null;
+
+        const chainRows = await Provider.runQuery(`
+            SELECT PASO_ID, INTERFAZ_ID, ORDEN FROM ${Provider.qualifyControl("FLUJOS_CHAIN")}
+            WHERE FLUJO_ID = '${Provider.esc(id)}' ORDER BY ORDEN`);
+        const targetRows = await Provider.runQuery(`
+            SELECT PASO_ID, GRUPO, CLAVE, TIPO, VALOR FROM ${Provider.qualifyControl("FLUJOS_CHAIN_TARGETS")}
+            WHERE FLUJO_ID = '${Provider.esc(id)}'`);
+        const targetsByPaso = {};
+        targetRows.forEach(t => {
+            const grupo = (t.GRUPO || "").toLowerCase();
+            targetsByPaso[t.PASO_ID] = targetsByPaso[t.PASO_ID] || { file: {}, filter: {}, mapping: {} };
+            targetsByPaso[t.PASO_ID][grupo][t.CLAVE] = { type: t.TIPO === "VARIABLE" ? "variable" : "constante", value: t.VALOR || "" };
+        });
+        const chain = chainRows.map(c => ({
+            id: c.PASO_ID,
+            interfaceId: c.INTERFAZ_ID,
+            targets: targetsByPaso[c.PASO_ID] || { file: {}, filter: {}, mapping: {} }
+        }));
+
+        const blockRows = await Provider.runQuery(`
+            SELECT BLOQUE_ID, TIPO, ORDEN, TITULO, CONTENIDO FROM ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")}
+            WHERE FLUJO_ID = '${Provider.esc(id)}' ORDER BY ORDEN`);
+        const varRows = await Provider.runQuery(`
+            SELECT VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, ORDEN FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")}
+            WHERE FLUJO_ID = '${Provider.esc(id)}' ORDER BY ORDEN`);
+        const varsByBloque = {};
+        varRows.forEach(v => {
+            (varsByBloque[v.BLOQUE_ID] = varsByBloque[v.BLOQUE_ID] || [])
+                .push({ id: v.VARIABLE_ID, name: v.NOMBRE, label: v.ETIQUETA || v.NOMBRE, type: v.TIPO || "STRING" });
+        });
+
+        const blocks = blockRows.map(b => {
+            if (b.TIPO === "VARIABLE") {
+                const v = (varsByBloque[b.BLOQUE_ID] || [])[0] || { id: Provider.newId(), name: "", label: "", type: "STRING" };
+                return { id: b.BLOQUE_ID, kind: "variable", variable: v };
+            }
+            if (b.TIPO === "TEXTO") {
+                return { id: b.BLOQUE_ID, kind: "text", text: b.CONTENIDO || "" };
+            }
+            return { id: b.BLOQUE_ID, kind: "frame", title: b.TITULO || "Frame", variables: varsByBloque[b.BLOQUE_ID] || [] };
+        });
+
+        let schedule = null;
+        if (row.SCHEDULE_JSON) { try { schedule = JSON.parse(row.SCHEDULE_JSON); } catch (e) { schedule = null; } }
+
+        return {
+            id: row.FLUJO_ID,
+            name: row.FLUJO,
+            type: row.TIPO === "MANUAL" ? "manual" : "automatico",
+            schedule,
+            chain,
+            screen: { title: row.SCREEN_TITLE || "", blocks }
+        };
     },
 
-    /** Interfaces (cargas de datos) y cubos del proyecto, para poder listarlas y leer sus campos. */
+    /** Interfaces (cargas de datos) y cubos del proyecto, para poder listarlas, leer sus campos y mapear variables. */
     async loadInterfacesAndCubes() {
         try {
-            this.interfaces = JSON.parse(localStorage.getItem(`draco_mock_loads_${this.project.PROYECTO_ID}`) || "[]");
+            const rows = await Provider.runQuery(`
+                SELECT INTERFAZ_ID, INTERFAZ, TIPO, CUBO_ID
+                FROM ${Provider.qualifyControl("INTERFACES")}
+                WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                ORDER BY INTERFAZ`);
+
+            let fieldsByIface = {}, mappingByIface = {};
+            if (rows.length) {
+                const inputs = await Provider.runQuery(`
+                    SELECT INTERFAZ_ID, CAMPO, TIPO, ORDEN FROM ${Provider.qualifyControl("INTERFACES_INPUT")}
+                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}' ORDER BY ORDEN`);
+                inputs.forEach(i => {
+                    (fieldsByIface[i.INTERFAZ_ID] = fieldsByIface[i.INTERFAZ_ID] || []).push({ name: i.CAMPO, type: i.TIPO || "STRING" });
+                });
+
+                const filters = await Provider.runQuery(`
+                    SELECT INTERFAZ_ID, CAMPO, TIPO, VALOR FROM ${Provider.qualifyControl("INTERFACES_INPUT_FILTERS")}
+                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'`);
+                const filtersByIface = {};
+                filters.forEach(f => {
+                    filtersByIface[f.INTERFAZ_ID] = filtersByIface[f.INTERFAZ_ID] || {};
+                    filtersByIface[f.INTERFAZ_ID][f.CAMPO] = { type: f.TIPO === "VARIABLE" ? "variable" : "constante", value: f.VALOR || "" };
+                });
+                Object.keys(fieldsByIface).forEach(ifaceId => {
+                    fieldsByIface[ifaceId] = fieldsByIface[ifaceId].map(fl =>
+                        ({ ...fl, filter: (filtersByIface[ifaceId] || {})[fl.name] || null }));
+                });
+
+                const mapping = await Provider.runQuery(`
+                    SELECT INTERFAZ_ID, CAMPO_DESTINO, TIPO FROM ${Provider.qualifyControl("INTERFACES_MAPPING")}
+                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'`);
+                mapping.forEach(m => {
+                    mappingByIface[m.INTERFAZ_ID] = mappingByIface[m.INTERFAZ_ID] || {};
+                    mappingByIface[m.INTERFAZ_ID][m.CAMPO_DESTINO] = { type: (m.TIPO || "").toLowerCase() };
+                });
+            }
+
+            this.interfaces = rows.map(r => ({
+                id: r.INTERFAZ_ID,
+                name: r.INTERFAZ,
+                cuboId: r.CUBO_ID,
+                originType: r.TIPO === "FICHERO" ? "fichero" : "tabla",
+                origin: { fields: fieldsByIface[r.INTERFAZ_ID] || [] },
+                outputMappings: mappingByIface[r.INTERFAZ_ID] || {}
+            }));
         } catch (e) {
             this.interfaces = [];
         }
@@ -159,7 +287,7 @@ const Flows = {
                                     <tr>
                                         <td><strong>${UI.escapeHtml(f.name)}</strong></td>
                                         <td>${this.statusHtml(f)}</td>
-                                        <td>${f.chain.length} paso${f.chain.length === 1 ? "" : "s"}</td>
+                                        <td>${f.chainCount} paso${f.chainCount === 1 ? "" : "s"}</td>
                                         <td>
                                             <div class="row-actions">
                                                 <button data-edit-flow="${f.id}" title="Editar">✎</button>
@@ -182,12 +310,18 @@ const Flows = {
     async remove(id) {
         const flow = this.list.find(f => f.id === id);
         if (!flow) return;
-        const ok = await UI.confirm("Eliminar flujo", `Se eliminará el flujo <strong>${UI.escapeHtml(flow.name)}</strong> (mockup, no afecta a ninguna ejecución real).`);
+        const ok = await UI.confirm("Eliminar flujo", `Se eliminará el flujo <strong>${UI.escapeHtml(flow.name)}</strong> y toda su configuración (cadena, pantalla y mapeo de variables).`);
         if (!ok) return;
-        this.list = this.list.filter(f => f.id !== id);
-        this.saveMockList();
-        this.renderList();
-        UI.toast(`Flujo "${flow.name}" eliminado.`, "success");
+        try {
+            for (const table of ["FLUJOS_SCREEN_VARIABLES", "FLUJOS_SCREEN_BLOCKS", "FLUJOS_CHAIN_TARGETS", "FLUJOS_CHAIN", "FLUJOS"]) {
+                await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl(table)} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
+            }
+            await this.loadList();
+            this.renderList();
+            UI.toast(`Flujo "${flow.name}" eliminado.`, "success");
+        } catch (err) {
+            UI.toast("Error al eliminar el flujo: " + err.message, "error");
+        }
     },
 
     // ------------------------------------------------------------
@@ -270,9 +404,14 @@ const Flows = {
     // Orquesta los 2 pasos de alta/edición
     // ------------------------------------------------------------
     async openForm(editId = null) {
-        const existing = editId ? this.list.find(f => f.id === editId) : null;
-        this.editingIsNew = !existing;
-        const draft = existing ? JSON.parse(JSON.stringify(existing)) : this.blankFlow();
+        this.editingIsNew = !editId;
+        let draft;
+        if (editId) {
+            draft = await this.loadDetail(editId);
+            if (!draft) { UI.toast("No se ha podido cargar el flujo.", "error"); return; }
+        } else {
+            draft = this.blankFlow();
+        }
 
         const basics = await this.openBasicsModal(draft, this.editingIsNew);
         if (!basics) return;
@@ -392,7 +531,7 @@ const Flows = {
             this.renderHeaderPart();
         });
         document.getElementById("btnRunFlow").addEventListener("click", () => {
-            UI.toast(`Ejecución de "${f.name}" lanzada (mockup, no ejecuta nada real).`, "success");
+            UI.toast(`"${f.name}" quedará pendiente de implementar la ejecución en el orquestador.`, "info");
         });
     },
 
@@ -819,19 +958,108 @@ const Flows = {
     },
 
     // ------------------------------------------------------------
-    // Guardado (mockup → localStorage)
+    // Guardado — reparte los datos en las 5 tablas de control
     // ------------------------------------------------------------
-    save() {
+    async save() {
         const f = this.editing;
         if (!f.name) { UI.toast("El flujo necesita un nombre.", "error"); return; }
 
-        const idx = this.list.findIndex(x => x.id === f.id);
-        if (idx >= 0) this.list[idx] = f; else this.list.push(f);
+        const btn = document.getElementById("flowFormSave");
+        if (btn) { btn.disabled = true; btn.textContent = "Guardando…"; }
+        try {
+            await this.persist();
+            const name = f.name;
+            this.editingIsNew = false;
+            this.closeForm();
+            await this.loadList();
+            this.renderList();
+            if (window.Draco && Draco.renderProgress) Draco.renderProgress();
+            UI.toast(`Flujo "${name}" guardado.`, "success");
+        } catch (err) {
+            UI.toast("Error al guardar el flujo: " + err.message, "error");
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = "Guardar flujo"; }
+        }
+    },
 
-        this.saveMockList();
-        const name = f.name;
-        this.closeForm();
-        this.renderList();
-        UI.toast(`Flujo "${name}" guardado (mockup).`, "success");
+    async persist() {
+        const f = this.editing;
+        const id = f.id;
+        const pid = this.project.PROYECTO_ID;
+        const tipo = f.type === "manual" ? "MANUAL" : "AUTOMATICO";
+        const scheduleJson = (tipo === "AUTOMATICO" && f.schedule) ? Provider.esc(JSON.stringify(f.schedule)) : "";
+        const screenTitle = tipo === "MANUAL" ? (f.screen.title || "") : "";
+
+        // 1) Cabecera --------------------------------------------------
+        if (this.editingIsNew) {
+            const sql = `INSERT INTO ${Provider.qualifyControl("FLUJOS")}
+                (FLUJO_ID, PROYECTO_ID, FLUJO, TIPO, SCHEDULE_JSON, SCREEN_TITLE, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
+                VALUES ('${Provider.esc(id)}', '${Provider.esc(pid)}', '${Provider.esc(f.name)}', '${Provider.esc(tipo)}',
+                        '${scheduleJson}', '${Provider.esc(screenTitle)}', ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`;
+            await Provider.runQuery(sql);
+        } else {
+            const sql = `UPDATE ${Provider.qualifyControl("FLUJOS")}
+                SET FLUJO = '${Provider.esc(f.name)}',
+                    TIPO = '${Provider.esc(tipo)}',
+                    SCHEDULE_JSON = '${scheduleJson}',
+                    SCREEN_TITLE = '${Provider.esc(screenTitle)}',
+                    FECHA_MODIFICACION = CURRENT_TIMESTAMP()
+                WHERE FLUJO_ID = '${Provider.esc(id)}'`;
+            await Provider.runQuery(sql);
+        }
+
+        // 2) Cadena de interfaces + variables asignadas por paso --------
+        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_CHAIN")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
+        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_CHAIN_TARGETS")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
+        if (f.chain.length) {
+            const chainVals = f.chain.map((s, idx) =>
+                `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(s.id)}', '${Provider.esc(s.interfaceId)}', ${idx})`).join(",\n");
+            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_CHAIN")} (PROYECTO_ID, FLUJO_ID, PASO_ID, INTERFAZ_ID, ORDEN) VALUES ${chainVals}`);
+
+            const targetRows = [];
+            f.chain.forEach(s => {
+                const targets = s.targets || { file: {}, filter: {}, mapping: {} };
+                ["file", "filter", "mapping"].forEach(grupo => {
+                    Object.entries(targets[grupo] || {}).forEach(([clave, t]) => {
+                        if (!t || !t.type) return;
+                        targetRows.push([s.id, grupo.toUpperCase(), clave, t.type === "variable" ? "VARIABLE" : "CONSTANTE", t.value || ""]);
+                    });
+                });
+            });
+            if (targetRows.length) {
+                const vals = targetRows.map(([pasoId, grupo, clave, tipoT, valor]) =>
+                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(pasoId)}', '${Provider.esc(grupo)}', '${Provider.esc(clave)}', '${Provider.esc(tipoT)}', '${Provider.esc(valor)}')`).join(",\n");
+                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_CHAIN_TARGETS")} (PROYECTO_ID, FLUJO_ID, PASO_ID, GRUPO, CLAVE, TIPO, VALOR) VALUES ${vals}`);
+            }
+        }
+
+        // 3) Pantalla de variables (solo manual; se limpia siempre por si cambió de tipo)
+        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
+        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
+        if (tipo === "MANUAL" && f.screen.blocks.length) {
+            const blockVals = f.screen.blocks.map((b, idx) => {
+                const tipoB = b.kind === "variable" ? "VARIABLE" : (b.kind === "frame" ? "FRAME" : "TEXTO");
+                const titulo = b.kind === "frame" ? (b.title || "") : "";
+                const contenido = b.kind === "text" ? (b.text || "") : "";
+                return `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(b.id)}', '${Provider.esc(tipoB)}', ${idx}, '${Provider.esc(titulo)}', '${Provider.esc(contenido)}')`;
+            }).join(",\n");
+            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")} (PROYECTO_ID, FLUJO_ID, BLOQUE_ID, TIPO, ORDEN, TITULO, CONTENIDO) VALUES ${blockVals}`);
+
+            const varRows = [];
+            f.screen.blocks.forEach(b => {
+                if (b.kind === "variable" && b.variable) {
+                    varRows.push([b.variable.id || Provider.newId(), b.id, b.variable.name, b.variable.label, b.variable.type, 0]);
+                } else if (b.kind === "frame") {
+                    (b.variables || []).forEach((v, vi) => {
+                        varRows.push([v.id || Provider.newId(), b.id, v.name, v.label, v.type, vi]);
+                    });
+                }
+            });
+            if (varRows.length) {
+                const vals = varRows.map(([varId, bloqueId, nombre, etiqueta, tipoV, orden]) =>
+                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(varId)}', '${Provider.esc(bloqueId)}', '${Provider.esc(nombre)}', '${Provider.esc(etiqueta)}', '${Provider.esc(tipoV)}', ${orden})`).join(",\n");
+                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")} (PROYECTO_ID, FLUJO_ID, VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, ORDEN) VALUES ${vals}`);
+            }
+        }
     }
 };
