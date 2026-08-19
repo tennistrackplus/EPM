@@ -20,7 +20,7 @@ const DracoConfig = {
     // Client ID que Snowflake genera al crear la SECURITY INTEGRATION
     // (ver sql/01_snowflake_oauth_integration.sql). No hace falta client
     // secret: al ser un cliente público, PKCE sustituye al secreto.
-    snowflakeClientId: "TU_SNOWFLAKE_OAUTH_CLIENT_ID",
+    snowflakeClientId: "m6fB0orhRaDGx6UBtpOKQWxXlKQ=",
     snowflakeScopes: "refresh_token",
 
     // Nombre del dataset/base de datos de control donde viven las tablas
