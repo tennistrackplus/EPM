@@ -1,0 +1,157 @@
+/* ============================================================
+   DRACO PLANNING — flow_run.html (ejecutar / monitorizar un flujo)
+   ============================================================ */
+
+.flow-run-wrap {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: var(--space-6);
+}
+
+.flow-run-heading {
+    margin-bottom: var(--space-6);
+}
+
+.flow-run-heading h1 {
+    margin: 0 0 4px 0;
+    font-size: 20px;
+    color: var(--text-primary);
+}
+
+.flow-run-tabs {
+    display: flex;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.flow-run-tab {
+    background: none;
+    border: none;
+    padding: var(--space-3) var(--space-2);
+    font-size: 14px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+}
+
+.flow-run-tab.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--color-info);
+    font-weight: 600;
+}
+
+/* --- Pantalla de variables ------------------------------------------- */
+
+.flow-screen-blocks--run {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    margin-bottom: var(--space-6);
+}
+
+.flow-screen-block--static {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+    background: #fff;
+}
+
+.flow-screen-block--text.flow-screen-block--static {
+    border: none;
+    padding: var(--space-2) 0;
+    background: none;
+}
+
+.flow-field-preview label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+.flow-field-preview input[type="text"],
+.flow-field-preview input[type="number"],
+.flow-field-preview input[type="date"],
+.flow-field-preview input[type="datetime-local"],
+.flow-field-preview input[type="file"] {
+    width: 100%;
+    padding: var(--space-3);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+}
+
+.flow-field-preview--checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.flow-field-preview--checkbox label {
+    margin-bottom: 0;
+}
+
+.flow-run-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+}
+
+/* --- Monitor ----------------------------------------------------------- */
+
+.flow-run-monitor-footer {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    margin-top: var(--space-5);
+    flex-wrap: wrap;
+}
+
+.flow-run-error-msg {
+    width: 100%;
+    white-space: pre-wrap;
+    color: var(--color-danger);
+}
+
+.flow-status-ok {
+    background-color: var(--color-success-light);
+    color: var(--color-success);
+}
+
+.flow-status-error {
+    background-color: var(--color-danger-light);
+    color: var(--color-danger);
+}
+
+/* Estados de cada tarjeta de paso en el monitor, reutilizando .flow-chain-card */
+
+.flow-run-step {
+    cursor: default;
+    border-width: 2px;
+}
+
+.flow-run-step--pendiente {
+    opacity: 0.55;
+}
+
+.flow-run-step--en_curso {
+    border-color: var(--color-info);
+    background-color: var(--color-info-light);
+    animation: flowRunPulse 1.4s ease-in-out infinite;
+}
+
+.flow-run-step--ok {
+    border-color: var(--color-success);
+    background-color: var(--color-success-light);
+}
+
+.flow-run-step--error {
+    border-color: var(--color-danger);
+    background-color: var(--color-danger-light);
+}
+
+@keyframes flowRunPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(42, 91, 215, 0.35); }
+    50% { box-shadow: 0 0 0 6px rgba(42, 91, 215, 0); }
+}
