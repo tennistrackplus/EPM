@@ -5,23 +5,29 @@
  * Listado de flujos (procesos) agrupados en "Automáticos" y
  * "Manuales", con alta/edición en dos pasos:
  *   1) Modal pequeño: nombre del proceso y tipo (automático/manual).
- *   2) Modal a pantalla completa con 4 bloques:
+ *   2) Modal a pantalla completa con 4 bloques, en este orden:
  *      A) Cabecera: nombre/tipo, y si es automático, planificación
  *         y ejecución.
- *      B) Cadena de interfaces (cargas de datos) a ejecutar, en
+ *      B) Pantalla de entrada de variables (solo flujos manuales,
+ *         contraíble): título, variables sueltas, agrupadas en
+ *         "frames" y textos explicativos con formato mínimo. Cada
+ *         elemento añadido se previsualiza como se vería de verdad
+ *         (sin recuadro alrededor, con un input real para la
+ *         variable) y se puede reordenar arrastrando, también
+ *         dentro de un frame.
+ *      C) Cadena de interfaces (cargas de datos) a ejecutar, en
  *         orden, sin bifurcaciones — se puede reordenar arrastrando.
- *      C) Pantalla de entrada de variables (solo flujos manuales):
- *         título, variables sueltas, agrupadas en "frames" y textos
- *         explicativos con formato mínimo.
- *      D) Mapeo: variables de fichero/filtro/mapeo de cada paso de
- *         la cadena, asignadas por constante o arrastrando una
- *         variable de pantalla (si el flujo es manual).
+ *      D) Mapeo de variables del paso seleccionado en la cadena
+ *         (clic en una tarjeta de la cadena para seleccionarla):
+ *         fichero (ruta/local-servidor), filtro y mapeo, asignadas
+ *         por constante o arrastrando una variable de pantalla (si
+ *         el flujo es manual).
  * Persistencia real en DRACO_CONTROL, repartida en 5 tablas:
- *   - FLUJOS                    cabecera (nombre, tipo, planificación, pantalla)
- *   - FLUJOS_CHAIN              cadena de interfaces, ordenada
- *   - FLUJOS_CHAIN_TARGETS      variables asignadas por paso (fichero/filtro/mapeo)
- *   - FLUJOS_SCREEN_BLOCKS      bloques de la pantalla de variables (var/frame/texto)
- *   - FLUJOS_SCREEN_VARIABLES   variables sueltas o dentro de un frame
+ *   - FLUJOS                     cabecera (nombre, tipo, planificación, pantalla)
+ *   - FLUJOS_INTERFACES          cadena de interfaces, ordenada
+ *   - FLUJOS_INTERFACES_TARGETS  variables asignadas por paso (fichero/filtro/mapeo)
+ *   - FLUJOS_SCREEN_BLOCKS       bloques de la pantalla de variables (var/frame/texto)
+ *   - FLUJOS_SCREEN_VARIABLES    variables sueltas o dentro de un frame
  * La ejecución real (lanzar/planificar en el orquestador) sigue sin
  * implementarse: el botón "Ejecutar" es un aviso, no dispara nada.
  */
@@ -32,8 +38,11 @@ const Flows = {
     editing: null,
     editingIsNew: true,
     collapsed: { automatico: false, manual: false },
+    screenCollapsed: false,
+    selectedStepId: null,
     dragChainIdx: null,
     dragBlockIdx: null,
+    dragFrameVar: null,
     dragScreenVar: null,
 
     async render(container, project) {
@@ -73,7 +82,7 @@ const Flows = {
             if (rows.length) {
                 const chains = await Provider.runQuery(`
                     SELECT FLUJO_ID, COUNT(*) AS N
-                    FROM ${Provider.qualifyControl("FLUJOS_CHAIN")}
+                    FROM ${Provider.qualifyControl("FLUJOS_INTERFACES")}
                     WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
                     GROUP BY FLUJO_ID`);
                 chains.forEach(c => { chainCounts[c.FLUJO_ID] = parseInt(c.N || "0", 10); });
@@ -103,10 +112,10 @@ const Flows = {
         if (!row) return null;
 
         const chainRows = await Provider.runQuery(`
-            SELECT PASO_ID, INTERFAZ_ID, ORDEN FROM ${Provider.qualifyControl("FLUJOS_CHAIN")}
+            SELECT PASO_ID, INTERFAZ_ID, ORDEN FROM ${Provider.qualifyControl("FLUJOS_INTERFACES")}
             WHERE FLUJO_ID = '${Provider.esc(id)}' ORDER BY ORDEN`);
         const targetRows = await Provider.runQuery(`
-            SELECT PASO_ID, GRUPO, CLAVE, TIPO, VALOR FROM ${Provider.qualifyControl("FLUJOS_CHAIN_TARGETS")}
+            SELECT PASO_ID, GRUPO, CLAVE, TIPO, VALOR FROM ${Provider.qualifyControl("FLUJOS_INTERFACES_TARGETS")}
             WHERE FLUJO_ID = '${Provider.esc(id)}'`);
         const targetsByPaso = {};
         targetRows.forEach(t => {
@@ -313,7 +322,7 @@ const Flows = {
         const ok = await UI.confirm("Eliminar flujo", `Se eliminará el flujo <strong>${UI.escapeHtml(flow.name)}</strong> y toda su configuración (cadena, pantalla y mapeo de variables).`);
         if (!ok) return;
         try {
-            for (const table of ["FLUJOS_SCREEN_VARIABLES", "FLUJOS_SCREEN_BLOCKS", "FLUJOS_CHAIN_TARGETS", "FLUJOS_CHAIN", "FLUJOS"]) {
+            for (const table of ["FLUJOS_SCREEN_VARIABLES", "FLUJOS_SCREEN_BLOCKS", "FLUJOS_INTERFACES_TARGETS", "FLUJOS_INTERFACES", "FLUJOS"]) {
                 await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl(table)} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
             }
             await this.loadList();
@@ -405,6 +414,8 @@ const Flows = {
     // ------------------------------------------------------------
     async openForm(editId = null) {
         this.editingIsNew = !editId;
+        this.screenCollapsed = false;
+        this.selectedStepId = null;
         let draft;
         if (editId) {
             draft = await this.loadDetail(editId);
@@ -460,8 +471,8 @@ const Flows = {
                 </div>
                 <div class="modal-body modal-body-flush">
                     <div id="flowHeaderPart" class="flow-part flow-part--header"></div>
-                    <div id="flowChainPart" class="flow-part flow-part--chain"></div>
                     <div id="flowScreenPart" class="flow-part flow-part--screen"></div>
+                    <div id="flowChainPart" class="flow-part flow-part--chain"></div>
                     <div id="flowMappingPart" class="flow-part flow-part--mapping"></div>
                 </div>
                 <div class="modal-footer">
@@ -479,8 +490,8 @@ const Flows = {
 
         this.updateModalHeader();
         this.renderHeaderPart();
-        this.renderChainBlock();
         this.renderScreenBlock();
+        this.renderChainBlock();
         this.renderMappingBlock();
     },
 
@@ -559,8 +570,9 @@ const Flows = {
         const cards = f.chain.map((step, idx) => {
             const iface = this.interfaceById(step.interfaceId);
             const label = this.chainInstanceLabel(idx);
+            const selected = step.id === this.selectedStepId;
             const card = `
-                <div class="flow-chain-card" draggable="true" data-chain-idx="${idx}">
+                <div class="flow-chain-card ${selected ? "is-selected" : ""}" draggable="true" data-chain-idx="${idx}" title="Clic para ver su mapeo de variables">
                     <div class="flow-chain-card-name">${iface ? UI.escapeHtml(iface.name) : "<em>Interfaz eliminada</em>"}</div>
                     <div class="flow-chain-card-meta">${iface ? UI.escapeHtml(cubeNames[iface.cuboId] || "—") : ""} · ${UI.escapeHtml(label)}</div>
                     <button type="button" class="flow-chain-card-remove" data-remove-chain="${idx}" title="Quitar de la cadena">✕</button>
@@ -579,19 +591,30 @@ const Flows = {
         document.getElementById("btnAddChainStep").addEventListener("click", async () => {
             const picked = await UI.openInterfacePickerModal({ interfaces: this.interfaces, cubeNameById: cubeNames });
             if (!picked) return;
-            f.chain.push({ id: Provider.newId(), interfaceId: picked.id, targets: { file: {}, filter: {}, mapping: {} } });
+            const step = { id: Provider.newId(), interfaceId: picked.id, targets: { file: {}, filter: {}, mapping: {} } };
+            f.chain.push(step);
+            this.selectedStepId = step.id;
             this.renderChainBlock();
             this.renderMappingBlock();
         });
 
-        part.querySelectorAll("[data-remove-chain]").forEach(btn => btn.addEventListener("click", () => {
+        part.querySelectorAll("[data-remove-chain]").forEach(btn => btn.addEventListener("click", (e) => {
+            e.stopPropagation();
             const idx = parseInt(btn.dataset.removeChain, 10);
+            const removedId = f.chain[idx].id;
             f.chain.splice(idx, 1);
+            if (this.selectedStepId === removedId) this.selectedStepId = null;
             this.renderChainBlock();
             this.renderMappingBlock();
         }));
 
         part.querySelectorAll(".flow-chain-card").forEach(card => {
+            card.addEventListener("click", () => {
+                const idx = parseInt(card.dataset.chainIdx, 10);
+                this.selectedStepId = f.chain[idx].id;
+                this.renderChainBlock();
+                this.renderMappingBlock();
+            });
             card.addEventListener("dragstart", () => {
                 this.dragChainIdx = parseInt(card.dataset.chainIdx, 10);
                 card.classList.add("dragging");
@@ -635,19 +658,31 @@ const Flows = {
         part.style.display = "";
 
         part.innerHTML = `
-            <div class="flow-part-header"><span>Pantalla de entrada de variables</span></div>
-            <div class="flow-screen-box">
+            <div class="flow-part-header flow-part-header--screen">
+                <button type="button" class="flow-part-toggle" id="btnToggleScreen">
+                    <span class="flow-group-caret ${this.screenCollapsed ? "is-collapsed" : ""}">▾</span>
+                    <span>Pantalla de entrada de variables</span>
+                </button>
+                <div class="flow-screen-toolbar-mini">
+                    <button type="button" class="flow-mini-btn" id="btnAddScreenVar" title="Añadir variable">+ Var</button>
+                    <button type="button" class="flow-mini-btn" id="btnAddScreenFrame" title="Añadir frame">+ Frame</button>
+                    <button type="button" class="flow-mini-btn" id="btnAddScreenText" title="Añadir texto">+ Texto</button>
+                </div>
+            </div>
+            <div class="flow-screen-box ${this.screenCollapsed ? "is-collapsed" : ""}" id="flowScreenBox">
                 <div class="form-group">
                     <label>Título de la pantalla</label>
                     <input type="text" id="screenTitle" placeholder="Ej. Parámetros de carga mensual" value="${UI.escapeHtml(f.screen.title || "")}">
                 </div>
-                <div class="flow-screen-toolbar">
-                    <button class="btn btn-secondary btn-sm" id="btnAddScreenVar">+ Variable</button>
-                    <button class="btn btn-secondary btn-sm" id="btnAddScreenFrame">+ Frame</button>
-                    <button class="btn btn-secondary btn-sm" id="btnAddScreenText">+ Texto</button>
-                </div>
                 <div class="flow-screen-blocks" id="flowScreenBlocks"></div>
             </div>`;
+
+        document.getElementById("btnToggleScreen").addEventListener("click", () => {
+            this.screenCollapsed = !this.screenCollapsed;
+            const box = document.getElementById("flowScreenBox");
+            box.classList.toggle("is-collapsed", this.screenCollapsed);
+            part.querySelector(".flow-group-caret").classList.toggle("is-collapsed", this.screenCollapsed);
+        });
 
         document.getElementById("screenTitle").addEventListener("input", (e) => { f.screen.title = e.target.value; });
 
@@ -691,8 +726,7 @@ const Flows = {
             return `
                 <div class="flow-screen-block flow-screen-block--var" draggable="true" data-block-idx="${idx}">
                     <span class="load-drag-handle">⠿</span>
-                    ${this.screenVarChipHtml(b.variable)}
-                    <span class="load-fn-toolbar-spacer"></span>
+                    ${this.fieldPreviewHtml(b.variable)}
                     <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
                 </div>`;
         }
@@ -711,19 +745,30 @@ const Flows = {
                     <span class="load-drag-handle">⠿</span>
                     <strong data-edit-frame-title="${idx}" title="Clic para renombrar">${UI.escapeHtml(b.title || "Frame")}</strong>
                     <span class="load-fn-toolbar-spacer"></span>
-                    <button type="button" class="btn btn-secondary btn-sm" data-add-frame-var="${idx}">+ Variable</button>
+                    <button type="button" class="flow-mini-btn" data-add-frame-var="${idx}">+ Var</button>
                     <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar frame">✕</button>
                 </div>
-                <div class="flow-frame-vars">
+                <div class="flow-frame-vars" data-frame-idx="${idx}">
                     ${b.variables.length ? b.variables.map((v, vi) => `
-                        <div class="flow-frame-var-row">
-                            ${this.screenVarChipHtml(v)}
+                        <div class="flow-frame-var-row" draggable="true" data-frame-idx="${idx}" data-var-idx="${vi}">
+                            <span class="load-drag-handle">⠿</span>
+                            ${this.fieldPreviewHtml(v)}
                             <button type="button" class="field-remove" data-remove-frame-var="${idx}:${vi}" title="Eliminar">✕</button>
                         </div>`).join("") : `<div class="hierarchy-pool-empty">Sin variables en este frame.</div>`}
                 </div>
             </div>`;
     },
 
+    /** Previsualización de una variable de pantalla tal y como se vería de verdad: etiqueta + input real, sin recuadro alrededor. */
+    fieldPreviewHtml(v) {
+        return `
+            <div class="flow-field-preview">
+                <label>${UI.escapeHtml(v.label || v.name)}</label>
+                <input type="text" disabled placeholder="${UI.escapeHtml(v.name)}">
+            </div>`;
+    },
+
+    /** Chip compacto (con tipo) para la paleta de variables arrastrables del bloque de mapeo. */
     screenVarChipHtml(v) {
         return `<span class="flow-screen-var-chip"><strong>${UI.escapeHtml(v.label || v.name)}</strong><span class="load-output-type-abbr">${UI.escapeHtml(v.type)}</span></span>`;
     },
@@ -771,8 +816,10 @@ const Flows = {
             this.renderScreenBlocksList();
         }));
 
-        wrap.querySelectorAll(".flow-screen-block").forEach(block => {
-            block.addEventListener("dragstart", () => {
+        // Reordenar bloques de primer nivel (variable suelta / frame / texto) arrastrando.
+        wrap.querySelectorAll(":scope > .flow-screen-block").forEach(block => {
+            block.addEventListener("dragstart", (e) => {
+                e.stopPropagation();
                 this.dragBlockIdx = parseInt(block.dataset.blockIdx, 10);
                 block.classList.add("dragging");
             });
@@ -780,11 +827,36 @@ const Flows = {
             block.addEventListener("dragover", (e) => e.preventDefault());
             block.addEventListener("drop", (e) => {
                 e.preventDefault();
+                e.stopPropagation();
                 const targetIdx = parseInt(block.dataset.blockIdx, 10);
                 if (this.dragBlockIdx === null || this.dragBlockIdx === targetIdx) return;
                 const [moved] = f.screen.blocks.splice(this.dragBlockIdx, 1);
                 f.screen.blocks.splice(targetIdx, 0, moved);
                 this.dragBlockIdx = null;
+                this.renderScreenBlocksList();
+            });
+        });
+
+        // Reordenar variables dentro de un mismo frame arrastrando.
+        wrap.querySelectorAll(".flow-frame-var-row").forEach(row => {
+            row.addEventListener("dragstart", (e) => {
+                e.stopPropagation();
+                this.dragFrameVar = { frameIdx: parseInt(row.dataset.frameIdx, 10), varIdx: parseInt(row.dataset.varIdx, 10) };
+                row.classList.add("dragging");
+            });
+            row.addEventListener("dragend", () => row.classList.remove("dragging"));
+            row.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
+            row.addEventListener("drop", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (!this.dragFrameVar) return;
+                const frameIdx = parseInt(row.dataset.frameIdx, 10);
+                const targetVarIdx = parseInt(row.dataset.varIdx, 10);
+                if (this.dragFrameVar.frameIdx !== frameIdx) { this.dragFrameVar = null; return; }
+                const vars = f.screen.blocks[frameIdx].variables;
+                const [moved] = vars.splice(this.dragFrameVar.varIdx, 1);
+                vars.splice(targetVarIdx, 0, moved);
+                this.dragFrameVar = null;
                 this.renderScreenBlocksList();
             });
         });
@@ -812,6 +884,13 @@ const Flows = {
         const screenVars = this.flatScreenVariables();
         const isManual = f.type === "manual";
 
+        // El paso seleccionado sobrevive a reordenar/renombrar; si se eliminó o no hay ninguno, se elige el primero.
+        let selectedIdx = f.chain.findIndex(s => s.id === this.selectedStepId);
+        if (selectedIdx < 0 && f.chain.length) { selectedIdx = 0; this.selectedStepId = f.chain[0].id; }
+        if (!f.chain.length) this.selectedStepId = null;
+        const selectedStep = selectedIdx >= 0 ? f.chain[selectedIdx] : null;
+        const selectedIface = selectedStep ? this.interfaceById(selectedStep.interfaceId) : null;
+
         const leftHtml = isManual ? `
             <div class="flow-mapping-col flow-mapping-col--vars">
                 <div class="load-mapping-col-header"><span>Variables de pantalla</span></div>
@@ -826,9 +905,13 @@ const Flows = {
 
         const rightHtml = `
             <div class="flow-mapping-col flow-mapping-col--targets">
-                <div class="load-mapping-col-header"><span>Variables por paso de la cadena</span></div>
+                <div class="load-mapping-col-header">
+                    <span>${selectedStep ? `Variables de: ${UI.escapeHtml(selectedIface ? selectedIface.name : "Interfaz eliminada")} ${UI.escapeHtml(this.chainInstanceLabel(selectedIdx))}` : "Variables por paso"}</span>
+                </div>
                 <div class="flow-mapping-steps" id="flowMappingSteps">
-                    ${f.chain.length ? f.chain.map((step, idx) => this.stepMappingHtml(step, idx)).join("") : `<div class="hierarchy-pool-empty">Añade interfaces a la cadena para poder mapear sus variables.</div>`}
+                    ${selectedStep
+                        ? this.stepMappingHtml(selectedStep, selectedIdx)
+                        : `<div class="hierarchy-pool-empty">${f.chain.length ? "Selecciona un paso de la cadena para ver sus variables." : "Añade interfaces a la cadena para poder mapear sus variables."}</div>`}
                 </div>
             </div>`;
 
@@ -857,14 +940,9 @@ const Flows = {
 
     stepMappingHtml(step, idx) {
         const iface = this.interfaceById(step.interfaceId);
-        const label = `${iface ? iface.name : "Interfaz eliminada"} ${this.chainInstanceLabel(idx)}`;
 
         if (!iface) {
-            return `
-                <div class="flow-step-card">
-                    <div class="flow-step-title">${UI.escapeHtml(label)}</div>
-                    <p class="form-hint">Esta interfaz ya no existe; quítala de la cadena.</p>
-                </div>`;
+            return `<p class="form-hint">Esta interfaz ya no existe; quítala de la cadena.</p>`;
         }
 
         step.targets = step.targets || { file: {}, filter: {}, mapping: {} };
@@ -893,7 +971,7 @@ const Flows = {
             fileHtml = `
                 <div class="flow-step-group">
                     <div class="flow-step-group-title">Variables de fichero</div>
-                    ${groupRows("file", [{ key: "localOrServer", label: "Local / Servidor" }, { key: "ruta", label: "Ruta" }])}
+                    ${groupRows("file", [{ key: "localOrServer", label: "Local / Servidor" }, { key: "ruta", label: "Ruta del fichero" }])}
                 </div>`;
         }
 
@@ -912,8 +990,7 @@ const Flows = {
         const nothingToMap = !isFile && !filterFields.length && !mappingFields.length;
 
         return `
-            <div class="flow-step-card">
-                <div class="flow-step-title">${UI.escapeHtml(label)}</div>
+            <div class="flow-step-detail">
                 ${fileHtml}${filterHtml}${mappingHtml}
                 ${nothingToMap ? `<p class="form-hint">Esta interfaz no tiene variables que asignar.</p>` : ""}
             </div>`;
@@ -1009,12 +1086,12 @@ const Flows = {
         }
 
         // 2) Cadena de interfaces + variables asignadas por paso --------
-        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_CHAIN")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
-        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_CHAIN_TARGETS")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
+        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_INTERFACES")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
+        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_INTERFACES_TARGETS")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
         if (f.chain.length) {
             const chainVals = f.chain.map((s, idx) =>
                 `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(s.id)}', '${Provider.esc(s.interfaceId)}', ${idx})`).join(",\n");
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_CHAIN")} (PROYECTO_ID, FLUJO_ID, PASO_ID, INTERFAZ_ID, ORDEN) VALUES ${chainVals}`);
+            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_INTERFACES")} (PROYECTO_ID, FLUJO_ID, PASO_ID, INTERFAZ_ID, ORDEN) VALUES ${chainVals}`);
 
             const targetRows = [];
             f.chain.forEach(s => {
@@ -1029,7 +1106,7 @@ const Flows = {
             if (targetRows.length) {
                 const vals = targetRows.map(([pasoId, grupo, clave, tipoT, valor]) =>
                     `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(pasoId)}', '${Provider.esc(grupo)}', '${Provider.esc(clave)}', '${Provider.esc(tipoT)}', '${Provider.esc(valor)}')`).join(",\n");
-                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_CHAIN_TARGETS")} (PROYECTO_ID, FLUJO_ID, PASO_ID, GRUPO, CLAVE, TIPO, VALOR) VALUES ${vals}`);
+                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_INTERFACES_TARGETS")} (PROYECTO_ID, FLUJO_ID, PASO_ID, GRUPO, CLAVE, TIPO, VALOR) VALUES ${vals}`);
             }
         }
 
