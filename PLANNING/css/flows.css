@@ -139,11 +139,25 @@
     border: 1px solid var(--brand-primary);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-xs);
-    cursor: grab;
+    cursor: pointer;
 }
 
 .flow-chain-card.dragging {
     opacity: 0.4;
+}
+
+.flow-chain-card.is-selected {
+    background-color: var(--brand-primary);
+    box-shadow: 0 0 0 2px var(--brand-primary);
+}
+
+.flow-chain-card.is-selected .flow-chain-card-name,
+.flow-chain-card.is-selected .flow-chain-card-meta {
+    color: var(--text-inverse);
+}
+
+.flow-chain-card.is-selected .flow-chain-card-remove {
+    color: var(--text-inverse);
 }
 
 .flow-chain-card-name {
@@ -213,30 +227,68 @@
 }
 
 /* ---------- C) Pantalla de entrada de variables ---------- */
+.flow-part-header--screen {
+    margin-bottom: 0;
+    padding-bottom: 10px;
+}
+
+.flow-part-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border: none;
+    background: none;
+    padding: 0;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+}
+
+.flow-screen-toolbar-mini {
+    display: flex;
+    gap: 4px;
+}
+
+.flow-mini-btn {
+    border: 1px solid var(--border-default);
+    background-color: var(--surface-card);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.flow-mini-btn:hover {
+    border-color: var(--brand-primary);
+    color: var(--brand-primary);
+}
+
 .flow-screen-box {
     max-width: 720px;
 }
 
-.flow-screen-toolbar {
-    display: flex;
-    gap: 8px;
-    margin: 10px 0;
+.flow-screen-box.is-collapsed {
+    display: none;
 }
 
 .flow-screen-blocks {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 4px;
+    margin-top: 10px;
 }
 
 .flow-screen-block {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 8px 10px;
-    background-color: var(--surface-card);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
+    padding: 4px 2px;
     cursor: grab;
 }
 
@@ -248,7 +300,9 @@
     flex-direction: column;
     align-items: stretch;
     background-color: var(--surface-sunken);
-    border-style: dashed;
+    border: 1px dashed var(--border-default);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
 }
 
 .flow-frame-header {
@@ -265,18 +319,43 @@
     margin-top: 8px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 2px;
 }
 
 .flow-frame-var-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 8px;
+    padding: 2px 0;
+    cursor: grab;
+}
+
+.flow-frame-var-row.dragging {
+    opacity: 0.4;
+}
+
+/* Previsualización "real" de una variable: etiqueta + input, sin recuadro alrededor de la fila */
+.flow-field-preview {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    max-width: 320px;
+}
+
+.flow-field-preview label {
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+}
+
+.flow-field-preview input {
+    width: 100%;
     padding: 6px 8px;
-    background-color: var(--surface-card);
-    border: 1px solid var(--border-subtle);
+    border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
+    background-color: var(--surface-card);
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
 }
 
 .flow-screen-var-chip {
@@ -333,17 +412,8 @@
     gap: 10px;
 }
 
-.flow-step-card {
-    padding: 8px 10px;
-    background-color: var(--surface-card);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-}
-
-.flow-step-title {
-    font-size: var(--fs-sm);
-    font-weight: 700;
-    margin-bottom: 6px;
+.flow-step-detail {
+    padding: 2px 2px 6px;
 }
 
 .flow-step-group {
