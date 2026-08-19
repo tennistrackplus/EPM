@@ -156,6 +156,30 @@ const DracoSchema = {
                     ETIQUETA STRING,
                     TIPO STRING,
                     ORDEN INTEGER
+                )`,
+            FLUJOS_RUNS: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    RUN_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    FLUJO_ID STRING NOT NULL,
+                    ESTADO STRING NOT NULL,
+                    VARIABLES_JSON STRING,
+                    MENSAJE STRING,
+                    USUARIO STRING,
+                    FECHA_INICIO TIMESTAMP,
+                    FECHA_FIN TIMESTAMP
+                )`,
+            FLUJOS_RUN_STEPS: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    RUN_ID STRING NOT NULL,
+                    PASO_ID STRING NOT NULL,
+                    ORDEN INTEGER,
+                    INTERFAZ_ID STRING,
+                    ESTADO STRING NOT NULL,
+                    FILAS INTEGER,
+                    MENSAJE STRING,
+                    FECHA_INICIO TIMESTAMP,
+                    FECHA_FIN TIMESTAMP
                 )`
         };
         return ddl[table];
@@ -163,7 +187,8 @@ const DracoSchema = {
 
     TABLES: ["PROYECTOS", "DIMENSIONES", "CUBOS", "JERARQUIAS",
              "INTERFACES", "INTERFACES_VALUES", "INTERFACES_INPUT", "INTERFACES_INPUT_FILTERS", "INTERFACES_MAPPING",
-             "FLUJOS", "FLUJOS_INTERFACES", "FLUJOS_INTERFACES_TARGETS", "FLUJOS_SCREEN_BLOCKS", "FLUJOS_SCREEN_VARIABLES"],
+             "FLUJOS", "FLUJOS_INTERFACES", "FLUJOS_INTERFACES_TARGETS", "FLUJOS_SCREEN_BLOCKS", "FLUJOS_SCREEN_VARIABLES",
+             "FLUJOS_RUNS", "FLUJOS_RUN_STEPS"],
 
     async isBootstrapped() {
         const exists = await Provider.containerExists(DracoConfig.controlDataset);

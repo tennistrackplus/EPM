@@ -28,8 +28,11 @@
  *   - FLUJOS_INTERFACES_TARGETS  variables asignadas por paso (fichero/filtro/mapeo)
  *   - FLUJOS_SCREEN_BLOCKS       bloques de la pantalla de variables (var/frame/texto)
  *   - FLUJOS_SCREEN_VARIABLES    variables sueltas o dentro de un frame
- * La ejecución real (lanzar/planificar en el orquestador) sigue sin
- * implementarse: el botón "Ejecutar" es un aviso, no dispara nada.
+ * La ejecución real corre en `python/flow_runner.py` (orquestador que
+ * llama, paso a paso, a `python/interface_loader.py`), lanzada y
+ * monitorizada desde `flow_run.html` (botones "Ejecutar" / "Monitor").
+ * El botón de este editor abre esa pantalla en una pestaña nueva, ya
+ * con el FLUJO_ID como parámetro.
  */
 const Flows = {
     list: [],
@@ -519,7 +522,14 @@ const Flows = {
                 <div class="flow-header-row">
                     <span class="table-tag">Flujo manual</span>
                     <span class="form-hint">Se lanza desde la pantalla de variables (asignada por workflow / rol).</span>
+                    <span class="load-fn-toolbar-spacer"></span>
+                    ${!this.editingIsNew ? `<button class="btn btn-primary btn-sm" id="btnOpenFlowRun">▶ Ejecutar / Monitor</button>` : `<span class="form-hint">Guarda el flujo para poder ejecutarlo.</span>`}
                 </div>`;
+            if (!this.editingIsNew) {
+                document.getElementById("btnOpenFlowRun").addEventListener("click", () => {
+                    window.open(`flow_run.html?flujo_id=${encodeURIComponent(f.id)}`, "_blank");
+                });
+            }
             return;
         }
 
@@ -532,7 +542,7 @@ const Flows = {
                 <span class="flow-schedule-status ${scheduled ? "is-active" : ""}">⏱ ${UI.escapeHtml(statusText)}</span>
                 <span class="load-fn-toolbar-spacer"></span>
                 <button class="btn btn-secondary btn-sm" id="btnPlanFlow">📅 Planificar</button>
-                <button class="btn btn-primary btn-sm" id="btnRunFlow">▶ Ejecutar</button>
+                ${!this.editingIsNew ? `<button class="btn btn-primary btn-sm" id="btnRunFlow">▶ Ejecutar / Monitor</button>` : ""}
             </div>`;
 
         document.getElementById("btnPlanFlow").addEventListener("click", async () => {
@@ -541,9 +551,12 @@ const Flows = {
             f.schedule = result === "remove" ? null : result;
             this.renderHeaderPart();
         });
-        document.getElementById("btnRunFlow").addEventListener("click", () => {
-            UI.toast(`"${f.name}" quedará pendiente de implementar la ejecución en el orquestador.`, "info");
-        });
+        const btnRun = document.getElementById("btnRunFlow");
+        if (btnRun) {
+            btnRun.addEventListener("click", () => {
+                window.open(`flow_run.html?flujo_id=${encodeURIComponent(f.id)}`, "_blank");
+            });
+        }
     },
 
     scheduleSummary(s) {
@@ -971,7 +984,7 @@ const Flows = {
             fileHtml = `
                 <div class="flow-step-group">
                     <div class="flow-step-group-title">Variables de fichero</div>
-                    ${groupRows("file", [{ key: "localOrServer", label: "Local / Servidor" }, { key: "ruta", label: "Ruta del fichero" }])}
+                    ${groupRows("file", [{ key: "ruta_local", label: "Ruta local" }, { key: "ruta_storage", label: "Ruta storage" }])}
                 </div>`;
         }
 

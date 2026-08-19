@@ -77,6 +77,11 @@ const UI = {
 
     FIELD_TYPES: ["STRING", "INTEGER", "FLOAT", "NUMERIC", "BOOLEAN", "DATE", "DATETIME", "TIMESTAMP"],
 
+    // Tipos válidos para una variable de pantalla de un FLUJO (superconjunto de
+    // FIELD_TYPES + FILE, que renderiza un <input type="file"> en flow_run.html
+    // y cuyo valor resuelto es la ruta de storage tras subir el fichero).
+    SCREEN_VARIABLE_TYPES: ["STRING", "INTEGER", "FLOAT", "NUMERIC", "BOOLEAN", "DATE", "DATETIME", "TIMESTAMP", "FILE"],
+
     /** Crea una fila de campo reutilizable para los distintos diseñadores (atributos / medidas) */
     _fieldRow(f = { name: "", type: "STRING", key: false }, { showKey = true } = {}) {
         const row = document.createElement("div");
@@ -1129,8 +1134,9 @@ const UI = {
                         <div class="form-group">
                             <label>Tipo</label>
                             <select id="svType">
-                                ${UI.FIELD_TYPES.map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
+                                ${UI.SCREEN_VARIABLE_TYPES.map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
                             </select>
+                            <p class="form-hint">FILE: en la pantalla de ejecución del flujo se pedirá un fichero; su valor resuelto será la ruta de storage tras subirlo.</p>
                         </div>
                     </div>
                     <div class="modal-footer">
