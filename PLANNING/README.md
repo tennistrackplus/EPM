@@ -146,9 +146,13 @@ index.html                    Landing / conectores
 auth-callback.html            Callback OAuth de BigQuery
 auth-callback-snowflake.html  Callback OAuth de Snowflake
 app.html                      Panel principal
+flow_run.html                 Ejecutar / monitorizar un flujo (?flujo_id=...)
 css/theme.css                 Design system (reutilizado de la app anterior)
 css/modal.css                 Modales y formularios
 css/app.css                   Layout de la app
+css/loads.css                 Estilos del módulo Interfaces (cargas de datos)
+css/flows.css                 Estilos del módulo Flujos de carga
+css/flow-run.css              Estilos de flow_run.html
 js/config.js                  Client IDs y constantes editables
 js/bigquery.js                Cliente REST de BigQuery
 js/snowflake.js                Cliente OAuth+PKCE / SQL API v2 de Snowflake
@@ -156,15 +160,56 @@ js/provider.js                 Capa de abstracción BigQuery ↔ Snowflake
 js/schema.js                    Bootstrap del esquema de control
 js/auth.js                       Lógica de login (solo en index.html)
 js/ui.js                          Toasts, modales, confirmaciones, maximizar/contraer
+js/storage.js                      Abstracción de storage (subida de ficheros) para flow_run.html
 js/dimensions.js                   Módulo Dimensiones
 js/cubes.js                         Módulo Cubos
-js/app.js                            Controlador principal de app.html
+js/loads.js                          Módulo Interfaces (cargas de datos)
+js/flows.js                           Módulo Flujos de carga
+js/flow-run.js                         Lógica de flow_run.html
+js/app.js                               Controlador principal de app.html
+python/interface_loader.py               Motor de mapeo de una interfaz (origen -> cubo)
+python/storage_io.py                      Storage + lectura de ficheros a DataFrame
+python/flow_runner.py                      Orquestador de un flujo (cadena de interfaces)
 sql/00_control_schema.sql             Script SQL de referencia (ambos motores)
 sql/01_snowflake_oauth_integration.sql Alta del cliente OAuth en Snowflake
 proxy/cloudflare-worker.js             Proxy CORS opcional para Snowflake
 ```
 
-## 7. Siguientes pasos sugeridos
+## 7bis. Ejecución de flujos (nuevo)
+
+Los **Flujos de carga** ya se pueden ejecutar de verdad, no solo modelar:
+
+- **`python/flow_runner.py`** — orquestador: recibe el `FLUJO_ID` y las
+  variables de la pantalla como parámetro de entrada, lee la cadena de
+  interfaces (`FLUJOS_INTERFACES` / `FLUJOS_INTERFACES_TARGETS`) y va
+  llamando, paso a paso, al motor de `python/interface_loader.py`,
+  sustituyendo cada `target` (constante o variable de pantalla) por su
+  valor real. Para los pasos de tipo **FICHERO** resuelve dos variables,
+  `ruta_local` y `ruta_storage`, y antes de mapear descarga el fichero
+  del storage con `python/storage_io.py` (que también sabe leerlo a un
+  DataFrame según sus separadores/codificación). Cada paso queda
+  registrado en las nuevas tablas de control `FLUJOS_RUNS` /
+  `FLUJOS_RUN_STEPS` (estado, filas, error). Pensado para desplegarse
+  como Snowflake Python Stored Procedure (ver docstring de `main()`).
+- **`flow_run.html`** — pantalla standalone: `flow_run.html?flujo_id=...`
+  pinta la pantalla de variables del flujo con inputs reales (incluido
+  un nuevo tipo de variable, **FILE**, que muestra un selector de
+  fichero) y dos botones:
+  - **▶ Ejecutar**: sube cada fichero local seleccionado al storage
+    (`js/storage.js` — configura `DracoConfig.storageUploadUrlBuilder`
+    con tu backend/bucket) y a continuación lanza el orquestador
+    (`DracoConfig.flowRunnerProcedure` vía `CALL` en Snowflake, o
+    `DracoConfig.flowRunnerHttpEndpoint` si envuelves `flow_runner.py`
+    en un servicio HTTP propio, p.ej. para BigQuery).
+  - **🖥 Monitor**: repinta la cadena de interfaces del flujo (misma
+    tarjeta que en el editor) coloreada según `FLUJOS_RUN_STEPS` de la
+    última ejecución — gris = pendiente, azul pulsando = en ejecución,
+    verde = completado, rojo = error — y la sondea cada 3s mientras
+    siga en curso.
+  - Desde el editor de flujos (`app.html`), el botón "▶ Ejecutar /
+    Monitor" abre directamente esta pantalla para el flujo guardado.
+
+## 8. Siguientes pasos sugeridos
 
 Dime por cuál seguimos: Cargas de datos, Flujos de carga, Funciones, Flujos
 de proceso, Workflows o Roles, y lo construimos con la misma mecánica

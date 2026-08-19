@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Draco Planning — Ejecutar flujo</title>
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/modal.css">
+    <link rel="stylesheet" href="css/app.css">
+    <link rel="stylesheet" href="css/flows.css">
+    <link rel="stylesheet" href="css/flow-run.css">
+</head>
+<body>
+
+    <!-- ===================== TOPBAR ===================== -->
+    <header class="app-topbar">
+        <div class="app-topbar-brand">
+            <div class="app-logo">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" stroke="white" stroke-width="1.8" stroke-linejoin="round"/>
+                    <path d="M3 7l9 5 9-5M12 12v10" stroke="white" stroke-width="1.8" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="app-topbar-titles">
+                <span class="app-topbar-title">Draco Planning</span>
+                <span class="app-topbar-subtitle">Ejecución de flujo</span>
+            </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+            <span class="app-topbar-status is-live" id="connStatus"><span class="dot"></span>Conectando...</span>
+            <a class="app-topbar-action" href="app.html" title="Volver al panel">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>
+                </svg>
+            </a>
+        </div>
+    </header>
+
+    <main class="flow-run-wrap">
+        <div class="flow-run-heading">
+            <h1 id="flowRunTitle">Cargando flujo...</h1>
+            <p class="form-hint" id="flowRunSubtitle"></p>
+        </div>
+
+        <div class="flow-run-tabs">
+            <button type="button" class="flow-run-tab active" id="btnTabScreen">Pantalla de variables</button>
+            <button type="button" class="flow-run-tab" id="btnTabMonitor">🖥 Monitor</button>
+        </div>
+
+        <div id="flowRunBody"><span class="spinner"></span></div>
+    </main>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="js/config.js"></script>
+    <script src="js/bigquery.js"></script>
+    <script src="js/snowflake.js"></script>
+    <script src="js/provider.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/storage.js"></script>
+    <script src="js/flow-run.js"></script>
+</body>
+</html>
