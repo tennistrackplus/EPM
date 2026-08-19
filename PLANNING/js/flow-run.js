@@ -227,9 +227,11 @@ const FlowRun = {
             for (let i = 0; i < fileNames.length; i++) {
                 const varName = fileNames[i];
                 const file = files[varName];
-                hint.textContent = `Subiendo "${file.name}" al storage (${i + 1}/${fileNames.length})...`;
                 const storagePath = Storage.buildPath(this.flujoId, varName, file.name);
-                await Storage.upload(file, storagePath);
+                await Storage.upload(file, storagePath, (chunkIdx, totalChunks) => {
+                    const progress = totalChunks > 1 ? ` [trozo ${chunkIdx}/${totalChunks}]` : "";
+                    hint.textContent = `Subiendo "${file.name}" al storage (${i + 1}/${fileNames.length})${progress}...`;
+                });
                 // El valor de la variable pasa a ser la ruta de storage: es lo
                 // que resuelve 'ruta_storage' en los pasos de tipo FICHERO.
                 values[varName] = storagePath;
