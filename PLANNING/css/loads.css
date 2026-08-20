@@ -126,6 +126,58 @@
     color: var(--text-inverse);
 }
 
+/* ---------- Selector de origen de datos (tarjetas) ---------- */
+.origin-type-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+
+.origin-type-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    padding: 16px 8px;
+    border: 1.5px solid var(--border-default);
+    border-radius: var(--radius-md);
+    background-color: var(--surface-card);
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.origin-type-card:hover:not(.is-disabled) {
+    border-color: var(--brand-primary);
+}
+
+.origin-type-card.active {
+    border-color: var(--brand-primary);
+    background-color: var(--brand-primary-light);
+    box-shadow: 0 0 0 1px var(--brand-primary);
+}
+
+.origin-type-card-icon {
+    font-size: 22px;
+    line-height: 1;
+}
+
+.origin-type-card-label {
+    font-size: var(--fs-sm);
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.origin-type-card-desc {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-align: center;
+}
+
+.origin-type-card.is-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 /* ---------- Panel de origen (tabla / fichero) ---------- */
 .load-origin-panel {
     background-color: var(--surface-sunken);
@@ -237,6 +289,8 @@
     justify-content: space-between;
     gap: 8px;
     padding: 6px 10px;
+    min-height: 34px;
+    box-sizing: border-box;
     background-color: var(--surface-sunken);
     border-bottom: 1px solid var(--border-subtle);
     font-size: var(--fs-xs);
@@ -299,6 +353,8 @@
     align-items: center;
     gap: 4px;
     padding: 3px 4px;
+    min-height: 30px;
+    box-sizing: border-box;
     background-color: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
@@ -320,13 +376,16 @@
     flex: 1;
     min-width: 0;
     font-size: var(--fs-xs);
-    padding: 3px 5px;
+    height: 22px;
+    padding: 1px 5px;
+    box-sizing: border-box;
 }
 
 .load-field-type {
     font-size: var(--fs-xs);
     max-width: 62px;
-    padding: 2px 3px;
+    height: 22px;
+    padding: 1px 3px;
     flex: 0 0 auto;
 }
 
@@ -374,6 +433,8 @@
     align-items: center;
     gap: 4px;
     padding: 3px 4px;
+    min-height: 30px;
+    box-sizing: border-box;
     background-color: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
@@ -416,7 +477,8 @@
 .load-map-type {
     flex: 0 0 92px;
     font-size: var(--fs-xs);
-    padding: 2px 3px;
+    height: 22px;
+    padding: 1px 3px;
 }
 
 .load-map-target {

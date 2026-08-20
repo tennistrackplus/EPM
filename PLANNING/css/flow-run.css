@@ -3,25 +3,38 @@
    ============================================================ */
 
 .flow-run-wrap {
-    max-width: 880px;
+    flex: 1;
+    width: 100%;
+    max-width: 960px;
     margin: 0 auto;
-    padding: var(--space-6);
+    padding: var(--space-6) var(--space-6) 48px;
+    box-sizing: border-box;
+}
+
+.flow-run-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+    padding: 28px 32px 32px;
 }
 
 .flow-run-heading {
-    margin-bottom: var(--space-6);
+    margin-bottom: var(--space-5);
+    padding-bottom: var(--space-5);
+    border-bottom: 1px solid var(--border-subtle);
 }
 
 .flow-run-heading h1 {
     margin: 0 0 4px 0;
-    font-size: 20px;
+    font-size: 22px;
     color: var(--text-primary);
 }
 
 .flow-run-tabs {
     display: flex;
     gap: var(--space-3);
-    margin-bottom: var(--space-5);
+    margin-bottom: var(--space-6);
     border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -47,20 +60,40 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
-    margin-bottom: var(--space-6);
+    max-width: 520px;
+    margin: 0 auto var(--space-6);
 }
 
 .flow-screen-block--static {
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     padding: var(--space-4);
-    background: #fff;
+    background: var(--surface-sunken);
 }
 
 .flow-screen-block--text.flow-screen-block--static {
     border: none;
     padding: var(--space-2) 0;
     background: none;
+}
+
+.flow-screen-block--skip.flow-screen-block--static {
+    border: none;
+    background: none;
+    padding: 0;
+    height: var(--space-5);
+}
+
+.flow-screen-block--line.flow-screen-block--static {
+    border: none;
+    background: none;
+    padding: var(--space-2) 0;
+}
+
+.flow-screen-block--line.flow-screen-block--static hr {
+    border: none;
+    border-top: 1px solid var(--border-default);
+    margin: 0;
 }
 
 .flow-field-preview label {
@@ -73,13 +106,13 @@
 .flow-field-preview input[type="text"],
 .flow-field-preview input[type="number"],
 .flow-field-preview input[type="date"],
-.flow-field-preview input[type="datetime-local"],
-.flow-field-preview input[type="file"] {
+.flow-field-preview input[type="datetime-local"] {
     width: 100%;
     padding: var(--space-3);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
     font-size: 14px;
+    background-color: var(--surface-card);
 }
 
 .flow-field-preview--checkbox {
@@ -92,10 +125,51 @@
     margin-bottom: 0;
 }
 
+/* Selector de fichero: se sustituye el <input type="file"> nativo (feo,
+   inconsistente entre navegadores) por una etiqueta con pinta de botón. */
+.flow-field-preview--file .file-input-native {
+    display: none;
+}
+
+.file-input-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: var(--space-3);
+    background-color: var(--surface-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: 14px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.file-input-btn:hover {
+    border-color: var(--brand-primary);
+    background-color: var(--brand-primary-light);
+}
+
+.file-input-btn-icon {
+    flex-shrink: 0;
+}
+
+.file-input-btn-text {
+    min-width: 0;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .flow-run-actions {
     display: flex;
     align-items: center;
     gap: var(--space-4);
+    max-width: 520px;
+    margin: 0 auto;
 }
 
 /* --- Monitor ----------------------------------------------------------- */

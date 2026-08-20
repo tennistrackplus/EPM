@@ -61,6 +61,33 @@
     margin-top: 2px;
 }
 
+/* Título editable de un modal a pantalla completa (nombre de interfaz/flujo):
+   sustituye al antiguo botón "editar nombre" — clic y escribe directamente. */
+.modal-title-edit-wrap {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.modal-title-editable {
+    display: inline-block;
+    outline: none;
+    border-radius: var(--radius-sm);
+    padding: 1px 5px;
+    margin: -1px -5px;
+    cursor: text;
+    transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.modal-title-editable:hover {
+    background-color: var(--gray-100);
+}
+
+.modal-title-editable:focus {
+    background-color: var(--surface-card);
+    box-shadow: 0 0 0 2px var(--brand-primary-light), 0 0 0 1px var(--brand-primary);
+}
+
 .modal-header {
     padding: 14px 18px;
     border-bottom: 1px solid var(--border-subtle);

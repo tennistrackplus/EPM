@@ -226,6 +226,43 @@
     color: var(--brand-primary);
 }
 
+/* ---------- Toggle de tipo de flujo (popup "Nuevo flujo") ---------- */
+.flow-type-toggle-wrap {
+    display: flex;
+    justify-content: center;
+}
+
+.flow-type-toggle {
+    display: inline-flex;
+    background-color: var(--surface-sunken);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-pill);
+    padding: 3px;
+    gap: 3px;
+}
+
+.flow-type-toggle-btn {
+    border: none;
+    background: none;
+    color: var(--text-secondary);
+    font-size: var(--fs-base);
+    font-weight: 600;
+    padding: 8px 20px;
+    border-radius: var(--radius-pill);
+    cursor: pointer;
+    transition: background-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.flow-type-toggle-btn:hover:not(.active) {
+    color: var(--text-primary);
+}
+
+.flow-type-toggle-btn.active {
+    background-color: var(--brand-primary);
+    color: var(--text-inverse);
+    box-shadow: var(--shadow-xs);
+}
+
 /* ---------- C) Pantalla de entrada de variables ---------- */
 .flow-part-header--screen {
     margin-bottom: 0;
@@ -258,19 +295,24 @@
     color: var(--text-secondary);
     font-size: 11px;
     font-weight: 600;
-    padding: 3px 8px;
-    border-radius: var(--radius-sm);
+    padding: 4px 11px;
+    border-radius: var(--radius-pill);
     cursor: pointer;
-    transition: border-color var(--transition-fast), color var(--transition-fast);
+    transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
 }
 
 .flow-mini-btn:hover {
     border-color: var(--brand-primary);
-    color: var(--brand-primary);
+    background-color: var(--brand-primary);
+    color: var(--text-inverse);
 }
 
 .flow-screen-box {
-    max-width: 720px;
+    max-width: 760px;
+    background-color: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    padding: 12px 14px 14px;
 }
 
 .flow-screen-box.is-collapsed {
@@ -280,8 +322,12 @@
 .flow-screen-blocks {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     margin-top: 10px;
+    background-color: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
 }
 
 .flow-screen-block {
@@ -290,6 +336,7 @@
     gap: 8px;
     padding: 4px 2px;
     cursor: grab;
+    border-radius: var(--radius-sm);
 }
 
 .flow-screen-block.dragging {
@@ -303,6 +350,34 @@
     border: 1px dashed var(--border-default);
     border-radius: var(--radius-sm);
     padding: 8px 10px;
+}
+
+/* Bloque "Espacio en blanco" (tipo SKIP de ABAP) */
+.flow-screen-block--skip {
+    padding: 2px;
+}
+
+.flow-screen-skip-marker {
+    flex: 1;
+    text-align: center;
+    font-size: 10px;
+    color: var(--text-muted);
+    letter-spacing: 0.06em;
+}
+
+/* Bloque "Línea separadora" (tipo ULINE de ABAP) */
+.flow-screen-block--line {
+    padding: 6px 2px;
+}
+
+.flow-screen-line-marker {
+    flex: 1;
+}
+
+.flow-screen-line-marker hr {
+    border: none;
+    border-top: 1px dashed var(--border-default);
+    margin: 0;
 }
 
 .flow-frame-header {
@@ -334,6 +409,22 @@
     opacity: 0.4;
 }
 
+/* Envoltorio clicable sobre la previsualización de una variable — clic para
+   configurar tipo / modo de selección (único, rango, varios, select-options) */
+.flow-field-preview-click {
+    flex: 1;
+    min-width: 0;
+    border-radius: var(--radius-sm);
+    padding: 2px 4px;
+    margin: -2px -4px;
+    cursor: pointer;
+    transition: background-color var(--transition-fast);
+}
+
+.flow-field-preview-click:hover {
+    background-color: var(--brand-primary-light);
+}
+
 /* Previsualización "real" de una variable: etiqueta + input, sin recuadro alrededor de la fila */
 .flow-field-preview {
     flex: 1;
@@ -344,8 +435,22 @@
 }
 
 .flow-field-preview label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     font-size: var(--fs-xs);
     color: var(--text-secondary);
+}
+
+.flow-var-mode-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--brand-primary-hover);
+    background-color: var(--brand-primary-light);
+    border-radius: var(--radius-pill);
 }
 
 .flow-field-preview input {
