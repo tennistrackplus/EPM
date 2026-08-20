@@ -75,19 +75,21 @@ const FlowRun = {
             SELECT BLOQUE_ID, TIPO, ORDEN, TITULO, CONTENIDO FROM ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")}
             WHERE FLUJO_ID = '${Provider.esc(this.flujoId)}' ORDER BY ORDEN`);
         const varRows = await Provider.runQuery(`
-            SELECT VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, ORDEN FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")}
+            SELECT VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, SELECT_MODE, ORDEN FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")}
             WHERE FLUJO_ID = '${Provider.esc(this.flujoId)}' ORDER BY ORDEN`);
         const varsByBloque = {};
         varRows.forEach(v => {
             (varsByBloque[v.BLOQUE_ID] = varsByBloque[v.BLOQUE_ID] || [])
-                .push({ id: v.VARIABLE_ID, name: v.NOMBRE, label: v.ETIQUETA || v.NOMBRE, type: v.TIPO || "STRING" });
+                .push({ id: v.VARIABLE_ID, name: v.NOMBRE, label: v.ETIQUETA || v.NOMBRE, type: v.TIPO || "STRING", selectMode: v.SELECT_MODE || "unico" });
         });
         const blocks = blockRows.map(b => {
             if (b.TIPO === "VARIABLE") {
-                const v = (varsByBloque[b.BLOQUE_ID] || [])[0] || { id: Provider.newId(), name: "", label: "", type: "STRING" };
+                const v = (varsByBloque[b.BLOQUE_ID] || [])[0] || { id: Provider.newId(), name: "", label: "", type: "STRING", selectMode: "unico" };
                 return { id: b.BLOQUE_ID, kind: "variable", variable: v };
             }
             if (b.TIPO === "TEXTO") return { id: b.BLOQUE_ID, kind: "text", text: b.CONTENIDO || "" };
+            if (b.TIPO === "SKIP") return { id: b.BLOQUE_ID, kind: "skip" };
+            if (b.TIPO === "ULINE") return { id: b.BLOQUE_ID, kind: "line" };
             return { id: b.BLOQUE_ID, kind: "frame", title: b.TITULO || "Frame", variables: varsByBloque[b.BLOQUE_ID] || [] };
         });
 
@@ -159,11 +161,24 @@ const FlowRun = {
             </div>`;
 
         document.getElementById("btnExecuteFlow").addEventListener("click", () => this.execute());
+
+        body.querySelectorAll('input.file-input-native[data-var-type="FILE"]').forEach(inp => {
+            inp.addEventListener("change", () => {
+                const textEl = body.querySelector(`[data-file-text="${inp.id}"]`);
+                if (textEl) textEl.textContent = (inp.files && inp.files[0]) ? inp.files[0].name : "Elegir archivo…";
+            });
+        });
     },
 
     blockHtml(b) {
         if (b.kind === "text") {
             return `<div class="flow-screen-block flow-screen-block--text flow-screen-block--static">${UI.renderFormattedText(b.text)}</div>`;
+        }
+        if (b.kind === "skip") {
+            return `<div class="flow-screen-block flow-screen-block--skip flow-screen-block--static"></div>`;
+        }
+        if (b.kind === "line") {
+            return `<div class="flow-screen-block flow-screen-block--line flow-screen-block--static"><hr></div>`;
         }
         if (b.kind === "variable") {
             return `<div class="flow-screen-block flow-screen-block--var flow-screen-block--static">${this.inputHtml(b.variable)}</div>`;
@@ -183,7 +198,15 @@ const FlowRun = {
         const id = `runvar_${v.id}`;
         const label = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}</label>`;
         if (v.type === "FILE") {
-            return `<div class="flow-field-preview">${label}<input type="file" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="FILE"></div>`;
+            return `
+                <div class="flow-field-preview flow-field-preview--file">
+                    ${label}
+                    <label class="file-input-btn" for="${id}">
+                        <span class="file-input-btn-icon">📎</span>
+                        <span class="file-input-btn-text" data-file-text="${id}">Elegir archivo…</span>
+                    </label>
+                    <input type="file" class="file-input-native" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="FILE">
+                </div>`;
         }
         if (v.type === "BOOLEAN") {
             return `<div class="flow-field-preview flow-field-preview--checkbox"><input type="checkbox" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="BOOLEAN">${label}</div>`;

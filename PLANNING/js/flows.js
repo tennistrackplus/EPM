@@ -136,21 +136,27 @@ const Flows = {
             SELECT BLOQUE_ID, TIPO, ORDEN, TITULO, CONTENIDO FROM ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")}
             WHERE FLUJO_ID = '${Provider.esc(id)}' ORDER BY ORDEN`);
         const varRows = await Provider.runQuery(`
-            SELECT VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, ORDEN FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")}
+            SELECT VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, SELECT_MODE, ORDEN FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")}
             WHERE FLUJO_ID = '${Provider.esc(id)}' ORDER BY ORDEN`);
         const varsByBloque = {};
         varRows.forEach(v => {
             (varsByBloque[v.BLOQUE_ID] = varsByBloque[v.BLOQUE_ID] || [])
-                .push({ id: v.VARIABLE_ID, name: v.NOMBRE, label: v.ETIQUETA || v.NOMBRE, type: v.TIPO || "STRING" });
+                .push({ id: v.VARIABLE_ID, name: v.NOMBRE, label: v.ETIQUETA || v.NOMBRE, type: v.TIPO || "STRING", selectMode: v.SELECT_MODE || "unico" });
         });
 
         const blocks = blockRows.map(b => {
             if (b.TIPO === "VARIABLE") {
-                const v = (varsByBloque[b.BLOQUE_ID] || [])[0] || { id: Provider.newId(), name: "", label: "", type: "STRING" };
+                const v = (varsByBloque[b.BLOQUE_ID] || [])[0] || { id: Provider.newId(), name: "", label: "", type: "STRING", selectMode: "unico" };
                 return { id: b.BLOQUE_ID, kind: "variable", variable: v };
             }
             if (b.TIPO === "TEXTO") {
                 return { id: b.BLOQUE_ID, kind: "text", text: b.CONTENIDO || "" };
+            }
+            if (b.TIPO === "SKIP") {
+                return { id: b.BLOQUE_ID, kind: "skip" };
+            }
+            if (b.TIPO === "ULINE") {
+                return { id: b.BLOQUE_ID, kind: "line" };
             }
             return { id: b.BLOQUE_ID, kind: "frame", title: b.TITULO || "Frame", variables: varsByBloque[b.BLOQUE_ID] || [] };
         });
@@ -351,7 +357,9 @@ const Flows = {
     },
 
     // ------------------------------------------------------------
-    // Paso 1: modal pequeño — nombre y tipo
+    // Paso 1 (solo para flujos NUEVOS): nombre y tipo. Al editar un flujo
+    // existente ya no se pasa por aquí — se entra directo al editor completo
+    // (ver openForm); el nombre se renombra desde el propio título.
     // ------------------------------------------------------------
     openBasicsModal(initial, isNew) {
         return new Promise((resolve) => {
@@ -370,16 +378,15 @@ const Flows = {
                         <button class="modal-close" id="flowBasicsClose">&times;</button>
                     </div>
                     <div class="modal-body">
+                        <div class="flow-type-toggle-wrap">
+                            <div class="flow-type-toggle" id="flowBasicsType">
+                                <button type="button" class="flow-type-toggle-btn ${initial.type !== "manual" ? "active" : ""}" data-ftype="automatico">⟲ Automático</button>
+                                <button type="button" class="flow-type-toggle-btn ${initial.type === "manual" ? "active" : ""}" data-ftype="manual">☺ Manual</button>
+                            </div>
+                        </div>
                         <div class="form-group">
                             <label>Nombre del proceso</label>
                             <input type="text" id="flowBasicsName" placeholder="Ej. Carga diaria ventas" value="${UI.escapeHtml(initial.name || "")}">
-                        </div>
-                        <div class="form-group">
-                            <label>Tipo de flujo</label>
-                            <div class="segmented" id="flowBasicsType">
-                                <button type="button" class="segmented-btn ${initial.type !== "manual" ? "active" : ""}" data-ftype="automatico">Automático</button>
-                                <button type="button" class="segmented-btn ${initial.type === "manual" ? "active" : ""}" data-ftype="manual">Manual</button>
-                            </div>
                         </div>
                     </div>
                     <div class="modal-footer">
@@ -419,32 +426,24 @@ const Flows = {
         this.editingIsNew = !editId;
         this.screenCollapsed = false;
         this.selectedStepId = null;
-        let draft;
+
+        // Editar entra directo al editor completo — nombre y tipo ya no se
+        // piden en un popup previo (el nombre se edita en el propio título).
         if (editId) {
-            draft = await this.loadDetail(editId);
+            const draft = await this.loadDetail(editId);
             if (!draft) { UI.toast("No se ha podido cargar el flujo.", "error"); return; }
-        } else {
-            draft = this.blankFlow();
+            this.editing = draft;
+            this.openMainModal();
+            return;
         }
 
-        const basics = await this.openBasicsModal(draft, this.editingIsNew);
+        const draft = this.blankFlow();
+        const basics = await this.openBasicsModal(draft, true);
         if (!basics) return;
         Object.assign(draft, basics);
 
         this.editing = draft;
         this.openMainModal();
-    },
-
-    /** Reabre el paso 1 desde dentro del modal grande, sin perder cadena/pantalla/mapeo. */
-    async editBasicsInline() {
-        const basics = await this.openBasicsModal(this.editing, false);
-        if (!basics) return;
-        Object.assign(this.editing, basics);
-
-        this.updateModalHeader();
-        this.renderHeaderPart();
-        this.renderScreenBlock();
-        this.renderMappingBlock();
     },
 
     // ------------------------------------------------------------
@@ -463,12 +462,11 @@ const Flows = {
         overlay.innerHTML = `
             <div class="modal-box modal-full">
                 <div class="modal-header">
-                    <div>
-                        <h3 id="flowModalTitle"></h3>
+                    <div class="modal-title-edit-wrap">
+                        <h3 id="flowModalTitle" class="modal-title-editable" contenteditable="true" spellcheck="false" title="Clic para renombrar el flujo"></h3>
                         <span class="modal-subtitle" id="flowModalSubtitle"></span>
                     </div>
                     <div class="modal-header-right">
-                        <button class="btn btn-secondary btn-sm" id="btnEditFlowBasics">✎ Nombre / tipo</button>
                         <button class="modal-close" id="flowFormClose">&times;</button>
                     </div>
                 </div>
@@ -487,7 +485,21 @@ const Flows = {
         document.getElementById("flowFormClose").addEventListener("click", () => this.closeForm());
         document.getElementById("flowFormCancel").addEventListener("click", () => this.closeForm());
         document.getElementById("flowFormSave").addEventListener("click", () => this.save());
-        document.getElementById("btnEditFlowBasics").addEventListener("click", () => this.editBasicsInline());
+
+        const titleEl = document.getElementById("flowModalTitle");
+        titleEl.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); titleEl.blur(); }
+        });
+        titleEl.addEventListener("blur", () => {
+            const newName = titleEl.textContent.trim();
+            if (!newName) {
+                UI.toast("El flujo necesita un nombre.", "error");
+                titleEl.textContent = this.editing.name;
+                return;
+            }
+            this.editing.name = newName;
+            titleEl.textContent = newName;
+        });
 
         overlay.classList.add("visible");
 
@@ -520,8 +532,6 @@ const Flows = {
         if (f.type !== "automatico") {
             part.innerHTML = `
                 <div class="flow-header-row">
-                    <span class="table-tag">Flujo manual</span>
-                    <span class="form-hint">Se lanza desde la pantalla de variables (asignada por workflow / rol).</span>
                     <span class="load-fn-toolbar-spacer"></span>
                     ${!this.editingIsNew ? `<button class="btn btn-primary btn-sm" id="btnOpenFlowRun">▶ Ejecutar / Monitor</button>` : `<span class="form-hint">Guarda el flujo para poder ejecutarlo.</span>`}
                 </div>`;
@@ -680,6 +690,8 @@ const Flows = {
                     <button type="button" class="flow-mini-btn" id="btnAddScreenVar" title="Añadir variable">+ Var</button>
                     <button type="button" class="flow-mini-btn" id="btnAddScreenFrame" title="Añadir frame">+ Frame</button>
                     <button type="button" class="flow-mini-btn" id="btnAddScreenText" title="Añadir texto">+ Texto</button>
+                    <button type="button" class="flow-mini-btn" id="btnAddScreenSkip" title="Añadir espacio en blanco (tipo SKIP de ABAP)">+ Espacio</button>
+                    <button type="button" class="flow-mini-btn" id="btnAddScreenLine" title="Añadir línea separadora (tipo ULINE de ABAP)">+ Línea</button>
                 </div>
             </div>
             <div class="flow-screen-box ${this.screenCollapsed ? "is-collapsed" : ""}" id="flowScreenBox">
@@ -716,6 +728,14 @@ const Flows = {
             f.screen.blocks.push({ id: Provider.newId(), kind: "text", text });
             this.renderScreenBlocksList();
         });
+        document.getElementById("btnAddScreenSkip").addEventListener("click", () => {
+            f.screen.blocks.push({ id: Provider.newId(), kind: "skip" });
+            this.renderScreenBlocksList();
+        });
+        document.getElementById("btnAddScreenLine").addEventListener("click", () => {
+            f.screen.blocks.push({ id: Provider.newId(), kind: "line" });
+            this.renderScreenBlocksList();
+        });
 
         this.renderScreenBlocksList();
     },
@@ -739,7 +759,9 @@ const Flows = {
             return `
                 <div class="flow-screen-block flow-screen-block--var" draggable="true" data-block-idx="${idx}">
                     <span class="load-drag-handle">⠿</span>
-                    ${this.fieldPreviewHtml(b.variable)}
+                    <div class="flow-field-preview-click" data-edit-var="${idx}" title="Clic para configurar la variable">
+                        ${this.fieldPreviewHtml(b.variable)}
+                    </div>
                     <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
                 </div>`;
         }
@@ -748,6 +770,22 @@ const Flows = {
                 <div class="flow-screen-block flow-screen-block--text" draggable="true" data-block-idx="${idx}">
                     <span class="load-drag-handle">⠿</span>
                     <div class="flow-screen-text-content" data-edit-text="${idx}" title="Clic para editar">${UI.renderFormattedText(b.text)}</div>
+                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                </div>`;
+        }
+        if (b.kind === "skip") {
+            return `
+                <div class="flow-screen-block flow-screen-block--skip" draggable="true" data-block-idx="${idx}">
+                    <span class="load-drag-handle">⠿</span>
+                    <div class="flow-screen-skip-marker">· · · espacio en blanco · · ·</div>
+                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                </div>`;
+        }
+        if (b.kind === "line") {
+            return `
+                <div class="flow-screen-block flow-screen-block--line" draggable="true" data-block-idx="${idx}">
+                    <span class="load-drag-handle">⠿</span>
+                    <div class="flow-screen-line-marker"><hr></div>
                     <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
                 </div>`;
         }
@@ -765,7 +803,9 @@ const Flows = {
                     ${b.variables.length ? b.variables.map((v, vi) => `
                         <div class="flow-frame-var-row" draggable="true" data-frame-idx="${idx}" data-var-idx="${vi}">
                             <span class="load-drag-handle">⠿</span>
-                            ${this.fieldPreviewHtml(v)}
+                            <div class="flow-field-preview-click" data-edit-frame-var="${idx}:${vi}" title="Clic para configurar la variable">
+                                ${this.fieldPreviewHtml(v)}
+                            </div>
                             <button type="button" class="field-remove" data-remove-frame-var="${idx}:${vi}" title="Eliminar">✕</button>
                         </div>`).join("") : `<div class="hierarchy-pool-empty">Sin variables en este frame.</div>`}
                 </div>
@@ -774,9 +814,11 @@ const Flows = {
 
     /** Previsualización de una variable de pantalla tal y como se vería de verdad: etiqueta + input real, sin recuadro alrededor. */
     fieldPreviewHtml(v) {
+        const modeLabels = { rango: "Rango", multiple: "Varios valores", cualquiera: "Select-options" };
+        const modeBadge = v.selectMode && modeLabels[v.selectMode] ? `<span class="flow-var-mode-badge">${modeLabels[v.selectMode]}</span>` : "";
         return `
             <div class="flow-field-preview">
-                <label>${UI.escapeHtml(v.label || v.name)}</label>
+                <label>${UI.escapeHtml(v.label || v.name)}${modeBadge}</label>
                 <input type="text" disabled placeholder="${UI.escapeHtml(v.name)}">
             </div>`;
     },
@@ -827,6 +869,28 @@ const Flows = {
             if (val === null) return;
             f.screen.blocks[idx].text = val;
             this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll("[data-edit-var]").forEach(el => el.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const idx = parseInt(el.dataset.editVar, 10);
+            const current = f.screen.blocks[idx].variable;
+            const v = await UI.openScreenVariableModal({ current });
+            if (!v) return;
+            f.screen.blocks[idx].variable = { ...current, ...v };
+            this.renderScreenBlocksList();
+            this.renderMappingBlock();
+        }));
+
+        wrap.querySelectorAll("[data-edit-frame-var]").forEach(el => el.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const [bIdx, vIdx] = el.dataset.editFrameVar.split(":").map(Number);
+            const current = f.screen.blocks[bIdx].variables[vIdx];
+            const v = await UI.openScreenVariableModal({ current });
+            if (!v) return;
+            f.screen.blocks[bIdx].variables[vIdx] = { ...current, ...v };
+            this.renderScreenBlocksList();
+            this.renderMappingBlock();
         }));
 
         // Reordenar bloques de primer nivel (variable suelta / frame / texto) arrastrando.
@@ -1127,8 +1191,9 @@ const Flows = {
         await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
         await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
         if (tipo === "MANUAL" && f.screen.blocks.length) {
+            const tipoBMap = { variable: "VARIABLE", frame: "FRAME", text: "TEXTO", skip: "SKIP", line: "ULINE" };
             const blockVals = f.screen.blocks.map((b, idx) => {
-                const tipoB = b.kind === "variable" ? "VARIABLE" : (b.kind === "frame" ? "FRAME" : "TEXTO");
+                const tipoB = tipoBMap[b.kind] || "FRAME";
                 const titulo = b.kind === "frame" ? (b.title || "") : "";
                 const contenido = b.kind === "text" ? (b.text || "") : "";
                 return `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(b.id)}', '${Provider.esc(tipoB)}', ${idx}, '${Provider.esc(titulo)}', '${Provider.esc(contenido)}')`;
@@ -1138,17 +1203,17 @@ const Flows = {
             const varRows = [];
             f.screen.blocks.forEach(b => {
                 if (b.kind === "variable" && b.variable) {
-                    varRows.push([b.variable.id || Provider.newId(), b.id, b.variable.name, b.variable.label, b.variable.type, 0]);
+                    varRows.push([b.variable.id || Provider.newId(), b.id, b.variable.name, b.variable.label, b.variable.type, b.variable.selectMode || "unico", 0]);
                 } else if (b.kind === "frame") {
                     (b.variables || []).forEach((v, vi) => {
-                        varRows.push([v.id || Provider.newId(), b.id, v.name, v.label, v.type, vi]);
+                        varRows.push([v.id || Provider.newId(), b.id, v.name, v.label, v.type, v.selectMode || "unico", vi]);
                     });
                 }
             });
             if (varRows.length) {
-                const vals = varRows.map(([varId, bloqueId, nombre, etiqueta, tipoV, orden]) =>
-                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(varId)}', '${Provider.esc(bloqueId)}', '${Provider.esc(nombre)}', '${Provider.esc(etiqueta)}', '${Provider.esc(tipoV)}', ${orden})`).join(",\n");
-                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")} (PROYECTO_ID, FLUJO_ID, VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, ORDEN) VALUES ${vals}`);
+                const vals = varRows.map(([varId, bloqueId, nombre, etiqueta, tipoV, selectMode, orden]) =>
+                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(varId)}', '${Provider.esc(bloqueId)}', '${Provider.esc(nombre)}', '${Provider.esc(etiqueta)}', '${Provider.esc(tipoV)}', '${Provider.esc(selectMode)}', ${orden})`).join(",\n");
+                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")} (PROYECTO_ID, FLUJO_ID, VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, SELECT_MODE, ORDEN) VALUES ${vals}`);
             }
         }
     }

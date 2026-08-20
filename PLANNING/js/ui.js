@@ -1114,7 +1114,7 @@ const UI = {
                 document.body.appendChild(overlay);
             }
 
-            const v = Object.assign({ name: "", label: "", type: "STRING" }, current || {});
+            const v = Object.assign({ name: "", label: "", type: "STRING", selectMode: "unico" }, current || {});
 
             overlay.innerHTML = `
                 <div class="modal-box">
@@ -1138,6 +1138,16 @@ const UI = {
                             </select>
                             <p class="form-hint">FILE: en la pantalla de ejecución del flujo se pedirá un fichero; su valor resuelto será la ruta de storage tras subirlo.</p>
                         </div>
+                        <div class="form-group">
+                            <label>Modo de selección</label>
+                            <select id="svSelectMode">
+                                <option value="unico" ${v.selectMode === "unico" ? "selected" : ""}>Valor único</option>
+                                <option value="rango" ${v.selectMode === "rango" ? "selected" : ""}>Rango (desde – hasta)</option>
+                                <option value="multiple" ${v.selectMode === "multiple" ? "selected" : ""}>Varios valores</option>
+                                <option value="cualquiera" ${v.selectMode === "cualquiera" ? "selected" : ""}>Cualquiera (select-options)</option>
+                            </select>
+                            <p class="form-hint">Por ahora es solo una etiqueta informativa (cambio estético); la lógica de cada modo se desarrollará más adelante.</p>
+                        </div>
                     </div>
                     <div class="modal-footer">
                         <button class="btn btn-secondary" id="svCancel">Cancelar</button>
@@ -1156,8 +1166,9 @@ const UI = {
                 const name = overlay.querySelector("#svName").value.trim();
                 const label = overlay.querySelector("#svLabel").value.trim();
                 const type = overlay.querySelector("#svType").value;
+                const selectMode = overlay.querySelector("#svSelectMode").value;
                 if (!name) { UI.toast("Indica un nombre técnico para la variable.", "error"); return; }
-                cleanup({ name, label: label || name, type });
+                cleanup({ name, label: label || name, type, selectMode });
             };
         });
     },

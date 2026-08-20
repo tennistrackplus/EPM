@@ -322,8 +322,20 @@ const Loads = {
         };
     },
 
+    // Tipos de origen disponibles para una interfaz. Solo "tabla" y "fichero"
+    // están implementados; el resto queda listado (deshabilitado) para que se
+    // vea de un vistazo hacia dónde crece esto (Web service, otros sistemas...).
+    ORIGIN_TYPES: [
+        { key: "tabla", icon: "🗄", label: "Tabla", desc: "BigQuery o Snowflake" },
+        { key: "fichero", icon: "📄", label: "Fichero", desc: "CSV, Excel, JSON, ancho fijo" },
+        { key: "webservice", icon: "🌐", label: "Web service", desc: "Próximamente", disabled: true },
+        { key: "sistema", icon: "🔌", label: "Otro sistema", desc: "Próximamente", disabled: true }
+    ],
+
     // ------------------------------------------------------------
-    // Paso 1: modal pequeño — nombre, origen, cubo destino
+    // Paso 1 (solo para interfaces NUEVAS): nombre, origen, cubo destino.
+    // Al editar una interfaz existente ya no se pasa por aquí — se entra
+    // directamente a la pantalla de mapeo (ver openForm).
     // ------------------------------------------------------------
     openBasicsModal(initial, isNew) {
         return new Promise((resolve) => {
@@ -335,8 +347,10 @@ const Loads = {
                 document.body.appendChild(overlay);
             }
 
+            let originType = initial.originType === "fichero" ? "fichero" : "tabla";
+
             overlay.innerHTML = `
-                <div class="modal-box">
+                <div class="modal-box modal-wide">
                     <div class="modal-header">
                         <h3>${isNew ? "Nueva interfaz" : "Datos básicos de la interfaz"}</h3>
                         <button class="modal-close" id="loadBasicsClose">&times;</button>
@@ -347,10 +361,15 @@ const Loads = {
                             <input type="text" id="basicsName" placeholder="Ej. Interfaz ventas línea" value="${UI.escapeHtml(initial.name || "")}">
                         </div>
                         <div class="form-group">
-                            <label>Origen</label>
-                            <div class="segmented" id="basicsOriginType">
-                                <button type="button" class="segmented-btn ${initial.originType !== "fichero" ? "active" : ""}" data-origin="tabla">Tabla</button>
-                                <button type="button" class="segmented-btn ${initial.originType === "fichero" ? "active" : ""}" data-origin="fichero">Fichero</button>
+                            <label>Origen de datos</label>
+                            <div class="origin-type-grid" id="basicsOriginType">
+                                ${this.ORIGIN_TYPES.map(o => `
+                                    <button type="button" class="origin-type-card ${o.disabled ? "is-disabled" : ""} ${!o.disabled && originType === o.key ? "active" : ""}"
+                                            data-origin="${o.key}" ${o.disabled ? "disabled" : ""}>
+                                        <span class="origin-type-card-icon">${o.icon}</span>
+                                        <span class="origin-type-card-label">${o.label}</span>
+                                        <span class="origin-type-card-desc">${o.desc}</span>
+                                    </button>`).join("")}
                             </div>
                         </div>
                         <div class="form-group">
@@ -366,8 +385,7 @@ const Loads = {
                     </div>
                 </div>`;
 
-            let originType = initial.originType === "fichero" ? "fichero" : "tabla";
-            overlay.querySelectorAll("#basicsOriginType [data-origin]").forEach(btn => {
+            overlay.querySelectorAll("#basicsOriginType [data-origin]:not(:disabled)").forEach(btn => {
                 btn.addEventListener("click", () => {
                     originType = btn.dataset.origin;
                     overlay.querySelectorAll("#basicsOriginType [data-origin]").forEach(b => b.classList.toggle("active", b === btn));
@@ -406,55 +424,27 @@ const Loads = {
         }
 
         this.editingIsNew = !editId;
-        let draft;
+
+        // Editar entra directo a la pantalla de mapeo — el nombre, origen y cubo
+        // ya no se piden en un popup previo (el nombre se edita en el propio
+        // título de esta pantalla; origen/cubo quedan fijos tras la creación).
         if (editId) {
-            draft = await this.loadDetail(editId);
+            const draft = await this.loadDetail(editId);
             if (!draft) { UI.toast("No se ha podido cargar la interfaz.", "error"); return; }
-        } else {
-            draft = this.blankLoad();
+            this.editing = draft;
+            this.fileParamsCollapsed = false;
+            this.openMainModal();
+            return;
         }
 
-        const basics = await this.openBasicsModal(draft, this.editingIsNew);
+        const draft = this.blankLoad();
+        const basics = await this.openBasicsModal(draft, true);
         if (!basics) return;
-
-        const cuboChanged = draft.cuboId !== basics.cuboId;
-        const originChanged = draft.originType !== basics.originType;
         Object.assign(draft, basics);
-        if (cuboChanged) draft.outputMappings = {};
-        if (originChanged) {
-            draft.origin.fields = [];
-            draft.origin.tableName = "";
-            draft.outputMappings = {};
-        }
 
         this.editing = draft;
         this.fileParamsCollapsed = false;
         this.openMainModal();
-    },
-
-    /** Reabre el paso 1 desde dentro del modal grande, sin perder el resto del mapeo */
-    async editBasicsInline() {
-        const before = { cuboId: this.editing.cuboId, originType: this.editing.originType };
-        const basics = await this.openBasicsModal(this.editing, false);
-        if (!basics) return;
-
-        const cuboChanged = basics.cuboId !== before.cuboId;
-        const originChanged = basics.originType !== before.originType;
-        Object.assign(this.editing, basics);
-
-        if (cuboChanged) this.editing.outputMappings = {};
-        if (originChanged) {
-            this.editing.origin.fields = [];
-            this.editing.origin.tableName = "";
-            this.editing.outputMappings = {};
-        }
-
-        this.updateModalHeader();
-        if (cuboChanged || originChanged) {
-            this.renderOriginPanel();
-            this.renderInputFields();
-        }
-        this.renderOutputFields();
     },
 
     // ------------------------------------------------------------
@@ -473,12 +463,11 @@ const Loads = {
         overlay.innerHTML = `
             <div class="modal-box modal-full">
                 <div class="modal-header">
-                    <div>
-                        <h3 id="loadModalTitle"></h3>
+                    <div class="modal-title-edit-wrap">
+                        <h3 id="loadModalTitle" class="modal-title-editable" contenteditable="true" spellcheck="false" title="Clic para renombrar la interfaz"></h3>
                         <span class="modal-subtitle" id="loadModalSubtitle"></span>
                     </div>
                     <div class="modal-header-right">
-                        <button class="btn btn-secondary btn-sm" id="btnEditBasics">✎ Nombre / origen / cubo</button>
                         <button class="modal-close" id="loadFormClose">&times;</button>
                     </div>
                 </div>
@@ -521,7 +510,21 @@ const Loads = {
         document.getElementById("loadFormClose").addEventListener("click", () => this.closeForm());
         document.getElementById("loadFormCancel").addEventListener("click", () => this.closeForm());
         document.getElementById("loadFormSave").addEventListener("click", () => this.save());
-        document.getElementById("btnEditBasics").addEventListener("click", () => this.editBasicsInline());
+
+        const titleEl = document.getElementById("loadModalTitle");
+        titleEl.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); titleEl.blur(); }
+        });
+        titleEl.addEventListener("blur", () => {
+            const newName = titleEl.textContent.trim();
+            if (!newName || !this.NAME_RE.test(newName)) {
+                UI.toast("El nombre debe empezar por una letra y contener solo letras, números y \"_\" (sin espacios ni otros caracteres), máx. 30.", "error");
+                titleEl.textContent = this.editing.name;
+                return;
+            }
+            this.editing.name = newName;
+            titleEl.textContent = newName;
+        });
 
         document.getElementById("btnFnInput").addEventListener("click", async () => {
             const code = await UI.openCodeEditorModal({
@@ -658,11 +661,6 @@ const Loads = {
                             <option value="Windows-1252" ${o.encoding === "Windows-1252" ? "selected" : ""}>Windows-1252</option>
                         </select>
                     </div>
-                </div>
-                <div class="load-origin-row load-origin-row--sample">
-                    <button class="btn btn-secondary btn-sm" id="btnSampleFile">📄 Cargar fichero de ejemplo</button>
-                    <input type="file" id="sampleFileInput" accept=".csv,.txt,.xlsx,.xls,.json" style="display:none;">
-                    <span class="form-hint">Solo se usa para leer la cabecera y proponer campos; no se guarda el fichero.</span>
                 </div>`;
 
             document.getElementById("btnToggleFileParams").addEventListener("click", () => {
@@ -681,9 +679,6 @@ const Loads = {
                 bind("fileDecSep", "decimalSeparator");
                 bind("fileEncoding", "encoding");
             }
-
-            document.getElementById("btnSampleFile").addEventListener("click", () => document.getElementById("sampleFileInput").click());
-            document.getElementById("sampleFileInput").addEventListener("change", (e) => this.handleSampleFile(e));
         }
     },
 
@@ -738,11 +733,21 @@ const Loads = {
         const o = this.editing.origin;
         const isTable = this.editing.originType === "tabla";
 
-        actions.innerHTML = `<button class="btn btn-secondary btn-sm" id="btnAddInputField">+ Añadir${isTable ? " (visual)" : ""}</button>`;
+        actions.innerHTML = `
+            <button class="btn btn-secondary btn-sm" id="btnAddInputField">+ Añadir${isTable ? " (visual)" : ""}</button>
+            ${!isTable ? `
+                <button class="btn btn-secondary btn-sm" id="btnSampleFile" title="Solo se usa para leer la cabecera y proponer campos; no se guarda el fichero.">🗂 Traer campos desde fichero</button>
+                <input type="file" id="sampleFileInput" accept=".csv,.txt,.xlsx,.xls,.json" style="display:none;">
+            ` : ""}`;
         document.getElementById("btnAddInputField").addEventListener("click", () => {
             o.fields.push({ name: `campo_${o.fields.length + 1}`, type: "STRING", custom: true, filter: null });
             this.renderInputFields();
         });
+
+        if (!isTable) {
+            document.getElementById("btnSampleFile").addEventListener("click", () => document.getElementById("sampleFileInput").click());
+            document.getElementById("sampleFileInput").addEventListener("change", (e) => this.handleSampleFile(e));
+        }
 
         if (!o.fields.length) {
             wrap.innerHTML = `<div class="hierarchy-pool-empty">${isTable ? "Selecciona una tabla o añade campos manualmente." : "Añade campos manualmente o carga un fichero de ejemplo."}</div>`;
