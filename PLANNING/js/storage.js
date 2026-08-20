@@ -99,9 +99,17 @@ const Storage = {
         });
     },
 
-    /** Construye una ruta de storage por defecto para un fichero de un flujo. */
+    /**
+     * Construye una ruta de storage por defecto para un fichero de un flujo.
+     * Sin subcarpetas a propósito: Snowflake, al descargar (GET) un fichero
+     * que vive en una subcarpeta del stage, intenta recrear esa misma
+     * subcarpeta en el disco local del stored procedure, y ahí solo /tmp es
+     * escribible — con nombre plano ese problema no existe.
+     */
     buildPath(flujoId, varName, fileName) {
         const safeName = String(fileName || "fichero").replace(/[^\w.\-]+/g, "_");
-        return `flows/${flujoId}/${varName}/${Date.now()}_${safeName}`;
+        const safeFlujo = String(flujoId || "flujo").replace(/[^\w.\-]+/g, "_");
+        const safeVar = String(varName || "var").replace(/[^\w.\-]+/g, "_");
+        return `${safeFlujo}__${safeVar}__${Date.now()}_${safeName}`;
     }
 };
