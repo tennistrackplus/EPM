@@ -26,6 +26,40 @@ const FlowRun = {
     lastRunId: null,
     pollHandle: null,
 
+    // Estado en memoria de las tablas select-options (rango / varios valores /
+    // cualquiera) por VARIABLE_ID: [{sign:'I'|'E', option:'EQ'|..., low, high}, ...]
+    selOptState: {},
+    _selOptDelegationBound: false,
+
+    // Operadores disponibles según el modo de selección de la variable —
+    // igual concepto que un SELECT-OPTIONS de ABAP (sign + option + low/high).
+    SELOPT_MODE_OPTIONS: {
+        rango: [
+            { value: "BT", label: "Entre" },
+            { value: "GE", label: "Mayor o igual que" },
+            { value: "LE", label: "Menor o igual que" },
+            { value: "GT", label: "Mayor que" },
+            { value: "LT", label: "Menor que" },
+            { value: "EQ", label: "Igual a" }
+        ],
+        multiple: [
+            { value: "EQ", label: "Igual a" },
+            { value: "NE", label: "Distinto de" }
+        ],
+        cualquiera: [
+            { value: "EQ", label: "Igual a (EQ)" },
+            { value: "NE", label: "Distinto de (NE)" },
+            { value: "GT", label: "Mayor que (GT)" },
+            { value: "GE", label: "Mayor o igual (GE)" },
+            { value: "LT", label: "Menor que (LT)" },
+            { value: "LE", label: "Menor o igual (LE)" },
+            { value: "BT", label: "Entre (BT)" },
+            { value: "NB", label: "No entre (NB)" },
+            { value: "CP", label: "Contiene patrón, admite * (CP)" },
+            { value: "NP", label: "No contiene patrón (NP)" }
+        ]
+    },
+
     async init() {
         const params = new URLSearchParams(window.location.search);
         this.flujoId = params.get("flujo_id") || params.get("flowId") || params.get("id");
@@ -168,6 +202,8 @@ const FlowRun = {
                 if (textEl) textEl.textContent = (inp.files && inp.files[0]) ? inp.files[0].name : "Elegir archivo…";
             });
         });
+
+        this.bindSelOptDelegation(body);
     },
 
     blockHtml(b) {
@@ -195,6 +231,12 @@ const FlowRun = {
 
     /** Input real (no deshabilitado) para una variable de pantalla, según su tipo. */
     inputHtml(v) {
+        // Rango / varios valores / cualquiera: editor de select-options en vez
+        // de un único input — el valor recogido es una TABLA de filas, no un escalar.
+        if (v.selectMode && v.selectMode !== "unico") {
+            return this.selOptHtml(v);
+        }
+
         const id = `runvar_${v.id}`;
         const label = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}</label>`;
         if (v.type === "FILE") {
@@ -215,7 +257,123 @@ const FlowRun = {
         return `<div class="flow-field-preview">${label}<input type="${htmlType}" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="${UI.escapeHtml(v.type || "STRING")}"></div>`;
     },
 
-    /** Recoge del DOM {nombre: valor} + {nombre: File} para las de tipo FILE. */
+    // ------------------------------------------------------------
+    // Editor de select-options (rango / varios valores / cualquiera): tabla de
+    // filas incluir/excluir + operador + valor(es), al estilo SELECT-OPTIONS de
+    // ABAP. Vive en memoria en `this.selOptState[variable_id]` y se recoge en
+    // `collectScreenValues()` como la lista de filas para esa variable.
+    // ------------------------------------------------------------
+    selOptDefaultRow(mode) {
+        return { sign: "I", option: mode === "rango" ? "BT" : "EQ", low: "", high: "" };
+    },
+
+    selOptNeedsHigh(option) {
+        return option === "BT" || option === "NB";
+    },
+
+    selOptHtml(v) {
+        if (!this.selOptState[v.id]) this.selOptState[v.id] = [this.selOptDefaultRow(v.selectMode)];
+        return `<div class="flow-field-preview flow-field-preview--selopt" id="selopt_wrap_${v.id}">${this.selOptInnerHtml(v)}</div>`;
+    },
+
+    selOptInnerHtml(v) {
+        const rows = this.selOptState[v.id] || [this.selOptDefaultRow(v.selectMode)];
+        return `
+            <label>${UI.escapeHtml(v.label || v.name)}</label>
+            <div class="selopt-table">
+                ${rows.map((r, idx) => this.selOptRowHtml(v, idx, r)).join("")}
+            </div>
+            <button type="button" class="flow-mini-btn selopt-add-btn" data-selopt-add="${v.id}">+ Valor</button>`;
+    },
+
+    selOptRowHtml(v, idx, row) {
+        const options = this.SELOPT_MODE_OPTIONS[v.selectMode] || this.SELOPT_MODE_OPTIONS.cualquiera;
+        const needsHigh = this.selOptNeedsHigh(row.option);
+        return `
+            <div class="selopt-row">
+                <select class="selopt-sign" data-selopt-field="sign" data-selopt-var="${v.id}" data-selopt-idx="${idx}" title="Incluir / excluir">
+                    <option value="I" ${row.sign !== "E" ? "selected" : ""}>Incl.</option>
+                    <option value="E" ${row.sign === "E" ? "selected" : ""}>Excl.</option>
+                </select>
+                <select class="selopt-option" data-selopt-field="option" data-selopt-var="${v.id}" data-selopt-idx="${idx}">
+                    ${options.map(o => `<option value="${o.value}" ${row.option === o.value ? "selected" : ""}>${o.label}</option>`).join("")}
+                </select>
+                <input type="text" class="selopt-low" data-selopt-field="low" data-selopt-var="${v.id}" data-selopt-idx="${idx}"
+                       placeholder="Valor" value="${UI.escapeHtml(row.low || "")}">
+                <input type="text" class="selopt-high" data-selopt-field="high" data-selopt-var="${v.id}" data-selopt-idx="${idx}"
+                       placeholder="y" value="${UI.escapeHtml(row.high || "")}" ${needsHigh ? "" : 'style="display:none"'}>
+                <button type="button" class="selopt-remove-btn" data-selopt-remove="${v.id}:${idx}" title="Eliminar valor">✕</button>
+            </div>`;
+    },
+
+    /** Delegación única (se enlaza una sola vez sobre #flowRunBody) para los
+     * controles de las tablas select-options: sobrevive a los re-renders. */
+    bindSelOptDelegation(body) {
+        if (this._selOptDelegationBound) return;
+        this._selOptDelegationBound = true;
+
+        body.addEventListener("click", (e) => {
+            const addBtn = e.target.closest("[data-selopt-add]");
+            if (addBtn) {
+                const varId = addBtn.dataset.seloptAdd;
+                const v = this.findVariableById(varId);
+                if (!v) return;
+                this.selOptState[varId] = this.selOptState[varId] || [];
+                this.selOptState[varId].push(this.selOptDefaultRow(v.selectMode));
+                this.refreshSelOptWrap(v);
+                return;
+            }
+            const removeBtn = e.target.closest("[data-selopt-remove]");
+            if (removeBtn) {
+                const [varId, idxStr] = removeBtn.dataset.seloptRemove.split(":");
+                const idx = parseInt(idxStr, 10);
+                const v = this.findVariableById(varId);
+                if (!v || !this.selOptState[varId]) return;
+                this.selOptState[varId].splice(idx, 1);
+                if (!this.selOptState[varId].length) this.selOptState[varId].push(this.selOptDefaultRow(v.selectMode));
+                this.refreshSelOptWrap(v);
+            }
+        });
+
+        body.addEventListener("change", (e) => {
+            const el = e.target.closest("[data-selopt-field]");
+            if (!el) return;
+            const varId = el.dataset.seloptVar;
+            const idx = parseInt(el.dataset.seloptIdx, 10);
+            const field = el.dataset.seloptField;
+            const rows = this.selOptState[varId];
+            if (!rows || !rows[idx]) return;
+            rows[idx][field] = el.value;
+            if (field === "option") {
+                const v = this.findVariableById(varId);
+                if (v) this.refreshSelOptWrap(v);
+            }
+        });
+    },
+
+    refreshSelOptWrap(v) {
+        const wrap = document.getElementById(`selopt_wrap_${v.id}`);
+        if (!wrap) return;
+        wrap.innerHTML = this.selOptInnerHtml(v);
+    },
+
+    /** Recorre variables sueltas y las de dentro de frames de la pantalla. */
+    forEachScreenVariable(fn) {
+        this.flow.screen.blocks.forEach(b => {
+            if (b.kind === "variable") fn(b.variable);
+            if (b.kind === "frame") (b.variables || []).forEach(fn);
+        });
+    },
+
+    findVariableById(varId) {
+        let found = null;
+        this.forEachScreenVariable(v => { if (v.id === varId) found = v; });
+        return found;
+    },
+
+    /** Recoge del DOM {nombre: valor} + {nombre: File} para las de tipo FILE.
+     *  Las variables en modo rango/varios/cualquiera devuelven en su lugar la
+     *  tabla de select-options: [{sign, option, low, high}, ...]. */
     collectScreenValues() {
         const values = {};
         const files = {};
@@ -230,6 +388,19 @@ const FlowRun = {
                 values[name] = el.value;
             }
         });
+
+        this.forEachScreenVariable(v => {
+            if (v.selectMode && v.selectMode !== "unico") {
+                const rows = (this.selOptState[v.id] || []).filter(r => (r.low || "").toString().trim() !== "");
+                values[v.name] = rows.map(r => ({
+                    sign: r.sign === "E" ? "E" : "I",
+                    option: r.option || "EQ",
+                    low: r.low || "",
+                    high: this.selOptNeedsHigh(r.option) ? (r.high || "") : ""
+                }));
+            }
+        });
+
         return { values, files };
     },
 

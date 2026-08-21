@@ -1146,7 +1146,7 @@ const UI = {
                                 <option value="multiple" ${v.selectMode === "multiple" ? "selected" : ""}>Varios valores</option>
                                 <option value="cualquiera" ${v.selectMode === "cualquiera" ? "selected" : ""}>Cualquiera (select-options)</option>
                             </select>
-                            <p class="form-hint">Por ahora es solo una etiqueta informativa (cambio estético); la lógica de cada modo se desarrollará más adelante.</p>
+                            <p class="form-hint">Si eliges rango, varios valores o cualquiera, en la pantalla de ejecución aparecerá una tabla de valores (incluir/excluir + operador) al estilo select-options de SAP; el código Python recibirá esa tabla (JSON) en lugar de un valor único.</p>
                         </div>
                     </div>
                     <div class="modal-footer">
