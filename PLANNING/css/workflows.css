@@ -1,0 +1,32 @@
+/* ============================================================
+   DRACO PLANNING — WORKFLOWS
+   La mayoría de la UI reutiliza clases de flows.css / app.css
+   (flow-part, flow-chain-*, flow-step-*, flow-target-row,
+   hier-chip-card, segmented). Aquí solo lo que falta.
+   ============================================================ */
+
+.chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 4px;
+}
+
+.chip-row .hier-chip a {
+    color: inherit;
+    text-decoration: none;
+    opacity: 0.6;
+}
+
+.chip-row .hier-chip a:hover {
+    opacity: 1;
+    color: var(--color-danger, #d64545);
+}
+
+.flow-target-row[data-edit-taskval] {
+    transition: background-color 0.15s ease;
+}
+
+.flow-target-row[data-edit-taskval]:hover {
+    background-color: var(--gray-50, #f7f7f8);
+}
