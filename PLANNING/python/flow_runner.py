@@ -45,7 +45,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
-from interface_loader import EngineAdapter, SnowflakeEngine, apply_mapping, load_mapping_config
+from interface_loader import EngineAdapter, SnowflakeEngine, apply_mapping, load_mapping_config, matches_select_options
 from storage_io import LocalFsStorage, SnowflakeStageStorage, StorageAdapter, load_interface_values, read_file_to_dataframe
 
 ESTADO_PENDIENTE = "PENDIENTE"
@@ -227,7 +227,7 @@ def _run_step(engine: EngineAdapter, storage: Optional[StorageAdapter], step: Fl
     })
 
     if config.input_transform_code:
-        ns: Dict[str, Any] = {"pd": pd}
+        ns: Dict[str, Any] = {"pd": pd, "matches_select_options": matches_select_options}
         exec(config.input_transform_code, ns)  # noqa: S102 - codigo definido por el usuario en la app
         if "transformar" in ns:
             df_input = ns["transformar"](df_input)
@@ -235,7 +235,7 @@ def _run_step(engine: EngineAdapter, storage: Optional[StorageAdapter], step: Fl
     df_output = apply_mapping(df_input, df_variables, config)
 
     if config.output_transform_code:
-        ns = {"pd": pd}
+        ns = {"pd": pd, "matches_select_options": matches_select_options}
         exec(config.output_transform_code, ns)  # noqa: S102
         if "transformar" in ns:
             df_output = ns["transformar"](df_output)

@@ -21,6 +21,21 @@ Microsoft Fabric...):
     escribir un adaptador nuevo que cumpla la misma interfaz - el
     resto del codigo (la logica de mapeo) no cambia.
 
+Contrato de las variables (dict `variables` / columna VALOR de
+`df_variables`): una variable de pantalla marcada en modo "unico" sigue
+llegando como un escalar (str/num/bool). Una variable en modo "rango",
+"varios valores" o "cualquiera" llega en cambio como una LISTA de
+select-options estilo SAP:
+
+    [{"sign": "I"|"E", "option": "EQ"|"NE"|"GT"|"GE"|"LT"|"LE"|"BT"|"NB"|"CP"|"NP",
+      "low": "...", "high": "..."}, ...]
+
+Usa `matches_select_options(valor, filas)` para evaluar un valor de
+campo contra esa tabla (ya se usa automaticamente en los filtros de
+entrada de una interfaz, y esta disponible tambien dentro del codigo
+Python que el usuario escribe en la app - mapeo por FUNCION, por
+CODIGO y las transformaciones de entrada/salida).
+
 Uso tipico desde Snowflake (Snowpark Python Stored Procedure / Task):
 
     from snowflake.snowpark import Session
@@ -39,6 +54,8 @@ Uso tipico desde Snowflake (Snowpark Python Stored Procedure / Task):
 from __future__ import annotations
 
 import ast
+import fnmatch
+import json
 import operator
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
@@ -257,20 +274,132 @@ _SAFE_BUILTINS = {name: getattr(_builtins, name) for name in _SAFE_BUILTIN_NAMES
 def _compile_funcion(codigo: str) -> Callable[[Dict[str, Any], Dict[str, Any]], Any]:
     """Compila el codigo Python de un mapeo tipo FUNCION. Debe definir una
     funcion `mapear(fila, variables)` que devuelva el valor del campo."""
-    ns: Dict[str, Any] = {}
+    ns: Dict[str, Any] = {"matches_select_options": matches_select_options}
     exec(codigo, {"__builtins__": _SAFE_BUILTINS}, ns)  # noqa: S102 - codigo del usuario en la app
     if "mapear" not in ns:
         raise ValueError("El codigo de la funcion debe definir `def mapear(fila, variables): ...`")
     return ns["mapear"]
 
 
+# ------------------------------------------------------------
+# Select-options estilo SAP: cada variable de pantalla marcada como
+# "rango", "varios valores" o "cualquiera" (SELECT_MODE en
+# FLUJOS_SCREEN_VARIABLES) ya NO llega como un valor escalar en el dict
+# `variables`, sino como una lista de filas:
+#
+#     [{"sign": "I"|"E", "option": "EQ"|"NE"|"GT"|"GE"|"LT"|"LE"|"BT"|"NB"|"CP"|"NP",
+#       "low": "...", "high": "..."}, ...]
+#
+# ("sign" I = incluir, E = excluir; "option" es el operador, igual que
+# en los SELECT-OPTIONS de ABAP: EQ igual, NE distinto, GT/GE/LT/LE
+# comparaciones, BT/NB entre / no entre, CP/NP coincide / no coincide
+# con un patron admitiendo comodines "*").
+#
+# `matches_select_options(valor, filas)` evalua un valor de campo contra
+# esa tabla y esta disponible tanto para los filtros de entrada (ver
+# `_row_passes_filters`) como dentro del codigo Python que el usuario
+# escribe en la app (mapeo por FUNCION, por CODIGO, y las
+# transformaciones de entrada/salida), donde se inyecta automaticamente
+# en el espacio de nombres de ejecucion.
+# ------------------------------------------------------------
+
+def _try_num(value: Any) -> Any:
+    if value is None or value == "":
+        return value
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _select_options_row_matches(value: Any, low: Any, high: Any, option: str) -> bool:
+    option = (option or "EQ").upper()
+
+    if option == "CP":
+        return fnmatch.fnmatch(str(value), str(low))
+    if option == "NP":
+        return not fnmatch.fnmatch(str(value), str(low))
+
+    v, lo, hi = _try_num(value), _try_num(low), _try_num(high)
+
+    if option == "EQ":
+        return v == lo
+    if option == "NE":
+        return v != lo
+    if option == "GT":
+        return v is not None and lo is not None and v > lo
+    if option == "GE":
+        return v is not None and lo is not None and v >= lo
+    if option == "LT":
+        return v is not None and lo is not None and v < lo
+    if option == "LE":
+        return v is not None and lo is not None and v <= lo
+    if option == "BT":
+        return v is not None and lo is not None and hi is not None and lo <= v <= hi
+    if option == "NB":
+        return not (v is not None and lo is not None and hi is not None and lo <= v <= hi)
+    return False
+
+
+def matches_select_options(value: Any, rows: Optional[List[Dict[str, Any]]]) -> bool:
+    """Evalua `value` contra una tabla de select-options estilo SAP.
+
+    Semantica igual que en ABAP: las filas "I" (incluir) se combinan con
+    OR entre si (si no hay ninguna fila "I", se considera que incluye
+    cualquier valor); las filas "E" (excluir) descartan el valor aunque
+    alguna "I" haya encajado. Filas sin "option" se tratan como EQ.
+    """
+    if not rows:
+        return True
+
+    include_rows = [r for r in rows if (r.get("sign") or "I").upper() != "E"]
+    exclude_rows = [r for r in rows if (r.get("sign") or "I").upper() == "E"]
+
+    included = True
+    if include_rows:
+        included = any(
+            _select_options_row_matches(value, r.get("low"), r.get("high"), r.get("option"))
+            for r in include_rows
+        )
+
+    excluded = any(
+        _select_options_row_matches(value, r.get("low"), r.get("high"), r.get("option"))
+        for r in exclude_rows
+    )
+
+    return included and not excluded
+
+
+def _coerce_objetivo(objetivo: Any) -> Any:
+    """Si `objetivo` llega como un string JSON de lista (p.ej. porque el motor
+    devuelve un VARIANT/JSON como texto), lo decodifica para poder tratarlo
+    como tabla de select-options. Si no es JSON o no es una lista, se
+    devuelve tal cual (valor escalar normal)."""
+    if isinstance(objetivo, str) and objetivo.strip().startswith("["):
+        try:
+            parsed = json.loads(objetivo)
+        except (ValueError, TypeError):
+            return objetivo
+        if isinstance(parsed, list):
+            return parsed
+    return objetivo
+
+
 def _row_passes_filters(row: Dict[str, Any], config: MappingConfig, variables: Dict[str, Any]) -> bool:
     for f in config.input_fields:
         if not f.filtro_tipo:
             continue
-        objetivo = variables.get(f.filtro_valor) if f.filtro_tipo == "VARIABLE" else f.filtro_valor
-        if str(row.get(f.campo)) != str(objetivo):
-            return False
+        objetivo = _coerce_objetivo(variables.get(f.filtro_valor) if f.filtro_tipo == "VARIABLE" else f.filtro_valor)
+        valor_campo = row.get(f.campo)
+        if isinstance(objetivo, list):
+            # Variable en modo rango / varios valores / cualquiera (select-options
+            # estilo SAP): en vez de un escalar, la variable trae una tabla
+            # [{sign, option, low, high}, ...] — ver matches_select_options().
+            if not matches_select_options(valor_campo, objetivo):
+                return False
+        else:
+            if str(valor_campo) != str(objetivo):
+                return False
     return True
 
 
@@ -286,7 +415,7 @@ def apply_mapping(df_input: pd.DataFrame, df_variables: pd.DataFrame, config: Ma
 
     # Modo "mapeo por codigo": el propio codigo decide todo el DataFrame de salida.
     if config.mapping_mode == "CODIGO" and config.mapping_code:
-        ns: Dict[str, Any] = {"pd": pd}
+        ns: Dict[str, Any] = {"pd": pd, "matches_select_options": matches_select_options}
         exec(config.mapping_code, ns)  # noqa: S102 - codigo definido por el propio usuario en la app
         if "mapear" not in ns:
             raise ValueError("El mapeo por codigo debe definir `def mapear(df_input, variables): ...`")
@@ -348,7 +477,7 @@ def run_interface(
     df_variables = engine.read_table(tabla_variables)
 
     if config.input_transform_code:
-        ns: Dict[str, Any] = {"pd": pd}
+        ns: Dict[str, Any] = {"pd": pd, "matches_select_options": matches_select_options}
         exec(config.input_transform_code, ns)  # noqa: S102
         if "transformar" in ns:
             df_input = ns["transformar"](df_input)
@@ -356,7 +485,7 @@ def run_interface(
     df_output = apply_mapping(df_input, df_variables, config)
 
     if config.output_transform_code:
-        ns = {"pd": pd}
+        ns = {"pd": pd, "matches_select_options": matches_select_options}
         exec(config.output_transform_code, ns)  # noqa: S102
         if "transformar" in ns:
             df_output = ns["transformar"](df_output)
