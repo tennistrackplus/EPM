@@ -1101,6 +1101,319 @@ const UI = {
     },
 
     /**
+     * Selector de valores concretos de una dimensión (multi-selección),
+     * usado por el driver de un paso de Workflow. Consulta la tabla física
+     * de la dimensión (columna clave = nombre de la dimensión) y deja
+     * marcar/desmarcar filas. Devuelve Promise<string[]|null>.
+     */
+    openDimensionValuesPickerModal({ project, dim, keyCol, selected = [] }) {
+        return new Promise(async (resolve) => {
+            let overlay = document.getElementById("dimValuesPickerModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "dimValuesPickerModal";
+                document.body.appendChild(overlay);
+            }
+
+            const picked = new Set(selected);
+            let allValues = [];
+
+            const shell = (bodyHtml) => `
+                <div class="modal-box modal-wide">
+                    <div class="modal-header">
+                        <div>
+                            <h3>Valores de ${UI.escapeHtml(dim[Dimensions.NAME_COL])}</h3>
+                            <span class="modal-subtitle">Selecciona los valores sobre los que se repartirá este paso</span>
+                        </div>
+                        <button class="modal-close" id="dimValPickerClose">&times;</button>
+                    </div>
+                    <div class="modal-body">${bodyHtml}</div>
+                </div>`;
+
+            overlay.innerHTML = shell(`<span class="spinner"></span>`);
+            overlay.classList.add("visible");
+            overlay.querySelector("#dimValPickerClose").onclick = () => { overlay.classList.remove("visible"); resolve(null); };
+
+            try {
+                const fullTable = Provider.qualify(project.DATASET, dim.TABLA);
+                const rows = await Provider.runQuery(`SELECT DISTINCT ${keyCol} AS V FROM ${fullTable} ORDER BY ${keyCol} LIMIT 5000`);
+                allValues = rows.map(r => String(r.V));
+            } catch (err) {
+                overlay.innerHTML = shell(`<div class="module-empty">Error al leer los valores: ${UI.escapeHtml(err.message)}</div>`);
+                return;
+            }
+
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+
+            const renderRows = (filterText = "") => {
+                const f = filterText.trim().toLowerCase();
+                const filtered = !f ? allValues : allValues.filter(v => v.toLowerCase().includes(f));
+                const rowsHtml = filtered.length
+                    ? filtered.map(v => `
+                        <tr data-toggle-val="${UI.escapeHtml(v)}">
+                            <td><input type="checkbox" ${picked.has(v) ? "checked" : ""}></td>
+                            <td>${UI.escapeHtml(v)}</td>
+                        </tr>`).join("")
+                    : `<tr><td colspan="2" class="dim-picker-empty">${allValues.length ? "Sin resultados." : "Esta dimensión todavía no tiene valores cargados."}</td></tr>`;
+
+                overlay.innerHTML = shell(`
+                    <input type="text" id="dimValPickerSearch" class="dim-picker-search" placeholder="Buscar valor...">
+                    <p class="form-hint">${picked.size} valor(es) seleccionado(s). Si no seleccionas ninguno, el paso se repartirá entre <strong>todos</strong> los valores de la dimensión.</p>
+                    <div class="dim-picker-table-wrap">
+                        <table class="dim-picker-table">
+                            <thead><tr><th style="width:32px;"></th><th>${UI.escapeHtml(dim[Dimensions.NAME_COL])}</th></tr></thead>
+                            <tbody id="dimValPickerRows">${rowsHtml}</tbody>
+                        </table>
+                    </div>
+                    <div class="modal-footer" style="padding:14px 0 0;">
+                        <button class="btn btn-secondary" id="dimValPickerCancel">Cancelar</button>
+                        <button class="btn btn-primary" id="dimValPickerSave">Guardar selección</button>
+                    </div>`);
+
+                overlay.querySelector("#dimValPickerClose").onclick = () => cleanup(null);
+                overlay.querySelector("#dimValPickerCancel").onclick = () => cleanup(null);
+                overlay.querySelector("#dimValPickerSave").onclick = () => cleanup(Array.from(picked));
+                const search = overlay.querySelector("#dimValPickerSearch");
+                search.value = filterText;
+                search.oninput = () => renderRows(search.value);
+                setTimeout(() => { search.focus(); search.selectionStart = search.selectionEnd = search.value.length; }, 30);
+
+                overlay.querySelectorAll("[data-toggle-val]").forEach(tr => {
+                    tr.addEventListener("click", (e) => {
+                        const v = tr.dataset.toggleVal;
+                        if (picked.has(v)) picked.delete(v); else picked.add(v);
+                        renderRows(search.value);
+                    });
+                });
+            };
+
+            renderRows();
+        });
+    },
+
+    /**
+     * Selector de un flujo manual (Flujos de carga con TIPO = manual) para
+     * usarlo como tarea de un paso de Workflow. Devuelve Promise<object|null>
+     * con el flujo elegido (de la lista `flows` recibida).
+     */
+    openFlowManualPickerModal({ flows = [] } = {}) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("wfFlowPickerModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "wfFlowPickerModal";
+                document.body.appendChild(overlay);
+            }
+            overlay.innerHTML = `
+                <div class="modal-box modal-wide">
+                    <div class="modal-header">
+                        <h3>Seleccionar flujo manual</h3>
+                        <button class="modal-close" id="wfFlowPickerClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <input type="text" id="wfFlowPickerSearch" class="dim-picker-search" placeholder="Buscar flujo...">
+                        <div class="dim-picker-table-wrap">
+                            <table class="dim-picker-table">
+                                <thead><tr><th>Flujo</th></tr></thead>
+                                <tbody id="wfFlowPickerRows"></tbody>
+                            </table>
+                        </div>
+                        ${!flows.length ? `<p class="form-hint">Todavía no hay flujos de carga de tipo manual en este proyecto.</p>` : ""}
+                    </div>
+                </div>`;
+
+            const searchInput = overlay.querySelector("#wfFlowPickerSearch");
+            const rowsEl = overlay.querySelector("#wfFlowPickerRows");
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+
+            const renderRows = (filterText = "") => {
+                const f = filterText.trim().toLowerCase();
+                const filtered = !f ? flows : flows.filter(fl => fl.name.toLowerCase().includes(f));
+                rowsEl.innerHTML = filtered.length
+                    ? filtered.map((fl, idx) => `<tr data-pick="${idx}"><td><strong>${UI.escapeHtml(fl.name)}</strong></td></tr>`).join("")
+                    : `<tr><td class="dim-picker-empty">${flows.length ? "Sin resultados." : "No hay flujos manuales."}</td></tr>`;
+                rowsEl.querySelectorAll("[data-pick]").forEach(tr => {
+                    tr.addEventListener("click", () => cleanup(filtered[parseInt(tr.dataset.pick, 10)]));
+                });
+            };
+
+            searchInput.value = "";
+            searchInput.oninput = () => renderRows(searchInput.value);
+            renderRows();
+            overlay.classList.add("visible");
+            setTimeout(() => searchInput.focus(), 50);
+            overlay.querySelector("#wfFlowPickerClose").onclick = () => cleanup(null);
+        });
+    },
+
+    /**
+     * Alta/edición de una variable de paso de Workflow: nombre técnico,
+     * etiqueta y tipo, de valor único (sirve para parametrizar distintas
+     * ejecuciones del mismo paso). Devuelve Promise<{name,label,type}|null>.
+     */
+    openWorkflowVariableModal({ current = null } = {}) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("wfVarModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "wfVarModal";
+                document.body.appendChild(overlay);
+            }
+            const v = Object.assign({ name: "", label: "", type: "STRING" }, current || {});
+            overlay.innerHTML = `
+                <div class="modal-box">
+                    <div class="modal-header">
+                        <h3>${current ? "Editar variable" : "Nueva variable del paso"}</h3>
+                        <button class="modal-close" id="wfVarClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label>Nombre técnico</label>
+                            <input type="text" id="wfVarName" placeholder="ej. mes_cierre" value="${UI.escapeHtml(v.name)}">
+                        </div>
+                        <div class="form-group">
+                            <label>Etiqueta</label>
+                            <input type="text" id="wfVarLabel" placeholder="ej. Mes de cierre" value="${UI.escapeHtml(v.label)}">
+                        </div>
+                        <div class="form-group">
+                            <label>Tipo</label>
+                            <select id="wfVarType">
+                                ${UI.FIELD_TYPES.map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
+                            </select>
+                            <p class="form-hint">Variable de valor único: cada ejecución del workflow puede darle un valor distinto.</p>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" id="wfVarCancel">Cancelar</button>
+                        <button class="btn btn-primary" id="wfVarSave">Guardar</button>
+                    </div>
+                </div>`;
+            overlay.classList.add("visible");
+            const nameInput = overlay.querySelector("#wfVarName");
+            setTimeout(() => nameInput.focus(), 50);
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+            overlay.querySelector("#wfVarClose").onclick = () => cleanup(null);
+            overlay.querySelector("#wfVarCancel").onclick = () => cleanup(null);
+            overlay.querySelector("#wfVarSave").onclick = () => {
+                const name = overlay.querySelector("#wfVarName").value.trim();
+                const label = overlay.querySelector("#wfVarLabel").value.trim();
+                const type = overlay.querySelector("#wfVarType").value;
+                if (!name) { UI.toast("Indica un nombre técnico para la variable.", "error"); return; }
+                cleanup({ name, label: label || name, type });
+            };
+        });
+    },
+
+    /**
+     * Asigna el valor de una variable que expone una tarea de un paso de
+     * Workflow: por constante, o mapeada a una variable del propio paso;
+     * con un botón para ocultarla en la pantalla de ejecución (útil cuando
+     * ya se ha fijado un valor y no tiene sentido volver a pedirlo).
+     * Devuelve Promise<{type,value,hidden}|"remove"|null>.
+     */
+    openWorkflowValueModal({ title = "Asignar valor", targetLabel = "", stepVariables = [], current = null }) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("wfValueModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "wfValueModal";
+                document.body.appendChild(overlay);
+            }
+
+            const hasVars = stepVariables.length > 0;
+            let type = current && current.type === "variable" && hasVars ? "variable" : "constante";
+            let constValue = current && current.type === "constante" ? (current.value || "") : "";
+            let varValue = current && current.type === "variable" ? (current.value || "") : (hasVars ? stepVariables[0].name : "");
+            let hidden = !!(current && current.hidden);
+
+            const renderBody = () => {
+                const valueBlock = type === "constante"
+                    ? `<div class="form-group">
+                            <label>Valor constante</label>
+                            <input type="text" id="wfValueValue" value="${UI.escapeHtml(constValue)}">
+                       </div>`
+                    : `<div class="form-group">
+                            <label>Variable del paso</label>
+                            <select id="wfValueVar">
+                                ${stepVariables.map(v => `<option value="${UI.escapeHtml(v.name)}" ${v.name === varValue ? "selected" : ""}>${UI.escapeHtml(v.label || v.name)}</option>`).join("")}
+                            </select>
+                       </div>`;
+
+                overlay.innerHTML = `
+                    <div class="modal-box">
+                        <div class="modal-header">
+                            <div>
+                                <h3>${UI.escapeHtml(title)}</h3>
+                                ${targetLabel ? `<span class="modal-subtitle">${UI.escapeHtml(targetLabel)}</span>` : ""}
+                            </div>
+                            <button class="modal-close" id="wfValueClose">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            ${hasVars ? `
+                                <div class="form-group">
+                                    <label>Origen del valor</label>
+                                    <div class="segmented" id="wfValueType">
+                                        <button type="button" class="segmented-btn ${type === "constante" ? "active" : ""}" data-vtype="constante">Constante</button>
+                                        <button type="button" class="segmented-btn ${type === "variable" ? "active" : ""}" data-vtype="variable">Variable del paso</button>
+                                    </div>
+                                </div>` : `<p class="form-hint">Este paso todavía no tiene variables — el valor solo se puede fijar por constante.</p>`}
+                            ${valueBlock}
+                            <div class="form-group">
+                                <label><input type="checkbox" id="wfValueHidden" ${hidden ? "checked" : ""}> Ocultar en la pantalla de ejecución</label>
+                                <p class="form-hint">Si ya has fijado el valor aquí, no hace falta volver a pedirlo al ejecutar el paso.</p>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            ${current ? `<button class="btn btn-secondary" id="wfValueRemove">Quitar</button><span class="load-fn-toolbar-spacer"></span>` : ""}
+                            <button class="btn btn-secondary" id="wfValueCancel">Cancelar</button>
+                            <button class="btn btn-primary" id="wfValueSave">Guardar</button>
+                        </div>
+                    </div>`;
+
+                const typeWrap = overlay.querySelector("#wfValueType");
+                if (typeWrap) {
+                    typeWrap.querySelectorAll("[data-vtype]").forEach(btn => {
+                        btn.addEventListener("click", () => {
+                            if (btn.dataset.vtype === type) return;
+                            if (type === "constante") { const i = overlay.querySelector("#wfValueValue"); if (i) constValue = i.value; }
+                            else { const s = overlay.querySelector("#wfValueVar"); if (s) varValue = s.value; }
+                            const h = overlay.querySelector("#wfValueHidden"); if (h) hidden = h.checked;
+                            type = btn.dataset.vtype;
+                            renderBody();
+                        });
+                    });
+                }
+
+                const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+                overlay.querySelector("#wfValueClose").onclick = () => cleanup(null);
+                overlay.querySelector("#wfValueCancel").onclick = () => cleanup(null);
+                const removeBtn = overlay.querySelector("#wfValueRemove");
+                if (removeBtn) removeBtn.onclick = () => cleanup("remove");
+                overlay.querySelector("#wfValueSave").onclick = () => {
+                    const h = overlay.querySelector("#wfValueHidden").checked;
+                    if (type === "constante") {
+                        const i = overlay.querySelector("#wfValueValue");
+                        cleanup({ type: "constante", value: i ? i.value : "", hidden: h });
+                    } else {
+                        const s = overlay.querySelector("#wfValueVar");
+                        cleanup({ type: "variable", value: s ? s.value : "", hidden: h });
+                    }
+                };
+
+                const focusInput = overlay.querySelector("#wfValueValue");
+                if (focusInput) setTimeout(() => { focusInput.focus(); focusInput.select(); }, 50);
+            };
+
+            renderBody();
+            overlay.classList.add("visible");
+        });
+    },
+
+    /**
      * Alta/edición de una variable de pantalla (nombre técnico, etiqueta y
      * tipo). Devuelve Promise<{name,label,type}|null>.
      */

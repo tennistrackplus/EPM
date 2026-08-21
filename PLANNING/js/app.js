@@ -213,12 +213,12 @@ const Draco = {
             cubos: () => Cubes.render(container, this.currentProject),
             cargas: () => Loads.render(container, this.currentProject),
             "flujos-carga": () => Flows.render(container, this.currentProject),
+            workflows: () => Workflows.render(container, this.currentProject),
         };
 
         const labels = {
             funciones: ["Funciones", "ƒ"],
             "flujos-proceso": ["Flujos de proceso", "⟲"],
-            workflows: ["Workflows", "⛓"],
             roles: ["Roles", "☺"]
         };
 
@@ -265,13 +265,19 @@ const Draco = {
             flowsCount = parseInt(r4[0]?.N || "0", 10);
         } catch (e) { flowsCount = 0; }
 
+        let workflowsCount = 0;
+        try {
+            const r5 = await Provider.runQuery(`SELECT COUNT(*) AS N FROM ${Provider.qualifyControl("WORKFLOWS")} WHERE PROYECTO_ID='${Provider.esc(pid)}'`);
+            workflowsCount = parseInt(r5[0]?.N || "0", 10);
+        } catch (e) { workflowsCount = 0; }
+
         const steps = [
             { done: true, title: "Crear proyecto", desc: `Proyecto "${this.currentProject.PROYECTO}" creado` },
             { done: dimCount > 0, title: "Definir dimensiones", desc: dimCount > 0 ? `${dimCount} dimensión(es) definida(s)` : "Aún no has creado ninguna dimensión" },
             { done: cuboCount > 0, title: "Definir cubos", desc: cuboCount > 0 ? `${cuboCount} cubo(s) definido(s)` : "Aún no has creado ningún cubo" },
             { done: loadsCount > 0, title: "Configurar interfaces", desc: loadsCount > 0 ? `${loadsCount} interfaz(ces) definida(s)` : "Aún no has creado ninguna interfaz" },
             { done: flowsCount > 0, title: "Diseñar flujos de carga", desc: flowsCount > 0 ? `${flowsCount} flujo(s) definido(s)` : "Aún no has creado ningún flujo" },
-            { done: false, title: "Definir workflows y roles", desc: "Próximamente" }
+            { done: workflowsCount > 0, title: "Definir workflows", desc: workflowsCount > 0 ? `${workflowsCount} workflow(s) definido(s)` : "Aún no has creado ningún workflow" }
         ];
 
         const doneCount = steps.filter(s => s.done).length;

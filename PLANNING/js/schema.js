@@ -180,6 +180,108 @@ const DracoSchema = {
                     MENSAJE STRING,
                     FECHA_INICIO TIMESTAMP,
                     FECHA_FIN TIMESTAMP
+                )`,
+            WORKFLOWS: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    WORKFLOW_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    WORKFLOW STRING NOT NULL,
+                    DESCRIPCION STRING,
+                    USUARIO STRING,
+                    FECHA_CREACION TIMESTAMP,
+                    FECHA_MODIFICACION TIMESTAMP
+                )`,
+            WORKFLOWS_PASOS: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    PASO_ID STRING NOT NULL,
+                    WORKFLOW_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    PASO STRING NOT NULL,
+                    ORDEN INTEGER,
+                    INICIO_TIPO STRING NOT NULL,
+                    INICIO_FECHA STRING,
+                    REVISION BOOLEAN,
+                    FIN_TIPO STRING NOT NULL,
+                    FIN_FECHA STRING,
+                    DRIVER_DIMENSION_ID STRING,
+                    DRIVER_MODO STRING
+                )`,
+            WORKFLOWS_PASOS_DRIVER_VALORES: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    PROYECTO_ID STRING NOT NULL,
+                    PASO_ID STRING NOT NULL,
+                    VALOR STRING NOT NULL
+                )`,
+            WORKFLOWS_PASOS_VARIABLES: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    PROYECTO_ID STRING NOT NULL,
+                    PASO_ID STRING NOT NULL,
+                    VARIABLE_ID STRING NOT NULL,
+                    NOMBRE STRING NOT NULL,
+                    ETIQUETA STRING,
+                    TIPO STRING,
+                    ORDEN INTEGER
+                )`,
+            WORKFLOWS_PASOS_BLOQUES: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    PROYECTO_ID STRING NOT NULL,
+                    PASO_ID STRING NOT NULL,
+                    BLOQUE_ID STRING NOT NULL,
+                    TITULO STRING,
+                    ORDEN INTEGER
+                )`,
+            WORKFLOWS_PASOS_TAREAS: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    PROYECTO_ID STRING NOT NULL,
+                    PASO_ID STRING NOT NULL,
+                    BLOQUE_ID STRING NOT NULL,
+                    TAREA_ID STRING NOT NULL,
+                    TIPO STRING NOT NULL,
+                    NOMBRE STRING,
+                    REF_ID STRING,
+                    REF_NOMBRE STRING,
+                    ORDEN INTEGER
+                )`,
+            WORKFLOWS_PASOS_TAREAS_VALORES: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    PROYECTO_ID STRING NOT NULL,
+                    TAREA_ID STRING NOT NULL,
+                    CLAVE STRING NOT NULL,
+                    ETIQUETA STRING,
+                    TIPO STRING NOT NULL,
+                    VALOR STRING,
+                    OCULTAR BOOLEAN
+                )`,
+            WORKFLOWS_RUNS: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    RUN_ID STRING NOT NULL,
+                    WORKFLOW_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    NOMBRE STRING NOT NULL,
+                    ESTADO STRING NOT NULL,
+                    USUARIO STRING,
+                    FECHA_CREACION TIMESTAMP,
+                    FECHA_FIN TIMESTAMP
+                )`,
+            WORKFLOWS_RUNS_INSTANCIAS: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    RUN_ID STRING NOT NULL,
+                    PASO_ID STRING NOT NULL,
+                    INSTANCIA_ID STRING NOT NULL,
+                    ORDEN INTEGER,
+                    DRIVER_VALOR STRING,
+                    ASIGNADO STRING,
+                    ESTADO STRING NOT NULL,
+                    FECHA_PROGRAMADA STRING,
+                    FECHA_INICIO TIMESTAMP,
+                    FECHA_FIN TIMESTAMP
+                )`,
+            WORKFLOWS_RUNS_VARIABLES: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    RUN_ID STRING NOT NULL,
+                    INSTANCIA_ID STRING NOT NULL,
+                    NOMBRE STRING NOT NULL,
+                    VALOR STRING
                 )`
         };
         return ddl[table];
@@ -188,7 +290,10 @@ const DracoSchema = {
     TABLES: ["PROYECTOS", "DIMENSIONES", "CUBOS", "JERARQUIAS",
              "INTERFACES", "INTERFACES_VALUES", "INTERFACES_INPUT", "INTERFACES_INPUT_FILTERS", "INTERFACES_MAPPING",
              "FLUJOS", "FLUJOS_INTERFACES", "FLUJOS_INTERFACES_TARGETS", "FLUJOS_SCREEN_BLOCKS", "FLUJOS_SCREEN_VARIABLES",
-             "FLUJOS_RUNS", "FLUJOS_RUN_STEPS"],
+             "FLUJOS_RUNS", "FLUJOS_RUN_STEPS",
+             "WORKFLOWS", "WORKFLOWS_PASOS", "WORKFLOWS_PASOS_DRIVER_VALORES", "WORKFLOWS_PASOS_VARIABLES",
+             "WORKFLOWS_PASOS_BLOQUES", "WORKFLOWS_PASOS_TAREAS", "WORKFLOWS_PASOS_TAREAS_VALORES",
+             "WORKFLOWS_RUNS", "WORKFLOWS_RUNS_INSTANCIAS", "WORKFLOWS_RUNS_VARIABLES"],
 
     async isBootstrapped() {
         const exists = await Provider.containerExists(DracoConfig.controlDataset);
