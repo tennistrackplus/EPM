@@ -159,7 +159,7 @@ CREATE TABLE IF NOT EXISTS `{PROJECT}.DRACO_CONTROL.FLUJOS_SCREEN_BLOCKS` (
   PROYECTO_ID  STRING NOT NULL,
   FLUJO_ID     STRING NOT NULL,
   BLOQUE_ID    STRING NOT NULL,
-  TIPO         STRING NOT NULL,   -- 'VARIABLE' | 'FRAME' | 'TEXTO'
+  TIPO         STRING NOT NULL,   -- 'VARIABLE' | 'FRAME' | 'TEXTO' | 'SKIP' (espacio en blanco) | 'ULINE' (línea separadora)
   ORDEN        INTEGER,
   TITULO       STRING,            -- solo FRAME
   CONTENIDO    STRING             -- solo TEXTO
@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS `{PROJECT}.DRACO_CONTROL.FLUJOS_SCREEN_VARIABLES` (
   NOMBRE       STRING NOT NULL,   -- nombre técnico
   ETIQUETA     STRING,
   TIPO         STRING,
+  SELECT_MODE  STRING,            -- 'unico' | 'rango' | 'multiple' | 'cualquiera' (estilo select-options SAP; de momento solo informativo)
   ORDEN        INTEGER
 );
 
