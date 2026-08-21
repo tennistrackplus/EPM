@@ -51,9 +51,48 @@ lenguaje visual que vuestra app anterior (EPM Data Studio).
     para proyectos con muchas dimensiones (probado con 200 simuladas: se
     filtra al instante). Cada dimensión añadida se puede quitar con la ✕.
     Las medidas se definen libremente (nombre + tipo), igual que antes.
-  - El resto de módulos del menú (Cargas de datos, Flujos de carga,
-    Funciones, Flujos de proceso, Workflows, Roles) son pantallas
-    "próximamente".
+  - **Workflows** (nuevo, solo definición — la ejecución se aborda más
+    adelante): un workflow es una secuencia de **pasos**, arrastrable para
+    reordenar. Cada paso tiene 4 pestañas:
+    - **Propiedades**: nombre; inicio (al iniciar el workflow / al
+      completar el paso anterior / fecha concreta); si requiere
+      **revisión**; y finalización (N/A, al enviarse a revisión o al
+      completarse —según el valor de revisión— o fecha concreta). La
+      finalización de un paso es lo que dispara el "al completar el paso
+      anterior" del siguiente.
+    - **Driver**: dimensión opcional por la que se reparte la ejecución
+      del paso (ej. CECOs) + valores concretos opcionales (buscador sobre
+      los datos reales de la dimensión); sin selección se reparte entre
+      todos los valores. Sin dimensión, el paso se asigna en bloque.
+    - **Variables**: variables de valor único del paso, para parametrizar
+      distintas ejecuciones (reutiliza el mismo diseñador que las
+      variables de pantalla de un Flujo).
+    - **Tareas**: organizadas en bloques; cada tarea es de tipo *flujo
+      manual* (con buscador sobre los Flujos de carga manuales del
+      proyecto, cargando automáticamente sus variables de pantalla),
+      *actualización de tabla de parametrización* (buscador de
+      Dimensiones), o *plantilla* / *función* / *página HTML* (estos tres
+      últimos, sin catálogo propio todavía, se referencian por nombre
+      libre). Cada variable que expone la tarea se completa por
+      constante o por una variable del paso, y se puede **ocultar** de
+      la pantalla de ejecución.
+  - **Ejecuciones de un Workflow** (nuevo, `js/workflow-runs.js`): desde el
+    listado de Workflows, el botón ▶ abre las ejecuciones (runs) de ese
+    workflow. "Nueva ejecución" instancia todos los pasos: si un paso
+    tiene driver, una instancia por cada valor (los elegidos en la
+    definición, o todos los reales de la dimensión si no se eligió
+    ninguno); si no, una única instancia. Cada instancia se puede asignar
+    (texto libre, todavía no hay módulo de Roles/usuarios), completar sus
+    variables de paso, y mover de estado: Pendiente → En curso → (si el
+    paso requiere revisión) En revisión → Completado. Al completarse
+    todas las instancias de un paso se desbloquean automáticamente las
+    del siguiente si su inicio es "al completar el paso anterior". Las
+    tareas se muestran a título informativo; las de tipo *flujo manual*
+    enlazan a `flow_run.html` para ejecutarse de verdad. Los pasos con
+    inicio "fecha concreta" no tienen scheduler en servidor: quedan
+    disponibles igualmente y solo se informa de la fecha prevista.
+  - El resto de módulos del menú (Cargas de datos, Funciones, Flujos de
+    proceso, Roles) son pantallas "próximamente".
 
 El grid de valores usa **SheetJS** (cargado por CDN en `app.html`) para
 leer/escribir CSV y Excel sin necesitar backend.
@@ -119,6 +158,16 @@ Snowflake):
 | `DIMENSIONES` | DIMENSION_ID, PROYECTO_ID, DIMENSION, DESCRIPCION, TABLA, CAMPOS_JSON, ...      |
 | `CUBOS`       | CUBO_ID, PROYECTO_ID, CUBOS, DESCRIPCION, TABLA, CAMPOS_JSON, ...               |
 | `JERARQUIAS`  | JERARQUIA_ID, DIMENSION_ID, PROYECTO_ID, JERARQUIA, NIVELES_JSON, ...           |
+| `WORKFLOWS`   | WORKFLOW_ID, PROYECTO_ID, WORKFLOW, DESCRIPCION, ...                            |
+| `WORKFLOWS_PASOS` | PASO_ID, WORKFLOW_ID, PASO, ORDEN, INICIO_TIPO, REVISION, FIN_TIPO, DRIVER_DIMENSION_ID, DRIVER_MODO, ... |
+| `WORKFLOWS_PASOS_DRIVER_VALORES` | PASO_ID, VALOR (valores concretos del driver)                  |
+| `WORKFLOWS_PASOS_VARIABLES` | PASO_ID, VARIABLE_ID, NOMBRE, ETIQUETA, TIPO                        |
+| `WORKFLOWS_PASOS_BLOQUES` | PASO_ID, BLOQUE_ID, TITULO, ORDEN                                      |
+| `WORKFLOWS_PASOS_TAREAS` | BLOQUE_ID, TAREA_ID, TIPO, NOMBRE, REF_ID, REF_NOMBRE, ORDEN            |
+| `WORKFLOWS_PASOS_TAREAS_VALORES` | TAREA_ID, CLAVE, ETIQUETA, TIPO, VALOR, OCULTAR                |
+| `WORKFLOWS_RUNS` | RUN_ID, WORKFLOW_ID, PROYECTO_ID, NOMBRE, ESTADO, ...                                |
+| `WORKFLOWS_RUNS_INSTANCIAS` | RUN_ID, PASO_ID, INSTANCIA_ID, DRIVER_VALOR, ASIGNADO, ESTADO, ...       |
+| `WORKFLOWS_RUNS_VARIABLES` | RUN_ID, INSTANCIA_ID, NOMBRE, VALOR                                       |
 
 `DIMENSIONES.CAMPOS_JSON` guarda un array; el primer elemento es siempre la
 clave principal (`__isPrimaryName: true`, nombre = identificador de la
@@ -166,6 +215,9 @@ js/cubes.js                         Módulo Cubos
 js/loads.js                          Módulo Interfaces (cargas de datos)
 js/flows.js                           Módulo Flujos de carga
 js/flow-run.js                         Lógica de flow_run.html
+js/workflows.js                        Módulo Workflows (definición)
+js/workflow-runs.js                    Ejecuciones (runs) de un Workflow
+css/workflows.css                       Estilos específicos de Workflows
 js/app.js                               Controlador principal de app.html
 python/interface_loader.py               Motor de mapeo de una interfaz (origen -> cubo)
 python/storage_io.py                      Storage + lectura de ficheros a DataFrame
@@ -211,8 +263,11 @@ Los **Flujos de carga** ya se pueden ejecutar de verdad, no solo modelar:
 
 ## 8. Siguientes pasos sugeridos
 
-Dime por cuál seguimos: Cargas de datos, Flujos de carga, Funciones, Flujos
-de proceso, Workflows o Roles, y lo construimos con la misma mecánica
-(listado por proyecto + alta/edición + tabla de metadatos en
-`DRACO_CONTROL`, funcionando sobre ambos motores vía `Provider`).
+Dime por cuál seguimos: Funciones, Flujos de proceso, Roles (para
+asignar ejecuciones a personas/grupos reales en vez de texto libre),
+disparar de verdad las tareas de tipo plantilla/función/parametrización/
+HTML durante una ejecución, o cualquier ajuste sobre lo ya construido, y
+lo abordamos con la misma mecánica (listado por proyecto + alta/edición +
+tabla de metadatos en `DRACO_CONTROL`, funcionando sobre ambos motores
+vía `Provider`).
 
