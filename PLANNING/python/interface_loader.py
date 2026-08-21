@@ -389,7 +389,15 @@ def _row_passes_filters(row: Dict[str, Any], config: MappingConfig, variables: D
     for f in config.input_fields:
         if not f.filtro_tipo:
             continue
-        objetivo = _coerce_objetivo(variables.get(f.filtro_valor) if f.filtro_tipo == "VARIABLE" else f.filtro_valor)
+        if f.filtro_tipo == "VARIABLE":
+            # El valor real se asigna por FLUJO sobre este mismo campo (ver
+            # FLUJOS_INTERFACES_TARGETS, grupo 'filter', CLAVE = nombre del
+            # campo) — por eso se busca en `variables` por el nombre del
+            # campo, no por INTERFACES_INPUT_FILTERS.VALOR (que no se usa
+            # para esto).
+            objetivo = _coerce_objetivo(variables.get(f.campo))
+        else:
+            objetivo = f.filtro_valor
         valor_campo = row.get(f.campo)
         if isinstance(objetivo, list):
             # Variable en modo rango / varios valores / cualquiera (select-options
@@ -435,7 +443,17 @@ def apply_mapping(df_input: pd.DataFrame, df_variables: pd.DataFrame, config: Ma
             elif m.tipo == "CONSTANTE":
                 salida[m.campo_destino] = m.valor
             elif m.tipo == "VARIABLE":
-                salida[m.campo_destino] = variables.get(m.valor)
+                # Igual que en los filtros: el valor real se asigna por FLUJO
+                # sobre este mismo campo destino (FLUJOS_INTERFACES_TARGETS,
+                # grupo 'mapping', CLAVE = CAMPO_DESTINO) — se busca en
+                # `variables` por el propio campo destino, no por
+                # INTERFACES_MAPPING.VALOR (que no se usa para esto).
+                valor_var = variables.get(m.campo_destino)
+                # Si la variable de pantalla es de tipo rango/varios/cualquiera,
+                # su valor es una tabla de select-options: no tiene sentido como
+                # valor de un campo de salida, así que se guarda como JSON en
+                # lugar de escribir el objeto Python directamente en la celda.
+                salida[m.campo_destino] = json.dumps(valor_var) if isinstance(valor_var, list) else valor_var
             elif m.tipo == "FORMULA":
                 salida[m.campo_destino] = _safe_eval_formula(m.valor, {**fila, **variables})
             elif m.tipo == "FUNCION":
