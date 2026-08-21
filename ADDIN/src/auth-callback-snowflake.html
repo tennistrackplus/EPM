@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPM Data Studio · Autenticación Snowflake</title>
+    <!-- Script de Office necesario para comunicar la ventana emergente con el TaskPane -->
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link rel="stylesheet" href="css/theme.css">
+    <style>
+        body {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+
+        .status-box {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            gap: 14px;
+            padding: 32px 28px;
+            background: var(--surface-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-md);
+            max-width: 320px;
+        }
+
+        .status-spinner {
+            width: 22px;
+            height: 22px;
+            border: 3px solid var(--gray-200);
+            border-top-color: var(--brand-primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .status-box h3 {
+            font-size: var(--fs-md);
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .status-box p {
+            font-size: var(--fs-sm);
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+    <div class="status-box">
+        <div class="status-spinner" aria-hidden="true"></div>
+        <h3>Procesando autenticación con Snowflake</h3>
+        <p>Por favor, espera un momento. Esta ventana se cerrará automáticamente.</p>
+    </div>
+
+    <script>
+        function processAuth() {
+            const params = new URLSearchParams(window.location.search);
+            const error = params.get("error");
+            const code = params.get("code");
+            const state = params.get("state");
+
+            let payload = null;
+
+            if (code) {
+                payload = JSON.stringify({
+                    status: "success",
+                    provider: "snowflake",
+                    code: code,
+                    state: state
+                });
+            } else if (error) {
+                payload = JSON.stringify({
+                    status: "error",
+                    provider: "snowflake",
+                    error: params.get("error_description") || error
+                });
+            }
+
+            if (payload) {
+                if (typeof Office !== "undefined" && Office.context && Office.context.ui && typeof Office.context.ui.messageParent === "function") {
+                    Office.context.ui.messageParent(payload);
+                } else if (window.opener) {
+                    window.opener.postMessage(payload, "*");
+                    window.close();
+                }
+            }
+        }
+
+        if (typeof Office !== "undefined") {
+            Office.onReady(() => {
+                processAuth();
+            });
+        } else {
+            document.addEventListener("DOMContentLoaded", () => {
+                processAuth();
+            });
+        }
+    </script>
+</body>
+</html>
