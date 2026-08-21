@@ -551,7 +551,7 @@ const UI = {
                             <label>Valor constante</label>
                             <input type="text" id="filterFieldValue" placeholder="Ej. 2024" value="${UI.escapeHtml(value)}">
                        </div>`
-                    : `<p class="form-hint">Filtro por variable: la selección del catálogo de variables se desarrollará más adelante. Por ahora solo se guarda que el campo se filtra por variable.</p>`;
+                    : `<p class="form-hint">El valor de esta variable se asigna en cada flujo, directamente sobre este campo (en la pestaña Flujos → Mapeo de variables).</p>`;
 
                 overlay.innerHTML = `
                     <div class="modal-box">

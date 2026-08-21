@@ -892,7 +892,7 @@ const Loads = {
         const labels = {
             campo: `<strong>${UI.escapeHtml(m.value || "—")}</strong>`,
             constante: `Constante: <strong>${UI.escapeHtml(m.value || "—")}</strong>`,
-            variable: `Variable: <strong>${UI.escapeHtml(m.value || "(pendiente)")}</strong>`,
+            variable: `Variable <span class="form-hint">(se asigna en cada flujo)</span>`,
             formula: `<code>${UI.escapeHtml((m.value || "").slice(0, 50) || "—")}</code>`,
             funcion: `Función Python asignada`
         };
@@ -923,7 +923,6 @@ const Loads = {
         }
 
         if (type === "variable") {
-            UI.toast("La selección de variables se desarrollará más adelante. Por ahora se guarda como pendiente.", "info");
             this.editing.outputMappings[outId] = { type: "variable", value: current.type === "variable" ? current.value : "" };
             this.renderOutputFields();
             return;
