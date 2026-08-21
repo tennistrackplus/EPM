@@ -172,6 +172,82 @@
     margin: 0 auto;
 }
 
+/* --- Editor de select-options (rango / varios valores / cualquiera) -- */
+
+.flow-field-preview--selopt {
+    max-width: 520px;
+}
+
+.selopt-table {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.selopt-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.selopt-sign {
+    flex: 0 0 60px;
+}
+
+.selopt-option {
+    flex: 0 0 auto;
+    max-width: 190px;
+}
+
+.selopt-sign,
+.selopt-option {
+    padding: 6px 4px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    background-color: var(--surface-card);
+    color: var(--text-primary);
+}
+
+.selopt-low,
+.selopt-high {
+    flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+}
+
+.selopt-remove-btn {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background-color: var(--surface-card);
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    transition: border-color var(--transition-fast), color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.selopt-remove-btn:hover {
+    border-color: var(--color-danger);
+    color: var(--color-danger);
+    background-color: var(--color-danger-light);
+}
+
+.selopt-add-btn {
+    margin-top: 2px;
+}
+
 /* --- Monitor ----------------------------------------------------------- */
 
 .flow-run-monitor-footer {
