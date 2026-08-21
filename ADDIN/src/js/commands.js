@@ -658,11 +658,12 @@ function buildSelectBase(relGrid, rowsDefs, colDefs) {
 function buildFrom(measuresGrid) {
     const R = buscarMedida(measuresGrid, ReportState.Measures[0].Name);
 
-    return "FROM `" +
-        cellValue(measuresGrid, R, 3) + "." +
-        cellValue(measuresGrid, R, 4) + "." +
-        cellValue(measuresGrid, R, 5) +
-        "` f";
+    return "FROM " +
+        Provider.qualify(
+            cellValue(measuresGrid, R, 3),
+            cellValue(measuresGrid, R, 4),
+            cellValue(measuresGrid, R, 5)
+        ) + " f";
 }
 
 function buildJoins(relGrid) {
@@ -676,9 +677,9 @@ function buildJoins(relGrid) {
         if (dimensionIsUsed(dimname)) {
             sql += CRLF
                 + cellValue(relGrid, R, 11)
-                + " JOIN `"
-                + cellValue(relGrid, R, 7) + "." + cellValue(relGrid, R, 8) + "." + cellValue(relGrid, R, 9)
-                + "` d" + cellValue(relGrid, R, 1) + CRLF
+                + " JOIN "
+                + Provider.qualify(cellValue(relGrid, R, 7), cellValue(relGrid, R, 8), cellValue(relGrid, R, 9))
+                + " d" + cellValue(relGrid, R, 1) + CRLF
                 + "    ON f."
                 + cellValue(relGrid, R, 6)
                 + " = d"
@@ -781,6 +782,23 @@ function buildIdArray(atributesGrid, defs, idFieldName) {
         }
     }
 
+    if (Provider.key() === "snowflake") {
+        // Snowflake no tiene UNNEST([STRUCT(...)]) ni ARRAY(SELECT...WHERE...);
+        // el equivalente es construir el array con un elemento condicional
+        // por ID (NULL si la condición no se cumple) y compactarlo con
+        // ARRAY_CONSTRUCT_COMPACT, que descarta los NULL.
+        const items = [];
+        for (const [id, conds] of dict.entries()) {
+            items.push("IFF(" + conds.join(" AND ") + ", " + id + ", NULL)");
+        }
+
+        let sql = "ARRAY_CONSTRUCT_COMPACT(" + CRLF;
+        sql += items.map(s => "        " + s).join("," + CRLF) + CRLF;
+        sql += "    )";
+        return sql;
+    }
+
+    // BigQuery (comportamiento original, sin cambios)
     const structs = [];
     for (const [id, conds] of dict.entries()) {
         structs.push("STRUCT(" + id + " AS " + idFieldName + ", (" + conds.join(" AND ") + ") AS COND)");
@@ -830,14 +848,26 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     sql += "    FROM BASE" + CRLF;
     sql += ")" + CRLF + CRLF;
 
-    // ---- SELECT final: cruce ROW_ID x COLUMN_ID vía UNNEST + agregación ----
+    // ---- SELECT final: cruce ROW_ID x COLUMN_ID + agregación ----
+    // BigQuery usa UNNEST(array) AS alias; Snowflake no soporta esa forma
+    // sobre un array literal -> se usa LATERAL FLATTEN, que devuelve el
+    // valor en una columna "VALUE" (de tipo VARIANT) que hay que castear.
     sql += "SELECT" + CRLF;
-    sql += "    ROW_ID," + CRLF;
-    sql += "    COLUMN_ID," + CRLF;
-    sql += "    SUM(IMPORTE) AS IMPORTE" + CRLF;
-    sql += "FROM TAGGED," + CRLF;
-    sql += "UNNEST(ROW_IDS) AS ROW_ID," + CRLF;
-    sql += "UNNEST(COLUMN_IDS) AS COLUMN_ID" + CRLF;
+    if (Provider.key() === "snowflake") {
+        sql += "    ROW_ID_F.VALUE::INTEGER AS ROW_ID," + CRLF;
+        sql += "    COLUMN_ID_F.VALUE::INTEGER AS COLUMN_ID," + CRLF;
+        sql += "    SUM(IMPORTE) AS IMPORTE" + CRLF;
+        sql += "FROM TAGGED," + CRLF;
+        sql += "LATERAL FLATTEN(input => ROW_IDS) AS ROW_ID_F," + CRLF;
+        sql += "LATERAL FLATTEN(input => COLUMN_IDS) AS COLUMN_ID_F" + CRLF;
+    } else {
+        sql += "    ROW_ID," + CRLF;
+        sql += "    COLUMN_ID," + CRLF;
+        sql += "    SUM(IMPORTE) AS IMPORTE" + CRLF;
+        sql += "FROM TAGGED," + CRLF;
+        sql += "UNNEST(ROW_IDS) AS ROW_ID," + CRLF;
+        sql += "UNNEST(COLUMN_IDS) AS COLUMN_ID" + CRLF;
+    }
     sql += "GROUP BY ROW_ID, COLUMN_ID" + CRLF;
     sql += "ORDER BY ROW_ID, COLUMN_ID";
 
@@ -857,7 +887,44 @@ function escapeJSON(text) {
     return text;
 }
 
+/**
+ * Convierte las filas ya normalizadas de Provider/SF.runQuery (array de
+ * objetos { COLUMNA: valor }) al mismo formato de texto que devuelve
+ * BigQuery y que ya saben leer parseJsonValueTriples() y
+ * jsonTo3MatricesCore(): ambos escanean el texto buscando el literal
+ * `"v":` una vez por celda, en el mismo orden fila a fila / columna a
+ * columna del SELECT — no hace falta que sea JSON válido de verdad, solo
+ * que contenga exactamente esos tokens y nada más. Así Snowflake reutiliza
+ * los dos parsers existentes sin tocarlos.
+ */
+function snowflakeRowsToPseudoBqJson(rows) {
+    let out = '{"rows":[';
+    rows.forEach((row, i) => {
+        if (i > 0) out += ",";
+        out += '{"f":[';
+        const values = Object.values(row);
+        values.forEach((val, j) => {
+            if (j > 0) out += ",";
+            if (val === null || val === undefined) {
+                out += '{"v":null}';
+            } else {
+                const text = String(val).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+                out += '{"v":"' + text + '"}';
+            }
+        });
+        out += "]}";
+    });
+    out += "]}";
+    return out;
+}
+
 async function executeSQL(sql) {
+    if (Provider.key() === "snowflake") {
+        const rows = await SF.runQuery(sql);
+        return snowflakeRowsToPseudoBqJson(rows);
+    }
+
+    // BigQuery (comportamiento original, sin cambios)
     const token = localStorage.getItem("bigquery_access_token");
     const expires = localStorage.getItem("bigquery_token_expires");
 

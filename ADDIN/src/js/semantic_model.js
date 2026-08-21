@@ -613,20 +613,18 @@ function clearCurrentModel()
 }
 
 function getAuthToken() {
-    const token = localStorage.getItem("bigquery_access_token");
-    const expires = localStorage.getItem("bigquery_token_expires");
-    if (!token || !expires || Date.now() >= parseInt(expires)) {
-        alert("Sesión no válida o expirada. Por favor, inicia sesión de nuevo.");
+    if (!Provider.isConnected()) {
+        alert(`Sesión de ${Provider.label()} no válida o expirada. Por favor, inicia sesión de nuevo.`);
         return null;
     }
-    return token;
+    return true; // solo se usa como comprobación booleana; Provider gestiona el token internamente
 }
 
 async function openTreeModal(target = "FACT") {
     currentTreeTarget = target;
     document.getElementById("treeModal").style.display = "block";
     const container = document.getElementById("treeContainer");
-    container.innerHTML = "Cargando proyectos...";
+    container.innerHTML = `Cargando ${Provider.level1Label()}s...`;
 
     let autoProject = null;
     let autoDataset = null;
@@ -648,17 +646,14 @@ async function loadProjectsTree(container, autoProject = null, autoDataset = nul
     if (!token) return;
 
     try {
-        const response = await fetch("https://bigquery.googleapis.com/bigquery/v2/projects", {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-        const data = await response.json();
+        const items = await Provider.listLevel1();
         container.innerHTML = "";
 
-        if (data.projects && data.projects.length > 0) {
+        if (items.length > 0) {
             const ul = document.createElement("ul");
             ul.className = "tree-list";
-            for (const p of data.projects) {
-                const projectId = p.id || p.projectReference.projectId;
+            for (const p of items) {
+                const projectId = p.id;
                 const li = document.createElement("li");
                 li.className = "tree-item";
                 
@@ -679,7 +674,7 @@ async function loadProjectsTree(container, autoProject = null, autoDataset = nul
                         childrenDiv.classList.add("open");
                         toggleSpan.textContent = "▼";
                         if (!loaded) {
-                            childrenDiv.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>Cargando datasets...</div>";
+                            childrenDiv.innerHTML = `<div style='margin-left:20px; font-size:11px; color:#666;'>Cargando ${Provider.level2Label()}s...</div>`;
                             await loadDatasetsTree(projectId, childrenDiv, autoDataset);
                             loaded = true;
                         }
@@ -693,18 +688,18 @@ async function loadProjectsTree(container, autoProject = null, autoDataset = nul
                 if (autoProject && projectId === autoProject) {
                     childrenDiv.classList.add("open");
                     header.querySelector(".tree-toggle").textContent = "▼";
-                    childrenDiv.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>Cargando datasets...</div>";
+                    childrenDiv.innerHTML = `<div style='margin-left:20px; font-size:11px; color:#666;'>Cargando ${Provider.level2Label()}s...</div>`;
                     loaded = true;
                     loadDatasetsTree(projectId, childrenDiv, autoDataset);
                 }
             }
             container.appendChild(ul);
         } else {
-            container.innerHTML = "No se encontraron proyectos.";
+            container.innerHTML = `No se encontraron elementos de ${Provider.level1Label()}.`;
         }
     } catch (err) {
         console.error("Error al cargar árbol de proyectos:", err);
-        container.innerHTML = "Error al cargar proyectos.";
+        container.innerHTML = `Error al cargar ${Provider.level1Label()}s.`;
     }
 }
 
@@ -713,17 +708,14 @@ async function loadDatasetsTree(projectId, container, autoDataset = null) {
     if (!token) return;
 
     try {
-        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets`, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-        const data = await response.json();
+        const items = await Provider.listLevel2(projectId);
         container.innerHTML = "";
 
-        if (data.datasets && data.datasets.length > 0) {
+        if (items.length > 0) {
             const ul = document.createElement("ul");
             ul.className = "tree-list";
-            for (const ds of data.datasets) {
-                const datasetId = ds.datasetReference.datasetId;
+            for (const ds of items) {
+                const datasetId = ds.id;
                 const li = document.createElement("li");
                 li.className = "tree-item";
                 
@@ -766,11 +758,11 @@ async function loadDatasetsTree(projectId, container, autoDataset = null) {
             }
             container.appendChild(ul);
         } else {
-            container.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>No hay datasets en este proyecto.</div>";
+            container.innerHTML = `<div style='margin-left:20px; font-size:11px; color:#666;'>No hay ${Provider.level2Label()}s en este ${Provider.level1Label()}.</div>`;
         }
     } catch (err) {
         console.error("Error al cargar datasets:", err);
-        container.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>Error al cargar datasets.</div>";
+        container.innerHTML = `<div style='margin-left:20px; font-size:11px; color:#666;'>Error al cargar ${Provider.level2Label()}s.</div>`;
     }
 }
 
@@ -779,17 +771,14 @@ async function loadTablesTree(projectId, datasetId, container) {
     if (!token) return;
 
     try {
-        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables`, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-        const data = await response.json();
+        const items = await Provider.listTables(projectId, datasetId);
         container.innerHTML = "";
 
-        if (data.tables && data.tables.length > 0) {
+        if (items.length > 0) {
             const ul = document.createElement("ul");
             ul.className = "tree-list";
-            data.tables.forEach(tbl => {
-                const tableId = tbl.tableReference.tableId;
+            items.forEach(tbl => {
+                const tableId = tbl.id;
                 const li = document.createElement("li");
                 li.className = "tree-item";
                 
@@ -847,12 +836,9 @@ async function fetchFactFields(isModelLoad = false) {
     }
 
     try {
-        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-        const data = await response.json();
+        const fields = await Provider.getTableFields(projectId, datasetId, tableId);
 
-        if (data.schema && data.schema.fields) {
+        if (fields && fields.length > 0) {
             let savedDimFields = new Set();
             let savedMeaFields = new Set();
             let relMap = {};    // DIMENSION -> { relProject, relDataset, relTable }
@@ -997,7 +983,7 @@ async function fetchFactFields(isModelLoad = false) {
                 }
             }
 
-            fieldsState = data.schema.fields.map(f => {
+            fieldsState = fields.map(f => {
                 const isNumeric = ["INTEGER", "FLOAT", "NUMERIC", "BIGNUMERIC"].includes(f.type);
                 let fieldType = isNumeric ? "MEASURE" : "DIMENSION";
                 let isEnabled = true;
@@ -1189,19 +1175,16 @@ async function fetchDimensionAttributes(forceRefetch = false) {
     }
 
     try {
-        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/datasets/${datasetId}/tables/${tableId}`, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-        const data = await response.json();
+        const fields = await Provider.getTableFields(projectId, datasetId, tableId);
 
-        if (data.schema && data.schema.fields) {
+        if (fields && fields.length > 0) {
             field.relProject = projectId;
             field.relDataset = datasetId;
             field.relTable = tableId;
 
             const existingAttrsMap = new Map((field.attributes || []).map(a => [a.name, a]));
 
-            field.attributes = data.schema.fields.map((attr, idx) => {
+            field.attributes = fields.map((attr, idx) => {
                 const existing = existingAttrsMap.get(attr.name);
                 if (existing && !forceRefetch) {
                     return existing;

@@ -1,16 +1,13 @@
 /**
  * Lógica del Task Pane de Login, Verificación de Sesión y Desconexión
+ * Soporta BigQuery (OAuth implícito) y Snowflake (OAuth PKCE) a
+ * través de la capa Provider; el resto del add-in solo necesita
+ * saber cuál está activo (Provider.key()).
  */
 const LoginApp = {
     selectedProvider: null,
     authDialog: null,
     connectedProviders: {},
-
-    // Configuración OAuth de Google BigQuery con tu Client ID real
-    googleConfig: {
-        clientId: "316357511817-lck6pdotv8mrb7n72pahuukt2e0fvsrt.apps.googleusercontent.com",
-        scopes: "https://www.googleapis.com/auth/bigquery.readonly https://www.googleapis.com/auth/userinfo.email"
-    },
 
     init() {
         this.bindEvents();
@@ -27,7 +24,7 @@ const LoginApp = {
         if (toast) {
             toast.innerText = msg;
             toast.className = `toast-message visible ${isError ? "error" : "info"}`;
-            
+
             setTimeout(() => {
                 toast.classList.remove("visible");
             }, 6000);
@@ -42,8 +39,9 @@ const LoginApp = {
             card.addEventListener("click", () => {
                 cards.forEach(c => c.classList.remove("selected"));
                 card.classList.add("selected");
-                
+
                 this.selectedProvider = card.getAttribute("data-provider");
+                this.togglePanels();
                 this.updateActionButton();
             });
         });
@@ -56,14 +54,29 @@ const LoginApp = {
 
                 if (isConnected) {
                     this.logoutProvider(this.selectedProvider);
+                } else if (this.selectedProvider === "bigquery") {
+                    this.connectBigQuery();
+                } else if (this.selectedProvider === "snowflake") {
+                    this.connectSnowflake();
                 } else {
-                    if (this.selectedProvider === "bigquery") {
-                        this.connectBigQuery();
-                    } else {
-                        this.showAlert(`El conector para ${this.getProviderDisplayName(this.selectedProvider)} estará disponible próximamente.`);
-                    }
+                    this.showAlert(`El conector para ${this.getProviderDisplayName(this.selectedProvider)} estará disponible próximamente.`);
                 }
             });
+        }
+    },
+
+    /** Muestra/oculta el panel de configuración de Snowflake según el conector seleccionado */
+    togglePanels() {
+        const panel = document.getElementById("snowflakeConfigPanel");
+        if (!panel) return;
+
+        panel.classList.toggle("visible", this.selectedProvider === "snowflake");
+
+        if (this.selectedProvider === "snowflake") {
+            document.getElementById("sfAccount").value = SF.getAccount();
+            document.getElementById("sfWarehouse").value = SF.getWarehouse();
+            document.getElementById("sfDatabase").value = SF.getDatabase();
+            document.getElementById("sfRole").value = SF.getRole();
         }
     },
 
@@ -89,64 +102,33 @@ const LoginApp = {
      * Revisa al cargar el panel si existen tokens activos y actualiza el estado
      */
     checkExistingTokens() {
-        const token = localStorage.getItem("bigquery_access_token");
-        const expires = localStorage.getItem("bigquery_token_expires");
-
-        if (token && expires && Date.now() < parseInt(expires)) {
+        if (BQ.isConnected()) {
             this.setProviderState("bigquery", true);
         } else {
-            localStorage.removeItem("bigquery_access_token");
-            localStorage.removeItem("bigquery_token_expires");
+            BQ.logout();
             this.setProviderState("bigquery", false);
+        }
+
+        if (SF.isConnected()) {
+            this.setProviderState("snowflake", true);
+        } else {
+            SF.logout();
+            this.setProviderState("snowflake", false);
         }
     },
 
     /**
-     * Inicia el flujo OAuth 2.0 en ventana emergente para BigQuery
+     * Abre la URL de autenticación indicada en un diálogo de Office (o en una
+     * ventana emergente si se ejecuta fuera de Excel, p.ej. para pruebas en navegador)
      */
-    connectBigQuery() {
-        // Validación de protocolo: alertar si se abre directamente desde file://
+    openAuthWindow(authUrl) {
+        const isOfficeEnvironment = typeof Office !== "undefined" &&
+            Office.context &&
+            Office.context.ui &&
+            typeof Office.context.ui.displayDialogAsync === "function";
 
-            this.showAlert("Prueba1", true);
-
-            this.showAlert("Prueba2", true);
-        if (window.location.protocol === "file:") {
-            console.error("No se puede ejecutar desde file://. Debes usar un servidor web local (ej. Live Server o http://localhost).");
-//            this.showAlert("Error: No se puede ejecutar desde un archivo local (file://). Usa Live Server o un servidor HTTP.", true);
-            return;
-        }
-
-        // Construcción de la URL del callback en relación al origen actual
-        const redirectUri = new URL("auth-callback.html", window.location.href).href;
-        
-        const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
-            `client_id=${encodeURIComponent(this.googleConfig.clientId)}` +
-            `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-            "&response_type=token" +
-            `&scope=${encodeURIComponent(this.googleConfig.scopes)}` +
-            "&prompt=consent";
-
-        // Comprobación de si estamos ejecutando dentro de Microsoft Office
-        const isOfficeEnvironment = typeof Office !== "undefined" && 
-                                   Office.context && 
-                                   Office.context.ui && 
-                                   typeof Office.context.ui.displayDialogAsync === "function";
-								   
-								               this.showAlert("Prueba3", true);
-
-
-//        if (isOfficeEnvironment) {
- 
-  if ( 1 === 1 ) { 
-            this.showAlert("EXCEL", true);
-
-            console.log("Entorno detectado: Microsoft Office Add-in (Excel). Usando displayDialogAsync.");
-
-            const dialogOptions = {
-                height: 60,
-                width: 40,
-                displayInIframe: false
-            };
+        if (isOfficeEnvironment) {
+            const dialogOptions = { height: 60, width: 40, displayInIframe: false };
 
             Office.context.ui.displayDialogAsync(authUrl, dialogOptions, (asyncResult) => {
                 if (asyncResult.status === Office.AsyncResultStatus.Failed) {
@@ -156,49 +138,101 @@ const LoginApp = {
                 }
 
                 this.authDialog = asyncResult.value;
-
                 this.authDialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
                     this.handleAuthResponse(arg.message);
                 });
             });
         } else {
-            console.log("Entorno detectado: Navegador web estándar. Usando window.open.");
-            this.showAlert("OPEN", true);
-            const width = 500;
-            const height = 650;
+            const width = 500, height = 650;
             const left = (window.screen.width / 2) - (width / 2);
             const top = (window.screen.height / 2) - (height / 2);
-            alert("OPEN");
-            this.showAlert("OPEN", true);
-
-            window.open(
-                authUrl,
-                "GoogleAuthWindow",
-                `width=${width},height=${height},top=${top},left=${left}`
-            );
+            window.open(authUrl, "AuthWindow", `width=${width},height=${height},top=${top},left=${left}`);
         }
     },
 
     /**
-     * Maneja la respuesta recibida tras el login
+     * Inicia el flujo OAuth 2.0 (implícito) para BigQuery
      */
-    handleAuthResponse(messageString) {
+    connectBigQuery() {
+        if (window.location.protocol === "file:") {
+            console.error("No se puede ejecutar desde file://. Debes usar un servidor web local (ej. Live Server o http://localhost).");
+            this.showAlert("Error: no se puede ejecutar desde un archivo local (file://). Usa Live Server o un servidor HTTP.", true);
+            return;
+        }
+
+        const redirectUri = new URL("auth-callback.html", window.location.href).href;
+        const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
+            `client_id=${encodeURIComponent(DracoConfig.googleClientId)}` +
+            `&redirect_uri=${encodeURIComponent(redirectUri)}` +
+            "&response_type=token" +
+            `&scope=${encodeURIComponent(DracoConfig.googleScopes)}` +
+            "&prompt=consent";
+
+        this.openAuthWindow(authUrl);
+    },
+
+    /**
+     * Inicia el flujo OAuth 2.0 (Authorization Code + PKCE) para Snowflake
+     */
+    async connectSnowflake() {
+        const account = document.getElementById("sfAccount").value.trim();
+        const warehouse = document.getElementById("sfWarehouse").value.trim();
+        const database = document.getElementById("sfDatabase").value.trim() || DracoConfig.snowflakeDatabase;
+        const role = document.getElementById("sfRole").value.trim();
+
+        if (!account || !warehouse) {
+            this.showAlert("Indica al menos la cuenta y el warehouse de Snowflake.", true);
+            return;
+        }
+
+        SF.setAccount(account);
+        SF.setWarehouse(warehouse);
+        SF.setDatabase(database);
+        SF.setRole(role);
+
+        try {
+            const authUrl = await SF.buildAuthUrl();
+            this.openAuthWindow(authUrl);
+        } catch (err) {
+            console.error("Error al iniciar la conexión con Snowflake:", err);
+            this.showAlert("Error al iniciar la conexión con Snowflake: " + err.message, true);
+        }
+    },
+
+    /**
+     * Maneja la respuesta recibida tras el login, de cualquier proveedor
+     */
+    async handleAuthResponse(messageString) {
         try {
             const response = JSON.parse(messageString);
 
-            if (response.status === "success" && response.provider === "bigquery") {
-                localStorage.setItem("bigquery_access_token", response.token);
-                localStorage.setItem("bigquery_token_expires", Date.now() + (parseInt(response.expiresIn) * 1000));
-
-                this.setProviderState("bigquery", true);
-                this.updateActionButton();
-                this.showAlert("¡Conexión con Google BigQuery establecida con éxito!");
-            } else {
-                console.error("Error en autenticación:", response.error);
-                this.showAlert("Error de autenticación: " + (response.error || "Desconocido"), true);
+            if (response.provider === "bigquery") {
+                if (response.status === "success") {
+                    localStorage.setItem("bigquery_access_token", response.token);
+                    localStorage.setItem("bigquery_token_expires", Date.now() + (parseInt(response.expiresIn, 10) * 1000));
+                    Provider.setKey("bigquery");
+                    this.setProviderState("bigquery", true);
+                    this.updateActionButton();
+                    this.showAlert("¡Conexión con Google BigQuery establecida con éxito!");
+                } else {
+                    console.error("Error en autenticación:", response.error);
+                    this.showAlert("Error de autenticación: " + (response.error || "Desconocido"), true);
+                }
+            } else if (response.provider === "snowflake") {
+                if (response.status === "success" && response.code) {
+                    await SF.handleAuthCode(response.code, response.state);
+                    Provider.setKey("snowflake");
+                    this.setProviderState("snowflake", true);
+                    this.updateActionButton();
+                    this.showAlert("¡Conexión con Snowflake establecida con éxito!");
+                } else {
+                    console.error("Error en autenticación:", response.error);
+                    this.showAlert("Error de autenticación con Snowflake: " + (response.error || "Desconocido"), true);
+                }
             }
         } catch (err) {
             console.error("Error leyendo respuesta de autenticación:", err);
+            this.showAlert("Error al procesar la respuesta de login: " + err.message, true);
         } finally {
             if (this.authDialog) {
                 this.authDialog.close();
@@ -212,8 +246,9 @@ const LoginApp = {
      */
     logoutProvider(providerKey) {
         if (providerKey === "bigquery") {
-            localStorage.removeItem("bigquery_access_token");
-            localStorage.removeItem("bigquery_token_expires");
+            BQ.logout();
+        } else if (providerKey === "snowflake") {
+            SF.logout();
         }
 
         this.setProviderState(providerKey, false);
@@ -227,7 +262,7 @@ const LoginApp = {
     setProviderState(providerKey, isConnected) {
         this.connectedProviders[providerKey] = isConnected;
         const badge = document.getElementById(`badge-${providerKey}`);
-        
+
         if (badge) {
             if (isConnected) {
                 badge.innerText = "Conectado";
