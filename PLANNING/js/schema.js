@@ -198,6 +198,7 @@ const DracoSchema = {
                     PROYECTO_ID STRING NOT NULL,
                     PASO STRING NOT NULL,
                     ORDEN INTEGER,
+                    ES_PASO0 BOOLEAN,
                     INICIO_TIPO STRING NOT NULL,
                     INICIO_FECHA STRING,
                     REVISION BOOLEAN,

@@ -2,35 +2,47 @@
  * ============================================================
  * DRACO PLANNING — WORKFLOWS (definición)
  * ============================================================
- * Un Workflow es una secuencia de Pasos. Cada paso define:
- *   - Nombre.
- *   - Inicio: al iniciar el workflow / al completar el paso anterior / fecha.
- *   - Revisión (sí/no).
- *   - Finalización: N/A, al enviarse a revisión (si revisión=true),
- *     al completarse (si revisión=false), o fecha — se recalcula sola
- *     al cambiar Revisión salvo que el usuario haya elegido N/A o Fecha.
- *   - Driver: dimensión (opcional) por la que se reparte la ejecución del
- *     paso (ej. nodo superior de la jerarquía de CECOs) + valores
- *     concretos opcionales (si no se eligen, se reparte entre TODOS los
- *     valores de la dimensión). Sin driver, el paso se asigna en bloque.
- *   - Variables del paso: variables de valor único para parametrizar
- *     distintas ejecuciones.
- *   - Tareas del paso, agrupadas en bloques: flujo manual, plantilla,
- *     función, actualización de tabla de parametrización o página HTML.
- *     Cada tarea puede completar sus propias variables por constante o
- *     por una variable del paso, y ocultarlas de la pantalla de ejecución.
+ * Un Workflow es una secuencia de Pasos, empezando siempre por un
+ * **Paso 0** especial (no eliminable) donde solo se definen las
+ * **variables del workflow** — de valor único, se piden al crear cada
+ * ejecución y están disponibles para completar tareas en cualquier paso.
+ *
+ * El resto de pasos tienen 2 pestañas:
+ *   - Propiedades: nombre, Inicio (izquierda) / Finalización (derecha)
+ *     y, debajo, el Driver — todo junto en la misma pantalla.
+ *       · Inicio: al iniciar el workflow / al completar el paso
+ *         anterior / fecha concreta.
+ *       · Revisión (sí/no).
+ *       · Finalización: N/A, al enviarse a revisión (si revisión=true),
+ *         al completarse (si revisión=false), o fecha concreta — se
+ *         recalcula sola al cambiar Revisión salvo que el usuario haya
+ *         elegido N/A o Fecha. Es lo que dispara el "al completar el
+ *         paso anterior" del siguiente paso.
+ *       · Driver: dimensión opcional por la que se reparte la ejecución
+ *         del paso (ej. nodo superior de la jerarquía de CECOs) +
+ *         valores concretos opcionales (si no se eligen, se reparte
+ *         entre TODOS los valores de la dimensión). Sin driver, el paso
+ *         se asigna en bloque a una persona o grupo.
+ *   - Tareas del paso: organizadas en bloques — un menú lateral
+ *     (igual que Dimensiones/Cubos/Interfaces) donde "+ Añadir bloque"
+ *     crea uno nuevo y se reordenan arrastrando; a la derecha, las
+ *     tareas del bloque seleccionado. Cada tarea es de tipo flujo
+ *     manual, plantilla, función, actualización de tabla de
+ *     parametrización o página HTML, y puede completar sus propias
+ *     variables por constante o por una variable del workflow (Paso 0),
+ *     con opción de ocultarlas en la pantalla de ejecución.
  *
  * Persistencia en DRACO_CONTROL:
  *   - WORKFLOWS                        cabecera (nombre, descripción)
- *   - WORKFLOWS_PASOS                  pasos (propiedades + driver simple)
+ *   - WORKFLOWS_PASOS                  pasos (propiedades + driver simple + ES_PASO0)
  *   - WORKFLOWS_PASOS_DRIVER_VALORES   valores concretos del driver
- *   - WORKFLOWS_PASOS_VARIABLES        variables del paso
+ *   - WORKFLOWS_PASOS_VARIABLES        variables (solo se usan en el Paso 0)
  *   - WORKFLOWS_PASOS_BLOQUES          bloques de tareas
  *   - WORKFLOWS_PASOS_TAREAS           tareas dentro de cada bloque
  *   - WORKFLOWS_PASOS_TAREAS_VALORES   valores/variables de cada tarea
  *
  * La ejecución (crear/gestionar instancias de un workflow ya definido)
- * se aborda en una fase posterior.
+ * vive en js/workflow-runs.js.
  */
 const Workflows = {
     TABLE: "WORKFLOWS",
@@ -51,8 +63,10 @@ const Workflows = {
     editing: null,
     editingIsNew: true,
     selectedStepId: null,
+    selectedBlockId: null,
     activeTab: "propiedades",
     dragStepIdx: null,
+    dragBlockIdx: null,
 
     async render(container, project) {
         this.container = container;
@@ -91,7 +105,7 @@ const Workflows = {
                 const steps = await Provider.runQuery(`
                     SELECT WORKFLOW_ID, COUNT(*) AS N
                     FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")}
-                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}' AND (ES_PASO0 IS NULL OR ES_PASO0 = FALSE)
                     GROUP BY WORKFLOW_ID`);
                 steps.forEach(s => { stepCounts[s.WORKFLOW_ID] = parseInt(s.N || "0", 10); });
             }
@@ -222,12 +236,27 @@ const Workflows = {
     // Blancos
     // ------------------------------------------------------------
     blankWorkflow() {
-        return { id: Provider.newId(), name: "", description: "", steps: [] };
+        return { id: Provider.newId(), name: "", description: "", steps: [this.blankPaso0()] };
+    },
+
+    blankPaso0() {
+        return {
+            id: Provider.newId(),
+            isPaso0: true,
+            name: "Variables del workflow",
+            inicio: { tipo: "INICIO_WORKFLOW", fecha: "" },
+            revision: false,
+            fin: { tipo: "COMPLETAR", fecha: "" },
+            driver: { dimensionId: null, valores: [] },
+            variables: [],
+            bloques: []
+        };
     },
 
     blankStep(name) {
         return {
             id: Provider.newId(),
+            isPaso0: false,
             name: name || "",
             inicio: { tipo: "INICIO_WORKFLOW", fecha: "" },
             revision: false,
@@ -302,8 +331,9 @@ const Workflows = {
             });
         });
 
-        const steps = pasoRows.map(p => ({
+        let steps = pasoRows.map(p => ({
             id: p.PASO_ID,
+            isPaso0: !!(p.ES_PASO0 === true || p.ES_PASO0 === "true" || p.ES_PASO0 === 1),
             name: p.PASO,
             inicio: { tipo: p.INICIO_TIPO || "INICIO_WORKFLOW", fecha: p.INICIO_FECHA || "" },
             revision: !!(p.REVISION === true || p.REVISION === "true" || p.REVISION === 1),
@@ -312,6 +342,9 @@ const Workflows = {
             variables: varsByPaso[p.PASO_ID] || [],
             bloques: bloquesByPaso[p.PASO_ID] || []
         }));
+
+        // Compatibilidad con workflows creados antes de que existiera el Paso 0.
+        if (!steps.some(s => s.isPaso0)) steps.unshift(this.blankPaso0());
 
         return { id: row[this.ID_COL], name: row[this.NAME_COL], description: row.DESCRIPCION || "", steps };
     },
@@ -322,6 +355,7 @@ const Workflows = {
     async openForm(editId = null) {
         this.editingIsNew = !editId;
         this.selectedStepId = null;
+        this.selectedBlockId = null;
         this.activeTab = "propiedades";
 
         await this.loadDimensions();
@@ -331,7 +365,7 @@ const Workflows = {
             const draft = await this.loadDetail(editId);
             if (!draft) { UI.toast("No se ha podido cargar el workflow.", "error"); return; }
             this.editing = draft;
-            this.selectedStepId = draft.steps.length ? draft.steps[0].id : null;
+            this.selectedStepId = draft.steps[0].id;
             this.openMainModal();
             return;
         }
@@ -341,6 +375,7 @@ const Workflows = {
         if (!basics) return;
         Object.assign(draft, basics);
         this.editing = draft;
+        this.selectedStepId = draft.steps[0].id;
         this.openMainModal();
     },
 
@@ -457,7 +492,7 @@ const Workflows = {
     },
 
     // ------------------------------------------------------------
-    // Pasos (cadena, arrastrable)
+    // Pasos (cadena, arrastrable — el Paso 0 siempre va primero y fijo)
     // ------------------------------------------------------------
     renderStepsPart() {
         const part = document.getElementById("wfStepsPart");
@@ -465,9 +500,13 @@ const Workflows = {
 
         const cards = wf.steps.map((s, idx) => {
             const selected = s.id === this.selectedStepId;
-            const card = `
+            const card = s.isPaso0 ? `
+                <div class="flow-chain-card wf-paso0-card ${selected ? "is-selected" : ""}" data-step-idx="${idx}" title="Variables del workflow">
+                    <div class="flow-chain-card-name">🧩 Variables</div>
+                    <div class="flow-chain-card-meta">${s.variables.length} variable${s.variables.length === 1 ? "" : "s"}</div>
+                </div>` : `
                 <div class="flow-chain-card ${selected ? "is-selected" : ""}" draggable="true" data-step-idx="${idx}" title="Clic para editar el paso">
-                    <div class="flow-chain-card-name">${idx + 1}. ${UI.escapeHtml(s.name || "(sin nombre)")}</div>
+                    <div class="flow-chain-card-name">${idx}. ${UI.escapeHtml(s.name || "(sin nombre)")}</div>
                     <div class="flow-chain-card-meta">${this.stepMetaLabel(s)}</div>
                     <button type="button" class="flow-chain-card-remove" data-remove-step="${idx}" title="Eliminar paso">✕</button>
                 </div>`;
@@ -487,22 +526,26 @@ const Workflows = {
         part.querySelectorAll("[data-step-idx]").forEach(card => {
             card.addEventListener("click", (e) => {
                 if (e.target.closest("[data-remove-step]")) return;
-                this.selectedStepId = wf.steps[parseInt(card.dataset.stepIdx, 10)].id;
+                const idx = parseInt(card.dataset.stepIdx, 10);
+                this.selectedStepId = wf.steps[idx].id;
+                this.selectedBlockId = null;
                 this.activeTab = "propiedades";
                 this.renderStepsPart();
                 this.renderStepDetail();
             });
-            card.addEventListener("dragstart", () => { this.dragStepIdx = parseInt(card.dataset.stepIdx, 10); });
-            card.addEventListener("dragover", (e) => e.preventDefault());
-            card.addEventListener("drop", (e) => {
-                e.preventDefault();
-                const toIdx = parseInt(card.dataset.stepIdx, 10);
-                if (this.dragStepIdx === null || this.dragStepIdx === toIdx) return;
-                const [moved] = wf.steps.splice(this.dragStepIdx, 1);
-                wf.steps.splice(toIdx, 0, moved);
-                this.dragStepIdx = null;
-                this.renderStepsPart();
-            });
+            if (card.getAttribute("draggable") === "true") {
+                card.addEventListener("dragstart", () => { this.dragStepIdx = parseInt(card.dataset.stepIdx, 10); });
+                card.addEventListener("dragover", (e) => e.preventDefault());
+                card.addEventListener("drop", (e) => {
+                    e.preventDefault();
+                    const toIdx = parseInt(card.dataset.stepIdx, 10);
+                    if (toIdx === 0 || this.dragStepIdx === null || this.dragStepIdx === toIdx) return;
+                    const [moved] = wf.steps.splice(this.dragStepIdx, 1);
+                    wf.steps.splice(toIdx, 0, moved);
+                    this.dragStepIdx = null;
+                    this.renderStepsPart();
+                });
+            }
         });
         part.querySelectorAll("[data-remove-step]").forEach(btn => {
             btn.addEventListener("click", async (e) => {
@@ -512,7 +555,7 @@ const Workflows = {
                 const ok = await UI.confirm("Eliminar paso", `Se eliminará el paso <strong>${UI.escapeHtml(step.name || "(sin nombre)")}</strong> con toda su configuración.`);
                 if (!ok) return;
                 wf.steps.splice(idx, 1);
-                if (this.selectedStepId === step.id) this.selectedStepId = wf.steps.length ? wf.steps[0].id : null;
+                if (this.selectedStepId === step.id) this.selectedStepId = wf.steps[0].id;
                 this.renderStepsPart();
                 this.renderStepDetail();
             });
@@ -538,6 +581,7 @@ const Workflows = {
         const step = this.blankStep(name.trim());
         this.editing.steps.push(step);
         this.selectedStepId = step.id;
+        this.selectedBlockId = null;
         this.activeTab = "propiedades";
         this.renderStepsPart();
         this.renderStepDetail();
@@ -548,7 +592,7 @@ const Workflows = {
     },
 
     // ------------------------------------------------------------
-    // Detalle del paso seleccionado (pestañas)
+    // Detalle del paso seleccionado
     // ------------------------------------------------------------
     renderStepDetail() {
         const part = document.getElementById("wfStepDetailPart");
@@ -559,12 +603,20 @@ const Workflows = {
             return;
         }
 
+        // Paso 0: sin pestañas, solo variables del workflow.
+        if (step.isPaso0) {
+            part.innerHTML = `
+                <div class="flow-part-header"><strong>Variables del workflow</strong></div>
+                <div class="flow-step-detail" id="wfStepTabBody"></div>`;
+            this.renderVariablesTab(document.getElementById("wfStepTabBody"), step);
+            return;
+        }
+
         const tabs = [
             ["propiedades", "Propiedades"],
-            ["driver", "Driver"],
-            ["variables", "Variables"],
-            ["tareas", "Tareas"]
+            ["tareas", "Tareas del paso"]
         ];
+        if (!["propiedades", "tareas"].includes(this.activeTab)) this.activeTab = "propiedades";
 
         part.innerHTML = `
             <div class="flow-part-header"><strong>Paso: ${UI.escapeHtml(step.name || "(sin nombre)")}</strong></div>
@@ -582,12 +634,10 @@ const Workflows = {
 
         const body = document.getElementById("wfStepTabBody");
         if (this.activeTab === "propiedades") this.renderPropiedadesTab(body, step);
-        else if (this.activeTab === "driver") this.renderDriverTab(body, step);
-        else if (this.activeTab === "variables") this.renderVariablesTab(body, step);
-        else if (this.activeTab === "tareas") this.renderTareasTab(body, step);
+        else this.renderTareasTab(body, step);
     },
 
-    // -------------------- Propiedades --------------------
+    // -------------------- Propiedades (nombre + inicio/fin + driver) --------------------
     finOptions(step) {
         const opts = [["NA", "N/A"]];
         opts.push(step.revision ? ["REVISION", "Al enviarse a revisión"] : ["COMPLETAR", "Al completarse el paso"]);
@@ -598,6 +648,7 @@ const Workflows = {
     renderPropiedadesTab(body, step) {
         const finOpts = this.finOptions(step);
         if (!finOpts.some(([k]) => k === step.fin.tipo)) step.fin.tipo = finOpts[1][0];
+        const dim = step.driver.dimensionId ? this.dimensionById(step.driver.dimensionId) : null;
 
         body.innerHTML = `
             <div class="flow-step-group">
@@ -605,26 +656,48 @@ const Workflows = {
                     <label>Nombre del paso</label>
                     <input type="text" id="stepName" value="${UI.escapeHtml(step.name)}">
                 </div>
-                <div class="form-group">
-                    <label>Inicio</label>
-                    <select id="stepInicioTipo">
-                        <option value="INICIO_WORKFLOW" ${step.inicio.tipo === "INICIO_WORKFLOW" ? "selected" : ""}>Al iniciar el workflow</option>
-                        <option value="PASO_ANTERIOR" ${step.inicio.tipo === "PASO_ANTERIOR" ? "selected" : ""}>Al completar el paso anterior</option>
-                        <option value="FECHA" ${step.inicio.tipo === "FECHA" ? "selected" : ""}>Fecha concreta</option>
-                    </select>
-                    ${step.inicio.tipo === "FECHA" ? `<input type="date" id="stepInicioFecha" value="${UI.escapeHtml(step.inicio.fecha)}" style="margin-top:8px;">` : ""}
+
+                <div class="wf-timing-grid">
+                    <div class="wf-timing-card wf-timing-card--start">
+                        <div class="wf-timing-label">▶ Inicio</div>
+                        <select id="stepInicioTipo">
+                            <option value="INICIO_WORKFLOW" ${step.inicio.tipo === "INICIO_WORKFLOW" ? "selected" : ""}>Al iniciar el workflow</option>
+                            <option value="PASO_ANTERIOR" ${step.inicio.tipo === "PASO_ANTERIOR" ? "selected" : ""}>Al completar el paso anterior</option>
+                            <option value="FECHA" ${step.inicio.tipo === "FECHA" ? "selected" : ""}>Fecha concreta</option>
+                        </select>
+                        ${step.inicio.tipo === "FECHA" ? `<input type="date" id="stepInicioFecha" value="${UI.escapeHtml(step.inicio.fecha)}">` : ""}
+                        <label class="wf-timing-check"><input type="checkbox" id="stepRevision" ${step.revision ? "checked" : ""}> Requiere revisión</label>
+                    </div>
+                    <div class="wf-timing-arrow">→</div>
+                    <div class="wf-timing-card wf-timing-card--end">
+                        <div class="wf-timing-label">■ Finalización</div>
+                        <select id="stepFinTipo">
+                            ${finOpts.map(([k, l]) => `<option value="${k}" ${step.fin.tipo === k ? "selected" : ""}>${l}</option>`).join("")}
+                        </select>
+                        ${step.fin.tipo === "FECHA" ? `<input type="date" id="stepFinFecha" value="${UI.escapeHtml(step.fin.fecha)}">` : ""}
+                        <p class="form-hint">Dispara el "al completar el paso anterior" del siguiente paso.</p>
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label><input type="checkbox" id="stepRevision" ${step.revision ? "checked" : ""}> Requiere revisión</label>
-                    <p class="form-hint">Si el paso requiere revisión, se considera terminado al enviarse a revisión (no al completarse).</p>
-                </div>
-                <div class="form-group">
-                    <label>Finalización</label>
-                    <select id="stepFinTipo">
-                        ${finOpts.map(([k, l]) => `<option value="${k}" ${step.fin.tipo === k ? "selected" : ""}>${l}</option>`).join("")}
-                    </select>
-                    ${step.fin.tipo === "FECHA" ? `<input type="date" id="stepFinFecha" value="${UI.escapeHtml(step.fin.fecha)}" style="margin-top:8px;">` : ""}
-                    <p class="form-hint">Este momento es el que dispara el "Al completar el paso anterior" del siguiente paso.</p>
+
+                <div class="wf-driver-section">
+                    <div class="flow-step-group-title">Driver de reparto</div>
+                    <p class="form-hint">Reparte la ejecución de este paso por los valores de una dimensión (ej. nodo superior de la jerarquía de CECOs → una ejecución por CECO, cada una asignable a una persona distinta). Sin driver, el paso se asigna en bloque a una persona o grupo.</p>
+                    ${dim ? `
+                        <div class="hier-chip-card" style="margin-bottom:12px;">
+                            <div>
+                                <strong>${UI.escapeHtml(dim.DIMENSION)}</strong>
+                                <span class="hier-chip-levels">${step.driver.valores.length ? `${step.driver.valores.length} valor(es) seleccionado(s)` : "Todos los valores de la dimensión"}</span>
+                            </div>
+                            <div class="row-actions">
+                                <button id="btnDriverValues" title="Elegir valores concretos">▤</button>
+                                <button id="btnDriverClear" class="danger" title="Quitar driver">🗑</button>
+                            </div>
+                        </div>
+                        ${step.driver.valores.length ? `
+                            <div class="chip-row">
+                                ${step.driver.valores.map(v => `<span class="hier-chip">${UI.escapeHtml(v)} <a href="#" data-remove-driver-val="${UI.escapeHtml(v)}" style="margin-left:4px;">✕</a></span>`).join("")}
+                            </div>` : ""}
+                    ` : `<button class="btn btn-secondary btn-sm" id="btnDriverPick">+ Seleccionar dimensión driver</button>`}
                 </div>
             </div>`;
 
@@ -654,32 +727,6 @@ const Workflows = {
         });
         const finFecha = document.getElementById("stepFinFecha");
         if (finFecha) finFecha.addEventListener("input", (e) => { step.fin.fecha = e.target.value; });
-    },
-
-    // -------------------- Driver --------------------
-    renderDriverTab(body, step) {
-        const dim = step.driver.dimensionId ? this.dimensionById(step.driver.dimensionId) : null;
-
-        body.innerHTML = `
-            <div class="flow-step-group">
-                <p class="form-hint">Reparte la ejecución de este paso por los valores de una dimensión (ej. nodo superior de la jerarquía de CECOs → una ejecución por CECO, cada una asignable a una persona distinta). Sin driver, el paso se asigna en bloque a una persona o grupo.</p>
-                ${dim ? `
-                    <div class="hier-chip-card" style="margin-bottom:12px;">
-                        <div>
-                            <strong>${UI.escapeHtml(dim.DIMENSION)}</strong>
-                            <span class="hier-chip-levels">${step.driver.valores.length ? `${step.driver.valores.length} valor(es) seleccionado(s)` : "Todos los valores de la dimensión"}</span>
-                        </div>
-                        <div class="row-actions">
-                            <button id="btnDriverValues" title="Elegir valores concretos">▤</button>
-                            <button id="btnDriverClear" class="danger" title="Quitar driver">🗑</button>
-                        </div>
-                    </div>
-                    ${step.driver.valores.length ? `
-                        <div class="chip-row">
-                            ${step.driver.valores.map(v => `<span class="hier-chip">${UI.escapeHtml(v)} <a href="#" data-remove-driver-val="${UI.escapeHtml(v)}" style="margin-left:4px;">✕</a></span>`).join("")}
-                        </div>` : ""}
-                ` : `<button class="btn btn-secondary btn-sm" id="btnDriverPick">+ Seleccionar dimensión driver</button>`}
-            </div>`;
 
         const pickBtn = document.getElementById("btnDriverPick");
         if (pickBtn) pickBtn.addEventListener("click", async () => {
@@ -687,13 +734,13 @@ const Workflows = {
             if (!dimId) return;
             step.driver.dimensionId = dimId;
             step.driver.valores = [];
-            this.renderDriverTab(body, step);
+            this.renderPropiedadesTab(body, step);
             this.renderStepsPart();
         });
         const clearBtn = document.getElementById("btnDriverClear");
         if (clearBtn) clearBtn.addEventListener("click", () => {
             step.driver = { dimensionId: null, valores: [] };
-            this.renderDriverTab(body, step);
+            this.renderPropiedadesTab(body, step);
             this.renderStepsPart();
         });
         const valuesBtn = document.getElementById("btnDriverValues");
@@ -702,25 +749,26 @@ const Workflows = {
             const result = await UI.openDimensionValuesPickerModal({ project: this.project, dim, keyCol, selected: step.driver.valores });
             if (result === null) return;
             step.driver.valores = result;
-            this.renderDriverTab(body, step);
+            this.renderPropiedadesTab(body, step);
             this.renderStepsPart();
         });
         body.querySelectorAll("[data-remove-driver-val]").forEach(a => {
             a.addEventListener("click", (e) => {
                 e.preventDefault();
                 step.driver.valores = step.driver.valores.filter(v => v !== a.dataset.removeDriverVal);
-                this.renderDriverTab(body, step);
+                this.renderPropiedadesTab(body, step);
                 this.renderStepsPart();
             });
         });
     },
 
-    // -------------------- Variables del paso --------------------
+    // -------------------- Variables (solo Paso 0) --------------------
     renderVariablesTab(body, step) {
         body.innerHTML = `
             <div class="flow-step-group">
+                <p class="form-hint">Variables de valor único del workflow: se piden al crear cada ejecución y están disponibles para completar tareas en cualquier paso.</p>
                 <div class="flow-step-group-title">
-                    Variables de valor único
+                    Variables
                     <button class="btn btn-secondary btn-sm" id="btnAddStepVar" style="float:right;">+ Nueva variable</button>
                 </div>
                 ${step.variables.length ? `
@@ -742,7 +790,7 @@ const Workflows = {
                                     </tr>`).join("")}
                             </tbody>
                         </table>
-                    </div>` : `<div class="module-empty module-empty--inline">Este paso todavía no tiene variables.</div>`}
+                    </div>` : `<div class="module-empty module-empty--inline">Este workflow todavía no tiene variables.</div>`}
             </div>`;
 
         document.getElementById("btnAddStepVar").addEventListener("click", async () => {
@@ -750,6 +798,7 @@ const Workflows = {
             if (!v) return;
             step.variables.push({ id: Provider.newId(), ...v });
             this.renderVariablesTab(body, step);
+            this.renderStepsPart();
         });
         body.querySelectorAll("[data-edit-var]").forEach(btn => {
             btn.addEventListener("click", async () => {
@@ -765,44 +814,123 @@ const Workflows = {
                 const idx = parseInt(btn.dataset.delVar, 10);
                 step.variables.splice(idx, 1);
                 this.renderVariablesTab(body, step);
+                this.renderStepsPart();
             });
         });
     },
 
-    // -------------------- Tareas (bloques) --------------------
+    // Todas las variables del workflow disponibles para mapear tareas (viven en el Paso 0).
+    workflowVariables() {
+        const paso0 = this.editing.steps.find(s => s.isPaso0);
+        return paso0 ? paso0.variables : [];
+    },
+
+    // -------------------- Tareas del paso (bloques en menú lateral) --------------------
     renderTareasTab(body, step) {
+        if (step.bloques.length && !step.bloques.some(b => b.id === this.selectedBlockId)) {
+            this.selectedBlockId = step.bloques[0].id;
+        }
+        if (!step.bloques.length) this.selectedBlockId = null;
+
         body.innerHTML = `
-            <div class="flow-step-group">
-                <button class="btn btn-secondary btn-sm" id="btnAddBlock">+ Añadir bloque</button>
-                <div id="wfBlocksWrap" style="margin-top:12px;">
-                    ${step.bloques.length ? step.bloques.map((b, bIdx) => this.blockHtml(b, bIdx)).join("") : `<div class="module-empty module-empty--inline">Todavía no hay bloques de tareas en este paso.</div>`}
+            <div class="wf-blocks-layout">
+                <div class="wf-block-menu" id="wfBlockMenu">
+                    ${step.bloques.map((b, bIdx) => `
+                        <div class="wf-block-menu-item ${b.id === this.selectedBlockId ? "active" : ""}" draggable="true" data-block-idx="${bIdx}">
+                            <span class="wf-block-menu-item-name">${UI.escapeHtml(b.titulo)}</span>
+                            <span class="wf-block-menu-item-count">${b.tareas.length}</span>
+                            <button type="button" class="wf-block-menu-item-remove" data-remove-block="${bIdx}" title="Eliminar bloque">✕</button>
+                        </div>`).join("")}
+                    <button type="button" class="btn btn-secondary btn-sm wf-block-menu-add" id="btnAddBlock">+ Añadir bloque</button>
                 </div>
+                <div class="wf-block-detail" id="wfBlockDetail"></div>
             </div>`;
 
         document.getElementById("btnAddBlock").addEventListener("click", () => {
-            step.bloques.push({ id: Provider.newId(), titulo: "Nuevo bloque", tareas: [] });
+            const block = { id: Provider.newId(), titulo: "Nuevo bloque", tareas: [] };
+            step.bloques.push(block);
+            this.selectedBlockId = block.id;
             this.renderTareasTab(body, step);
+            this.renderStepsPart();
         });
 
-        this.bindBlockEvents(body, step);
+        this.bindBlockMenuEvents(body, step);
+        this.renderBlockDetail(body, step);
     },
 
-    blockHtml(block, bIdx) {
-        return `
-            <div class="flow-screen-block flow-screen-block--frame" data-block-idx="${bIdx}" style="margin-bottom:14px;">
-                <div class="flow-frame-header">
-                    <span class="modal-title-editable" contenteditable="true" spellcheck="false" data-block-title="${bIdx}">${UI.escapeHtml(block.titulo)}</span>
-                    <span class="load-fn-toolbar-spacer"></span>
-                    <button type="button" class="btn btn-secondary btn-sm" data-add-task="${bIdx}">+ Tarea</button>
-                    <button type="button" class="flow-chain-card-remove" data-remove-block="${bIdx}" title="Eliminar bloque">✕</button>
-                </div>
-                <div class="flow-frame-vars">
-                    ${block.tareas.length ? block.tareas.map((t, tIdx) => this.taskHtml(block, bIdx, t, tIdx)).join("") : `<p class="form-hint">Sin tareas todavía.</p>`}
-                </div>
+    bindBlockMenuEvents(body, step) {
+        const menu = document.getElementById("wfBlockMenu");
+
+        menu.querySelectorAll("[data-block-idx]").forEach(item => {
+            item.addEventListener("click", (e) => {
+                if (e.target.closest("[data-remove-block]")) return;
+                this.selectedBlockId = step.bloques[parseInt(item.dataset.blockIdx, 10)].id;
+                this.renderTareasTab(body, step);
+            });
+            item.addEventListener("dragstart", () => { this.dragBlockIdx = parseInt(item.dataset.blockIdx, 10); });
+            item.addEventListener("dragover", (e) => e.preventDefault());
+            item.addEventListener("drop", (e) => {
+                e.preventDefault();
+                const toIdx = parseInt(item.dataset.blockIdx, 10);
+                if (this.dragBlockIdx === null || this.dragBlockIdx === toIdx) return;
+                const [moved] = step.bloques.splice(this.dragBlockIdx, 1);
+                step.bloques.splice(toIdx, 0, moved);
+                this.dragBlockIdx = null;
+                this.renderTareasTab(body, step);
+            });
+        });
+
+        menu.querySelectorAll("[data-remove-block]").forEach(btn => {
+            btn.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                const idx = parseInt(btn.dataset.removeBlock, 10);
+                const ok = await UI.confirm("Eliminar bloque", `Se eliminará el bloque <strong>${UI.escapeHtml(step.bloques[idx].titulo)}</strong> y todas sus tareas.`);
+                if (!ok) return;
+                const removedId = step.bloques[idx].id;
+                step.bloques.splice(idx, 1);
+                if (this.selectedBlockId === removedId) this.selectedBlockId = step.bloques.length ? step.bloques[0].id : null;
+                this.renderTareasTab(body, step);
+                this.renderStepsPart();
+            });
+        });
+    },
+
+    renderBlockDetail(body, step) {
+        const detail = document.getElementById("wfBlockDetail");
+        const block = step.bloques.find(b => b.id === this.selectedBlockId);
+
+        if (!block) {
+            detail.innerHTML = `<div class="module-empty module-empty--inline">Añade un bloque para empezar a crear tareas.</div>`;
+            return;
+        }
+
+        detail.innerHTML = `
+            <div class="wf-block-detail-header">
+                <span class="modal-title-editable" contenteditable="true" spellcheck="false" id="wfBlockTitleInput">${UI.escapeHtml(block.titulo)}</span>
+                <span class="load-fn-toolbar-spacer"></span>
+                <button type="button" class="btn btn-primary btn-sm" id="btnAddTask">+ Tarea</button>
+            </div>
+            <div class="flow-frame-vars">
+                ${block.tareas.length ? block.tareas.map((t, tIdx) => this.taskHtml(block, t, tIdx)).join("") : `<p class="form-hint">Sin tareas todavía.</p>`}
             </div>`;
+
+        const titleEl = document.getElementById("wfBlockTitleInput");
+        titleEl.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); titleEl.blur(); } });
+        titleEl.addEventListener("blur", () => {
+            block.titulo = titleEl.textContent.trim() || "Bloque";
+            this.renderTareasTab(document.getElementById("wfStepTabBody"), step);
+        });
+
+        document.getElementById("btnAddTask").addEventListener("click", async () => {
+            await this.addTask(step, block);
+            this.renderTareasTab(document.getElementById("wfStepTabBody"), step);
+            this.renderStepsPart();
+        });
+
+        this.bindTaskEvents(detail, step, block);
     },
 
-    taskHtml(block, bIdx, task, tIdx) {
+    taskHtml(block, task, tIdx) {
         const typeInfo = this.TASK_TYPES[task.tipo] || { label: task.tipo, icon: "•" };
         const canAddCustomVar = task.tipo === "PLANTILLA" || task.tipo === "FUNCION" || task.tipo === "HTML";
         return `
@@ -810,13 +938,13 @@ const Workflows = {
                 <div class="flow-frame-header">
                     <span>${typeInfo.icon} <strong>${UI.escapeHtml(typeInfo.label)}</strong> — ${UI.escapeHtml(task.refNombre || task.nombre || "(sin referencia)")}</span>
                     <span class="load-fn-toolbar-spacer"></span>
-                    ${canAddCustomVar ? `<button type="button" class="btn btn-secondary btn-sm" data-add-taskvar="${bIdx}:${tIdx}">+ Variable</button>` : ""}
-                    <button type="button" class="flow-chain-card-remove" data-remove-task="${bIdx}:${tIdx}" title="Eliminar tarea">✕</button>
+                    ${canAddCustomVar ? `<button type="button" class="btn btn-secondary btn-sm" data-add-taskvar="${tIdx}">+ Variable</button>` : ""}
+                    <button type="button" class="flow-chain-card-remove" data-remove-task="${tIdx}" title="Eliminar tarea">✕</button>
                 </div>
                 ${task.valores.length ? `
                     <div class="flow-mapping-vars-list">
                         ${task.valores.map((v, vIdx) => `
-                            <div class="flow-target-row" data-edit-taskval="${bIdx}:${tIdx}:${vIdx}" style="cursor:pointer;">
+                            <div class="flow-target-row" data-edit-taskval="${tIdx}:${vIdx}" style="cursor:pointer;">
                                 <span class="flow-target-label">${UI.escapeHtml(v.etiqueta || v.clave)}</span>
                                 <span class="table-tag">${v.tipo === "variable" ? "= " + UI.escapeHtml(v.valor || "—") : UI.escapeHtml(v.valor || "(vacío)")}</span>
                                 ${v.ocultar ? `<span class="table-tag">Oculta</span>` : ""}
@@ -825,71 +953,43 @@ const Workflows = {
             </div>`;
     },
 
-    bindBlockEvents(body, step) {
-        document.querySelectorAll("[data-block-title]").forEach(el => {
-            el.addEventListener("blur", () => {
-                const idx = parseInt(el.dataset.blockTitle, 10);
-                step.bloques[idx].titulo = el.textContent.trim() || "Bloque";
-            });
-            el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); el.blur(); } });
-        });
-
-        document.querySelectorAll("[data-remove-block]").forEach(btn => {
-            btn.addEventListener("click", async () => {
-                const idx = parseInt(btn.dataset.removeBlock, 10);
-                const ok = await UI.confirm("Eliminar bloque", `Se eliminará el bloque <strong>${UI.escapeHtml(step.bloques[idx].titulo)}</strong> y todas sus tareas.`);
-                if (!ok) return;
-                step.bloques.splice(idx, 1);
-                this.renderTareasTab(body, step);
-                this.renderStepsPart();
-            });
-        });
-
-        document.querySelectorAll("[data-add-task]").forEach(btn => {
-            btn.addEventListener("click", async () => {
-                const bIdx = parseInt(btn.dataset.addTask, 10);
-                await this.addTask(step, step.bloques[bIdx]);
-                this.renderTareasTab(body, step);
-                this.renderStepsPart();
-            });
-        });
-
-        document.querySelectorAll("[data-remove-task]").forEach(btn => {
+    bindTaskEvents(detail, step, block) {
+        detail.querySelectorAll("[data-remove-task]").forEach(btn => {
             btn.addEventListener("click", () => {
-                const [bIdx, tIdx] = btn.dataset.removeTask.split(":").map(n => parseInt(n, 10));
-                step.bloques[bIdx].tareas.splice(tIdx, 1);
-                this.renderTareasTab(body, step);
+                const tIdx = parseInt(btn.dataset.removeTask, 10);
+                block.tareas.splice(tIdx, 1);
+                this.renderTareasTab(document.getElementById("wfStepTabBody"), step);
                 this.renderStepsPart();
             });
         });
 
-        document.querySelectorAll("[data-add-taskvar]").forEach(btn => {
+        detail.querySelectorAll("[data-add-taskvar]").forEach(btn => {
             btn.addEventListener("click", async () => {
-                const [bIdx, tIdx] = btn.dataset.addTaskvar.split(":").map(n => parseInt(n, 10));
+                const tIdx = parseInt(btn.dataset.addTaskvar, 10);
                 const clave = await UI.openTextPromptModal({ title: "Nueva variable de la tarea", label: "Nombre de la variable", placeholder: "ej. ruta_fichero" });
                 if (!clave || !clave.trim()) return;
-                const task = step.bloques[bIdx].tareas[tIdx];
-                const result = await UI.openWorkflowValueModal({ title: "Asignar valor", targetLabel: clave.trim(), stepVariables: step.variables });
+                const task = block.tareas[tIdx];
+                const result = await UI.openWorkflowValueModal({ title: "Asignar valor", targetLabel: clave.trim(), stepVariables: this.workflowVariables() });
                 if (!result || result === "remove") return;
                 task.valores.push({ clave: clave.trim(), etiqueta: clave.trim(), tipo: result.type, valor: result.value, ocultar: !!result.hidden });
-                this.renderTareasTab(body, step);
+                this.renderTareasTab(document.getElementById("wfStepTabBody"), step);
             });
         });
 
-        document.querySelectorAll("[data-edit-taskval]").forEach(row => {
+        detail.querySelectorAll("[data-edit-taskval]").forEach(row => {
             row.addEventListener("click", async () => {
-                const [bIdx, tIdx, vIdx] = row.dataset.editTaskval.split(":").map(n => parseInt(n, 10));
-                const task = step.bloques[bIdx].tareas[tIdx];
+                const [tIdx, vIdx] = row.dataset.editTaskval.split(":").map(n => parseInt(n, 10));
+                const task = block.tareas[tIdx];
                 const v = task.valores[vIdx];
                 const result = await UI.openWorkflowValueModal({
                     title: "Asignar valor", targetLabel: v.etiqueta || v.clave,
-                    stepVariables: step.variables,
+                    stepVariables: this.workflowVariables(),
                     current: { type: v.tipo, value: v.valor, hidden: v.ocultar }
                 });
                 if (result === null) return;
                 if (result === "remove") { task.valores.splice(vIdx, 1); }
                 else { v.tipo = result.type; v.valor = result.value; v.ocultar = !!result.hidden; }
-                this.renderTareasTab(body, step);
+                this.renderTareasTab(document.getElementById("wfStepTabBody"), step);
             });
         });
     },
@@ -997,13 +1097,14 @@ const Workflows = {
         // 3) Pasos -------------------------------------------------------
         const pasoVals = wf.steps.map((s, idx) => `(
             '${Provider.esc(s.id)}', '${Provider.esc(id)}', '${Provider.esc(pid)}', '${Provider.esc(s.name)}', ${idx},
+            ${s.isPaso0 ? "TRUE" : "FALSE"},
             '${Provider.esc(s.inicio.tipo)}', '${Provider.esc(s.inicio.fecha || "")}', ${s.revision ? "TRUE" : "FALSE"},
             '${Provider.esc(s.fin.tipo)}', '${Provider.esc(s.fin.fecha || "")}',
             ${s.driver.dimensionId ? `'${Provider.esc(s.driver.dimensionId)}'` : "NULL"},
             '${s.driver.dimensionId ? (s.driver.valores.length ? "VALORES" : "TODOS") : "NINGUNO"}'
         )`).join(",\n");
         await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS")}
-            (PASO_ID, WORKFLOW_ID, PROYECTO_ID, PASO, ORDEN, INICIO_TIPO, INICIO_FECHA, REVISION, FIN_TIPO, FIN_FECHA, DRIVER_DIMENSION_ID, DRIVER_MODO)
+            (PASO_ID, WORKFLOW_ID, PROYECTO_ID, PASO, ORDEN, ES_PASO0, INICIO_TIPO, INICIO_FECHA, REVISION, FIN_TIPO, FIN_FECHA, DRIVER_DIMENSION_ID, DRIVER_MODO)
             VALUES ${pasoVals}`);
 
         // 4) Valores del driver -------------------------------------------
@@ -1013,7 +1114,7 @@ const Workflows = {
             await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_DRIVER_VALORES")} (PROYECTO_ID, PASO_ID, VALOR) VALUES ${driverVals.join(",\n")}`);
         }
 
-        // 5) Variables del paso ---------------------------------------------
+        // 5) Variables (viven en el Paso 0) ---------------------------------------------
         const varVals = [];
         wf.steps.forEach(s => (s.variables || []).forEach((v, idx) =>
             varVals.push(`('${Provider.esc(pid)}', '${Provider.esc(s.id)}', '${Provider.esc(v.id || Provider.newId())}', '${Provider.esc(v.name)}', '${Provider.esc(v.label)}', '${Provider.esc(v.type)}', ${idx})`)));

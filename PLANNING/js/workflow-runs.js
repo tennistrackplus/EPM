@@ -45,7 +45,16 @@ const WorkflowRuns = {
     project: null,
     workflow: null,      // definición completa (Workflows.loadDetail)
     runs: [],
-    currentRun: null,    // { id, name, estado, instancias:[...] }
+    currentRun: null,    // { id, name, estado, variables:{}, instancias:[...] }
+
+    // Pasos ejecutables (todos menos el Paso 0, que solo aloja variables).
+    execSteps() {
+        return this.workflow.steps.filter(s => !s.isPaso0);
+    },
+
+    paso0Step() {
+        return this.workflow.steps.find(s => s.isPaso0) || null;
+    },
 
     // ------------------------------------------------------------
     // Entrada: lista de ejecuciones de un workflow
@@ -82,18 +91,19 @@ const WorkflowRuns = {
 
     renderRunsList() {
         const wf = this.workflow;
+        const steps = this.execSteps();
         this.container.innerHTML = `
             <div class="module-header">
                 <div>
                     <button class="btn btn-secondary btn-sm" id="btnBackToWorkflows" style="margin-bottom:8px;">← Volver a Workflows</button>
                     <h3>Ejecuciones de "${UI.escapeHtml(wf.name)}"</h3>
-                    <p>${wf.steps.length} paso${wf.steps.length === 1 ? "" : "s"} definido${wf.steps.length === 1 ? "" : "s"}</p>
+                    <p>${steps.length} paso${steps.length === 1 ? "" : "s"} definido${steps.length === 1 ? "" : "s"}</p>
                 </div>
-                <button class="btn btn-primary btn-sm" id="btnNewRun" ${wf.steps.length ? "" : "disabled"}>+ Nueva ejecución</button>
+                <button class="btn btn-primary btn-sm" id="btnNewRun" ${steps.length ? "" : "disabled"}>+ Nueva ejecución</button>
             </div>
             <div id="wfRunsListWrap">
-                ${!wf.steps.length ? `<div class="module-empty">Este workflow todavía no tiene pasos definidos.</div>` : ""}
-                ${wf.steps.length && !this.runs.length ? `<div class="module-empty">Todavía no hay ejecuciones. Crea la primera con "Nueva ejecución".</div>` : ""}
+                ${!steps.length ? `<div class="module-empty">Este workflow todavía no tiene pasos definidos.</div>` : ""}
+                ${steps.length && !this.runs.length ? `<div class="module-empty">Todavía no hay ejecuciones. Crea la primera con "Nueva ejecución".</div>` : ""}
                 ${this.runs.length ? `
                     <div class="data-list">
                         <table>
@@ -146,25 +156,22 @@ const WorkflowRuns = {
     },
 
     // ------------------------------------------------------------
-    // Creación: instancia todos los pasos (fan-out por driver)
+    // Creación: popup grande (nombre + variables del Paso 0), luego
+    // instancia todos los pasos ejecutables (fan-out por driver)
     // ------------------------------------------------------------
     async createRun() {
-        const name = await UI.openTextPromptModal({
-            title: "Nueva ejecución", label: "Nombre de la ejecución",
-            placeholder: "Ej. Cierre Enero 2026"
-        });
-        if (name === null) return;
-        if (!name.trim()) { UI.toast("Indica un nombre para la ejecución.", "error"); return; }
+        const result = await this.openNewRunModal();
+        if (!result) return;
 
         UI.toast("Creando ejecución…", "info");
         try {
             const runId = Provider.newId();
             const pid = this.project.PROYECTO_ID;
-            const today = new Date().toISOString().substring(0, 10);
+            const steps = this.execSteps();
 
             const instancias = [];
-            for (let idx = 0; idx < this.workflow.steps.length; idx++) {
-                const step = this.workflow.steps[idx];
+            for (let idx = 0; idx < steps.length; idx++) {
+                const step = steps[idx];
                 let valores = [null];
                 if (step.driver.dimensionId) {
                     if (step.driver.valores.length) {
@@ -199,7 +206,7 @@ const WorkflowRuns = {
 
             await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_RUNS")}
                 (RUN_ID, WORKFLOW_ID, PROYECTO_ID, NOMBRE, ESTADO, USUARIO, FECHA_CREACION, FECHA_FIN)
-                VALUES ('${Provider.esc(runId)}', '${Provider.esc(this.workflow.id)}', '${Provider.esc(pid)}', '${Provider.esc(name.trim())}', 'EN_CURSO',
+                VALUES ('${Provider.esc(runId)}', '${Provider.esc(this.workflow.id)}', '${Provider.esc(pid)}', '${Provider.esc(result.name)}', 'EN_CURSO',
                         ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), NULL)`);
 
             if (instancias.length) {
@@ -213,12 +220,85 @@ const WorkflowRuns = {
                     VALUES ${vals}`);
             }
 
+            // Variables del Paso 0 → valores globales de la ejecución (INSTANCIA_ID = RUN_ID, sentinel).
+            const globalVarEntries = Object.entries(result.variables || {});
+            if (globalVarEntries.length) {
+                const varVals = globalVarEntries.map(([name, value]) =>
+                    `('${Provider.esc(runId)}', '${Provider.esc(runId)}', '${Provider.esc(name)}', '${Provider.esc(value)}')`);
+                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_RUNS_VARIABLES")}
+                    (RUN_ID, INSTANCIA_ID, NOMBRE, VALOR) VALUES ${varVals.join(",\n")}`);
+            }
+
             await this.loadRuns();
             await this.openRun(runId);
-            UI.toast(`Ejecución "${name.trim()}" creada con ${instancias.length} instancia(s).`, "success");
+            UI.toast(`Ejecución "${result.name}" creada con ${instancias.length} instancia(s).`, "success");
         } catch (err) {
             UI.toast("Error al crear la ejecución: " + err.message, "error");
         }
+    },
+
+    // Popup grande (como el editor de workflow) pidiendo el nombre de la
+    // ejecución y el valor de cada variable del Paso 0.
+    openNewRunModal() {
+        return new Promise((resolve) => {
+            const paso0 = this.paso0Step();
+            const variables = paso0 ? paso0.variables : [];
+
+            let overlay = document.getElementById("wfNewRunModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "wfNewRunModal";
+                document.body.appendChild(overlay);
+            }
+
+            const inputType = (t) => ({ INTEGER: "number", FLOAT: "number", NUMERIC: "number", DATE: "date", DATETIME: "datetime-local", TIMESTAMP: "datetime-local" }[t] || "text");
+
+            overlay.innerHTML = `
+                <div class="modal-box modal-full">
+                    <div class="modal-header">
+                        <div>
+                            <h3>Nueva ejecución</h3>
+                            <span class="modal-subtitle">${UI.escapeHtml(this.workflow.name)}</span>
+                        </div>
+                        <button class="modal-close" id="wfNewRunClose">&times;</button>
+                    </div>
+                    <div class="modal-body modal-body-flush" style="padding:24px; overflow-y:auto;">
+                        <div class="form-group" style="max-width:420px;">
+                            <label>Nombre de la ejecución</label>
+                            <input type="text" id="wfNewRunName" placeholder="Ej. Cierre Enero 2026">
+                        </div>
+                        <div class="flow-step-group-title" style="margin-top:10px;">Variables del workflow</div>
+                        ${variables.length ? `
+                            <div class="wf-newrun-vars">
+                                ${variables.map(v => `
+                                    <div class="form-group" style="max-width:420px;">
+                                        <label>${UI.escapeHtml(v.label)}</label>
+                                        <input type="${inputType(v.type)}" data-run-var="${UI.escapeHtml(v.name)}" placeholder="${UI.escapeHtml(v.label)}">
+                                    </div>`).join("")}
+                            </div>` : `<div class="module-empty module-empty--inline">Este workflow no tiene variables definidas en el Paso 0.</div>`}
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" id="wfNewRunCancel">Cancelar</button>
+                        <button class="btn btn-primary" id="wfNewRunCreate">Crear ejecución</button>
+                    </div>
+                </div>`;
+
+            overlay.classList.add("visible");
+            const nameInput = overlay.querySelector("#wfNewRunName");
+            setTimeout(() => nameInput.focus(), 50);
+
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+            overlay.querySelector("#wfNewRunClose").onclick = () => cleanup(null);
+            overlay.querySelector("#wfNewRunCancel").onclick = () => cleanup(null);
+            overlay.querySelector("#wfNewRunCreate").onclick = () => {
+                const name = nameInput.value.trim();
+                if (!name) { UI.toast("Indica un nombre para la ejecución.", "error"); return; }
+                const values = {};
+                overlay.querySelectorAll("[data-run-var]").forEach(input => { values[input.dataset.runVar] = input.value; });
+                cleanup({ name, variables: values });
+            };
+        });
     },
 
     // ------------------------------------------------------------
@@ -240,10 +320,15 @@ const WorkflowRuns = {
                 WHERE RUN_ID = '${Provider.esc(runId)}'`) : [];
 
             const varsByInst = {};
-            varRows.forEach(v => { (varsByInst[v.INSTANCIA_ID] = varsByInst[v.INSTANCIA_ID] || {})[v.NOMBRE] = v.VALOR; });
+            const globalVars = {};
+            varRows.forEach(v => {
+                if (v.INSTANCIA_ID === runId) { globalVars[v.NOMBRE] = v.VALOR; return; }
+                (varsByInst[v.INSTANCIA_ID] = varsByInst[v.INSTANCIA_ID] || {})[v.NOMBRE] = v.VALOR;
+            });
 
             this.currentRun = {
                 id: head.RUN_ID, name: head.NOMBRE, estado: head.ESTADO,
+                variables: globalVars,
                 instancias: instRows.map(i => ({
                     id: i.INSTANCIA_ID, pasoId: i.PASO_ID, orden: parseInt(i.ORDEN || "0", 10),
                     driverValor: i.DRIVER_VALOR || null, asignado: i.ASIGNADO || "",
@@ -264,10 +349,12 @@ const WorkflowRuns = {
 
     renderRunDetail() {
         const wf = this.workflow;
+        const steps = this.execSteps();
         const run = this.currentRun;
         const total = run.instancias.length;
         const done = run.instancias.filter(i => i.estado === "COMPLETADO").length;
         const pct = total ? Math.round((done / total) * 100) : 0;
+        const globalVarEntries = Object.entries(run.variables || {});
 
         this.container.innerHTML = `
             <div class="module-header">
@@ -283,12 +370,40 @@ const WorkflowRuns = {
                     <div style="height:100%; width:${pct}%; background:var(--color-success, #2f9e58); transition:width .3s;"></div>
                 </div>
             </div>
+            ${globalVarEntries.length ? `
+                <div class="chip-row" style="margin-bottom:16px;">
+                    ${globalVarEntries.map(([k, v]) => `<span class="hier-chip">${UI.escapeHtml(k)} = ${UI.escapeHtml(v || "—")}</span>`).join("")}
+                </div>` : ""}
+            <div class="flow-part-header"><strong>Pasos</strong></div>
+            <div class="flow-chain-wrap" id="wfRunChainWrap" style="margin-bottom:20px;"></div>
             <div id="wfRunSteps"></div>`;
 
         document.getElementById("btnBackToRuns").addEventListener("click", () => this.renderRunsList());
 
+        const chainWrap = document.getElementById("wfRunChainWrap");
+        chainWrap.innerHTML = steps.map((step, idx) => {
+            const instances = this.instancesForStep(step.id);
+            const assignedCount = instances.filter(i => i.asignado && i.asignado.trim()).length;
+            const fullyAssigned = instances.length > 0 && assignedCount === instances.length;
+            const card = `
+                <div class="flow-chain-card" data-scroll-step="${step.id}" style="cursor:pointer;">
+                    <div class="flow-chain-card-name">${idx + 1}. ${UI.escapeHtml(step.name)}</div>
+                    <span class="wf-run-chain-badge ${fullyAssigned ? "wf-run-chain-badge--assigned" : "wf-run-chain-badge--unassigned"}">
+                        ${fullyAssigned ? "✓" : "⚠"} ${assignedCount}/${instances.length} asignada${instances.length === 1 ? "" : "s"}
+                    </span>
+                </div>`;
+            const arrow = idx < steps.length - 1 ? `<div class="flow-chain-arrow">→</div>` : "";
+            return card + arrow;
+        }).join("");
+        chainWrap.querySelectorAll("[data-scroll-step]").forEach(card => {
+            card.addEventListener("click", () => {
+                const target = document.getElementById(`wfRunStep-${card.dataset.scrollStep}`);
+                if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+            });
+        });
+
         const stepsWrap = document.getElementById("wfRunSteps");
-        stepsWrap.innerHTML = wf.steps.map((step, idx) => this.stepSectionHtml(step, idx)).join("");
+        stepsWrap.innerHTML = steps.map((step, idx) => this.stepSectionHtml(step, idx)).join("");
         this.bindRunEvents();
     },
 
@@ -298,7 +413,7 @@ const WorkflowRuns = {
         const taskCount = step.bloques.reduce((n, b) => n + b.tareas.length, 0);
 
         return `
-            <div class="flow-screen-block flow-screen-block--frame" style="margin-bottom:18px;">
+            <div class="flow-screen-block flow-screen-block--frame" id="wfRunStep-${step.id}" style="margin-bottom:18px; scroll-margin-top:12px;">
                 <div class="flow-frame-header">
                     <span><strong>${idx + 1}. ${UI.escapeHtml(step.name)}</strong></span>
                     <span class="load-fn-toolbar-spacer"></span>
@@ -400,9 +515,38 @@ const WorkflowRuns = {
                 SET ASIGNADO = '${Provider.esc(value)}' WHERE INSTANCIA_ID = '${Provider.esc(instId)}'`);
             const inst = this.currentRun.instancias.find(i => i.id === instId);
             if (inst) inst.asignado = value;
+            this.refreshRunChain();
         } catch (err) {
             UI.toast("Error al guardar el responsable: " + err.message, "error");
         }
+    },
+
+    // Redibuja solo la cadena superior de pasos (badges de asignación),
+    // sin tocar las tarjetas de instancia para no perder el foco del input.
+    refreshRunChain() {
+        const chainWrap = document.getElementById("wfRunChainWrap");
+        if (!chainWrap) return;
+        const steps = this.execSteps();
+        chainWrap.innerHTML = steps.map((step, idx) => {
+            const instances = this.instancesForStep(step.id);
+            const assignedCount = instances.filter(i => i.asignado && i.asignado.trim()).length;
+            const fullyAssigned = instances.length > 0 && assignedCount === instances.length;
+            const card = `
+                <div class="flow-chain-card" data-scroll-step="${step.id}" style="cursor:pointer;">
+                    <div class="flow-chain-card-name">${idx + 1}. ${UI.escapeHtml(step.name)}</div>
+                    <span class="wf-run-chain-badge ${fullyAssigned ? "wf-run-chain-badge--assigned" : "wf-run-chain-badge--unassigned"}">
+                        ${fullyAssigned ? "✓" : "⚠"} ${assignedCount}/${instances.length} asignada${instances.length === 1 ? "" : "s"}
+                    </span>
+                </div>`;
+            const arrow = idx < steps.length - 1 ? `<div class="flow-chain-arrow">→</div>` : "";
+            return card + arrow;
+        }).join("");
+        chainWrap.querySelectorAll("[data-scroll-step]").forEach(card => {
+            card.addEventListener("click", () => {
+                const target = document.getElementById(`wfRunStep-${card.dataset.scrollStep}`);
+                if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+            });
+        });
     },
 
     async updateVariable(instId, name, value) {
@@ -443,13 +587,14 @@ const WorkflowRuns = {
     },
 
     async cascadeUnblock(pasoId) {
-        const stepIdx = this.workflow.steps.findIndex(s => s.id === pasoId);
-        if (stepIdx === -1 || stepIdx === this.workflow.steps.length - 1) return;
+        const steps = this.execSteps();
+        const stepIdx = steps.findIndex(s => s.id === pasoId);
+        if (stepIdx === -1 || stepIdx === steps.length - 1) return;
 
         const stepInstances = this.instancesForStep(pasoId);
         if (!stepInstances.every(i => i.estado === "COMPLETADO")) return;
 
-        const nextStep = this.workflow.steps[stepIdx + 1];
+        const nextStep = steps[stepIdx + 1];
         if (nextStep.inicio.tipo !== "PASO_ANTERIOR") return;
 
         const toUnblock = this.instancesForStep(nextStep.id).filter(i => i.estado === "BLOQUEADO");
