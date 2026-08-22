@@ -30,3 +30,214 @@
 .flow-target-row[data-edit-taskval]:hover {
     background-color: var(--gray-50, #f7f7f8);
 }
+
+/* ---------- Paso 0 (variables del workflow) en la cadena de pasos ---------- */
+.wf-paso0-card {
+    background: var(--brand-primary-light, #eef2ff);
+    border-color: var(--brand-primary, #4f46e5);
+}
+
+.wf-paso0-card .flow-chain-card-name {
+    color: var(--brand-primary-hover, #4338ca);
+}
+
+/* ---------- Propiedades: Inicio / Finalización lado a lado ---------- */
+.wf-timing-grid {
+    display: grid;
+    grid-template-columns: 1fr 34px 1fr;
+    align-items: stretch;
+    gap: 0;
+    margin: 4px 0 20px;
+}
+
+.wf-timing-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px 16px;
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+}
+
+.wf-timing-card--start {
+    border-left: 3px solid var(--brand-primary, #4f46e5);
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+}
+
+.wf-timing-card--end {
+    border-left: none;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+}
+
+.wf-timing-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.wf-timing-card select,
+.wf-timing-card input[type="date"] {
+    width: 100%;
+}
+
+.wf-timing-check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-sm, 13px);
+    font-weight: 500;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+
+.wf-timing-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 18px;
+    background: var(--surface-sunken);
+    border-top: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.wf-driver-section {
+    margin-top: 6px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-subtle);
+}
+
+/* ---------- Tareas del paso: bloques como menú lateral ---------- */
+.wf-blocks-layout {
+    display: flex;
+    min-height: 360px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.wf-block-menu {
+    width: 200px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border-subtle);
+    background: var(--surface-sunken);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+    overflow-y: auto;
+}
+
+.wf-block-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 9px 8px 9px 10px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--fs-base);
+    font-weight: 600;
+    cursor: grab;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.wf-block-menu-item:hover {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+
+.wf-block-menu-item.active {
+    background: var(--brand-primary-light);
+    color: var(--brand-primary-hover);
+}
+
+.wf-block-menu-item-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wf-block-menu-item-count {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+.wf-block-menu-item-remove {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    opacity: 0;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+    padding: 2px;
+    transition: opacity 0.15s ease;
+}
+
+.wf-block-menu-item:hover .wf-block-menu-item-remove {
+    opacity: 1;
+}
+
+.wf-block-menu-item-remove:hover {
+    color: var(--color-danger, #d64545);
+}
+
+.wf-block-menu-add {
+    margin-top: 6px;
+    width: 100%;
+}
+
+.wf-block-detail {
+    flex: 1;
+    min-width: 0;
+    padding: 14px;
+    overflow-y: auto;
+}
+
+.wf-block-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+/* ---------- Ejecuciones: cadena de pasos con badge de asignación ---------- */
+.wf-run-chain-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 999px;
+    margin-top: 4px;
+}
+
+.wf-run-chain-badge--assigned {
+    background: rgba(47, 158, 88, 0.15);
+    color: var(--color-success, #2f9e58);
+}
+
+.wf-run-chain-badge--unassigned {
+    background: rgba(214, 69, 69, 0.12);
+    color: var(--color-danger, #d64545);
+}
+
+.wf-newrun-vars {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 420px));
+    gap: 4px 24px;
+}
+
