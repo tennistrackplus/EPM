@@ -166,34 +166,6 @@
             border: 1px solid #F3C9C6;
         }
 
-        .provider-config-panel {
-            display: none;
-            flex-direction: column;
-            gap: 4px;
-            padding: 12px;
-            margin-bottom: 12px;
-            background: var(--surface-page);
-            border: 1px solid var(--border-subtle);
-            border-radius: var(--radius-md);
-        }
-
-        .provider-config-panel.visible {
-            display: flex;
-        }
-
-        .provider-config-panel label {
-            font-size: var(--fs-xs);
-            font-weight: 600;
-            color: var(--text-muted);
-        }
-
-        .provider-config-panel input {
-            padding: 8px 10px;
-            border: 1px solid var(--border-subtle);
-            border-radius: var(--radius-sm);
-            font-size: var(--fs-sm);
-        }
-
         .action-footer {
             flex-shrink: 0;
             padding-top: 10px;
@@ -344,27 +316,12 @@
 
             <div id="toastMessage" class="toast-message"></div>
 
-            <div class="provider-config-panel" id="snowflakeConfigPanel">
-                <label for="sfAccount">Identificador de cuenta Snowflake</label>
-                <input type="text" id="sfAccount" placeholder="ej. xy12345.eu-west-1 u orgname-accountname">
-                <label for="sfWarehouse" style="margin-top:10px;">Warehouse</label>
-                <input type="text" id="sfWarehouse" placeholder="ej. COMPUTE_WH">
-                <label for="sfDatabase" style="margin-top:10px;">Base de datos</label>
-                <input type="text" id="sfDatabase" placeholder="DRACO">
-                <label for="sfRole" style="margin-top:10px;">Rol (opcional)</label>
-                <input type="text" id="sfRole" placeholder="ej. SYSADMIN">
-            </div>
-
             <div class="action-footer">
                 <button id="btnAction" class="btn-action" disabled>1. Selecciona una fuente de datos</button>
             </div>
         </div>
     </div>
 
-    <script src="js/config.js"></script>
-    <script src="js/bigquery.js"></script>
-    <script src="js/snowflake.js"></script>
-    <script src="js/provider.js"></script>
     <script src="js/login.js"></script>
 </body>
 </html>
