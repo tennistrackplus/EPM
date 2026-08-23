@@ -2,19 +2,11 @@
  * Vista previa de jerarquía (diálogo abierto con Office.context.ui.displayDialogAsync
  * desde el editor de jerarquías de semantic_model.js). Página independiente,
  * sin acceso al modelo de objetos de Excel: recibe la especificación de la
- * jerarquía (tabla + niveles) por querystring, la consulta contra BigQuery
- * con SELECT DISTINCT ... ORDER BY (igual que buildHierarchySQL en
- * excelService.js) y pinta el resultado como árbol anidado por nivel.
+ * jerarquía (tabla + niveles) por querystring, la consulta contra el
+ * proveedor activo con SELECT DISTINCT ... ORDER BY (igual que
+ * buildHierarchySQL en excelService.js) y pinta el resultado como árbol
+ * anidado por nivel.
  */
-
-function getAuthTokenForHierPreview() {
-    const token = localStorage.getItem("bigquery_access_token");
-    const expires = localStorage.getItem("bigquery_token_expires");
-    if (!token || !expires || Date.now() >= parseInt(expires, 10)) {
-        return null;
-    }
-    return token;
-}
 
 function showHierPreviewError(msg) {
     const status = document.getElementById("previewStatus");
@@ -25,18 +17,17 @@ function showHierPreviewError(msg) {
 }
 
 /**
- * Agrupa las filas planas (ya ordenadas por BigQuery según los niveles) en
+ * Agrupa las filas planas (ya ordenadas por el proveedor según los niveles) en
  * un árbol: cada nodo agrupa los valores repetidos de un nivel bajo su
  * padre del nivel anterior.
  */
-function buildHierTree(rows, levelCount) {
+function buildHierTree(rows, levels) {
     const root = { children: new Map() };
 
     rows.forEach(row => {
         let node = root;
-        const cells = row.f || [];
-        for (let i = 0; i < levelCount; i++) {
-            const raw = cells[i] ? cells[i].v : "";
+        for (let i = 0; i < levels.length; i++) {
+            const raw = row[levels[i].field];
             const value = (raw === null || raw === undefined || String(raw).trim() === "")
                 ? "(vacío)"
                 : String(raw);
@@ -118,45 +109,24 @@ async function runHierarchyPreview() {
         return;
     }
 
-    const token = getAuthTokenForHierPreview();
-    if (!token) {
-        showHierPreviewError("Sesión de BigQuery no válida o expirada. Inicia sesión de nuevo desde el panel principal y vuelve a intentarlo.");
+    if (!Provider.isConnected()) {
+        showHierPreviewError(`Sesión de ${Provider.label()} no válida o expirada. Inicia sesión de nuevo desde el panel principal y vuelve a intentarlo.`);
         return;
     }
 
     const fieldList = levels.map(l => l.field).join(", ");
-    const escapedTable = "`" + project + "." + dataset + "." + table + "`";
-    const sql = "SELECT DISTINCT " + fieldList + " FROM " + escapedTable +
+    const sql = "SELECT DISTINCT " + fieldList + " FROM " + Provider.qualify(project, dataset, table) +
         " ORDER BY " + fieldList + " LIMIT 500";
 
     try {
-        const response = await fetch(
-            `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(project)}/queries`,
-            {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${token}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({ query: sql, useLegacySql: false })
-            }
-        );
-
-        const data = await response.json();
-
-        if (data.error) {
-            showHierPreviewError("Error de BigQuery: " + data.error.message);
-            return;
-        }
-
-        const rows = data.rows || [];
+        const { rows } = await Provider.runQuery(sql, project, dataset);
 
         if (rows.length === 0) {
             showHierPreviewError("No hay datos para mostrar esta jerarquía.");
             return;
         }
 
-        const tree = buildHierTree(rows, levels.length);
+        const tree = buildHierTree(rows, levels);
 
         document.getElementById("previewStatus").style.display = "none";
         const wrapper = document.getElementById("previewTreeWrapper");
@@ -164,8 +134,8 @@ async function runHierarchyPreview() {
         renderHierTree(tree, levels, wrapper);
 
     } catch (err) {
-        console.error("Error al consultar BigQuery para la vista previa de jerarquía:", err);
-        showHierPreviewError("Error al consultar BigQuery: " + (err.message || err));
+        console.error(`Error al consultar ${Provider.label()} para la vista previa de jerarquía:`, err);
+        showHierPreviewError(`Error al consultar ${Provider.label()}: ` + (err.message || err));
     }
 }
 

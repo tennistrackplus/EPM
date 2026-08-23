@@ -54,6 +54,14 @@ const Provider = {
         return `\`${c1}.${c2}.${table}\``;
     },
 
+    /** Ejecuta SQL contra el proveedor activo y devuelve {fields:[{name}], rows:[{col: valor}]} */
+    async runQuery(sql, level1Id, level2Id) {
+        if (this.key() === "snowflake") {
+            return SF.runQuerySql(sql, { database: level1Id, schema: level2Id });
+        }
+        return BQ.runQuerySql(level1Id, sql);
+    },
+
     // -----------------------------------------------------------
     // Explorador de metadatos (usado por semantic_model.js)
     // -----------------------------------------------------------

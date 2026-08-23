@@ -1083,11 +1083,30 @@ async function actualizarInformeFixedCore() {
  *   JSON_PaintValues(Json)
  * @param {Office.AddinCommands.Event} event
  */
+/**
+ * Escribe el mensaje de un error en EDIT_REPORT!X1, para diagnosticar
+ * fallos que antes solo quedaban en la consola (F12) y dejaban la celda
+ * en blanco sin más pista de qué había pasado ni por qué no se llegó a
+ * hacer la llamada al proveedor de datos.
+ */
+async function surfaceErrorToSheet(error) {
+    try {
+        await Excel.run(async (context) => {
+            const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+            editReportSheet.getRange("X1").values = [["ERROR: " + (error && error.message ? error.message : String(error))]];
+            await context.sync();
+        });
+    } catch (e2) {
+        console.error("Además, no se ha podido escribir el error en EDIT_REPORT!X1:", e2);
+    }
+}
+
 async function actualizarInformeFixed(event) {
     try {
         await actualizarInformeFixedCore();
     } catch (error) {
         console.error("Error al actualizar el informe (fixed):", error);
+        await surfaceErrorToSheet(error);
     } finally {
         if (event) {
             event.completed();
@@ -3441,6 +3460,7 @@ async function actualizarInforme(event) {
         await actualizarInformeCore();
     } catch (error) {
         console.error("Error al actualizar el informe (dinámico):", error);
+        await surfaceErrorToSheet(error);
     } finally {
         if (event) {
             event.completed();
@@ -3468,6 +3488,7 @@ async function actualizar(event) {
         }
     } catch (error) {
         console.error("Error al actualizar el informe:", error);
+        await surfaceErrorToSheet(error);
     } finally {
         if (event) {
             event.completed();

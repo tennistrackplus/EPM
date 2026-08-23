@@ -231,6 +231,18 @@ const SF = {
         });
     },
 
+    /** Igual que runQuery(), pero además devuelve las columnas: {fields:[{name}], rows:[{col: valor}]} */
+    async runQuerySql(sql, opts) {
+        const data = await this.execRaw(sql, opts);
+        const cols = (data.resultSetMetaData && data.resultSetMetaData.rowType) || [];
+        const rows = (data.data || []).map(r => {
+            const obj = {};
+            cols.forEach((c, i) => { obj[c.name] = r[i]; });
+            return obj;
+        });
+        return { fields: cols.map(c => ({ name: c.name })), rows };
+    },
+
     // ---------------------------------------------------------
     // Metadatos (para el explorador del modelo semántico)
     // ---------------------------------------------------------

@@ -99,6 +99,14 @@ const BQ = {
         });
     },
 
+    /** Igual que query(), pero devuelve {fields:[{name}], rows:[{col: valor}]} ya normalizado (mismo formato que SF.runQuerySql) */
+    async runQuerySql(projectId, sql) {
+        const result = await this.query(projectId, sql);
+        const fields = (result.schema && result.schema.fields) || [];
+        const rows = this.rowsToObjects(result);
+        return { fields: fields.map(f => ({ name: f.name })), rows };
+    },
+
     /** Escapa comillas simples para literales SQL */
     esc(value) {
         if (value === null || value === undefined) return "";

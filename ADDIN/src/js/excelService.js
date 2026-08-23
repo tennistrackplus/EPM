@@ -111,7 +111,7 @@ function buildAttributeSQL(atribGrid, dimension, attributeName) {
 
     return "SELECT DISTINCT" + SVC_CRLF
         + "    " + field + SVC_CRLF
-        + "FROM `" + project + "." + dataset + "." + table + "`" + SVC_CRLF
+        + "FROM " + Provider.qualify(project, dataset, table) + SVC_CRLF
         + "ORDER BY " + field;
 }
 
@@ -143,7 +143,7 @@ function buildHierarchySQL(hierGrid, dimension, hierarchy) {
 
     let sql = "SELECT DISTINCT" + SVC_CRLF;
     sql += fields.map(f => "    " + f).join("," + SVC_CRLF);
-    sql += SVC_CRLF + "FROM `" + project + "." + dataset + "." + table + "`" + SVC_CRLF;
+    sql += SVC_CRLF + "FROM " + Provider.qualify(project, dataset, table) + SVC_CRLF;
     sql += "ORDER BY" + SVC_CRLF;
     sql += fields.map(f => "    " + f).join("," + SVC_CRLF);
 
@@ -154,7 +154,42 @@ function buildHierarchySQL(hierGrid, dimension, hierarchy) {
  * ExecuteSQL (idéntico al usado en commands.js)
  * ------------------------------------------------------------------- */
 
+/**
+ * Convierte filas normalizadas (array de objetos { COLUMNA: valor }) al
+ * mismo formato de texto que devuelve BigQuery y que sabe leer
+ * parseMemberJsonTree()/filterModal.js: buscan el literal `"v":` una vez
+ * por celda, en el mismo orden columna a columna del SELECT. Copia local
+ * (misma lógica que en commands.js) para no depender del orden de carga
+ * entre los dos ficheros.
+ */
+function svcRowsToPseudoBqJson(rows) {
+    let out = '{"rows":[';
+    rows.forEach((row, i) => {
+        if (i > 0) out += ",";
+        out += '{"f":[';
+        const values = Object.values(row);
+        values.forEach((val, j) => {
+            if (j > 0) out += ",";
+            if (val === null || val === undefined) {
+                out += '{"v":null}';
+            } else {
+                const text = String(val).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+                out += '{"v":"' + text + '"}';
+            }
+        });
+        out += "]}";
+    });
+    out += "]}";
+    return out;
+}
+
 async function executeSQLBigQuery(sql) {
+    if (Provider.key() === "snowflake") {
+        const rows = await SF.runQuery(sql);
+        return svcRowsToPseudoBqJson(rows);
+    }
+
+    // BigQuery (comportamiento original, sin cambios)
     const token = localStorage.getItem("bigquery_access_token");
     const expires = localStorage.getItem("bigquery_token_expires");
 

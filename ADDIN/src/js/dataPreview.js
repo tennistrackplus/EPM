@@ -1,19 +1,10 @@
 /**
  * Vista previa de datos (diálogo abierto con Office.context.ui.displayDialogAsync
  * desde semantic_model.js). Es una página independiente: no tiene acceso al
- * modelo de objetos de Excel, solo necesita el token de BigQuery (compartido
- * vía localStorage, mismo origen que el resto del add-in) y los parámetros
- * project/dataset/table recibidos por querystring.
+ * modelo de objetos de Excel, solo necesita la sesión del proveedor activo
+ * (compartida vía localStorage, mismo origen que el resto del add-in) y los
+ * parámetros project/dataset/table recibidos por querystring.
  */
-
-function getAuthTokenForPreview() {
-    const token = localStorage.getItem("bigquery_access_token");
-    const expires = localStorage.getItem("bigquery_token_expires");
-    if (!token || !expires || Date.now() >= parseInt(expires, 10)) {
-        return null;
-    }
-    return token;
-}
 
 function showPreviewError(msg) {
     const status = document.getElementById("previewStatus");
@@ -47,10 +38,9 @@ function renderPreviewTable(rows, fields) {
 
     rows.forEach(r => {
         const tr = document.createElement("tr");
-        const cells = r.f || [];
-        cells.forEach(cell => {
+        fields.forEach(f => {
             const td = document.createElement("td");
-            td.textContent = formatCellValue(cell.v);
+            td.textContent = formatCellValue(r[f.name]);
             tr.appendChild(td);
         });
         tbody.appendChild(tr);
@@ -80,37 +70,15 @@ async function runDataPreview() {
         return;
     }
 
-    const token = getAuthTokenForPreview();
-    if (!token) {
-        showPreviewError("Sesión de BigQuery no válida o expirada. Inicia sesión de nuevo desde el panel principal y vuelve a intentarlo.");
+    if (!Provider.isConnected()) {
+        showPreviewError(`Sesión de ${Provider.label()} no válida o expirada. Inicia sesión de nuevo desde el panel principal y vuelve a intentarlo.`);
         return;
     }
 
-    const escapedTable = "`" + project + "." + dataset + "." + table + "`";
-    const sql = "SELECT * FROM " + escapedTable + " LIMIT 500";
+    const sql = "SELECT * FROM " + Provider.qualify(project, dataset, table) + " LIMIT 500";
 
     try {
-        const response = await fetch(
-            `https://bigquery.googleapis.com/bigquery/v2/projects/${encodeURIComponent(project)}/queries`,
-            {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${token}`,
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({ query: sql, useLegacySql: false })
-            }
-        );
-
-        const data = await response.json();
-
-        if (data.error) {
-            showPreviewError("Error de BigQuery: " + data.error.message);
-            return;
-        }
-
-        const fields = (data.schema && data.schema.fields) || [];
-        const rows = data.rows || [];
+        const { fields, rows } = await Provider.runQuery(sql, project, dataset);
 
         if (fields.length === 0) {
             showPreviewError("No se ha podido leer el esquema de la tabla.");
@@ -125,8 +93,8 @@ async function runDataPreview() {
         renderPreviewTable(rows, fields);
 
     } catch (err) {
-        console.error("Error al consultar BigQuery para la vista previa:", err);
-        showPreviewError("Error al consultar BigQuery: " + (err.message || err));
+        console.error(`Error al consultar ${Provider.label()} para la vista previa:`, err);
+        showPreviewError(`Error al consultar ${Provider.label()}: ` + (err.message || err));
     }
 }
 
