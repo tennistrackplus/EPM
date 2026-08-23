@@ -906,10 +906,10 @@ function snowflakeRowsToPseudoBqJson(rows) {
         values.forEach((val, j) => {
             if (j > 0) out += ",";
             if (val === null || val === undefined) {
-                out += '{"v":null}';
+                out += '{"v": null}';
             } else {
                 const text = String(val).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-                out += '{"v":"' + text + '"}';
+                out += '{"v": "' + text + '"}';
             }
         });
         out += "]}";
