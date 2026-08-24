@@ -1,0 +1,247 @@
+/* ============================================================
+   ACTUALIZACIÓN DE TABLAS
+   ============================================================ */
+
+.table-picker {
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+}
+.table-picker-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 0;
+    font-size: var(--fs-sm);
+}
+.table-picker-row select {
+    min-width: 220px;
+}
+
+/* Bloque A: pantalla de selección */
+.flow-screen-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    cursor: pointer;
+    background: var(--surface-2, #f7f8fb);
+    border-bottom: 1px solid var(--border-subtle);
+}
+.flow-screen-caret {
+    font-size: 11px;
+    opacity: 0.6;
+}
+.flow-screen-hint {
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    margin-left: 4px;
+}
+.flow-screen-body {
+    padding: 12px 16px;
+}
+.var-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 120px 34px;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+/* Bloque B: campos */
+.actupd-fields-header {
+    display: grid;
+    grid-template-columns: 28px 1fr 2fr 60px 60px;
+    gap: 8px;
+    padding: 6px 16px;
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+.actupd-fields-rows {
+    max-height: 46vh;
+    overflow-y: auto;
+    padding: 0 16px 16px;
+}
+.actupd-field-row {
+    display: grid;
+    grid-template-columns: 28px 1fr 2fr 60px 60px;
+    gap: 8px;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.actupd-field-row.dragging {
+    opacity: 0.4;
+}
+.actupd-drag-handle {
+    cursor: grab;
+    text-align: center;
+    color: var(--text-muted);
+}
+.actupd-field-name {
+    font-weight: 600;
+    font-size: var(--fs-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.actupd-icon-btn {
+    background: none;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    width: 30px;
+    height: 30px;
+    cursor: pointer;
+    opacity: 0.5;
+}
+.actupd-icon-btn:hover {
+    opacity: 0.85;
+}
+.actupd-icon-btn.active {
+    opacity: 1;
+    border-color: var(--brand-primary);
+    background: var(--brand-primary-light);
+    color: var(--brand-primary-hover);
+}
+
+/* Popover de filtro */
+.actupd-popover {
+    position: absolute;
+    z-index: 3000;
+    background: var(--surface-1, #fff);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.15);
+    padding: 12px;
+    width: 260px;
+}
+.actupd-popover-title {
+    font-weight: 600;
+    font-size: var(--fs-sm);
+    margin-bottom: 6px;
+}
+.actupd-popover label {
+    display: block;
+    font-size: var(--fs-sm);
+    margin: 4px 0;
+}
+.actupd-popover input[type="text"], .actupd-popover select {
+    width: 100%;
+    margin: 4px 0 8px;
+}
+.actupd-popover-actions {
+    text-align: right;
+}
+
+/* Tabla de constantes en el modal de validación */
+.const-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 8px;
+}
+.const-table th, .const-table td {
+    padding: 4px 6px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.const-table input {
+    width: 100%;
+}
+
+/* ---------------- Grid tipo ALV ---------------- */
+.actupd-grid-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-wrap: wrap;
+}
+.actupd-grid-toolbar input[type="text"] {
+    flex: 1 1 220px;
+    min-width: 180px;
+}
+.actupd-grid-count {
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    margin-left: auto;
+}
+.actupd-grid-wrap {
+    overflow: auto;
+    max-height: 68vh;
+    padding: 0 16px 16px;
+}
+table.actupd-grid {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: var(--fs-sm);
+}
+table.actupd-grid th, table.actupd-grid td {
+    border: 1px solid var(--border-subtle);
+    padding: 4px 6px;
+    white-space: nowrap;
+}
+table.actupd-grid thead th {
+    position: sticky;
+    top: 0;
+    background: var(--surface-2, #f7f8fb);
+    cursor: pointer;
+    z-index: 1;
+}
+.actupd-sel-col {
+    width: 26px;
+    text-align: center;
+}
+.actupd-desc-col {
+    color: var(--text-muted);
+    font-style: italic;
+}
+.actupd-cell-input {
+    border: 1px solid transparent;
+    background: transparent;
+    width: 100%;
+    min-width: 90px;
+    font-size: var(--fs-sm);
+}
+.actupd-cell-input:focus {
+    border-color: var(--brand-primary);
+    background: #fff;
+}
+.actupd-search-cell {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+.actupd-search-trigger {
+    border: none;
+    background: none;
+    cursor: pointer;
+}
+
+.actupd-sh-results {
+    max-height: 320px;
+    overflow-y: auto;
+    margin-top: 8px;
+}
+.actupd-sh-item {
+    padding: 6px 8px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: var(--fs-sm);
+}
+.actupd-sh-item:hover {
+    background: var(--brand-primary-light);
+}
+
+.actupd-summary-detail {
+    max-height: 300px;
+    overflow-y: auto;
+    margin-top: 8px;
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 8px;
+}
+.actupd-summary-row {
+    font-size: var(--fs-sm);
+    padding: 2px 0;
+    font-family: monospace;
+}

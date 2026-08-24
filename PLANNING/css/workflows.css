@@ -237,7 +237,105 @@
 
 .wf-newrun-vars {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(240px, 420px));
-    gap: 4px 24px;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 4px 20px;
+}
+
+/* ---------- Ejecuciones: resumen (progreso + variables globales) ---------- */
+.wf-run-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 18px;
+}
+
+.wf-run-summary-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.wf-run-summary-progress-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: var(--fs-sm, 13px);
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.wf-run-progress-bar {
+    height: 8px;
+    background: var(--gray-100, #eee);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.wf-run-progress-fill {
+    height: 100%;
+    background: var(--color-success, #2f9e58);
+    transition: width 0.3s ease;
+}
+
+/* ---------- Ejecuciones: cadena de pasos como pestañas ---------- */
+.wf-run-tabs {
+    margin-bottom: 18px;
+}
+
+.wf-run-tab {
+    cursor: pointer;
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.wf-run-tab.is-selected {
+    border-color: var(--brand-primary);
+    box-shadow: 0 0 0 1px var(--brand-primary);
+}
+
+/* ---------- Ejecuciones: instancias del paso seleccionado, en rejilla ---------- */
+.wf-instance-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+    margin-top: 4px;
+}
+
+.wf-instance-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px;
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    border-left-width: 3px;
+}
+
+.wf-instance-card-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.wf-instance-card-title {
+    font-weight: 700;
+    font-size: var(--fs-base);
+}
+
+.wf-instance-card .form-group {
+    margin: 0;
+}
+
+.wf-instance-card label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.wf-instance-card.flow-run-step--en_curso {
+    animation: none;
 }
 
