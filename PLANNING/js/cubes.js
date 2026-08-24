@@ -156,20 +156,20 @@ const Cubes = {
 
             const spec = { dimensions: dimSpecs, measures };
             const camposJson = JSON.stringify(spec).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+            const cuboId = editing ? editing[this.ID_COL] : Provider.newId();
 
             if (editing) {
                 const sql = `UPDATE ${Provider.qualifyControl(this.TABLE)}
                     SET DESCRIPCION = '${Provider.esc(description)}',
                         CAMPOS_JSON = '${camposJson}',
                         FECHA_MODIFICACION = CURRENT_TIMESTAMP()
-                    WHERE ${this.ID_COL} = '${Provider.esc(editing[this.ID_COL])}'`;
+                    WHERE ${this.ID_COL} = '${Provider.esc(cuboId)}'`;
                 await Provider.runQuery(sql);
                 UI.toast(`Cubo "${name}" actualizado.`, "success");
             } else {
-                const id = Provider.newId();
                 const sql = `INSERT INTO ${Provider.qualifyControl(this.TABLE)}
                     (${this.ID_COL}, PROYECTO_ID, ${this.NAME_COL}, DESCRIPCION, TABLA, CAMPOS_JSON, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
-                    VALUES ('${Provider.esc(id)}', '${Provider.esc(this.project.PROYECTO_ID)}', '${Provider.esc(name)}', '${Provider.esc(description)}',
+                    VALUES ('${Provider.esc(cuboId)}', '${Provider.esc(this.project.PROYECTO_ID)}', '${Provider.esc(name)}', '${Provider.esc(description)}',
                             '${Provider.esc(tableName)}', '${camposJson}', ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`;
                 await Provider.runQuery(sql);
                 UI.toast(`Cubo "${name}" creado.`, "success");
@@ -177,6 +177,16 @@ const Cubes = {
 
             await this.loadList();
             Draco.renderProgress();
+
+            // Genera y guarda el modelo semántico (YAML) de este cubo. No
+            // bloquea ni revierte el guardado del cubo si falla: solo avisa.
+            if (typeof SemanticModel !== "undefined") {
+                SemanticModel.generateAndSave(
+                    this.project,
+                    { id: cuboId, name, description, table: tableName },
+                    spec
+                );
+            }
         } catch (err) {
             UI.toast("Error al guardar el cubo: " + err.message, "error");
         }

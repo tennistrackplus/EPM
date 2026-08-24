@@ -44,7 +44,9 @@ const DracoSchema = {
                     CAMPOS_JSON STRING,
                     USUARIO STRING,
                     FECHA_CREACION TIMESTAMP,
-                    FECHA_MODIFICACION TIMESTAMP
+                    FECHA_MODIFICACION TIMESTAMP,
+                    MODELO_YAML_PATH STRING,       -- ruta del modelo semántico en el stage (ver js/semantic-model.js)
+                    MODELO_YAML_FECHA TIMESTAMP    -- última vez que se generó/subió el YAML
                 )`,
             JERARQUIAS: `
                 CREATE TABLE IF NOT EXISTS ${t} (
@@ -283,6 +285,24 @@ const DracoSchema = {
                     INSTANCIA_ID STRING NOT NULL,
                     NOMBRE STRING NOT NULL,
                     VALOR STRING
+                )`,
+            // Actualización de tablas: mantenimiento manual de una tabla física
+            // (dimensión, cubo, o cualquier otra tabla del esquema del proyecto)
+            // con pantalla de variables + validaciones por campo. Todo el diseño
+            // (variables de pantalla y configuración de cada campo) se guarda
+            // como JSON, igual que CUBOS.CAMPOS_JSON. Ver js/table-updates.js.
+            ACTUALIZACIONES: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    ACTUALIZACION_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    NOMBRE STRING NOT NULL,
+                    DESCRIPCION STRING,
+                    TABLA STRING NOT NULL,       -- tabla física dentro del esquema del proyecto
+                    VARIABLES_JSON STRING,       -- [{id,name,label,type}]  (pantalla de selección)
+                    CAMPOS_JSON STRING,          -- [{name,description,order,filter,validation,allowEmpty,showText,searchHelp}]
+                    USUARIO STRING,
+                    FECHA_CREACION TIMESTAMP,
+                    FECHA_MODIFICACION TIMESTAMP
                 )`
         };
         return ddl[table];
@@ -294,7 +314,8 @@ const DracoSchema = {
              "FLUJOS_RUNS", "FLUJOS_RUN_STEPS",
              "WORKFLOWS", "WORKFLOWS_PASOS", "WORKFLOWS_PASOS_DRIVER_VALORES", "WORKFLOWS_PASOS_VARIABLES",
              "WORKFLOWS_PASOS_BLOQUES", "WORKFLOWS_PASOS_TAREAS", "WORKFLOWS_PASOS_TAREAS_VALORES",
-             "WORKFLOWS_RUNS", "WORKFLOWS_RUNS_INSTANCIAS", "WORKFLOWS_RUNS_VARIABLES"],
+             "WORKFLOWS_RUNS", "WORKFLOWS_RUNS_INSTANCIAS", "WORKFLOWS_RUNS_VARIABLES",
+             "ACTUALIZACIONES"],
 
     async isBootstrapped() {
         const exists = await Provider.containerExists(DracoConfig.controlDataset);
@@ -307,6 +328,20 @@ const DracoSchema = {
         } catch (e) {
             return false;
         }
+    },
+
+    /**
+     * Cambios sobre tablas que ya existían antes de introducir estas
+     * columnas (proyectos ya bootstrapeados). `CREATE TABLE IF NOT EXISTS`
+     * no las añade retroactivamente, así que se hace aquí con
+     * `ADD COLUMN IF NOT EXISTS`, soportado tal cual en BigQuery y en
+     * Snowflake. Idempotente: se puede ejecutar en cada bootstrap.
+     */
+    async evolve(onProgress = () => {}) {
+        onProgress("Verificando columnas del modelo semántico...");
+        const cubos = Provider.qualifyControl("CUBOS");
+        await Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING`);
+        await Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP`);
     },
 
     async bootstrap(onProgress = () => {}) {
@@ -325,5 +360,7 @@ const DracoSchema = {
             onProgress(`Verificando tabla ${name}...`);
             await Provider.runQuery(this.ddl(name));
         }
+
+        await this.evolve(onProgress);
     }
 };

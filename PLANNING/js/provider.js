@@ -107,5 +107,30 @@ const Provider = {
 
     qualifyControl(table) {
         return this.qualify(DracoConfig.controlDataset, table);
+    },
+
+    /** Nombre de la "base de datos" (Snowflake) o proyecto GCP (BigQuery) activo */
+    databaseLabel() {
+        return this.key() === "snowflake" ? SF.getDatabase() : BQ.getGcpProject();
+    },
+
+    /** Lista los nombres de tabla dentro de un dataset/esquema (para selectores de tabla) */
+    async listTablesInContainer(container) {
+        const sql = this.key() === "snowflake"
+            ? `SELECT TABLE_NAME FROM ${SF.getDatabase()}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${this.esc(container)}' ORDER BY TABLE_NAME`
+            : `SELECT TABLE_NAME FROM \`${BQ.getGcpProject()}.${container}.INFORMATION_SCHEMA.TABLES\` ORDER BY TABLE_NAME`;
+        const rows = await this.runQuery(sql);
+        return rows.map(r => r.TABLE_NAME);
+    },
+
+    /** Lista { name, type } de las columnas físicas de una tabla, en orden */
+    async listColumns(container, table) {
+        const sql = this.key() === "snowflake"
+            ? `SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION FROM ${SF.getDatabase()}.INFORMATION_SCHEMA.COLUMNS
+               WHERE TABLE_SCHEMA = '${this.esc(container)}' AND TABLE_NAME = '${this.esc(table)}' ORDER BY ORDINAL_POSITION`
+            : `SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION FROM \`${BQ.getGcpProject()}.${container}.INFORMATION_SCHEMA.COLUMNS\`
+               WHERE TABLE_NAME = '${this.esc(table)}' ORDER BY ORDINAL_POSITION`;
+        const rows = await this.runQuery(sql);
+        return rows.map(r => ({ name: r.COLUMN_NAME, type: r.DATA_TYPE }));
     }
 };

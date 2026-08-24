@@ -83,17 +83,42 @@ const UI = {
     SCREEN_VARIABLE_TYPES: ["STRING", "INTEGER", "FLOAT", "NUMERIC", "BOOLEAN", "DATE", "DATETIME", "TIMESTAMP", "FILE"],
 
     /** Crea una fila de campo reutilizable para los distintos diseñadores (atributos / medidas) */
-    _fieldRow(f = { name: "", type: "STRING", key: false }, { showKey = true } = {}) {
+    /**
+     * `showDesc` activa la columna "Descripción" (icono 🏷): marca qué
+     * atributo de la dimensión es el atributo descriptivo. Es un estado
+     * MUTUAMENTE EXCLUSIVO entre filas del mismo diseñador (como un radio),
+     * pero opcional: puede no haber ninguno marcado. Al no ser un
+     * <input type="radio"> nativo, se puede desmarcar volviendo a pulsar
+     * el que ya está activo.
+     */
+    _fieldRow(f = { name: "", type: "STRING", key: false, isDescription: false }, { showKey = true, showDesc = false } = {}) {
         const row = document.createElement("div");
         row.className = "field-row";
+        row.dataset.isDesc = f.isDescription ? "1" : "0";
         row.innerHTML = `
             <input type="text" class="f-name" placeholder="ej. codigo_cliente" value="${UI.escapeHtml(f.name)}">
             <select class="f-type">
                 ${UI.FIELD_TYPES.map(t => `<option value="${t}" ${t === f.type ? "selected" : ""}>${t}</option>`).join("")}
             </select>
             <span class="field-key">${showKey ? `<input type="checkbox" class="f-key" ${f.key ? "checked" : ""}>` : ""}</span>
+            ${showDesc ? `<span class="field-desc"><button type="button" class="field-desc-toggle${f.isDescription ? " active" : ""}" title="Marcar como atributo descriptivo">🏷</button></span>` : ""}
             <button type="button" class="field-remove" title="Eliminar">✕</button>`;
         row.querySelector(".field-remove").addEventListener("click", () => row.remove());
+        if (showDesc) {
+            row.querySelector(".field-desc-toggle").addEventListener("click", (e) => {
+                const nowActive = row.dataset.isDesc === "1";
+                // Desmarca cualquier otra fila del mismo diseñador (solo puede haber una).
+                row.parentElement.querySelectorAll(".field-row").forEach(r => {
+                    r.dataset.isDesc = "0";
+                    const btn = r.querySelector(".field-desc-toggle");
+                    if (btn) btn.classList.remove("active");
+                });
+                if (!nowActive) {
+                    row.dataset.isDesc = "1";
+                    e.currentTarget.classList.add("active");
+                }
+            });
+        }
         return row;
     },
 
@@ -101,7 +126,8 @@ const UI = {
         return Array.from(container.querySelectorAll(".field-row")).map(r => ({
             name: r.querySelector(".f-name").value.trim(),
             type: r.querySelector(".f-type").value,
-            key: !!r.querySelector(".f-key") && r.querySelector(".f-key").checked
+            key: !!r.querySelector(".f-key") && r.querySelector(".f-key").checked,
+            isDescription: r.dataset.isDesc === "1"
         })).filter(f => f.name);
     },
 
@@ -145,16 +171,16 @@ const UI = {
                             </div>
                             <div class="form-group">
                                 <label>Atributos</label>
-                                <div class="fields-builder">
+                                <div class="fields-builder fields-builder--with-desc">
                                     <div class="fields-builder-header">
-                                        <span>Nombre del atributo</span><span>Tipo</span><span>Clave</span><span></span>
+                                        <span>Nombre del atributo</span><span>Tipo</span><span>Clave</span><span>Desc.</span><span></span>
                                     </div>
                                     <div class="fields-builder-rows" id="dimFormRows"></div>
                                     <div class="fields-builder-footer">
                                         <button class="btn btn-secondary btn-sm" id="dimFormAddField">+ Añadir atributo</button>
                                     </div>
                                 </div>
-                                <p class="form-hint">Marca "Clave" en un atributo si quieres una clave compuesta (ej. Clase de coste + Sociedad).</p>
+                                <p class="form-hint">Marca "Clave" en un atributo si quieres una clave compuesta (ej. Clase de coste + Sociedad). Marca 🏷 en, como mucho, un atributo para indicar cuál es el atributo descriptivo de la dimensión (opcional).</p>
                             </div>
                         </div>
                         <div class="modal-footer">
@@ -178,7 +204,7 @@ const UI = {
             };
             nameInput.oninput = updateKeyPreview;
 
-            const addRow = (f) => rowsContainer.appendChild(UI._fieldRow(f, { showKey: true }));
+            const addRow = (f) => rowsContainer.appendChild(UI._fieldRow(f, { showKey: true, showDesc: true }));
             rowsContainer.innerHTML = "";
             attributes.forEach(a => addRow(a));
 

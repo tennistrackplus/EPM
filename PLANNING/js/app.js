@@ -211,6 +211,7 @@ const Draco = {
         const modules = {
             dimensiones: () => Dimensions.render(container, this.currentProject),
             cubos: () => Cubes.render(container, this.currentProject),
+            actualizaciones: () => TableUpdates.render(container, this.currentProject),
             cargas: () => Loads.render(container, this.currentProject),
             "flujos-carga": () => Flows.render(container, this.currentProject),
             workflows: () => Workflows.render(container, this.currentProject),
