@@ -33,7 +33,14 @@ lenguaje visual que vuestra app anterior (EPM Data Studio).
     nombre de la dimensión (ej. dimensión `CUENTA` → columna `CUENTA`,
     clave). El resto de columnas son "Atributos", y cualquiera de ellos
     también se puede marcar como clave para soportar claves compuestas
-    (ej. Clase de coste + Sociedad).
+    (ej. Clase de coste + Sociedad). Además, un atributo (como mucho uno,
+    es opcional) se puede marcar con el icono 🏷 **"Desc."** para indicar
+    que es el **atributo descriptivo** de la dimensión (ej. `CUENTA` =
+    "4300001", atributo descriptivo = "Proveedores nacionales"). Es un
+    estado tipo radio: marcar uno desmarca el anterior, y se puede
+    desmarcar volviendo a pulsarlo (no es obligatorio tener uno). Se
+    guarda como `isDescription: true` dentro de `CAMPOS_JSON` y viaja
+    después al modelo semántico (ver más abajo).
     - **Valores** (icono ▤): ahora se abre en un **popup casi a pantalla
       completa**. Rejilla editable de los datos físicos — añadir filas,
       pegar bloques copiados de Excel, exportar a CSV/Excel, importar
@@ -53,46 +60,82 @@ lenguaje visual que vuestra app anterior (EPM Data Studio).
     Las medidas se definen libremente (nombre + tipo), igual que antes.
   - **Workflows** (nuevo, solo definición — la ejecución se aborda más
     adelante): un workflow es una secuencia de **pasos**, arrastrable para
-    reordenar. Cada paso tiene 4 pestañas:
-    - **Propiedades**: nombre; inicio (al iniciar el workflow / al
-      completar el paso anterior / fecha concreta); si requiere
-      **revisión**; y finalización (N/A, al enviarse a revisión o al
-      completarse —según el valor de revisión— o fecha concreta). La
-      finalización de un paso es lo que dispara el "al completar el paso
-      anterior" del siguiente.
-    - **Driver**: dimensión opcional por la que se reparte la ejecución
-      del paso (ej. CECOs) + valores concretos opcionales (buscador sobre
-      los datos reales de la dimensión); sin selección se reparte entre
-      todos los valores. Sin dimensión, el paso se asigna en bloque.
-    - **Variables**: variables de valor único del paso, para parametrizar
-      distintas ejecuciones (reutiliza el mismo diseñador que las
-      variables de pantalla de un Flujo).
-    - **Tareas**: organizadas en bloques; cada tarea es de tipo *flujo
-      manual* (con buscador sobre los Flujos de carga manuales del
-      proyecto, cargando automáticamente sus variables de pantalla),
-      *actualización de tabla de parametrización* (buscador de
-      Dimensiones), o *plantilla* / *función* / *página HTML* (estos tres
-      últimos, sin catálogo propio todavía, se referencian por nombre
-      libre). Cada variable que expone la tarea se completa por
-      constante o por una variable del paso, y se puede **ocultar** de
-      la pantalla de ejecución.
+    reordenar, que empieza siempre por un **Paso 0** fijo (no se puede
+    eliminar) donde solo se definen las **variables del workflow** —de
+    valor único, se piden al crear cada ejecución y quedan disponibles
+    para completar tareas en cualquier paso. El resto de pasos tienen 2
+    pestañas:
+    - **Propiedades**: nombre; Inicio a la izquierda / Finalización a la
+      derecha (tarjetas con conector visual entre ambas) y, debajo, el
+      Driver — todo en una sola pantalla.
+      - Inicio: al iniciar el workflow / al completar el paso anterior /
+        fecha concreta.
+      - Revisión (sí/no).
+      - Finalización: N/A, al enviarse a revisión o al completarse
+        —según el valor de Revisión— o fecha concreta. Es lo que dispara
+        el "al completar el paso anterior" del siguiente paso.
+      - Driver: dimensión opcional por la que se reparte la ejecución
+        del paso (ej. CECOs) + valores concretos opcionales (buscador
+        sobre los datos reales de la dimensión); sin selección se
+        reparte entre todos los valores. Sin dimensión, el paso se
+        asigna en bloque.
+    - **Tareas del paso**: los bloques son un menú lateral (igual que
+      Dimensiones/Cubos/Interfaces) — "+ Añadir bloque" crea uno nuevo y
+      se reordenan arrastrando; a la derecha, las tareas del bloque
+      seleccionado. Cada tarea es de tipo *flujo manual* (con buscador
+      sobre los Flujos de carga manuales del proyecto, cargando
+      automáticamente sus variables de pantalla), *actualización de
+      tabla de parametrización* (buscador de Dimensiones), o *plantilla*
+      / *función* / *página HTML* (estos tres últimos, sin catálogo
+      propio todavía, se referencian por nombre libre). Cada variable
+      que expone la tarea se completa por constante o por una variable
+      del workflow (Paso 0), y se puede **ocultar** de la pantalla de
+      ejecución.
   - **Ejecuciones de un Workflow** (nuevo, `js/workflow-runs.js`): desde el
-    listado de Workflows, el botón ▶ abre las ejecuciones (runs) de ese
-    workflow. "Nueva ejecución" instancia todos los pasos: si un paso
-    tiene driver, una instancia por cada valor (los elegidos en la
-    definición, o todos los reales de la dimensión si no se eligió
-    ninguno); si no, una única instancia. Cada instancia se puede asignar
-    (texto libre, todavía no hay módulo de Roles/usuarios), completar sus
-    variables de paso, y mover de estado: Pendiente → En curso → (si el
-    paso requiere revisión) En revisión → Completado. Al completarse
-    todas las instancias de un paso se desbloquean automáticamente las
-    del siguiente si su inicio es "al completar el paso anterior". Las
-    tareas se muestran a título informativo; las de tipo *flujo manual*
+    listado de Workflows, el botón ▶ abre un **popup** (90% de pantalla,
+    igual que el editor de un workflow) con el listado de ejecuciones de
+    ese workflow; "← Volver a ejecuciones" navega entre listado y
+    detalle dentro del mismo popup, y la X lo cierra. "Nueva ejecución"
+    abre un segundo popup, de tamaño normal, pidiendo el nombre y el
+    valor de cada variable del Paso 0; al confirmar, instancia todos los
+    pasos ejecutables: si un paso tiene driver, una instancia por cada
+    valor (los elegidos en la definición, o todos los reales de la
+    dimensión si no se eligió ninguno); si no, una única instancia. La
+    asignación se hace **paso a paso**: arriba se repite la cadena de
+    pasos a modo de pestañas, cada una con un badge de color (verde ✓ /
+    rojo ⚠) según si todas sus instancias están asignadas, y debajo solo
+    se muestran —en una rejilla de tarjetas— las instancias del paso
+    seleccionado, no las de todos los pasos apiladas. Cada instancia se
+    puede asignar (texto libre, todavía no hay módulo de Roles/usuarios),
+    completar sus variables, y mover de estado: Pendiente → En curso →
+    (si el paso requiere revisión) En revisión → Completado. Al
+    completarse todas las instancias de un paso se desbloquean
+    automáticamente las del siguiente si su inicio es "al completar el
+    paso anterior". Las tareas se muestran a título informativo; las de
+    tipo *flujo manual*
     enlazan a `flow_run.html` para ejecutarse de verdad. Los pasos con
     inicio "fecha concreta" no tienen scheduler en servidor: quedan
     disponibles igualmente y solo se informa de la fecha prevista.
   - El resto de módulos del menú (Cargas de datos, Funciones, Flujos de
     proceso, Roles) son pantallas "próximamente".
+  - **Modelo semántico (YAML) de un Cubo** (nuevo, `js/semantic-model.js`):
+    cada vez que se guarda un cubo (crear o editar) Draco genera
+    automáticamente un YAML con la tabla de hechos, sus dimensiones
+    (con atributos y jerarquías) y lo sube al mismo sitio donde ya se
+    guardan otros ficheros del proyecto — el stage de Snowflake
+    (`@DRACO_LANDING` por defecto), reutilizando el mecanismo de
+    `js/storage.js` (trocear + `INSERT` + `SP_FINALIZE_FILE_UPLOAD`,
+    ver sección 7bis y `sql/02_snowflake_file_upload.sql`). No requiere
+    infraestructura nueva. Si el proveedor activo no es Snowflake, o la
+    subida falla, el modelo se genera igualmente y se ofrece como
+    descarga en el navegador — nunca bloquea el guardado del cubo. La
+    ruta resultante y la fecha de generación quedan en
+    `CUBOS.MODELO_YAML_PATH` / `MODELO_YAML_FECHA`. Ver la sección
+    "Modelo semántico (YAML)" más abajo para la estructura completa,
+    pensada para que el add-in de Excel (`addin/src`) la lea y rellene
+    sus pestañas `model_dimension` / `model_Fact` / `model_hier` — **de
+    momento este cambio solo genera y guarda el YAML; el add-in no se
+    ha tocado**.
 
 El grid de valores usa **SheetJS** (cargado por CDN en `app.html`) para
 leer/escribir CSV y Excel sin necesitar backend.
@@ -159,7 +202,7 @@ Snowflake):
 | `CUBOS`       | CUBO_ID, PROYECTO_ID, CUBOS, DESCRIPCION, TABLA, CAMPOS_JSON, ...               |
 | `JERARQUIAS`  | JERARQUIA_ID, DIMENSION_ID, PROYECTO_ID, JERARQUIA, NIVELES_JSON, ...           |
 | `WORKFLOWS`   | WORKFLOW_ID, PROYECTO_ID, WORKFLOW, DESCRIPCION, ...                            |
-| `WORKFLOWS_PASOS` | PASO_ID, WORKFLOW_ID, PASO, ORDEN, INICIO_TIPO, REVISION, FIN_TIPO, DRIVER_DIMENSION_ID, DRIVER_MODO, ... |
+| `WORKFLOWS_PASOS` | PASO_ID, WORKFLOW_ID, PASO, ORDEN, ES_PASO0, INICIO_TIPO, REVISION, FIN_TIPO, DRIVER_DIMENSION_ID, DRIVER_MODO, ... |
 | `WORKFLOWS_PASOS_DRIVER_VALORES` | PASO_ID, VALOR (valores concretos del driver)                  |
 | `WORKFLOWS_PASOS_VARIABLES` | PASO_ID, VARIABLE_ID, NOMBRE, ETIQUETA, TIPO                        |
 | `WORKFLOWS_PASOS_BLOQUES` | PASO_ID, BLOQUE_ID, TITULO, ORDEN                                      |
@@ -209,8 +252,9 @@ js/provider.js                 Capa de abstracción BigQuery ↔ Snowflake
 js/schema.js                    Bootstrap del esquema de control
 js/auth.js                       Lógica de login (solo en index.html)
 js/ui.js                          Toasts, modales, confirmaciones, maximizar/contraer
-js/storage.js                      Abstracción de storage (subida de ficheros) para flow_run.html
+js/storage.js                      Abstracción de storage (subida de ficheros); usado por flow_run.html y por semantic-model.js
 js/dimensions.js                   Módulo Dimensiones
+js/semantic-model.js                Genera y guarda el modelo semántico YAML de un cubo
 js/cubes.js                         Módulo Cubos
 js/loads.js                          Módulo Interfaces (cargas de datos)
 js/flows.js                           Módulo Flujos de carga
@@ -261,7 +305,99 @@ Los **Flujos de carga** ya se pueden ejecutar de verdad, no solo modelar:
   - Desde el editor de flujos (`app.html`), el botón "▶ Ejecutar /
     Monitor" abre directamente esta pantalla para el flujo guardado.
 
-## 8. Siguientes pasos sugeridos
+## 8. Modelo semántico (YAML)
+
+Un fichero por cubo, generado y sobrescrito automáticamente cada vez
+que se guarda ese cubo. Ruta dentro del stage:
+
+```
+semantic_models/<PROYECTO_identificador>/<CUBO_identificador>.yaml
+```
+
+(`<..._identificador>` = `Provider.toIdentifier(nombre)`, el mismo
+identificador que se usa para nombrar las tablas físicas). Al guardar
+el mismo cubo dos veces se **sobrescribe** el mismo fichero
+(`overwrite=True` en `session.file.put_stream()`), no se acumulan
+versiones.
+
+Estructura completa (los tipos entre paréntesis son orientativos):
+
+```yaml
+format_version: 1                 # versión del formato del propio YAML
+
+model:                            # metadatos de la generación
+  name: <string>                    # nombre del cubo
+  cube_id: <string>                 # CUBO_ID en DRACO_CONTROL.CUBOS
+  project: <string>                 # nombre del proyecto Draco
+  project_id: <string>              # PROYECTO_ID
+  engine: snowflake|bigquery        # motor activo al generar el YAML
+  database: <string>                # base de datos (Snowflake) o proyecto GCP (BigQuery)
+  schema: <string>                  # esquema/dataset del proyecto, DRACO_<PROYECTO>
+  generated_at: <ISO8601 timestamp> # momento de generación (UTC)
+
+fact:                             # LA TABLA DE HECHOS -> pestaña model_Fact
+  name: <string>                    # nombre del cubo
+  table: <string>                   # tabla física, ej. DRACO_VENTAS (sin qualificar; usar model.database + model.schema)
+  description: <string|null>
+  measures:                         # medidas definidas libremente en el cubo
+    - name: <string>
+      column: <string>                # nombre de columna físico (identificador)
+      type: STRING|INTEGER|FLOAT|NUMERIC|BOOLEAN|DATE|DATETIME|TIMESTAMP
+  foreign_keys:                     # una por cada dimensión añadida al cubo
+    - dimension: <string>             # nombre de la dimensión (== dimensions[].name)
+      column: <string>                # columna FK en la tabla de hechos (mismo nombre que la clave de la dimensión)
+      references_dimension: <string>  # redundante con "dimension", pensado para lectura directa
+      references_column: <string>     # columna PK en la tabla de la dimensión (== dimensions[].key_column)
+
+dimensions:                       # LAS DIMENSIONES -> pestaña model_dimension
+  - name: <string>                  # nombre de la dimensión
+    dimension_id: <string>          # DIMENSION_ID en DRACO_CONTROL.DIMENSIONES
+    table: <string>                 # tabla física, ej. DRACO_CUENTA
+    description: <string|null>
+    key_attribute: <string>         # nombre del atributo clave principal (== nombre de la dimensión)
+    key_column: <string>            # columna física de esa clave
+    description_attribute: <string|null>  # atributo marcado con 🏷 en el diseñador; null si no hay ninguno
+    description_column: <string|null>     # columna física de ese atributo; null si no hay ninguno
+    attributes:                     # TODOS los atributos, incluida la propia clave principal
+      - name: <string>
+        column: <string>              # nombre de columna físico (identificador)
+        type: STRING|INTEGER|FLOAT|NUMERIC|BOOLEAN|DATE|DATETIME|TIMESTAMP
+        is_key: <bool>                 # true en la clave principal y en claves compuestas
+        is_description: <bool>         # true solo en el atributo marcado con 🏷 (como mucho uno por dimensión)
+    hierarchies:                    # LAS JERARQUÍAS DE ESTA DIMENSIÓN -> pestaña model_hier
+      - name: <string>                # nombre de la jerarquía
+        levels:                       # nivel superior primero
+          - level: <int>                # 1-based
+            attribute: <string>          # nombre del atributo en ese nivel
+            column: <string>             # columna física de ese atributo
+```
+
+Notas para quien vaya a leer esto desde el add-in (`addin/src`):
+
+- **`model_Fact`**: una fila de cabecera con `fact.name` / `fact.table`
+  / `fact.description`, más una fila por `fact.measures[]` y una fila
+  por `fact.foreign_keys[]` (o todo en la misma tabla si la pestaña
+  mezcla medidas y FKs — a definir cuando se aborde el add-in).
+- **`model_dimension`**: una fila por cada `dimensions[].attributes[]`,
+  repitiendo `dimensions[].name` / `table` como columnas de contexto,
+  y usando `is_key` / `is_description` para pintar los mismos dos
+  ticks que hay en el diseñador de Draco.
+- **`model_hier`**: una fila por cada `dimensions[].hierarchies[].levels[]`,
+  repitiendo el nombre de la dimensión y de la jerarquía como columnas
+  de contexto.
+- Todas las claves foráneas y de jerarquía referencian atributos **por
+  nombre y por columna física** a la vez, para que el add-in pueda
+  usar la que le resulte más cómoda sin tener que recalcular
+  identificadores.
+- `description_attribute` / `description_column` pueden venir a
+  `null`: no es obligatorio que una dimensión tenga uno marcado.
+
+Por ahora **el add-in no lee este YAML todavía** — este cambio se
+limita a generarlo y guardarlo de forma fiable en cada guardado de
+cubo, dejando la estructura cerrada y documentada para abordar la
+lectura desde `addin/src` como siguiente paso.
+
+## 9. Siguientes pasos sugeridos
 
 Dime por cuál seguimos: Funciones, Flujos de proceso, Roles (para
 asignar ejecuciones a personas/grupos reales en vez de texto libre),
