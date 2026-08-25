@@ -44,12 +44,51 @@ const TableUpdates = {
     project: null,
     editing: null,
     editingIsNew: true,
-    variables: [],
+    screen: { title: "", blocks: [] },   // pantalla de variables del diseñador, mismo formato que Flows.editing.screen
     fields: [],
     dragFieldIdx: null,
-    dragVarIdx: null,
+    dragBlockIdx: null,
+    dragFrameVar: null,
     screenCollapsed: false,
     dimensionsCache: [],
+
+    // ---- ejecución (Bloque de "Ejecutar", ver más abajo) ----
+    runRecord: null,
+    runFields: [],
+    runScreen: { title: "", blocks: [] },
+    runView: "screen",       // 'screen' | 'table'
+    gridState: null,
+    selOptState: {},
+    _selOptDelegationBound: false,
+
+    /** Parsea VARIABLES_JSON admitiendo el formato antiguo (lista plana de
+     * variables) y el nuevo (mismo formato que la pantalla de Flujos de
+     * carga: {title, blocks:[{kind:'variable'|'frame'|'text'|'skip'|'line', ...}]}). */
+    parseScreen(json) {
+        const parsed = this.safeParse(json, null);
+        if (!parsed) return { title: "", blocks: [] };
+        if (Array.isArray(parsed)) {
+            return {
+                title: "",
+                blocks: parsed.filter(v => v && v.name).map(v => ({
+                    id: v.id || Provider.newId(),
+                    kind: "variable",
+                    variable: { id: v.id || Provider.newId(), name: v.name, label: v.label || v.name, type: v.type || "STRING", selectMode: v.selectMode || "unico" }
+                }))
+            };
+        }
+        return { title: parsed.title || "", blocks: Array.isArray(parsed.blocks) ? parsed.blocks : [] };
+    },
+
+    /** Lista plana de variables de pantalla (sueltas + las de todos los frames). */
+    flatVars(screen) {
+        const out = [];
+        (screen.blocks || []).forEach(b => {
+            if (b.kind === "variable") out.push(b.variable);
+            else if (b.kind === "frame") out.push(...(b.variables || []));
+        });
+        return out;
+    },
 
     // ================================================================
     // LISTADO
@@ -239,7 +278,7 @@ const TableUpdates = {
     async openEditor(record) {
         this.editing = record;
         this.editingIsNew = !this.list.some(r => r[this.ID_COL] === record[this.ID_COL]);
-        this.variables = this.safeParse(record.VARIABLES_JSON, []);
+        this.screen = this.parseScreen(record.VARIABLES_JSON);
         const savedFields = this.safeParse(record.CAMPOS_JSON, []);
 
         await this.loadDimensions();
@@ -331,79 +370,262 @@ const TableUpdates = {
         this.dimensionsCache = await Provider.runQuery(sql);
     },
 
-    // ---------------- Bloque A: pantalla de selección (variables) ----------------
+    // ---------------- Bloque A: pantalla de entrada de variables ----------------
+    // Mismo diseñador que en Flujos de carga (Flows.renderScreenBlock): variables
+    // sueltas, frames, textos, espacios y líneas, con alta/edición de cada
+    // variable vía el modal compartido UI.openScreenVariableModal (nombre
+    // técnico, etiqueta, tipo y modo de selección).
     renderScreenBlock() {
         const part = document.getElementById("actUpdScreenPart");
+        const screen = this.screen;
+
         part.innerHTML = `
             <div class="flow-part-header flow-part-header--screen">
                 <button type="button" class="flow-part-toggle" id="actUpdScreenToggle">
                     <span class="flow-group-caret ${this.screenCollapsed ? "is-collapsed" : ""}">▾</span>
-                    <span>Pantalla de selección</span>
+                    <span>Pantalla de entrada de variables</span>
                 </button>
                 <div class="flow-screen-toolbar-mini">
                     <button type="button" class="flow-mini-btn" id="actUpdAddVar" title="Añadir variable">+ Var</button>
+                    <button type="button" class="flow-mini-btn" id="actUpdAddFrame" title="Añadir frame">+ Frame</button>
+                    <button type="button" class="flow-mini-btn" id="actUpdAddText" title="Añadir texto">+ Texto</button>
+                    <button type="button" class="flow-mini-btn" id="actUpdAddSkip" title="Añadir espacio en blanco">+ Espacio</button>
+                    <button type="button" class="flow-mini-btn" id="actUpdAddLine" title="Añadir línea separadora">+ Línea</button>
                 </div>
             </div>
             <div class="flow-screen-box ${this.screenCollapsed ? "is-collapsed" : ""}" id="actUpdScreenBox">
+                <div class="form-group">
+                    <label>Título de la pantalla</label>
+                    <input type="text" id="actUpdScreenTitle" placeholder="Ej. Filtro de actualización" value="${UI.escapeHtml(screen.title || "")}">
+                </div>
                 <p class="form-hint">Variables para filtrar qué filas se traen a editar; se pueden usar luego como "filtro variable" de un campo.</p>
-                <div class="flow-screen-blocks" id="actUpdVarsRows"></div>
+                <div class="flow-screen-blocks" id="actUpdScreenBlocks"></div>
             </div>`;
 
         document.getElementById("actUpdScreenToggle").addEventListener("click", () => {
             this.screenCollapsed = !this.screenCollapsed;
-            this.renderScreenBlock();
-        });
-        document.getElementById("actUpdAddVar").addEventListener("click", () => {
-            this.variables.push({ id: Provider.newId(), name: "", label: "", type: "STRING" });
-            this.screenCollapsed = false;
-            this.renderScreenBlock();
+            const box = document.getElementById("actUpdScreenBox");
+            box.classList.toggle("is-collapsed", this.screenCollapsed);
+            part.querySelector(".flow-group-caret").classList.toggle("is-collapsed", this.screenCollapsed);
         });
 
-        this.renderVarRows();
+        document.getElementById("actUpdScreenTitle").addEventListener("input", (e) => { screen.title = e.target.value; });
+
+        document.getElementById("actUpdAddVar").addEventListener("click", async () => {
+            const v = await UI.openScreenVariableModal({});
+            if (!v) return;
+            screen.blocks.push({ id: Provider.newId(), kind: "variable", variable: { id: Provider.newId(), ...v } });
+            this.screenCollapsed = false;
+            this.renderScreenBlocksList();
+        });
+        document.getElementById("actUpdAddFrame").addEventListener("click", () => {
+            screen.blocks.push({ id: Provider.newId(), kind: "frame", title: "Nuevo frame", variables: [] });
+            this.screenCollapsed = false;
+            this.renderScreenBlocksList();
+        });
+        document.getElementById("actUpdAddText").addEventListener("click", async () => {
+            const text = await UI.openScreenTextModal({ current: "" });
+            if (text === null) return;
+            screen.blocks.push({ id: Provider.newId(), kind: "text", text });
+            this.renderScreenBlocksList();
+        });
+        document.getElementById("actUpdAddSkip").addEventListener("click", () => {
+            screen.blocks.push({ id: Provider.newId(), kind: "skip" });
+            this.renderScreenBlocksList();
+        });
+        document.getElementById("actUpdAddLine").addEventListener("click", () => {
+            screen.blocks.push({ id: Provider.newId(), kind: "line" });
+            this.renderScreenBlocksList();
+        });
+
+        this.renderScreenBlocksList();
     },
 
-    renderVarRows() {
-        const rowsEl = document.getElementById("actUpdVarsRows");
-        if (!rowsEl) return;
-        rowsEl.innerHTML = this.variables.map((v, idx) => `
-            <div class="flow-screen-block flow-screen-block--var" draggable="true" data-idx="${idx}">
-                <span class="load-drag-handle">⠿</span>
-                <div class="flow-field-preview">
-                    <label>Variable</label>
-                    <input type="text" class="var-name" placeholder="nombre técnico (ej. SOCIEDAD)" value="${UI.escapeHtml(v.name)}">
-                </div>
-                <div class="flow-field-preview">
-                    <label>Etiqueta</label>
-                    <input type="text" class="var-label" placeholder="Etiqueta a mostrar" value="${UI.escapeHtml(v.label)}">
-                </div>
-                <div class="flow-field-preview">
-                    <label>Tipo</label>
-                    <select class="var-type">
-                        ${["STRING", "INTEGER", "DATE"].map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
-                    </select>
-                </div>
-                <button type="button" class="field-remove" title="Eliminar">✕</button>
-            </div>`).join("") || `<div class="hierarchy-levels-empty">Sin variables: la tabla se cargará entera al ejecutar (salvo filtros constantes por campo).</div>`;
+    renderScreenBlocksList() {
+        const wrap = document.getElementById("actUpdScreenBlocks");
+        const screen = this.screen;
+        if (!wrap) return;
 
-        rowsEl.querySelectorAll(".flow-screen-block--var").forEach(row => {
-            const idx = parseInt(row.dataset.idx, 10);
-            row.querySelector(".var-name").addEventListener("input", (e) => { this.variables[idx].name = e.target.value; });
-            row.querySelector(".var-label").addEventListener("input", (e) => { this.variables[idx].label = e.target.value; });
-            row.querySelector(".var-type").addEventListener("change", (e) => { this.variables[idx].type = e.target.value; });
-            row.querySelector(".field-remove").addEventListener("click", () => {
-                this.variables.splice(idx, 1);
-                this.renderVarRows();
+        if (!screen.blocks.length) {
+            wrap.innerHTML = `<div class="module-empty module-empty--inline">Sin variables: la tabla se cargará entera al ejecutar (salvo filtros constantes por campo).</div>`;
+            return;
+        }
+
+        wrap.innerHTML = screen.blocks.map((b, idx) => this.screenBlockHtml(b, idx)).join("");
+        this.bindScreenBlocksEvents();
+    },
+
+    screenBlockHtml(b, idx) {
+        if (b.kind === "variable") {
+            return `
+                <div class="flow-screen-block flow-screen-block--var" draggable="true" data-block-idx="${idx}">
+                    <span class="load-drag-handle">⠿</span>
+                    <div class="flow-field-preview-click" data-edit-var="${idx}" title="Clic para configurar la variable">
+                        ${this.fieldPreviewHtml(b.variable)}
+                    </div>
+                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                </div>`;
+        }
+        if (b.kind === "text") {
+            return `
+                <div class="flow-screen-block flow-screen-block--text" draggable="true" data-block-idx="${idx}">
+                    <span class="load-drag-handle">⠿</span>
+                    <div class="flow-screen-text-content" data-edit-text="${idx}" title="Clic para editar">${UI.renderFormattedText(b.text)}</div>
+                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                </div>`;
+        }
+        if (b.kind === "skip") {
+            return `
+                <div class="flow-screen-block flow-screen-block--skip" draggable="true" data-block-idx="${idx}">
+                    <span class="load-drag-handle">⠿</span>
+                    <div class="flow-screen-skip-marker">· · · espacio en blanco · · ·</div>
+                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                </div>`;
+        }
+        if (b.kind === "line") {
+            return `
+                <div class="flow-screen-block flow-screen-block--line" draggable="true" data-block-idx="${idx}">
+                    <span class="load-drag-handle">⠿</span>
+                    <div class="flow-screen-line-marker"><hr></div>
+                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                </div>`;
+        }
+        // frame
+        return `
+            <div class="flow-screen-block flow-screen-block--frame" draggable="true" data-block-idx="${idx}">
+                <div class="flow-frame-header">
+                    <span class="load-drag-handle">⠿</span>
+                    <strong data-edit-frame-title="${idx}" title="Clic para renombrar">${UI.escapeHtml(b.title || "Frame")}</strong>
+                    <span class="load-fn-toolbar-spacer"></span>
+                    <button type="button" class="flow-mini-btn" data-add-frame-var="${idx}">+ Var</button>
+                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar frame">✕</button>
+                </div>
+                <div class="flow-frame-vars" data-frame-idx="${idx}">
+                    ${b.variables.length ? b.variables.map((v, vi) => `
+                        <div class="flow-frame-var-row" draggable="true" data-frame-idx="${idx}" data-var-idx="${vi}">
+                            <span class="load-drag-handle">⠿</span>
+                            <div class="flow-field-preview-click" data-edit-frame-var="${idx}:${vi}" title="Clic para configurar la variable">
+                                ${this.fieldPreviewHtml(v)}
+                            </div>
+                            <button type="button" class="field-remove" data-remove-frame-var="${idx}:${vi}" title="Eliminar">✕</button>
+                        </div>`).join("") : `<div class="hierarchy-pool-empty">Sin variables en este frame.</div>`}
+                </div>
+            </div>`;
+    },
+
+    /** Previsualización de una variable de pantalla tal y como se vería de verdad: etiqueta + input, sin recuadro alrededor. */
+    fieldPreviewHtml(v) {
+        const modeLabels = { rango: "Rango", multiple: "Varios valores", cualquiera: "Select-options" };
+        const modeBadge = v.selectMode && modeLabels[v.selectMode] ? `<span class="flow-var-mode-badge">${modeLabels[v.selectMode]}</span>` : "";
+        return `
+            <div class="flow-field-preview">
+                <label>${UI.escapeHtml(v.label || v.name)}${modeBadge}</label>
+                <input type="text" disabled placeholder="${UI.escapeHtml(v.name)}">
+            </div>`;
+    },
+
+    bindScreenBlocksEvents() {
+        const wrap = document.getElementById("actUpdScreenBlocks");
+        const screen = this.screen;
+
+        wrap.querySelectorAll("[data-remove-block]").forEach(btn => btn.addEventListener("click", () => {
+            const idx = parseInt(btn.dataset.removeBlock, 10);
+            screen.blocks.splice(idx, 1);
+            this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll("[data-add-frame-var]").forEach(btn => btn.addEventListener("click", async () => {
+            const idx = parseInt(btn.dataset.addFrameVar, 10);
+            const v = await UI.openScreenVariableModal({});
+            if (!v) return;
+            screen.blocks[idx].variables.push({ id: Provider.newId(), ...v });
+            this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll("[data-remove-frame-var]").forEach(btn => btn.addEventListener("click", () => {
+            const [bIdx, vIdx] = btn.dataset.removeFrameVar.split(":").map(Number);
+            screen.blocks[bIdx].variables.splice(vIdx, 1);
+            this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll("[data-edit-frame-title]").forEach(el => el.addEventListener("click", async () => {
+            const idx = parseInt(el.dataset.editFrameTitle, 10);
+            const val = await UI.openTextPromptModal({ title: "Nombre del frame", label: "Título", value: screen.blocks[idx].title || "" });
+            if (val === null) return;
+            screen.blocks[idx].title = val || "Frame";
+            this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll("[data-edit-text]").forEach(el => el.addEventListener("click", async () => {
+            const idx = parseInt(el.dataset.editText, 10);
+            const val = await UI.openScreenTextModal({ current: screen.blocks[idx].text || "" });
+            if (val === null) return;
+            screen.blocks[idx].text = val;
+            this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll("[data-edit-var]").forEach(el => el.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const idx = parseInt(el.dataset.editVar, 10);
+            const current = screen.blocks[idx].variable;
+            const v = await UI.openScreenVariableModal({ current });
+            if (!v) return;
+            screen.blocks[idx].variable = { ...current, ...v };
+            this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll("[data-edit-frame-var]").forEach(el => el.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const [bIdx, vIdx] = el.dataset.editFrameVar.split(":").map(Number);
+            const current = screen.blocks[bIdx].variables[vIdx];
+            const v = await UI.openScreenVariableModal({ current });
+            if (!v) return;
+            screen.blocks[bIdx].variables[vIdx] = { ...current, ...v };
+            this.renderScreenBlocksList();
+        }));
+
+        // Reordenar bloques de primer nivel arrastrando.
+        wrap.querySelectorAll(":scope > .flow-screen-block").forEach(block => {
+            block.addEventListener("dragstart", (e) => {
+                e.stopPropagation();
+                this.dragBlockIdx = parseInt(block.dataset.blockIdx, 10);
+                block.classList.add("dragging");
             });
-            row.addEventListener("dragstart", () => { this.dragVarIdx = idx; row.classList.add("dragging"); });
+            block.addEventListener("dragend", () => block.classList.remove("dragging"));
+            block.addEventListener("dragover", (e) => e.preventDefault());
+            block.addEventListener("drop", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const targetIdx = parseInt(block.dataset.blockIdx, 10);
+                if (this.dragBlockIdx === null || this.dragBlockIdx === targetIdx) return;
+                const [moved] = screen.blocks.splice(this.dragBlockIdx, 1);
+                screen.blocks.splice(targetIdx, 0, moved);
+                this.dragBlockIdx = null;
+                this.renderScreenBlocksList();
+            });
+        });
+
+        // Reordenar variables dentro de un mismo frame arrastrando.
+        wrap.querySelectorAll(".flow-frame-var-row").forEach(row => {
+            row.addEventListener("dragstart", (e) => {
+                e.stopPropagation();
+                this.dragFrameVar = { frameIdx: parseInt(row.dataset.frameIdx, 10), varIdx: parseInt(row.dataset.varIdx, 10) };
+                row.classList.add("dragging");
+            });
             row.addEventListener("dragend", () => row.classList.remove("dragging"));
-            row.addEventListener("dragover", (e) => e.preventDefault());
+            row.addEventListener("dragover", (e) => { e.preventDefault(); e.stopPropagation(); });
             row.addEventListener("drop", (e) => {
                 e.preventDefault();
-                if (this.dragVarIdx === null || this.dragVarIdx === idx) return;
-                const [moved] = this.variables.splice(this.dragVarIdx, 1);
-                this.variables.splice(idx, 0, moved);
-                this.dragVarIdx = null;
-                this.renderVarRows();
+                e.stopPropagation();
+                if (!this.dragFrameVar) return;
+                const frameIdx = parseInt(row.dataset.frameIdx, 10);
+                const targetVarIdx = parseInt(row.dataset.varIdx, 10);
+                if (this.dragFrameVar.frameIdx !== frameIdx) { this.dragFrameVar = null; return; }
+                const vars = screen.blocks[frameIdx].variables;
+                const [moved] = vars.splice(this.dragFrameVar.varIdx, 1);
+                vars.splice(targetVarIdx, 0, moved);
+                this.dragFrameVar = null;
+                this.renderScreenBlocksList();
             });
         });
     },
@@ -484,7 +706,7 @@ const TableUpdates = {
             <label><input type="radio" name="filterType" value="VAR" ${f.filter.type === "VAR" ? "checked" : ""}> Variable</label>
             <select id="actUpdFilterVarSel" style="display:${f.filter.type === "VAR" ? "block" : "none"}">
                 <option value="">Selecciona...</option>
-                ${this.variables.map(v => `<option value="${v.id}" ${f.filter.value === v.id ? "selected" : ""}>${UI.escapeHtml(v.label || v.name)}</option>`).join("")}
+                ${this.flatVars(this.screen).map(v => `<option value="${v.id}" ${f.filter.value === v.id ? "selected" : ""}>${UI.escapeHtml(v.label || v.name)}</option>`).join("")}
             </select>
             <div class="actupd-popover-actions">
                 <button class="btn btn-primary btn-sm" id="actUpdFilterAccept">Aceptar</button>
@@ -697,7 +919,7 @@ const TableUpdates = {
         if (!name) { UI.toast("El nombre no puede estar vacío.", "error"); return; }
 
         this.fields.forEach((f, i) => { f.order = i; });
-        const varsJson = JSON.stringify(this.variables).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        const varsJson = JSON.stringify(this.screen).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         const fieldsJson = JSON.stringify(this.fields).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         const id = this.editing[this.ID_COL];
 
@@ -727,94 +949,358 @@ const TableUpdates = {
     },
 
     // ================================================================
-    // EJECUCIÓN: pantalla de variables -> grid
+    // EJECUCIÓN — mismo patrón que flow_run.html (Flujos de carga): una
+    // pantalla con dos pestañas, "Pantalla de variables" y, en lugar de
+    // "Monitor", "Tabla" (el grid con los datos que trae esa pantalla de
+    // variables). Un único modal a pantalla completa; switchRunTab()
+    // alterna el contenido de #actUpdRunBody entre ambas vistas.
     // ================================================================
     async startRun(record) {
         if (this.overlay) this.overlay.remove();
-        const variables = this.safeParse(record.VARIABLES_JSON, []);
-        const fields = this.safeParse(record.CAMPOS_JSON, []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        this.runRecord = record;
+        this.runScreen = this.parseScreen(record.VARIABLES_JSON);
+        this.runFields = this.safeParse(record.CAMPOS_JSON, []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        this.gridState = null;
+        this.selOptState = {};
 
-        if (!variables.length) {
-            this.loadAndOpenGrid(record, fields, {});
-            return;
-        }
-
-        let overlay = document.getElementById("actUpdRunVarsModal");
+        let overlay = document.getElementById("actUpdRunModal");
         if (!overlay) {
             overlay = document.createElement("div");
             overlay.className = "modal-overlay";
-            overlay.id = "actUpdRunVarsModal";
+            overlay.id = "actUpdRunModal";
             document.body.appendChild(overlay);
         }
+        this.runOverlay = overlay;
         overlay.classList.add("visible");
         overlay.innerHTML = `
-            <div class="modal-box">
+            <div class="modal-box modal-full">
                 <div class="modal-header">
-                    <h3>${UI.escapeHtml(record[this.NAME_COL])} — Variables</h3>
-                    <button class="modal-close" id="actUpdRunVarsClose">&times;</button>
+                    <div>
+                        <h3>${UI.escapeHtml(this.runScreen.title || record[this.NAME_COL])}</h3>
+                        <span class="modal-subtitle">${UI.escapeHtml(record[this.NAME_COL])} · Tabla ${UI.escapeHtml(record.TABLA)}</span>
+                    </div>
+                    <button class="modal-close" id="actUpdRunClose">&times;</button>
                 </div>
-                <div class="modal-body">
-                    ${variables.map(v => `
-                        <div class="form-group">
-                            <label>${UI.escapeHtml(v.label || v.name)}</label>
-                            <input type="${v.type === "DATE" ? "date" : (v.type === "INTEGER" ? "number" : "text")}" class="actupd-run-var" data-name="${UI.escapeHtml(v.name)}">
-                        </div>`).join("")}
+                <div class="flow-run-tabs" id="actUpdRunTabs">
+                    <button type="button" class="flow-run-tab active" id="actUpdRunTabScreen">Pantalla de variables</button>
+                    <button type="button" class="flow-run-tab" id="actUpdRunTabTable">📋 Tabla</button>
                 </div>
-                <div class="modal-footer">
-                    <button class="btn btn-secondary" id="actUpdRunVarsCancel">Cancelar</button>
-                    <button class="btn btn-primary" id="actUpdRunVarsContinue">Continuar</button>
+                <div class="modal-body modal-body-flush" id="actUpdRunBody"></div>
+            </div>`;
+
+        document.getElementById("actUpdRunClose").addEventListener("click", () => overlay.remove());
+        document.getElementById("actUpdRunTabScreen").addEventListener("click", () => this.switchRunTab("screen"));
+        document.getElementById("actUpdRunTabTable").addEventListener("click", () => this.switchRunTab("table"));
+
+        this.switchRunTab("screen");
+    },
+
+    switchRunTab(tab) {
+        this.runView = tab;
+        document.getElementById("actUpdRunTabScreen").classList.toggle("active", tab === "screen");
+        document.getElementById("actUpdRunTabTable").classList.toggle("active", tab === "table");
+        if (tab === "screen") this.renderRunScreenView();
+        else this.renderRunTableView();
+    },
+
+    // ---------------- Pestaña 1: pantalla de variables ----------------
+    renderRunScreenView() {
+        const body = document.getElementById("actUpdRunBody");
+        const blocksHtml = this.runScreen.blocks.length
+            ? this.runScreen.blocks.map(b => this.runBlockHtml(b)).join("")
+            : `<div class="module-empty module-empty--inline">Esta actualización no tiene variables de pantalla definidas.</div>`;
+
+        body.innerHTML = `
+            <div class="flow-run-screen">
+                <div class="flow-screen-blocks flow-screen-blocks--run">${blocksHtml}</div>
+                <div class="flow-run-actions">
+                    <button class="btn btn-primary" id="actUpdRunExecute">▶ Cargar tabla</button>
+                    <span class="form-hint" id="actUpdRunHint"></span>
                 </div>
             </div>`;
-        const close = () => overlay.remove();
-        document.getElementById("actUpdRunVarsClose").addEventListener("click", close);
-        document.getElementById("actUpdRunVarsCancel").addEventListener("click", close);
-        document.getElementById("actUpdRunVarsContinue").addEventListener("click", () => {
-            const values = {};
-            overlay.querySelectorAll(".actupd-run-var").forEach(inp => { values[inp.dataset.name] = inp.value; });
-            close();
-            this.loadAndOpenGrid(record, fields, values);
+
+        document.getElementById("actUpdRunExecute").addEventListener("click", () => this.executeRun());
+        this.bindSelOptDelegation(body);
+    },
+
+    runBlockHtml(b) {
+        if (b.kind === "text") {
+            return `<div class="flow-screen-block flow-screen-block--text flow-screen-block--static">${UI.renderFormattedText(b.text)}</div>`;
+        }
+        if (b.kind === "skip") {
+            return `<div class="flow-screen-block flow-screen-block--skip flow-screen-block--static"></div>`;
+        }
+        if (b.kind === "line") {
+            return `<div class="flow-screen-block flow-screen-block--line flow-screen-block--static"><hr></div>`;
+        }
+        if (b.kind === "variable") {
+            return `<div class="flow-screen-block flow-screen-block--var flow-screen-block--static">${this.runInputHtml(b.variable)}</div>`;
+        }
+        // frame
+        return `
+            <div class="flow-screen-block flow-screen-block--frame flow-screen-block--static">
+                <div class="flow-frame-header"><strong>${UI.escapeHtml(b.title || "Frame")}</strong></div>
+                <div class="flow-frame-vars">
+                    ${(b.variables || []).map(v => `<div class="flow-frame-var-row flow-frame-var-row--static">${this.runInputHtml(v)}</div>`).join("")}
+                </div>
+            </div>`;
+    },
+
+    /** Input real para una variable de pantalla en ejecución, según su tipo. */
+    runInputHtml(v) {
+        if (v.selectMode && v.selectMode !== "unico") return this.selOptHtml(v);
+
+        const id = `actupdrunvar_${v.id}`;
+        const label = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}</label>`;
+        if (v.type === "FILE") {
+            // Sin orquestador de storage en Actualización de tablas: se recoge
+            // el nombre del fichero como valor de texto, sin subirlo.
+            return `
+                <div class="flow-field-preview flow-field-preview--file">
+                    ${label}
+                    <label class="file-input-btn" for="${id}">
+                        <span class="file-input-btn-icon">📎</span>
+                        <span class="file-input-btn-text" data-file-text="${id}">Elegir archivo…</span>
+                    </label>
+                    <input type="file" class="file-input-native" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="FILE_NAME_ONLY">
+                </div>`;
+        }
+        if (v.type === "BOOLEAN") {
+            return `<div class="flow-field-preview flow-field-preview--checkbox"><input type="checkbox" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="BOOLEAN">${label}</div>`;
+        }
+        const htmlType = { INTEGER: "number", FLOAT: "number", NUMERIC: "number", DATE: "date", DATETIME: "datetime-local", TIMESTAMP: "datetime-local" }[v.type] || "text";
+        return `<div class="flow-field-preview">${label}<input type="${htmlType}" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="${UI.escapeHtml(v.type || "STRING")}"></div>`;
+    },
+
+    // ---- editor de select-options (rango / varios valores / cualquiera), igual que en flow_run.js ----
+    selOptDefaultRow(mode) {
+        return { sign: "I", option: mode === "rango" ? "BT" : "EQ", low: "", high: "" };
+    },
+
+    selOptNeedsHigh(option) {
+        return option === "BT" || option === "NB";
+    },
+
+    selOptHtml(v) {
+        if (!this.selOptState[v.id]) this.selOptState[v.id] = [this.selOptDefaultRow(v.selectMode)];
+        return `<div class="flow-field-preview flow-field-preview--selopt" id="actupd_selopt_wrap_${v.id}">${this.selOptInnerHtml(v)}</div>`;
+    },
+
+    selOptInnerHtml(v) {
+        const rows = this.selOptState[v.id] || [this.selOptDefaultRow(v.selectMode)];
+        return `
+            <label>${UI.escapeHtml(v.label || v.name)}</label>
+            <div class="selopt-table">
+                ${rows.map((r, idx) => this.selOptRowHtml(v, idx, r)).join("")}
+            </div>
+            <button type="button" class="flow-mini-btn selopt-add-btn" data-selopt-add="${v.id}">+ Valor</button>`;
+    },
+
+    SELOPT_MODE_OPTIONS: {
+        rango: [
+            { value: "BT", label: "Entre" }, { value: "GE", label: "Mayor o igual que" },
+            { value: "LE", label: "Menor o igual que" }, { value: "GT", label: "Mayor que" },
+            { value: "LT", label: "Menor que" }, { value: "EQ", label: "Igual a" }
+        ],
+        multiple: [{ value: "EQ", label: "Igual a" }, { value: "NE", label: "Distinto de" }],
+        cualquiera: [
+            { value: "EQ", label: "Igual a (EQ)" }, { value: "NE", label: "Distinto de (NE)" },
+            { value: "GT", label: "Mayor que (GT)" }, { value: "GE", label: "Mayor o igual (GE)" },
+            { value: "LT", label: "Menor que (LT)" }, { value: "LE", label: "Menor o igual (LE)" },
+            { value: "BT", label: "Entre (BT)" }, { value: "NB", label: "No entre (NB)" },
+            { value: "CP", label: "Contiene patrón, admite * (CP)" }, { value: "NP", label: "No contiene patrón (NP)" }
+        ]
+    },
+
+    selOptRowHtml(v, idx, row) {
+        const options = this.SELOPT_MODE_OPTIONS[v.selectMode] || this.SELOPT_MODE_OPTIONS.cualquiera;
+        const needsHigh = this.selOptNeedsHigh(row.option);
+        return `
+            <div class="selopt-row">
+                <select class="selopt-sign" data-selopt-field="sign" data-selopt-var="${v.id}" data-selopt-idx="${idx}" title="Incluir / excluir">
+                    <option value="I" ${row.sign !== "E" ? "selected" : ""}>Incl.</option>
+                    <option value="E" ${row.sign === "E" ? "selected" : ""}>Excl.</option>
+                </select>
+                <select class="selopt-option" data-selopt-field="option" data-selopt-var="${v.id}" data-selopt-idx="${idx}">
+                    ${options.map(o => `<option value="${o.value}" ${row.option === o.value ? "selected" : ""}>${o.label}</option>`).join("")}
+                </select>
+                <input type="text" class="selopt-low" data-selopt-field="low" data-selopt-var="${v.id}" data-selopt-idx="${idx}"
+                       placeholder="Valor" value="${UI.escapeHtml(row.low || "")}">
+                <input type="text" class="selopt-high" data-selopt-field="high" data-selopt-var="${v.id}" data-selopt-idx="${idx}"
+                       placeholder="y" value="${UI.escapeHtml(row.high || "")}" ${needsHigh ? "" : 'style="display:none"'}>
+                <button type="button" class="selopt-remove-btn" data-selopt-remove="${v.id}:${idx}" title="Eliminar valor">✕</button>
+            </div>`;
+    },
+
+    bindSelOptDelegation(body) {
+        if (this._selOptDelegationBound) return;
+        this._selOptDelegationBound = true;
+
+        body.addEventListener("click", (e) => {
+            const addBtn = e.target.closest("[data-selopt-add]");
+            if (addBtn) {
+                const varId = addBtn.dataset.seloptAdd;
+                const v = this.findRunVariableById(varId);
+                if (!v) return;
+                this.selOptState[varId] = this.selOptState[varId] || [];
+                this.selOptState[varId].push(this.selOptDefaultRow(v.selectMode));
+                this.refreshSelOptWrap(v);
+                return;
+            }
+            const removeBtn = e.target.closest("[data-selopt-remove]");
+            if (removeBtn) {
+                const [varId, idxStr] = removeBtn.dataset.seloptRemove.split(":");
+                const idx = parseInt(idxStr, 10);
+                const v = this.findRunVariableById(varId);
+                if (!v || !this.selOptState[varId]) return;
+                this.selOptState[varId].splice(idx, 1);
+                if (!this.selOptState[varId].length) this.selOptState[varId].push(this.selOptDefaultRow(v.selectMode));
+                this.refreshSelOptWrap(v);
+            }
         });
+
+        body.addEventListener("change", (e) => {
+            const el = e.target.closest("[data-selopt-field]");
+            if (!el) return;
+            const varId = el.dataset.seloptVar;
+            const idx = parseInt(el.dataset.seloptIdx, 10);
+            const field = el.dataset.seloptField;
+            const rows = this.selOptState[varId];
+            if (!rows || !rows[idx]) return;
+            rows[idx][field] = el.value;
+            if (field === "option") {
+                const v = this.findRunVariableById(varId);
+                if (v) this.refreshSelOptWrap(v);
+            }
+        });
+    },
+
+    refreshSelOptWrap(v) {
+        const wrap = document.getElementById(`actupd_selopt_wrap_${v.id}`);
+        if (!wrap) return;
+        wrap.innerHTML = this.selOptInnerHtml(v);
+    },
+
+    findRunVariableById(varId) {
+        return this.flatVars(this.runScreen).find(v => v.id === varId) || null;
+    },
+
+    /** Recoge del DOM {nombre: valor} para las variables de la pantalla de ejecución.
+     *  Las variables en modo rango/varios/cualquiera devuelven la tabla de
+     *  select-options: [{sign, option, low, high}, ...]. */
+    collectRunScreenValues() {
+        const values = {};
+        document.querySelectorAll("#actUpdRunBody [data-var-name]").forEach(el => {
+            const name = el.dataset.varName;
+            const type = el.dataset.varType;
+            if (type === "FILE_NAME_ONLY") {
+                values[name] = (el.files && el.files[0]) ? el.files[0].name : "";
+            } else if (type === "BOOLEAN") {
+                values[name] = el.checked;
+            } else {
+                values[name] = el.value;
+            }
+        });
+
+        this.flatVars(this.runScreen).forEach(v => {
+            if (v.selectMode && v.selectMode !== "unico") {
+                const rows = (this.selOptState[v.id] || []).filter(r => (r.low || "").toString().trim() !== "");
+                values[v.name] = rows.map(r => ({
+                    sign: r.sign === "E" ? "E" : "I",
+                    option: r.option || "EQ",
+                    low: r.low || "",
+                    high: this.selOptNeedsHigh(r.option) ? (r.high || "") : ""
+                }));
+            }
+        });
+
+        return values;
+    },
+
+    /** Traduce una fila de select-options (sign/option/low/high) a una condición SQL. */
+    selOptRowSql(col, row) {
+        const low = Provider.esc(row.low), high = Provider.esc(row.high || "");
+        switch (row.option) {
+            case "EQ": return `${col} = '${low}'`;
+            case "NE": return `${col} <> '${low}'`;
+            case "GT": return `${col} > '${low}'`;
+            case "GE": return `${col} >= '${low}'`;
+            case "LT": return `${col} < '${low}'`;
+            case "LE": return `${col} <= '${low}'`;
+            case "BT": return `${col} BETWEEN '${low}' AND '${high}'`;
+            case "NB": return `NOT (${col} BETWEEN '${low}' AND '${high}')`;
+            case "CP": return `${col} LIKE '${low.replace(/\*/g, "%")}'`;
+            case "NP": return `${col} NOT LIKE '${low.replace(/\*/g, "%")}'`;
+            default: return null;
+        }
+    },
+
+    /** Tabla select-options -> condición SQL: incluidos en OR, excluidos como AND NOT, al estilo select-options de SAP. */
+    selOptTableSql(col, rows) {
+        const inc = (rows || []).filter(r => r.sign !== "E" && (r.low || "").toString().trim() !== "");
+        const exc = (rows || []).filter(r => r.sign === "E" && (r.low || "").toString().trim() !== "");
+        const incSql = inc.map(r => this.selOptRowSql(col, r)).filter(Boolean);
+        const excSql = exc.map(r => this.selOptRowSql(col, r)).filter(Boolean);
+        const parts = [];
+        if (incSql.length) parts.push(`(${incSql.join(" OR ")})`);
+        excSql.forEach(c => parts.push(`NOT (${c})`));
+        return parts.length ? parts.join(" AND ") : null;
     },
 
     buildWhere(fields, variableValues) {
         const clauses = [];
         fields.forEach(f => {
             if (!f.filter || f.filter.type === "NONE") return;
-            let val = null;
-            if (f.filter.type === "CONST") val = f.filter.value;
-            else if (f.filter.type === "VAR") val = variableValues[this.varNameById(f.filter.value)];
-            if (val === null || val === undefined || val === "") return;
-            clauses.push(`${f.name} = '${Provider.esc(val)}'`);
+            if (f.filter.type === "CONST") {
+                if (f.filter.value === null || f.filter.value === undefined || f.filter.value === "") return;
+                clauses.push(`${f.name} = '${Provider.esc(f.filter.value)}'`);
+                return;
+            }
+            if (f.filter.type === "VAR") {
+                const varName = this.varNameById(f.filter.value);
+                const val = variableValues[varName];
+                if (Array.isArray(val)) {
+                    const sql = this.selOptTableSql(f.name, val);
+                    if (sql) clauses.push(sql);
+                } else if (val !== null && val !== undefined && val !== "") {
+                    clauses.push(`${f.name} = '${Provider.esc(val)}'`);
+                }
+            }
         });
         return clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
     },
 
     varNameById(id) {
-        // helper resuelto en tiempo de ejecución desde this._runVariables si existe
-        const v = (this._runVariables || []).find(x => x.id === id);
+        const v = this.flatVars(this.runScreen).find(x => x.id === id);
         return v ? v.name : id;
     },
 
-    async loadAndOpenGrid(record, fields, variableValues) {
-        this._runVariables = this.safeParse(record.VARIABLES_JSON, []);
-        const where = this.buildWhere(fields, variableValues);
-        const table = Provider.qualify(this.project.DATASET, record.TABLA);
+    async executeRun() {
+        const btn = document.getElementById("actUpdRunExecute");
+        const hint = document.getElementById("actUpdRunHint");
+        if (btn) btn.disabled = true;
+        if (hint) hint.textContent = "Cargando datos...";
 
-        UI.toast("Cargando datos...", "info");
         try {
+            const values = this.collectRunScreenValues();
+            const where = this.buildWhere(this.runFields, values);
+            const table = Provider.qualify(this.project.DATASET, this.runRecord.TABLA);
             const rows = await Provider.runQuery(`SELECT * FROM ${table} ${where}`);
-            await this.openGrid(record, fields, rows, where);
+            await this.buildGridState(this.runRecord, this.runFields, rows, where);
+            this.switchRunTab("table");
         } catch (err) {
             UI.toast("Error al cargar la tabla: " + err.message, "error");
+        } finally {
+            if (btn) btn.disabled = false;
+            if (hint) hint.textContent = "";
         }
     },
 
-    // ================================================================
-    // GRID (formato "Excel", igual que Mantenimiento de dimensiones):
-    // pegar bloques desde Excel, exportar/importar fichero, filtro por
-    // columna, y al grabar diff con resumen de altas/mods/bajas.
-    // ================================================================
-    async openGrid(record, fields, rows, where) {
+    // ---------------- Pestaña 2: Tabla (antes "Monitor") ----------------
+    // Mismo grid tipo "Excel" de siempre (pegar bloques, exportar/importar,
+    // filtro por columna, diff altas/mods/bajas al grabar), ahora incrustado
+    // en la pestaña "Tabla" en lugar de un monitor de progreso.
+    async buildGridState(record, fields, rows, where) {
         const state = {
             record, fields, where,
             columns: fields.map(f => f.name),
@@ -835,40 +1321,29 @@ const TableUpdates = {
                 state.optionsByField[f.name] = await this.resolveValidationOptions(f.validation);
             }
         }
+    },
 
-        let overlay = document.getElementById("actUpdGridModal");
-        if (!overlay) {
-            overlay = document.createElement("div");
-            overlay.className = "modal-overlay";
-            overlay.id = "actUpdGridModal";
-            document.body.appendChild(overlay);
+    renderRunTableView() {
+        const body = document.getElementById("actUpdRunBody");
+        if (!this.gridState) {
+            body.innerHTML = `<div class="module-empty">Todavía no se ha cargado la tabla. Pulsa "▶ Cargar tabla" en la pestaña "Pantalla de variables".</div>`;
+            return;
         }
-        overlay.innerHTML = `
-            <div class="modal-box modal-full">
-                <div class="modal-header">
-                    <div>
-                        <h3>${UI.escapeHtml(record[this.NAME_COL])}</h3>
-                        <span class="modal-subtitle">Tabla ${UI.escapeHtml(record.TABLA)} · ${state.columns.length} columna(s)</span>
-                    </div>
-                    <button class="modal-close" id="actUpdGridClose">&times;</button>
-                </div>
-                <div class="modal-body modal-body-flush">
-                    <div class="values-toolbar">
-                        <button class="btn btn-secondary btn-sm" id="actUpdGridAddRow">+ Añadir fila</button>
-                        <button class="btn btn-secondary btn-sm" id="actUpdGridExportCsv">Exportar CSV</button>
-                        <button class="btn btn-secondary btn-sm" id="actUpdGridExportXlsx">Exportar Excel</button>
-                        <button class="btn btn-secondary btn-sm" id="actUpdGridImport">Importar archivo</button>
-                        <input type="file" id="actUpdGridFileInput" accept=".csv,.xlsx,.xls" style="display:none;">
-                        <span class="values-toolbar-spacer"></span>
-                        <span class="values-row-count" id="actUpdGridCount"></span>
-                        <button class="btn btn-primary btn-sm" id="actUpdGridSave">Grabar</button>
-                    </div>
-                    <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). Filtra escribiendo bajo el nombre de cada columna. "Grabar" sustituye estas filas en la tabla; la clave (${UI.escapeHtml(state.columns[0])}) debe ser única.</p>
-                    <div class="values-grid-wrap values-grid-wrap--modal" id="actUpdGridWrap"><span class="spinner"></span></div>
-                </div>
-            </div>`;
+        const state = this.gridState;
+        body.innerHTML = `
+            <div class="values-toolbar">
+                <button class="btn btn-secondary btn-sm" id="actUpdGridAddRow">+ Añadir fila</button>
+                <button class="btn btn-secondary btn-sm" id="actUpdGridExportCsv">Exportar CSV</button>
+                <button class="btn btn-secondary btn-sm" id="actUpdGridExportXlsx">Exportar Excel</button>
+                <button class="btn btn-secondary btn-sm" id="actUpdGridImport">Importar archivo</button>
+                <input type="file" id="actUpdGridFileInput" accept=".csv,.xlsx,.xls" style="display:none;">
+                <span class="values-toolbar-spacer"></span>
+                <span class="values-row-count" id="actUpdGridCount"></span>
+                <button class="btn btn-primary btn-sm" id="actUpdGridSave">Grabar</button>
+            </div>
+            <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). Filtra escribiendo bajo el nombre de cada columna. "Grabar" sustituye estas filas en la tabla; la clave (${UI.escapeHtml(state.columns[0])}) debe ser única.</p>
+            <div class="values-grid-wrap values-grid-wrap--modal" id="actUpdGridWrap"><span class="spinner"></span></div>`;
 
-        document.getElementById("actUpdGridClose").addEventListener("click", () => overlay.remove());
         document.getElementById("actUpdGridAddRow").addEventListener("click", () => {
             const blank = {};
             state.columns.forEach(c => { blank[c] = ""; });
