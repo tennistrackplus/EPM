@@ -477,6 +477,8 @@ const Flows = {
                     <div id="flowMappingPart" class="flow-part flow-part--mapping"></div>
                 </div>
                 <div class="modal-footer">
+                    <button class="btn btn-secondary" id="flowFormRun" style="display:none;">▶ Ejecutar / Monitor</button>
+                    <span class="load-fn-toolbar-spacer"></span>
                     <button class="btn btn-secondary" id="flowFormCancel">Cancelar</button>
                     <button class="btn btn-primary" id="flowFormSave">Guardar flujo</button>
                 </div>
@@ -485,6 +487,10 @@ const Flows = {
         document.getElementById("flowFormClose").addEventListener("click", () => this.closeForm());
         document.getElementById("flowFormCancel").addEventListener("click", () => this.closeForm());
         document.getElementById("flowFormSave").addEventListener("click", () => this.save());
+        document.getElementById("flowFormRun").addEventListener("click", () => {
+            window.open(`flow_run.html?flujo_id=${encodeURIComponent(this.editing.id)}`, "_blank");
+        });
+        this.updateRunButtonVisibility();
 
         const titleEl = document.getElementById("flowModalTitle");
         titleEl.addEventListener("keydown", (e) => {
@@ -528,18 +534,13 @@ const Flows = {
     renderHeaderPart() {
         const part = document.getElementById("flowHeaderPart");
         const f = this.editing;
+        this.updateRunButtonVisibility();
 
         if (f.type !== "automatico") {
-            part.innerHTML = `
+            part.innerHTML = this.editingIsNew ? `
                 <div class="flow-header-row">
-                    <span class="load-fn-toolbar-spacer"></span>
-                    ${!this.editingIsNew ? `<button class="btn btn-primary btn-sm" id="btnOpenFlowRun">▶ Ejecutar / Monitor</button>` : `<span class="form-hint">Guarda el flujo para poder ejecutarlo.</span>`}
-                </div>`;
-            if (!this.editingIsNew) {
-                document.getElementById("btnOpenFlowRun").addEventListener("click", () => {
-                    window.open(`flow_run.html?flujo_id=${encodeURIComponent(f.id)}`, "_blank");
-                });
-            }
+                    <span class="form-hint">Guarda el flujo para poder ejecutarlo.</span>
+                </div>` : "";
             return;
         }
 
@@ -552,7 +553,6 @@ const Flows = {
                 <span class="flow-schedule-status ${scheduled ? "is-active" : ""}">⏱ ${UI.escapeHtml(statusText)}</span>
                 <span class="load-fn-toolbar-spacer"></span>
                 <button class="btn btn-secondary btn-sm" id="btnPlanFlow">📅 Planificar</button>
-                ${!this.editingIsNew ? `<button class="btn btn-primary btn-sm" id="btnRunFlow">▶ Ejecutar / Monitor</button>` : ""}
             </div>`;
 
         document.getElementById("btnPlanFlow").addEventListener("click", async () => {
@@ -561,12 +561,12 @@ const Flows = {
             f.schedule = result === "remove" ? null : result;
             this.renderHeaderPart();
         });
-        const btnRun = document.getElementById("btnRunFlow");
-        if (btnRun) {
-            btnRun.addEventListener("click", () => {
-                window.open(`flow_run.html?flujo_id=${encodeURIComponent(f.id)}`, "_blank");
-            });
-        }
+    },
+
+    /** Muestra/oculta el botón "Ejecutar / Monitor" del footer según si el flujo ya está guardado */
+    updateRunButtonVisibility() {
+        const btnRun = document.getElementById("flowFormRun");
+        if (btnRun) btnRun.style.display = this.editingIsNew ? "none" : "";
     },
 
     scheduleSummary(s) {

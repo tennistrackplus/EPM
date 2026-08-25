@@ -335,14 +335,18 @@ const TableUpdates = {
     renderScreenBlock() {
         const part = document.getElementById("actUpdScreenPart");
         part.innerHTML = `
-            <div class="flow-screen-header" id="actUpdScreenToggle">
-                <span class="flow-screen-caret">${this.screenCollapsed ? "▶" : "▼"}</span>
-                <strong>Pantalla de selección</strong>
-                <span class="flow-screen-hint">Variables para filtrar qué filas se traen a editar</span>
+            <div class="flow-part-header flow-part-header--screen">
+                <button type="button" class="flow-part-toggle" id="actUpdScreenToggle">
+                    <span class="flow-group-caret ${this.screenCollapsed ? "is-collapsed" : ""}">▾</span>
+                    <span>Pantalla de selección</span>
+                </button>
+                <div class="flow-screen-toolbar-mini">
+                    <button type="button" class="flow-mini-btn" id="actUpdAddVar" title="Añadir variable">+ Var</button>
+                </div>
             </div>
-            <div class="flow-screen-body" id="actUpdScreenBody" style="${this.screenCollapsed ? "display:none;" : ""}">
-                <div class="fields-builder-rows" id="actUpdVarsRows"></div>
-                <button class="btn btn-secondary btn-sm" id="actUpdAddVar">+ Añadir variable</button>
+            <div class="flow-screen-box ${this.screenCollapsed ? "is-collapsed" : ""}" id="actUpdScreenBox">
+                <p class="form-hint">Variables para filtrar qué filas se traen a editar; se pueden usar luego como "filtro variable" de un campo.</p>
+                <div class="flow-screen-blocks" id="actUpdVarsRows"></div>
             </div>`;
 
         document.getElementById("actUpdScreenToggle").addEventListener("click", () => {
@@ -351,6 +355,7 @@ const TableUpdates = {
         });
         document.getElementById("actUpdAddVar").addEventListener("click", () => {
             this.variables.push({ id: Provider.newId(), name: "", label: "", type: "STRING" });
+            this.screenCollapsed = false;
             this.renderScreenBlock();
         });
 
@@ -361,16 +366,26 @@ const TableUpdates = {
         const rowsEl = document.getElementById("actUpdVarsRows");
         if (!rowsEl) return;
         rowsEl.innerHTML = this.variables.map((v, idx) => `
-            <div class="field-row var-row" draggable="true" data-idx="${idx}">
-                <input type="text" class="var-name" placeholder="nombre técnico (ej. SOCIEDAD)" value="${UI.escapeHtml(v.name)}">
-                <input type="text" class="var-label" placeholder="Etiqueta a mostrar" value="${UI.escapeHtml(v.label)}">
-                <select class="var-type">
-                    ${["STRING", "INTEGER", "DATE"].map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
-                </select>
+            <div class="flow-screen-block flow-screen-block--var" draggable="true" data-idx="${idx}">
+                <span class="load-drag-handle">⠿</span>
+                <div class="flow-field-preview">
+                    <label>Variable</label>
+                    <input type="text" class="var-name" placeholder="nombre técnico (ej. SOCIEDAD)" value="${UI.escapeHtml(v.name)}">
+                </div>
+                <div class="flow-field-preview">
+                    <label>Etiqueta</label>
+                    <input type="text" class="var-label" placeholder="Etiqueta a mostrar" value="${UI.escapeHtml(v.label)}">
+                </div>
+                <div class="flow-field-preview">
+                    <label>Tipo</label>
+                    <select class="var-type">
+                        ${["STRING", "INTEGER", "DATE"].map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
+                    </select>
+                </div>
                 <button type="button" class="field-remove" title="Eliminar">✕</button>
             </div>`).join("") || `<div class="hierarchy-levels-empty">Sin variables: la tabla se cargará entera al ejecutar (salvo filtros constantes por campo).</div>`;
 
-        rowsEl.querySelectorAll(".var-row").forEach(row => {
+        rowsEl.querySelectorAll(".flow-screen-block--var").forEach(row => {
             const idx = parseInt(row.dataset.idx, 10);
             row.querySelector(".var-name").addEventListener("input", (e) => { this.variables[idx].name = e.target.value; });
             row.querySelector(".var-label").addEventListener("input", (e) => { this.variables[idx].label = e.target.value; });
@@ -795,7 +810,9 @@ const TableUpdates = {
     },
 
     // ================================================================
-    // GRID (tipo ALV): buscar, filtrar, ordenar, editar, fichero, grabar
+    // GRID (formato "Excel", igual que Mantenimiento de dimensiones):
+    // pegar bloques desde Excel, exportar/importar fichero, filtro por
+    // columna, y al grabar diff con resumen de altas/mods/bajas.
     // ================================================================
     async openGrid(record, fields, rows, where) {
         const state = {
@@ -804,7 +821,7 @@ const TableUpdates = {
             originalRows: rows.map(r => ({ ...r })),
             currentRows: rows.map(r => ({ ...r, __rowId: Provider.newId(), __isNew: false })),
             deletedRowIds: [],
-            search: "",
+            colFilters: {},
             sortCol: null, sortDir: 1,
             visibleCount: this.RENDER_CHUNK,
             optionsByField: {}
@@ -826,43 +843,41 @@ const TableUpdates = {
             overlay.id = "actUpdGridModal";
             document.body.appendChild(overlay);
         }
-        overlay.classList.add("visible");
         overlay.innerHTML = `
             <div class="modal-box modal-full">
                 <div class="modal-header">
-                    <h3>${UI.escapeHtml(record[this.NAME_COL])}</h3>
+                    <div>
+                        <h3>${UI.escapeHtml(record[this.NAME_COL])}</h3>
+                        <span class="modal-subtitle">Tabla ${UI.escapeHtml(record.TABLA)} · ${state.columns.length} columna(s)</span>
+                    </div>
                     <button class="modal-close" id="actUpdGridClose">&times;</button>
                 </div>
                 <div class="modal-body modal-body-flush">
-                    <div class="actupd-grid-toolbar">
-                        <input type="text" id="actUpdGridSearch" placeholder="Buscar en todas las columnas...">
+                    <div class="values-toolbar">
                         <button class="btn btn-secondary btn-sm" id="actUpdGridAddRow">+ Añadir fila</button>
-                        <button class="btn btn-secondary btn-sm" id="actUpdGridDelRows">Eliminar seleccionadas</button>
-                        <button class="btn btn-secondary btn-sm" id="actUpdGridDownload">⇩ Descargar</button>
-                        <button class="btn btn-secondary btn-sm" id="actUpdGridUpload">⇧ Cargar fichero</button>
-                        <input type="file" id="actUpdGridFileInput" accept=".xlsx,.xls,.csv" style="display:none;">
-                        <span class="actupd-grid-count" id="actUpdGridCount"></span>
+                        <button class="btn btn-secondary btn-sm" id="actUpdGridExportCsv">Exportar CSV</button>
+                        <button class="btn btn-secondary btn-sm" id="actUpdGridExportXlsx">Exportar Excel</button>
+                        <button class="btn btn-secondary btn-sm" id="actUpdGridImport">Importar archivo</button>
+                        <input type="file" id="actUpdGridFileInput" accept=".csv,.xlsx,.xls" style="display:none;">
+                        <span class="values-toolbar-spacer"></span>
+                        <span class="values-row-count" id="actUpdGridCount"></span>
                         <button class="btn btn-primary btn-sm" id="actUpdGridSave">Grabar</button>
                     </div>
-                    <div class="actupd-grid-wrap" id="actUpdGridWrap"><span class="spinner"></span></div>
+                    <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). Filtra escribiendo bajo el nombre de cada columna. "Grabar" sustituye estas filas en la tabla; la clave (${UI.escapeHtml(state.columns[0])}) debe ser única.</p>
+                    <div class="values-grid-wrap values-grid-wrap--modal" id="actUpdGridWrap"><span class="spinner"></span></div>
                 </div>
             </div>`;
 
         document.getElementById("actUpdGridClose").addEventListener("click", () => overlay.remove());
-        document.getElementById("actUpdGridSearch").addEventListener("input", (e) => {
-            state.search = e.target.value.toLowerCase();
-            state.visibleCount = this.RENDER_CHUNK;
-            this.renderGrid();
-        });
         document.getElementById("actUpdGridAddRow").addEventListener("click", () => {
             const blank = {};
             state.columns.forEach(c => { blank[c] = ""; });
             state.currentRows.push({ ...blank, __rowId: Provider.newId(), __isNew: true });
             this.renderGrid();
         });
-        document.getElementById("actUpdGridDelRows").addEventListener("click", () => this.deleteSelectedRows());
-        document.getElementById("actUpdGridDownload").addEventListener("click", () => this.downloadGrid());
-        document.getElementById("actUpdGridUpload").addEventListener("click", () => document.getElementById("actUpdGridFileInput").click());
+        document.getElementById("actUpdGridExportCsv").addEventListener("click", () => this.exportGrid("csv"));
+        document.getElementById("actUpdGridExportXlsx").addEventListener("click", () => this.exportGrid("xlsx"));
+        document.getElementById("actUpdGridImport").addEventListener("click", () => document.getElementById("actUpdGridFileInput").click());
         document.getElementById("actUpdGridFileInput").addEventListener("change", (e) => this.uploadGrid(e));
         document.getElementById("actUpdGridSave").addEventListener("click", () => this.commitGrid());
 
@@ -919,8 +934,10 @@ const TableUpdates = {
     getFilteredSortedRows() {
         const state = this.gridState;
         let rows = state.currentRows;
-        if (state.search) {
-            rows = rows.filter(r => state.columns.some(c => String(r[c] ?? "").toLowerCase().includes(state.search)));
+
+        const activeFilters = Object.entries(state.colFilters).filter(([, v]) => v);
+        if (activeFilters.length) {
+            rows = rows.filter(r => activeFilters.every(([col, term]) => String(r[col] ?? "").toLowerCase().includes(term)));
         }
         if (state.sortCol) {
             rows = rows.slice().sort((a, b) => {
@@ -936,26 +953,39 @@ const TableUpdates = {
     renderGrid() {
         const state = this.gridState;
         const wrap = document.getElementById("actUpdGridWrap");
+        if (!state.currentRows.length) {
+            const blank = {};
+            state.columns.forEach(c => { blank[c] = ""; });
+            state.currentRows.push({ ...blank, __rowId: Provider.newId(), __isNew: true });
+        }
         const filtered = this.getFilteredSortedRows();
         const visible = filtered.slice(0, state.visibleCount);
 
         const countEl = document.getElementById("actUpdGridCount");
-        if (countEl) countEl.textContent = `${filtered.length} de ${state.currentRows.length} filas`;
+        if (countEl) countEl.textContent = `${filtered.length} de ${state.currentRows.length} fila(s)`;
 
         const headerCells = state.fields.map(f => {
             const arrow = state.sortCol === f.name ? (state.sortDir === 1 ? " ▲" : " ▼") : "";
-            return `<th data-sort="${UI.escapeHtml(f.name)}" title="${UI.escapeHtml(f.description || "")}">${UI.escapeHtml(f.description || f.name)}${arrow}</th>${f.validation && f.validation.showText ? `<th class="actupd-desc-col">Texto</th>` : ""}`;
+            return `<th data-sort="${UI.escapeHtml(f.name)}" title="${UI.escapeHtml(f.description || "")}">${UI.escapeHtml(f.description || f.name)}${arrow}<br><span class="col-type">${UI.escapeHtml((f.validation && f.validation.type !== "NONE") ? "validado" : "texto")}</span></th>${f.validation && f.validation.showText ? `<th class="actupd-desc-col">Texto</th>` : ""}`;
         }).join("");
+
+        const filterCells = state.fields.map(f => `
+            <th class="actupd-filter-th"><input type="text" class="actupd-col-filter" data-col="${UI.escapeHtml(f.name)}" placeholder="Filtrar..." value="${UI.escapeHtml(state.colFilters[f.name] || "")}"></th>
+            ${f.validation && f.validation.showText ? `<th class="actupd-filter-th actupd-desc-col"></th>` : ""}
+        `).join("");
 
         const rowsHtml = visible.map(row => {
             const cells = state.fields.map(f => this.renderCell(row, f)).join("");
-            return `<tr data-row="${row.__rowId}"><td class="actupd-sel-col"><input type="checkbox" class="actupd-row-check" data-row="${row.__rowId}"></td>${cells}</tr>`;
+            return `<tr data-row="${row.__rowId}">${cells}<td class="values-row-remove"><button type="button" data-remove-row="${row.__rowId}" title="Eliminar fila">✕</button></td></tr>`;
         }).join("");
 
         wrap.innerHTML = `
-            <table class="actupd-grid">
-                <thead><tr><th class="actupd-sel-col"></th>${headerCells}</tr></thead>
-                <tbody>${rowsHtml || `<tr><td colspan="99">Sin filas.</td></tr>`}</tbody>
+            <table class="values-grid actupd-values-grid">
+                <thead>
+                    <tr>${headerCells}<th></th></tr>
+                    <tr>${filterCells}<th></th></tr>
+                </thead>
+                <tbody id="actUpdGridBody">${rowsHtml}</tbody>
             </table>
             ${filtered.length > visible.length ? `<button class="btn btn-secondary btn-sm" id="actUpdGridMore">Mostrar más (${filtered.length - visible.length} restantes)</button>` : ""}
         `;
@@ -968,8 +998,29 @@ const TableUpdates = {
                 this.renderGrid();
             });
         });
+        wrap.querySelectorAll(".actupd-col-filter").forEach(inp => {
+            inp.addEventListener("click", (e) => e.stopPropagation());
+            inp.addEventListener("input", (e) => {
+                state.colFilters[e.target.dataset.col] = e.target.value.toLowerCase();
+                state.visibleCount = this.RENDER_CHUNK;
+                this.renderGrid();
+                const again = wrap.querySelector(`.actupd-col-filter[data-col="${CSS.escape(e.target.dataset.col)}"]`);
+                if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+            });
+        });
         const moreBtn = document.getElementById("actUpdGridMore");
         if (moreBtn) moreBtn.addEventListener("click", () => { state.visibleCount += this.RENDER_CHUNK; this.renderGrid(); });
+
+        wrap.querySelectorAll("[data-remove-row]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                this.syncGridFromDom();
+                const rowId = btn.dataset.removeRow;
+                const row = state.currentRows.find(r => r.__rowId === rowId);
+                if (row && !row.__isNew) state.deletedRowIds.push(rowId);
+                state.currentRows = state.currentRows.filter(r => r.__rowId !== rowId);
+                this.renderGrid();
+            });
+        });
 
         wrap.querySelectorAll(".actupd-cell-input").forEach(el => {
             const evt = el.tagName === "SELECT" || el.type === "checkbox" ? "change" : "input";
@@ -978,6 +1029,9 @@ const TableUpdates = {
         wrap.querySelectorAll(".actupd-search-trigger").forEach(btn => {
             btn.addEventListener("click", () => this.openSearchHelp(btn.dataset.row, btn.dataset.field));
         });
+
+        const tbody = document.getElementById("actUpdGridBody");
+        tbody.addEventListener("paste", (e) => this.handlePaste(e));
     },
 
     renderCell(row, f) {
@@ -986,7 +1040,7 @@ const TableUpdates = {
         let inputHtml;
 
         if (!v || v.type === "NONE") {
-            inputHtml = `<input type="text" class="actupd-cell-input" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" value="${UI.escapeHtml(val)}">`;
+            inputHtml = `<input type="text" class="actupd-cell-input" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" data-col-idx="${this.gridState.columns.indexOf(f.name)}" value="${UI.escapeHtml(val)}">`;
         } else {
             const options = this.gridState.optionsByField[f.name] || [];
             if (v.searchHelp === "CHECKBOX" && options.length === 2) {
@@ -994,7 +1048,7 @@ const TableUpdates = {
                 inputHtml = `<input type="checkbox" class="actupd-cell-input" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" data-off="${UI.escapeHtml(options[0].id)}" data-on="${UI.escapeHtml(options[1].id)}" ${checked ? "checked" : ""}>`;
             } else if (v.searchHelp === "SEARCH") {
                 inputHtml = `<span class="actupd-search-cell">
-                    <input type="text" class="actupd-cell-input" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" value="${UI.escapeHtml(val)}">
+                    <input type="text" class="actupd-cell-input" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" data-col-idx="${this.gridState.columns.indexOf(f.name)}" value="${UI.escapeHtml(val)}">
                     <button type="button" class="actupd-search-trigger" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" title="Buscar">🔍</button>
                 </span>`;
             } else {
@@ -1012,6 +1066,21 @@ const TableUpdates = {
             return cellTd + `<td class="actupd-desc-col">${UI.escapeHtml(opt ? opt.desc : "")}</td>`;
         }
         return cellTd;
+    },
+
+    /** Vuelca lo que hay en los <input>/<select> del DOM a state.currentRows (por si hay cambios sin evento "change" disparado) */
+    syncGridFromDom() {
+        const state = this.gridState;
+        const tbody = document.getElementById("actUpdGridBody");
+        if (!tbody) return;
+        tbody.querySelectorAll("tr").forEach(tr => {
+            const row = state.currentRows.find(r => r.__rowId === tr.dataset.row);
+            if (!row) return;
+            tr.querySelectorAll(".actupd-cell-input").forEach(el => {
+                if (el.type === "checkbox") row[el.dataset.field] = el.checked ? el.dataset.on : el.dataset.off;
+                else row[el.dataset.field] = el.value;
+            });
+        });
     },
 
     onCellChange(e, el) {
@@ -1035,6 +1104,45 @@ const TableUpdates = {
         }
     },
 
+    /**
+     * Pegado de bloques de Excel (mismo comportamiento que Mantenimiento de
+     * dimensiones): pegar un bloque con tabulaciones/saltos de línea sobre
+     * una celda rellena esa celda y las siguientes en fila/columna,
+     * añadiendo filas nuevas si hace falta.
+     */
+    handlePaste(e) {
+        const target = e.target;
+        if (!target.matches(".actupd-cell-input") || target.tagName !== "INPUT") return;
+        const text = (e.clipboardData || window.clipboardData).getData("text");
+        if (!text || (!text.includes("\t") && !text.includes("\n"))) return; // pegado simple de una celda: comportamiento nativo
+
+        e.preventDefault();
+        this.syncGridFromDom();
+
+        const state = this.gridState;
+        const pastedRows = text.replace(/\r/g, "").split("\n").filter((r, i, arr) => !(i === arr.length - 1 && r === ""));
+        const startRowId = target.closest("tr").dataset.row;
+        const startRowIdx = state.currentRows.findIndex(r => r.__rowId === startRowId);
+        const startColIdx = parseInt(target.dataset.colIdx, 10);
+
+        pastedRows.forEach((rowText, rOffset) => {
+            const cells = rowText.split("\t");
+            let rowIdx = startRowIdx + rOffset;
+            while (rowIdx >= state.currentRows.length) {
+                const blank = {};
+                state.columns.forEach(c => { blank[c] = ""; });
+                state.currentRows.push({ ...blank, __rowId: Provider.newId(), __isNew: true });
+            }
+            cells.forEach((cellText, cOffset) => {
+                const colIdx = startColIdx + cOffset;
+                if (colIdx >= state.columns.length) return;
+                state.currentRows[rowIdx][state.columns[colIdx]] = cellText;
+            });
+        });
+
+        this.renderGrid();
+    },
+
     openSearchHelp(rowId, field) {
         const state = this.gridState;
         const options = state.optionsByField[field] || [];
@@ -1045,7 +1153,6 @@ const TableUpdates = {
             overlay.id = "actUpdSearchHelpModal";
             document.body.appendChild(overlay);
         }
-        overlay.classList.add("visible");
         overlay.innerHTML = `
             <div class="modal-box">
                 <div class="modal-header"><h3>Buscar valor — ${UI.escapeHtml(field)}</h3><button class="modal-close" id="actUpdSHClose">&times;</button></div>
@@ -1054,6 +1161,7 @@ const TableUpdates = {
                     <div id="actUpdSHResults" class="actupd-sh-results"></div>
                 </div>
             </div>`;
+        overlay.classList.add("visible");
         const close = () => overlay.remove();
         document.getElementById("actUpdSHClose").addEventListener("click", close);
 
@@ -1065,6 +1173,7 @@ const TableUpdates = {
             ).join("") || `<div class="hierarchy-levels-empty">Sin resultados.</div>`;
             document.querySelectorAll("#actUpdSHResults .actupd-sh-item").forEach(item => {
                 item.addEventListener("click", () => {
+                    this.syncGridFromDom();
                     const row = state.currentRows.find(r => r.__rowId === rowId);
                     row[field] = item.dataset.id;
                     close();
@@ -1076,83 +1185,120 @@ const TableUpdates = {
         document.getElementById("actUpdSHSearch").addEventListener("input", (e) => renderResults(e.target.value));
     },
 
-    deleteSelectedRows() {
+    // ------------------------------------------------------------
+    // Exportar / Importar (igual que Mantenimiento de dimensiones)
+    // ------------------------------------------------------------
+    toAoa() {
+        this.syncGridFromDom();
         const state = this.gridState;
-        const ids = Array.from(document.querySelectorAll(".actupd-row-check:checked")).map(cb => cb.dataset.row);
-        if (!ids.length) { UI.toast("Selecciona al menos una fila.", "info"); return; }
-        ids.forEach(id => {
-            const row = state.currentRows.find(r => r.__rowId === id);
-            if (row && !row.__isNew) state.deletedRowIds.push(id);
-        });
-        state.currentRows = state.currentRows.filter(r => !ids.includes(r.__rowId));
-        this.renderGrid();
+        const header = state.columns;
+        const body = state.currentRows.map(r => state.columns.map(c => r[c] ?? ""));
+        return [header, ...body];
     },
 
-    downloadGrid() {
+    toCsv(aoa) {
+        return aoa.map(row => row.map(cell => {
+            const s = String(cell ?? "");
+            return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        }).join(",")).join("\n");
+    },
+
+    exportGrid(kind) {
         const state = this.gridState;
-        const data = state.currentRows.map(r => {
-            const out = {};
-            state.columns.forEach(c => { out[c] = r[c]; });
-            return out;
+        if (kind === "csv") {
+            const csv = this.toCsv(this.toAoa());
+            UI.downloadBlob(`${state.record.TABLA}.csv`, "\uFEFF" + csv, "text/csv;charset=utf-8");
+        } else {
+            const ws = XLSX.utils.aoa_to_sheet(this.toAoa());
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Datos");
+            XLSX.writeFile(wb, `${state.record.TABLA}.xlsx`);
+        }
+    },
+
+    parseFileToAoa(file) {
+        return new Promise((resolve, reject) => {
+            const isCsv = /\.csv$/i.test(file.name);
+            const reader = new FileReader();
+            reader.onerror = () => reject(new Error("No se pudo leer el archivo."));
+            reader.onload = () => {
+                try {
+                    const wb = isCsv
+                        ? XLSX.read(reader.result, { type: "string" })
+                        : XLSX.read(new Uint8Array(reader.result), { type: "array" });
+                    const ws = wb.Sheets[wb.SheetNames[0]];
+                    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
+                    resolve(aoa);
+                } catch (err) {
+                    reject(err);
+                }
+            };
+            if (isCsv) reader.readAsText(file, "utf-8");
+            else reader.readAsArrayBuffer(file);
         });
-        const ws = XLSX.utils.json_to_sheet(data);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "Datos");
-        XLSX.writeFile(wb, `${state.record.TABLA}.xlsx`);
     },
 
     /**
-     * Carga desde fichero: SUSTITUYE el contenido del grid. Para conservar
-     * la identidad de las filas ya existentes (y así poder distinguir
-     * "modificada" de "borrada + añadida" en el resumen de cambios), se
-     * empareja cada fila del fichero con una fila original por el valor de
-     * su PRIMERA columna (asumida como identificador natural, patrón que
-     * siguen las tablas de Draco). Si no hay match, se trata como fila
-     * nueva; cualquier fila original sin match en el fichero se marca
-     * como eliminada.
+     * Carga desde fichero: SUSTITUYE el contenido del grid, igual que en
+     * Mantenimiento de dimensiones. Para conservar la identidad de las
+     * filas ya existentes (y así poder distinguir "modificada" de "borrada
+     * + añadida" en el resumen de cambios), se empareja cada fila del
+     * fichero con una fila original por el valor de su PRIMERA columna
+     * (asumida como identificador natural). Si no hay match, se trata
+     * como fila nueva; cualquier fila original sin match se marca borrada.
      */
-    uploadGrid(e) {
+    async uploadGrid(e) {
         const file = e.target.files[0];
+        e.target.value = "";
         if (!file) return;
         const state = this.gridState;
-        const reader = new FileReader();
-        reader.onload = async (ev) => {
-            try {
-                const wb = XLSX.read(new Uint8Array(ev.target.result), { type: "array" });
-                const ws = wb.Sheets[wb.SheetNames[0]];
-                const parsed = XLSX.utils.sheet_to_json(ws, { defval: "" });
+        try {
+            const aoa = await this.parseFileToAoa(file);
+            if (!aoa.length) { UI.toast("El archivo está vacío.", "error"); return; }
 
-                const keyCol = state.columns[0];
-                const originalByKey = new Map(state.originalRows.map(r => [String(r[keyCol]), r]));
-                const stillPresentKeys = new Set();
-
-                const newCurrent = parsed.map(pRow => {
-                    const keyVal = String(pRow[keyCol]);
-                    const original = originalByKey.get(keyVal);
-                    stillPresentKeys.add(keyVal);
-                    const rowId = original ? (state.currentRows.find(r => String(r[keyCol]) === keyVal)?.__rowId || Provider.newId()) : Provider.newId();
-                    const row = { __rowId: rowId, __isNew: !original };
-                    state.columns.forEach(c => { row[c] = pRow[c] !== undefined ? pRow[c] : ""; });
-                    return row;
+            const [headerRow, ...dataRows] = aoa;
+            const headerMap = headerRow.map(h => String(h).trim().toUpperCase());
+            const parsed = dataRows
+                .filter(r => r.some(c => String(c ?? "").trim() !== ""))
+                .map(r => {
+                    const obj = {};
+                    state.columns.forEach(c => {
+                        const idx = headerMap.indexOf(c.toUpperCase());
+                        obj[c] = idx !== -1 ? String(r[idx] ?? "") : "";
+                    });
+                    return obj;
                 });
 
-                state.originalRows.forEach(r => {
-                    if (!stillPresentKeys.has(String(r[keyCol]))) {
-                        const existing = state.currentRows.find(cr => String(cr[keyCol]) === String(r[keyCol]) && !cr.__isNew);
-                        if (existing) state.deletedRowIds.push(existing.__rowId);
-                    }
-                });
+            if (!parsed.length) { UI.toast("No se encontraron filas de datos en el archivo.", "error"); return; }
 
-                state.currentRows = newCurrent;
-                state.visibleCount = this.RENDER_CHUNK;
-                UI.toast(`Fichero cargado: ${parsed.length} filas.`, "success");
-                this.renderGrid();
-            } catch (err) {
-                UI.toast("Error al leer el fichero: " + err.message, "error");
-            }
-            e.target.value = "";
-        };
-        reader.readAsArrayBuffer(file);
+            this.syncGridFromDom();
+            const keyCol = state.columns[0];
+            const originalByKey = new Map(state.originalRows.map(r => [String(r[keyCol]), r]));
+            const currentByKey = new Map(state.currentRows.map(r => [String(r[keyCol]), r]));
+            const stillPresentKeys = new Set();
+
+            const newCurrent = parsed.map(pRow => {
+                const keyVal = String(pRow[keyCol]);
+                const original = originalByKey.get(keyVal);
+                const existingCurrent = currentByKey.get(keyVal);
+                stillPresentKeys.add(keyVal);
+                const rowId = existingCurrent ? existingCurrent.__rowId : Provider.newId();
+                const row = { __rowId: rowId, __isNew: existingCurrent ? existingCurrent.__isNew : !original };
+                state.columns.forEach(c => { row[c] = pRow[c] !== undefined ? pRow[c] : ""; });
+                return row;
+            });
+
+            state.originalRows.forEach(r => {
+                if (!stillPresentKeys.has(String(r[keyCol]))) state.deletedRowIds.push(String(r[keyCol]));
+            });
+
+            state.currentRows = newCurrent;
+            state.visibleCount = this.RENDER_CHUNK;
+            UI.toast(`Fichero cargado: ${parsed.length} fila(s). Pulsa "Grabar" para confirmarlo en la base de datos.`, "success");
+            this.renderGrid();
+        } catch (err) {
+            UI.toast("Error al leer el fichero: " + err.message, "error");
+        }
     },
 
     computeDiff() {
@@ -1175,22 +1321,52 @@ const TableUpdates = {
         return { added, modified, deleted };
     },
 
+    /** Marca en rojo (clase .duplicate-row, igual que Mantenimiento de dimensiones) las filas con clave repetida */
+    highlightDuplicateRows(dupKeys) {
+        const tbody = document.getElementById("actUpdGridBody");
+        if (!tbody) return;
+        const state = this.gridState;
+        const keyCol = state.columns[0];
+        tbody.querySelectorAll("tr").forEach(tr => tr.classList.remove("duplicate-row"));
+        state.currentRows.forEach(r => {
+            if (dupKeys.has(String(r[keyCol]).trim().toUpperCase())) {
+                const tr = tbody.querySelector(`tr[data-row="${r.__rowId}"]`);
+                if (tr) tr.classList.add("duplicate-row");
+            }
+        });
+    },
+
     async commitGrid() {
         const state = this.gridState;
+        this.syncGridFromDom();
 
-        // Valida "permite vacío" antes de grabar.
+        // Clave única (misma validación que Mantenimiento de dimensiones).
+        const keyCol = state.columns[0];
+        const seen = new Map();
+        const dupKeys = new Set();
+        state.currentRows.forEach(r => {
+            const k = String(r[keyCol] ?? "").trim().toUpperCase();
+            if (!k) return;
+            if (seen.has(k)) dupKeys.add(k); else seen.set(k, true);
+        });
+        if (dupKeys.size) {
+            this.renderGrid();
+            this.highlightDuplicateRows(dupKeys);
+            UI.toast(`No se puede grabar: hay ${dupKeys.size} valor(es) de "${keyCol}" repetidos. Corrige o elimina las filas duplicadas (marcadas en rojo).`, "error");
+            return;
+        }
+
+        // "Permite vacío" por campo validado.
         const violations = [];
         state.fields.forEach(f => {
             if (f.validation && f.validation.type !== "NONE" && f.validation.allowEmpty === false) {
                 state.currentRows.forEach(r => {
-                    if (r[f.name] === "" || r[f.name] === null || r[f.name] === undefined) {
-                        violations.push({ campo: f.name, row: r });
-                    }
+                    if (r[f.name] === "" || r[f.name] === null || r[f.name] === undefined) violations.push(f.name);
                 });
             }
         });
         if (violations.length) {
-            UI.toast(`No se puede grabar: ${violations.length} valor(es) vacío(s) en campos que no lo permiten (${[...new Set(violations.map(v => v.campo))].join(", ")}).`, "error");
+            UI.toast(`No se puede grabar: hay valor(es) vacío(s) en campos que no lo permiten (${[...new Set(violations)].join(", ")}).`, "error");
             return;
         }
 
@@ -1204,10 +1380,13 @@ const TableUpdates = {
             `Se van a grabar ${diff.added.length} alta(s), ${diff.modified.length} modificación(es) y ${diff.deleted.length} baja(s) en ${state.record.TABLA}. ¿Continuar?`);
         if (!ok) return;
 
+        const btn = document.getElementById("actUpdGridSave");
+        if (btn) { btn.disabled = true; btn.textContent = "Guardando..."; }
         try {
             const table = Provider.qualify(this.project.DATASET, state.record.TABLA);
-            // Estrategia simple y robusta (no requiere clave garantizada):
-            // se borra el subconjunto filtrado y se reinserta completo.
+            // Estrategia simple y robusta (no requiere clave garantizada a
+            // nivel de motor): se borra el subconjunto filtrado y se
+            // reinserta completo.
             await Provider.runQuery(`DELETE FROM ${table} ${state.where}`);
 
             const CHUNK = 500;
@@ -1228,6 +1407,8 @@ const TableUpdates = {
             state.currentRows.forEach(r => { r.__isNew = false; });
         } catch (err) {
             UI.toast("Error al grabar: " + err.message, "error");
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = "Grabar"; }
         }
     },
 
@@ -1239,7 +1420,6 @@ const TableUpdates = {
             overlay.id = "actUpdSummaryModal";
             document.body.appendChild(overlay);
         }
-        overlay.classList.add("visible");
         const state = this.gridState;
         overlay.innerHTML = `
             <div class="modal-box">
@@ -1252,6 +1432,7 @@ const TableUpdates = {
                     <div id="actUpdSummaryDetailBox" class="actupd-summary-detail" style="display:none;"></div>
                 </div>
             </div>`;
+        overlay.classList.add("visible");
         document.getElementById("actUpdSummaryClose").addEventListener("click", () => overlay.remove());
         document.getElementById("actUpdSummaryDetail").addEventListener("click", (e) => {
             const box = document.getElementById("actUpdSummaryDetailBox");
