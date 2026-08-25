@@ -1,0 +1,124 @@
+/* ---------- Editor de widget tipo Tabla (estilo Excel) ---------- */
+.wte-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-sunken);
+    flex-shrink: 0;
+}
+
+.wte-toolbar select {
+    height: 30px;
+    font-size: var(--fs-sm);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 0 6px;
+    background: var(--surface-card);
+}
+
+#wteFont { width: 110px; }
+#wteSize { width: 56px; }
+
+.wte-toolbar-sep {
+    width: 1px;
+    height: 22px;
+    background: var(--border-default);
+    margin: 0 2px;
+}
+
+.wte-toolbar-spacer { flex: 1; }
+
+.wte-color-label {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+
+.wte-color-label input[type="color"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+
+.wte-grid-wrap {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    background: var(--gray-50);
+    padding: 12px;
+}
+
+.wte-table {
+    border-collapse: collapse;
+    background: #fff;
+    user-select: none;
+}
+
+.wte-table th,
+.wte-table td {
+    box-sizing: border-box;
+}
+
+.wte-corner {
+    width: 40px;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-default);
+}
+
+.wte-colhead,
+.wte-rowhead {
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-default);
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+    position: sticky;
+    z-index: 1;
+}
+
+.wte-colhead {
+    top: 0;
+}
+
+.wte-rowhead {
+    left: 0;
+    width: 40px;
+}
+
+.wte-colhead:hover,
+.wte-rowhead:hover {
+    background: var(--brand-primary-light);
+    color: var(--brand-primary-hover);
+}
+
+.wte-cell {
+    padding: 3px 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    cursor: cell;
+    outline: none;
+    vertical-align: middle;
+}
+
+.wte-cell-selected {
+    box-shadow: inset 0 0 0 9999px rgba(42, 91, 215, 0.08);
+}
+
+.wte-cell-anchor {
+    box-shadow: inset 0 0 0 2px var(--brand-primary);
+}
