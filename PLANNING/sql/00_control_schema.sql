@@ -52,8 +52,15 @@ CREATE TABLE IF NOT EXISTS `{PROJECT}.DRACO_CONTROL.CUBOS` (
   CAMPOS_JSON         STRING,            -- { dimensions:[...], measures:[...] } en JSON
   USUARIO             STRING,
   FECHA_CREACION      TIMESTAMP,
-  FECHA_MODIFICACION  TIMESTAMP
+  FECHA_MODIFICACION  TIMESTAMP,
+  MODELO_YAML_PATH    STRING,            -- ruta del modelo semántico dentro del stage (ver js/semantic-model.js)
+  MODELO_YAML_FECHA   TIMESTAMP          -- última vez que se generó/subió el YAML
 );
+
+-- 4bis. Migración para instalaciones ya existentes (idempotente, mismo
+--       comando en BigQuery y Snowflake):
+-- ALTER TABLE `{PROJECT}.DRACO_CONTROL.CUBOS` ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING;
+-- ALTER TABLE `{PROJECT}.DRACO_CONTROL.CUBOS` ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP;
 
 -- 5. Tabla de jerarquías -------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `{PROJECT}.DRACO_CONTROL.JERARQUIAS` (
