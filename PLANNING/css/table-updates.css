@@ -2,6 +2,22 @@
    ACTUALIZACIÓN DE TABLAS
    ============================================================ */
 
+/* Pantalla de ejecución (#actUpdRunModal): mismas pestañas que
+   flow_run.html (Flujos de carga), pero "Tabla" en vez de "Monitor". */
+.modal-box.modal-full .flow-run-tabs {
+    margin: 0;
+    padding: 0 18px;
+    flex-shrink: 0;
+    background-color: var(--surface-card);
+}
+.modal-box.modal-full .flow-run-screen {
+    padding-top: var(--space-4);
+    overflow-y: auto;
+}
+.modal-box.modal-full .flow-screen-blocks--run {
+    margin-top: 0;
+}
+
 .table-picker {
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
