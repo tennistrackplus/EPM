@@ -21,6 +21,18 @@ const Draco = {
         this.bindProjectBar();
         this.bindAdminMenu();
 
+        // Verifica (y crea si faltan) las tablas de control del esquema.
+        // El bootstrap normal solo se ejecuta al hacer login desde
+        // index.html; si la sesión ya estaba abierta y se añadió una
+        // tabla nueva (p.ej. WIDGETS), esto la crea sin forzar un
+        // logout/login. Es idempotente (CREATE TABLE IF NOT EXISTS) y no
+        // bloquea la carga de la app si falla (se avisa y se continúa).
+        try {
+            await DracoSchema.bootstrap();
+        } catch (err) {
+            UI.toast("No se pudo verificar el esquema de control: " + err.message, "error");
+        }
+
         await this.loadProjects();
         this.renderModule(this.currentModule);
     },
@@ -215,6 +227,7 @@ const Draco = {
             cargas: () => Loads.render(container, this.currentProject),
             "flujos-carga": () => Flows.render(container, this.currentProject),
             workflows: () => Workflows.render(container, this.currentProject),
+            widgets: () => Widgets.render(container, this.currentProject),
         };
 
         const labels = {
