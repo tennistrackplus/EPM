@@ -18,33 +18,17 @@
     min-width: 220px;
 }
 
-/* Bloque A: pantalla de selección */
-.flow-screen-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 16px;
-    cursor: pointer;
-    background: var(--surface-2, #f7f8fb);
-    border-bottom: 1px solid var(--border-subtle);
-}
-.flow-screen-caret {
-    font-size: 11px;
-    opacity: 0.6;
-}
-.flow-screen-hint {
-    font-size: var(--fs-xs);
-    color: var(--text-muted);
-    margin-left: 4px;
-}
-.flow-screen-body {
-    padding: 12px 16px;
-}
-.var-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr 120px 34px;
-    gap: 8px;
-    margin-bottom: 6px;
+/* Bloque A homogéneo con Flujos de carga: variables editables inline
+   (en Flujos el input de previsualización es disabled; aquí es editable) */
+.actupd-fields-header .flow-field-preview select,
+.flow-field-preview select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background-color: var(--surface-card);
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
 }
 
 /* Bloque B: campos */
@@ -148,62 +132,33 @@
     width: 100%;
 }
 
-/* ---------------- Grid tipo ALV ---------------- */
-.actupd-grid-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border-subtle);
-    flex-wrap: wrap;
-}
-.actupd-grid-toolbar input[type="text"] {
-    flex: 1 1 220px;
-    min-width: 180px;
-}
-.actupd-grid-count {
-    font-size: var(--fs-xs);
-    color: var(--text-muted);
-    margin-left: auto;
-}
-.actupd-grid-wrap {
-    overflow: auto;
-    max-height: 68vh;
-    padding: 0 16px 16px;
-}
-table.actupd-grid {
-    border-collapse: collapse;
-    width: 100%;
-    font-size: var(--fs-sm);
-}
-table.actupd-grid th, table.actupd-grid td {
-    border: 1px solid var(--border-subtle);
-    padding: 4px 6px;
+/* ---------------- Grid formato Excel (igual que Mantenimiento de dimensiones) ---------------- */
+table.actupd-values-grid th {
     white-space: nowrap;
 }
-table.actupd-grid thead th {
-    position: sticky;
-    top: 0;
-    background: var(--surface-2, #f7f8fb);
-    cursor: pointer;
-    z-index: 1;
+.actupd-filter-th {
+    padding: 2px 4px !important;
+    background: var(--surface-card);
 }
-.actupd-sel-col {
-    width: 26px;
-    text-align: center;
+.actupd-filter-th input {
+    width: 100%;
+    font-size: var(--fs-xs);
+    padding: 3px 5px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    box-sizing: border-box;
 }
 .actupd-desc-col {
     color: var(--text-muted);
     font-style: italic;
 }
-.actupd-cell-input {
+table.actupd-values-grid td select.actupd-cell-input {
+    width: 100%;
     border: 1px solid transparent;
     background: transparent;
-    width: 100%;
-    min-width: 90px;
     font-size: var(--fs-sm);
 }
-.actupd-cell-input:focus {
+table.actupd-values-grid td select.actupd-cell-input:focus {
     border-color: var(--brand-primary);
     background: #fff;
 }
@@ -216,6 +171,7 @@ table.actupd-grid thead th {
     border: none;
     background: none;
     cursor: pointer;
+    flex: 0 0 auto;
 }
 
 .actupd-sh-results {
