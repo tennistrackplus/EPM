@@ -78,6 +78,16 @@ const TableUpdates = {
     async loadList() {
         const wrap = document.getElementById("actualizacionesListWrap");
         try {
+            // Autoreparación: si esta tabla de control todavía no existe en el
+            // esquema (sesión abierta antes de desplegar este módulo, sin pasar
+            // de nuevo por el login que ejecuta DracoSchema.bootstrap), se crea
+            // aquí mismo bajo demanda en lugar de fallar.
+            try {
+                await Provider.runQuery(DracoSchema.ddl(this.TABLE));
+            } catch (ddlErr) {
+                console.error("No se pudo verificar/crear la tabla de control ACTUALIZACIONES:", ddlErr);
+            }
+
             const sql = `SELECT ${this.ID_COL}, ${this.NAME_COL}, DESCRIPCION, TABLA, VARIABLES_JSON, CAMPOS_JSON
                          FROM ${Provider.qualifyControl(this.TABLE)}
                          WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
@@ -153,6 +163,7 @@ const TableUpdates = {
             overlay.id = "actUpdCreateModal";
             document.body.appendChild(overlay);
         }
+        overlay.classList.add("visible");
 
         overlay.innerHTML = `
             <div class="modal-box">
@@ -258,6 +269,7 @@ const TableUpdates = {
             overlay.id = "actUpdEditorModal";
             document.body.appendChild(overlay);
         }
+        overlay.classList.add("visible");
         this.overlay = overlay;
 
         overlay.innerHTML = `
@@ -506,6 +518,7 @@ const TableUpdates = {
             overlay.id = "actUpdValidModal";
             document.body.appendChild(overlay);
         }
+        overlay.classList.add("visible");
 
         const dimOptions = this.dimensionsCache.map(d => `<option value="${d.DIMENSION_ID}" ${v.dimensionId === d.DIMENSION_ID ? "selected" : ""}>${UI.escapeHtml(d.DIMENSION)}</option>`).join("");
 
@@ -718,6 +731,7 @@ const TableUpdates = {
             overlay.id = "actUpdRunVarsModal";
             document.body.appendChild(overlay);
         }
+        overlay.classList.add("visible");
         overlay.innerHTML = `
             <div class="modal-box">
                 <div class="modal-header">
@@ -812,6 +826,7 @@ const TableUpdates = {
             overlay.id = "actUpdGridModal";
             document.body.appendChild(overlay);
         }
+        overlay.classList.add("visible");
         overlay.innerHTML = `
             <div class="modal-box modal-full">
                 <div class="modal-header">
@@ -1030,6 +1045,7 @@ const TableUpdates = {
             overlay.id = "actUpdSearchHelpModal";
             document.body.appendChild(overlay);
         }
+        overlay.classList.add("visible");
         overlay.innerHTML = `
             <div class="modal-box">
                 <div class="modal-header"><h3>Buscar valor — ${UI.escapeHtml(field)}</h3><button class="modal-close" id="actUpdSHClose">&times;</button></div>
@@ -1223,6 +1239,7 @@ const TableUpdates = {
             overlay.id = "actUpdSummaryModal";
             document.body.appendChild(overlay);
         }
+        overlay.classList.add("visible");
         const state = this.gridState;
         overlay.innerHTML = `
             <div class="modal-box">

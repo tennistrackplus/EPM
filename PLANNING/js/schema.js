@@ -337,11 +337,16 @@ const DracoSchema = {
      * `ADD COLUMN IF NOT EXISTS`, soportado tal cual en BigQuery y en
      * Snowflake. Idempotente: se puede ejecutar en cada bootstrap.
      */
-    async evolve(onProgress = () => {}) {
+    async evolve(onProgress = () => {}, warnings = []) {
         onProgress("Verificando columnas del modelo semántico...");
         const cubos = Provider.qualifyControl("CUBOS");
-        await Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING`);
-        await Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP`);
+        try {
+            await Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING`);
+            await Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP`);
+        } catch (err) {
+            console.error("No se pudieron añadir las columnas del modelo semántico a CUBOS:", err);
+            warnings.push(`CUBOS (columnas modelo semántico): ${err.message}`);
+        }
     },
 
     async bootstrap(onProgress = () => {}) {
@@ -356,11 +361,25 @@ const DracoSchema = {
             await Provider.createContainer(DracoConfig.controlDataset, "Dataset/esquema de control de Draco Planning (proyectos, dimensiones, cubos, jerarquías, interfaces)");
         }
 
+        // Cada tabla/columna se crea en su propio try/catch: un fallo puntual
+        // (ej. un ALTER TABLE sin permiso, o un problema transitorio) no debe
+        // impedir entrar a Planning. Los fallos se avisan pero no bloquean.
+        const warnings = [];
         for (const name of this.TABLES) {
             onProgress(`Verificando tabla ${name}...`);
-            await Provider.runQuery(this.ddl(name));
+            try {
+                await Provider.runQuery(this.ddl(name));
+            } catch (err) {
+                console.error(`No se pudo crear/verificar la tabla ${name}:`, err);
+                warnings.push(`${name}: ${err.message}`);
+            }
         }
 
-        await this.evolve(onProgress);
+        await this.evolve(onProgress, warnings);
+
+        if (warnings.length) {
+            console.warn("Draco Planning entró con avisos de bootstrap:", warnings);
+        }
+        return warnings;
     }
 };
