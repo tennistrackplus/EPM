@@ -59,7 +59,13 @@ const Provider = {
         if (this.key() === "snowflake") {
             return SF.runQuerySql(sql, { database: level1Id, schema: level2Id });
         }
-        return BQ.runQuerySql(level1Id, sql);
+        // El "proyecto" usado para lanzar el job de BigQuery es el proyecto
+        // de facturación si se indicó uno al crear la conexión (igual que en
+        // Power BI); las tablas ya van totalmente cualificadas en el SQL
+        // (qualify() incluye siempre el proyecto de los datos), así que esto
+        // solo afecta a qué proyecto paga la consulta.
+        const billingProject = BQ.getBillingProject() || level1Id;
+        return BQ.runQuerySql(billingProject, sql);
     },
 
     // -----------------------------------------------------------

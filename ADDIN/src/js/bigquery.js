@@ -11,6 +11,44 @@
 const BQ = {
     BASE: "https://bigquery.googleapis.com/bigquery/v2",
 
+    // ---------------------------------------------------------
+    // Configuración de la conexión activa (proyecto de facturación
+    // opcional y repositorio de modelos semánticos, al estilo
+    // Power BI / LookML). Se guardan junto con el resto de config
+    // en Connections, pero se exponen aquí para el resto del código
+    // que ya habla con BQ directamente.
+    // ---------------------------------------------------------
+    getBillingProject() {
+        return localStorage.getItem("bq_billing_project") || "";
+    },
+    setBillingProject(v) {
+        if (v) {
+            localStorage.setItem("bq_billing_project", String(v).trim());
+        } else {
+            localStorage.removeItem("bq_billing_project");
+        }
+    },
+
+    /** { type: "github"|"gitlab"|"azure_devops"|"local"|"", url: "" } */
+    getSemanticRepo() {
+        try {
+            const raw = localStorage.getItem("bq_semantic_repo");
+            return raw ? JSON.parse(raw) : { type: "", url: "" };
+        } catch (e) {
+            return { type: "", url: "" };
+        }
+    },
+    setSemanticRepo(repo) {
+        if (repo && (repo.type || repo.url)) {
+            localStorage.setItem("bq_semantic_repo", JSON.stringify({
+                type: repo.type || "",
+                url: (repo.url || "").trim()
+            }));
+        } else {
+            localStorage.removeItem("bq_semantic_repo");
+        }
+    },
+
     getToken() {
         const token = localStorage.getItem("bigquery_access_token");
         const expires = localStorage.getItem("bigquery_token_expires");
