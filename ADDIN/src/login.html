@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EPM Data Studio · Conexión de datos</title>
+    <title>EPM Data Studio · Conexiones</title>
 
     <!-- Librería JavaScript de Microsoft Office (Obligatoria en el Head) -->
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
@@ -15,19 +15,30 @@
             overflow: hidden;
         }
 
-.login-shell {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-}
+        .login-shell {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
 
-.login-container {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-    padding: 8px 14px 14px;
-}
+        .login-container {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            padding: 8px 14px 14px;
+        }
+
+        .view {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .view.hidden {
+            display: none;
+        }
 
         .login-lead {
             flex-shrink: 0;
@@ -46,7 +57,10 @@
             color: var(--text-muted);
         }
 
-        .connectors-grid {
+        /* ---------------------------------------------------- */
+        /* Vista LISTA: conexiones guardadas                     */
+        /* ---------------------------------------------------- */
+        .connections-list {
             flex: 1;
             overflow-y: auto;
             display: flex;
@@ -54,6 +68,206 @@
             gap: 8px;
             padding-right: 2px;
             margin-bottom: 10px;
+        }
+
+        .empty-state {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: var(--fs-sm);
+            padding: 20px 10px;
+            gap: 6px;
+        }
+
+        .empty-state strong {
+            color: var(--text-secondary);
+            font-size: var(--fs-base);
+        }
+
+        .conn-card {
+            background: var(--surface-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-xs);
+            padding: 10px 10px 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            cursor: pointer;
+            transition: border-color var(--transition-base), box-shadow var(--transition-base);
+            flex-shrink: 0;
+        }
+
+        .conn-card:hover {
+            border-color: var(--brand-primary);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .conn-card.active {
+            border: 1.5px solid var(--brand-primary);
+            background-color: var(--brand-primary-light);
+        }
+
+        .conn-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .conn-icon {
+            width: 32px;
+            height: 32px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-md);
+            overflow: hidden;
+        }
+
+        .conn-icon img {
+            width: 32px;
+            height: 32px;
+            object-fit: contain;
+            display: block;
+        }
+
+        .conn-details {
+            min-width: 0;
+        }
+
+        .conn-details h3 {
+            font-size: var(--fs-md);
+            font-weight: 600;
+            margin: 0;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .conn-details span {
+            font-size: var(--fs-xs);
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: block;
+        }
+
+        .conn-side {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .badge-status {
+            flex-shrink: 0;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 3px 9px;
+            border-radius: var(--radius-pill);
+            background-color: var(--gray-100);
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .badge-status.connected {
+            background-color: var(--color-success-light);
+            color: var(--color-success);
+        }
+
+        .btn-icon {
+            width: 24px;
+            height: 24px;
+            flex-shrink: 0;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color var(--transition-fast), color var(--transition-fast);
+        }
+
+        .btn-icon:hover {
+            background-color: var(--gray-100);
+            color: var(--text-secondary);
+        }
+
+        .btn-icon.danger:hover {
+            background-color: var(--color-danger-light);
+            color: var(--color-danger);
+        }
+
+        .btn-icon.confirm-danger {
+            background-color: var(--color-danger-light);
+            color: var(--color-danger);
+        }
+
+        /* ---------------------------------------------------- */
+        /* Vista CREAR: nombre + selector de proveedor + campos  */
+        /* ---------------------------------------------------- */
+        .create-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 2px;
+            min-height: 0;
+        }
+
+        .field-group {
+            margin-bottom: 12px;
+        }
+
+        .field-group label {
+            display: block;
+            font-size: var(--fs-xs);
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .field-group input,
+        .field-group select {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-sm);
+            font-size: var(--fs-sm);
+            font-family: var(--font-family);
+            box-sizing: border-box;
+            background: var(--surface-card);
+            color: var(--text-primary);
+        }
+
+        .section-label {
+            font-size: var(--fs-xs);
+            font-weight: 600;
+            color: var(--text-muted);
+            margin: 2px 0 6px;
+        }
+
+        .connectors-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .connector-item {
+            display: flex;
+            flex-direction: column;
         }
 
         .connector-card {
@@ -69,6 +283,18 @@
             transition: border-color var(--transition-base), box-shadow var(--transition-base), background-color var(--transition-base);
             user-select: none;
             flex-shrink: 0;
+            position: relative;
+            z-index: 1;
+        }
+
+        .connector-item .connector-card {
+            border-radius: var(--radius-md);
+        }
+
+        .connector-item .connector-card.selected {
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+            border-bottom-color: transparent;
         }
 
         .connector-card:hover {
@@ -89,23 +315,24 @@
             min-width: 0;
         }
 
-.connector-icon {
-    width: 34px;
-    height: 34px;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-md);
-    overflow: hidden;
-}
+        .connector-icon {
+            width: 34px;
+            height: 34px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-md);
+            overflow: hidden;
+        }
 
-.connector-icon img {
-    width: 34px;
-    height: 34px;
-    object-fit: contain;
-    display: block;
-}
+        .connector-icon img {
+            width: 34px;
+            height: 34px;
+            object-fit: contain;
+            display: block;
+        }
+
         .connector-details {
             min-width: 0;
         }
@@ -125,7 +352,7 @@
             color: var(--text-muted);
         }
 
-        .badge-status {
+        .tag-soon {
             flex-shrink: 0;
             font-size: 10px;
             font-weight: 600;
@@ -133,11 +360,7 @@
             border-radius: var(--radius-pill);
             background-color: var(--gray-100);
             color: var(--text-secondary);
-        }
-
-        .badge-status.connected {
-            background-color: var(--color-success-light);
-            color: var(--color-success);
+            white-space: nowrap;
         }
 
         .toast-message {
@@ -166,10 +389,58 @@
             border: 1px solid #F3C9C6;
         }
 
+        .provider-config-panel {
+            display: none;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 0;
+            overflow: hidden;
+            padding: 0 12px;
+            background: var(--surface-page);
+            border: 1px solid var(--border-subtle);
+            border-top: none;
+            border-bottom-left-radius: var(--radius-md);
+            border-bottom-right-radius: var(--radius-md);
+            transition: max-height var(--transition-base), padding var(--transition-base);
+        }
+
+        .provider-config-panel.visible {
+            display: flex;
+            max-height: 600px;
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+
+        .provider-config-panel label {
+            font-size: var(--fs-xs);
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .provider-config-panel input,
+        .provider-config-panel select {
+            padding: 8px 10px;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-sm);
+            font-size: var(--fs-sm);
+            font-family: var(--font-family);
+            background: var(--surface-card);
+            color: var(--text-primary);
+        }
+
+        .provider-config-panel .hint {
+            font-size: 10px;
+            font-weight: 400;
+            color: var(--text-muted);
+            margin-top: -2px;
+        }
+
         .action-footer {
             flex-shrink: 0;
             padding-top: 10px;
             border-top: 1px solid var(--border-subtle);
+            display: flex;
+            gap: 8px;
         }
 
         .btn-action {
@@ -190,12 +461,18 @@
             background-color: var(--brand-primary-hover);
         }
 
-        .btn-action.disconnect-mode {
-            background-color: var(--color-danger);
+        .btn-action.btn-secondary {
+            background-color: var(--gray-100);
+            color: var(--text-secondary);
+            box-shadow: none;
+            flex: 0 0 auto;
+            width: auto;
+            padding-left: 16px;
+            padding-right: 16px;
         }
 
-        .btn-action.disconnect-mode:hover {
-            background-color: #B62A22;
+        .btn-action.btn-secondary:hover {
+            background-color: var(--gray-200);
         }
 
         .btn-action:disabled {
@@ -208,120 +485,187 @@
 </head>
 <body>
     <div class="login-shell">
-
-
         <div class="login-container">
-            <div class="login-lead">
-                <h2>Inicio de sesión</h2>
-                <p>Selecciona el servicio de datos para conectar o gestionar la sesión:</p>
+
+            <!-- ============================================== -->
+            <!-- VISTA 1: LISTA DE CONEXIONES GUARDADAS           -->
+            <!-- ============================================== -->
+            <div class="view" id="viewList">
+                <div class="login-lead">
+                    <h2>Conexiones</h2>
+                    <p>Elige una conexión guardada para conectarte, o crea una nueva.</p>
+                </div>
+
+                <div id="toastMessageList" class="toast-message"></div>
+
+                <div class="connections-list" id="connectionsContainer">
+                    <!-- Generado dinámicamente por login.js -->
+                </div>
+
+                <div class="action-footer">
+                    <button id="btnNewConnection" class="btn-action">+ Crear conexión</button>
+                </div>
             </div>
 
-            <div class="connectors-grid" id="connectorsContainer">
-
-                <!-- BigQuery -->
-                <div class="connector-card" data-provider="bigquery">
-                    <div class="connector-info">
-<div class="connector-icon">
-    <img src="https://www.vectorlogo.zone/logos/google_bigquery/google_bigquery-icon.svg"
-         alt="BigQuery">
-</div>
-                        <div class="connector-details">
-                            <h3>BigQuery</h3>
-                            <span>Google Cloud Platform</span>
-                        </div>
-                    </div>
-                    <span class="badge-status" id="badge-bigquery">Disponible</span>
+            <!-- ============================================== -->
+            <!-- VISTA 2: CREAR / EDITAR CONEXIÓN                 -->
+            <!-- ============================================== -->
+            <div class="view hidden" id="viewCreate">
+                <div class="login-lead">
+                    <h2 id="createTitle">Nueva conexión</h2>
+                    <p>Ponle un nombre y elige el origen de datos.</p>
                 </div>
 
-                <!-- Amazon -->
-                <div class="connector-card" data-provider="amazon">
-                    <div class="connector-info">
-<div class="connector-icon">
-    <img src="https://www.vectorlogo.zone/logos/amazon_aws/amazon_aws-icon.svg"
-         alt="AWS">
-</div>
-                        <div class="connector-details">
-                            <h3>Amazon</h3>
-                            <span>AWS Redshift / S3</span>
-                        </div>
+                <div id="toastMessageCreate" class="toast-message"></div>
+
+                <div class="create-scroll">
+                    <div class="field-group">
+                        <label for="connName">Nombre de la conexión</label>
+                        <input type="text" id="connName" placeholder="ej. BigQuery Producción">
                     </div>
-                    <span class="badge-status" id="badge-amazon">Disponible</span>
+
+                    <div class="section-label">Origen de datos</div>
+                    <div class="connectors-grid" id="connectorsContainer">
+
+                        <!-- BigQuery -->
+                        <div class="connector-item">
+                            <div class="connector-card" data-provider="bigquery">
+                                <div class="connector-info">
+                                    <div class="connector-icon">
+                                        <img src="https://www.vectorlogo.zone/logos/google_bigquery/google_bigquery-icon.svg" alt="BigQuery">
+                                    </div>
+                                    <div class="connector-details">
+                                        <h3>BigQuery</h3>
+                                        <span>Google Cloud Platform</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Campos específicos de BigQuery (acordeón bajo la propia opción) -->
+                            <div class="provider-config-panel" id="bigqueryConfigPanel">
+                                <label for="bqBillingProject">Id. del proyecto de facturación (opcional)</label>
+                                <input type="text" id="bqBillingProject" placeholder="Ejemplo: MyBillingProject">
+                                <span class="hint">Si se deja vacío, se factura sobre el proyecto de los datos consultados.</span>
+
+                                <label for="bqRepoType" style="margin-top:10px;">Repositorio de modelos semánticos (opcional)</label>
+                                <select id="bqRepoType">
+                                    <option value="">Ninguno</option>
+                                    <option value="github">GitHub</option>
+                                    <option value="gitlab">GitLab</option>
+                                    <option value="azure_devops">Azure DevOps</option>
+                                    <option value="local">Carpeta local</option>
+                                </select>
+                                <input type="text" id="bqRepoUrl" style="margin-top:6px;" placeholder="ej. https://github.com/mi-org/mis-modelos.git">
+                                <span class="hint">Dónde se guardan/versionan las definiciones del modelo semántico (equivalente a un proyecto LookML).</span>
+                            </div>
+                        </div>
+
+                        <!-- Snowflake -->
+                        <div class="connector-item">
+                            <div class="connector-card" data-provider="snowflake">
+                                <div class="connector-info">
+                                    <div class="connector-icon">
+                                        <img src="https://app.eu.peliqan.io/img/db/snowflake.svg" alt="Snowflake">
+                                    </div>
+                                    <div class="connector-details">
+                                        <h3>Snowflake</h3>
+                                        <span>Cloud Data Platform</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Campos específicos de Snowflake (acordeón bajo la propia opción) -->
+                            <div class="provider-config-panel" id="snowflakeConfigPanel">
+                                <label for="sfAccount">Identificador de cuenta Snowflake</label>
+                                <input type="text" id="sfAccount" placeholder="ej. xy12345.eu-west-1 u orgname-accountname">
+                                <label for="sfWarehouse" style="margin-top:10px;">Warehouse</label>
+                                <input type="text" id="sfWarehouse" placeholder="ej. COMPUTE_WH">
+                                <label for="sfDatabase" style="margin-top:10px;">Base de datos</label>
+                                <input type="text" id="sfDatabase" placeholder="DRACO">
+                                <label for="sfRole" style="margin-top:10px;">Rol (opcional)</label>
+                                <input type="text" id="sfRole" placeholder="ej. SYSADMIN">
+                            </div>
+                        </div>
+
+                        <!-- Amazon -->
+                        <div class="connector-item">
+                        <div class="connector-card" data-provider="amazon">
+                            <div class="connector-info">
+                                <div class="connector-icon">
+                                    <img src="https://www.vectorlogo.zone/logos/amazon_aws/amazon_aws-icon.svg" alt="AWS">
+                                </div>
+                                <div class="connector-details">
+                                    <h3>Amazon</h3>
+                                    <span>AWS Redshift / S3</span>
+                                </div>
+                            </div>
+                            <span class="tag-soon">Próximamente</span>
+                        </div>
+                        </div>
+
+                        <!-- Microsoft Fabric -->
+                        <div class="connector-item">
+                        <div class="connector-card" data-provider="fabric">
+                            <div class="connector-info">
+                                <div class="connector-icon">
+                                    <img src="https://community.fabric.microsoft.com/html/assets/fabric-expo-icon.svg" alt="Microsoft Fabric">
+                                </div>
+                                <div class="connector-details">
+                                    <h3>Microsoft Fabric</h3>
+                                    <span>OneLake / Power BI</span>
+                                </div>
+                            </div>
+                            <span class="tag-soon">Próximamente</span>
+                        </div>
+                        </div>
+
+                        <!-- SAP Datasphere -->
+                        <div class="connector-item">
+                        <div class="connector-card" data-provider="datasphere">
+                            <div class="connector-info">
+                                <div class="connector-icon">
+                                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg" alt="SAP Datasphere">
+                                </div>
+                                <div class="connector-details">
+                                    <h3>SAP Datasphere</h3>
+                                    <span>SAP Business Warehouse</span>
+                                </div>
+                            </div>
+                            <span class="tag-soon">Próximamente</span>
+                        </div>
+                        </div>
+
+                        <!-- CDS de S4 -->
+                        <div class="connector-item">
+                        <div class="connector-card" data-provider="s4cds">
+                            <div class="connector-info">
+                                <div class="connector-icon">
+                                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg" alt="SAP S/4HANA CDS">
+                                </div>
+                                <div class="connector-details">
+                                    <h3>CDS de S4</h3>
+                                    <span>SAP S/4HANA CDS Views</span>
+                                </div>
+                            </div>
+                            <span class="tag-soon">Próximamente</span>
+                        </div>
+                        </div>
+
+                    </div>
                 </div>
 
-                <!-- Microsoft Fabric -->
-                <div class="connector-card" data-provider="fabric">
-                    <div class="connector-info">
-
-<div class="connector-icon">
-<img src="https://community.fabric.microsoft.com/html/assets/fabric-expo-icon.svg">
-</div>
-
-                        <div class="connector-details">
-                            <h3>Microsoft Fabric</h3>
-                            <span>OneLake / Power BI</span>
-                        </div>
-                    </div>
-                    <span class="badge-status" id="badge-fabric">Disponible</span>
+                <div class="action-footer">
+                    <button id="btnCancelCreate" class="btn-action btn-secondary">Cancelar</button>
+                    <button id="btnSaveConnection" class="btn-action" disabled>Selecciona un origen de datos</button>
                 </div>
-
-                <!-- Snowflake -->
-                <div class="connector-card" data-provider="snowflake">
-                    <div class="connector-info">
-
-<div class="connector-icon">
-    <img src="https://app.eu.peliqan.io/img/db/snowflake.svg"
-         alt="SAP Datasphere">
-</div>
-
-
-                        <div class="connector-details">
-                            <h3>Snowflake</h3>
-                            <span>Cloud Data Platform</span>
-                        </div>
-                    </div>
-                    <span class="badge-status" id="badge-snowflake">Disponible</span>
-                </div>
-
-                <!-- SAP Datasphere -->
-                <div class="connector-card" data-provider="datasphere">
-                    <div class="connector-info">
-<div class="connector-icon">
-    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg"
-         alt="SAP Datasphere">
-</div>
-                        <div class="connector-details">
-                            <h3>SAP Datasphere</h3>
-                            <span>SAP Business Warehouse</span>
-                        </div>
-                    </div>
-                    <span class="badge-status" id="badge-datasphere">Disponible</span>
-                </div>
-
-                <!-- CDS de S4 -->
-                <div class="connector-card" data-provider="s4cds">
-                    <div class="connector-info">
-<div class="connector-icon">
-    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg"
-         alt="SAP S/4HANA CDS">
-</div>
-                        <div class="connector-details">
-                            <h3>CDS de S4</h3>
-                            <span>SAP S/4HANA CDS Views</span>
-                        </div>
-                    </div>
-                    <span class="badge-status" id="badge-s4cds">Disponible</span>
-                </div>
-
             </div>
 
-            <div id="toastMessage" class="toast-message"></div>
-
-            <div class="action-footer">
-                <button id="btnAction" class="btn-action" disabled>1. Selecciona una fuente de datos</button>
-            </div>
         </div>
     </div>
 
+    <script src="js/config.js"></script>
+    <script src="js/connections.js"></script>
+    <script src="js/bigquery.js"></script>
+    <script src="js/snowflake.js"></script>
+    <script src="js/provider.js"></script>
     <script src="js/login.js"></script>
 </body>
 </html>
