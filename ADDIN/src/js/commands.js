@@ -3608,7 +3608,7 @@ async function requestRibbonLabelUpdate(controlId, label, groupId) {
         if (Office.ribbon && Office.ribbon.requestUpdate) {
             await Office.ribbon.requestUpdate({
                 tabs: [{
-                    id: "DracoBITab",
+                    id: "DracoTab",
                     groups: [{ id: groupId || "EdicionGroup", controls: [{ id: controlId, label }] }]
                 }]
             });
