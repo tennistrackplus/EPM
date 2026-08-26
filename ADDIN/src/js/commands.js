@@ -2213,6 +2213,76 @@ async function handleDracoMemberRecognitionSelection(eventArgs) {
 }
 
 /**
+ * Comprueba si una dirección (celda o rango) de la hoja de resultados cae
+ * dentro del rango con nombre Draco_001_Rows y actualiza SOLO la etiqueta
+ * del botón "Crear informe" del ribbon: "Editar informe" si la selección
+ * está dentro de Draco_001_Rows, o de vuelta a "Crear informe" si no lo
+ * está o si el rango no existe (getItemOrNullObject). No cambia la
+ * Action del botón ni ninguna otra lógica: reutiliza el mismo helper
+ * requestRibbonLabelUpdate que ya usan "Pausar refresco" y "Reconocimiento
+ * de miembros" (definido más abajo en este archivo).
+ */
+async function updateCrearInformeLabelForAddress(addr) {
+    let withinRowsRange = false;
+
+    try {
+        await Excel.run(async (context) => {
+            const resultSheetName = await getDracoResultSheetName(context);
+            const sheet = context.workbook.worksheets.getItemOrNullObject(resultSheetName);
+            sheet.load("isNullObject");
+            await context.sync();
+            if (sheet.isNullObject) return;
+
+            const cell = sheet.getRange(addr);
+            cell.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+            const rowsNamed = context.workbook.names.getItemOrNullObject("Draco_001_Rows");
+            rowsNamed.load("isNullObject");
+            await context.sync();
+
+            // El rango puede no existir todavía (p.ej. sin informe creado nunca):
+            // en ese caso se deja withinRowsRange en false -> "Crear informe".
+            if (rowsNamed.isNullObject) return;
+
+            const r = rowsNamed.getRange();
+            r.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+            await context.sync();
+
+            withinRowsRange =
+                cell.rowIndex < r.rowIndex + r.rowCount &&
+                cell.rowIndex + cell.rowCount > r.rowIndex &&
+                cell.columnIndex < r.columnIndex + r.columnCount &&
+                cell.columnIndex + cell.columnCount > r.columnIndex;
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo comprobar la selección frente a Draco_001_Rows:", e);
+    }
+
+    await requestRibbonLabelUpdate(
+        "CrearInformeButton",
+        withinRowsRange ? "Editar informe" : "Crear informe",
+        "EdicionGroup"
+    );
+}
+
+/**
+ * onSelectionChanged: dispara la comprobación anterior con la dirección
+ * seleccionada. Es un listener más, independiente de handleDracoSelectionChanged
+ * y handleDracoMemberRecognitionSelection (no altera su comportamiento).
+ */
+async function handleDracoRibbonLabelSelection(eventArgs) {
+    try {
+        let addr = (eventArgs && eventArgs.address) || "";
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        if (!addr) return;
+
+        await updateCrearInformeLabelForAddress(addr);
+    } catch (e) {
+        console.error("Error al actualizar la etiqueta de Crear/Editar informe:", e);
+    }
+}
+
+/**
  * Parser mínimo del JSON de BigQuery a una lista plana {text, attribute,
  * value} — copia local de loadJsonTree (filterModal.js) para no depender
  * del DOM del taskpane: el diálogo del picker se ejecuta en su PROPIA
@@ -2464,6 +2534,7 @@ async function registerDracoSelectionHandler(context, sheet) {
 
     sheet.onSelectionChanged.add(handleDracoSelectionChanged);
     sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
+    sheet.onSelectionChanged.add(handleDracoRibbonLabelSelection);
     sheet.onChanged.add(handleDracoMemberRecognitionChanged);
 
     // NUEVO: petición de apertura del Member Picker desde EDIT_REPORT

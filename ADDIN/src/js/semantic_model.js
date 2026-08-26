@@ -7,6 +7,37 @@ let fieldsState = [];
 let currentConfigFieldIndex = null;
 let currentTreeTarget = "FACT"; // "FACT" o "DIM"
 
+/**
+ * Muestra un aviso visual (toast) en la parte superior de la taskpane,
+ * en lugar de un alert() nativo del navegador. type: "success" | "error".
+ */
+function showToast(message, type = "success", duration = 3500) {
+
+    const container = document.getElementById("appToastContainer");
+
+    if (!container) {
+        // Fallback por si el contenedor no existe todavía en el DOM.
+        alert(message);
+        return;
+    }
+
+    const toast = document.createElement("div");
+
+    toast.className = `app-toast ${type === "error" ? "error" : "success"}`;
+    toast.textContent = (type === "error" ? "⚠ " : "✔ ") + message;
+
+    container.appendChild(toast);
+
+    // Forzar reflow para que la transición de entrada se aplique.
+    requestAnimationFrame(() => toast.classList.add("visible"));
+
+    setTimeout(() => {
+        toast.classList.remove("visible");
+        setTimeout(() => toast.remove(), 250);
+    }, duration);
+
+}
+
 Office.onReady(async (info) => {
     if (info.host === Office.HostType.Excel) {
         initEvents();
@@ -136,7 +167,7 @@ function initEvents() {
 function openDataPreviewDialog(project, dataset, table) {
 
     if (!project || !dataset || !table) {
-        alert("Selecciona primero una tabla para poder previsualizar sus datos.");
+        showToast("Selecciona primero una tabla para poder previsualizar sus datos.", "error");
         return;
     }
 
@@ -154,7 +185,7 @@ function openDataPreviewDialog(project, dataset, table) {
 
             if (asyncResult.status === Office.AsyncResultStatus.Failed) {
                 console.error("Error al abrir la vista previa de datos:", asyncResult.error);
-                alert("No se ha podido abrir la vista previa: " + asyncResult.error.message);
+                showToast("No se ha podido abrir la vista previa: " + asyncResult.error.message, "error");
             }
 
         }
@@ -174,12 +205,12 @@ function previewCurrentHierarchy() {
     if (!field || !hierEditState) return;
 
     if (!hierEditState.levels || hierEditState.levels.length === 0) {
-        alert("Añade al menos un nivel a la jerarquía para poder previsualizarla.");
+        showToast("Añade al menos un nivel a la jerarquía para poder previsualizarla.", "error");
         return;
     }
 
     if (!field.relProject || !field.relDataset || !field.relTable) {
-        alert("Selecciona primero la tabla de dimensión.");
+        showToast("Selecciona primero la tabla de dimensión.", "error");
         return;
     }
 
@@ -209,7 +240,7 @@ function previewCurrentHierarchy() {
 
             if (asyncResult.status === Office.AsyncResultStatus.Failed) {
                 console.error("Error al abrir la vista previa de la jerarquía:", asyncResult.error);
-                alert("No se ha podido abrir la vista previa: " + asyncResult.error.message);
+                showToast("No se ha podido abrir la vista previa: " + asyncResult.error.message, "error");
             }
 
         }
@@ -440,7 +471,7 @@ function clearCurrentModel()
 
 function getAuthToken() {
     if (!Provider.isConnected()) {
-        alert(`Sesión de ${Provider.label()} no válida o expirada. Por favor, inicia sesión de nuevo.`);
+        showToast(`Sesión de ${Provider.label()} no válida o expirada. Por favor, inicia sesión de nuevo.`, "error");
         return null;
     }
     return true; // solo se usa como comprobación booleana; Provider gestiona el token internamente
@@ -657,7 +688,7 @@ async function fetchFactFields(isModelLoad = false) {
     const tableId = document.getElementById("factTable").value;
 
     if (!projectId || !datasetId || !tableId) {
-        alert("Por favor selecciona una Tabla de Hechos.");
+        showToast("Por favor selecciona una Tabla de Hechos.", "error");
         return;
     }
 
@@ -785,7 +816,7 @@ function openConfigModal(index) {
     const field = fieldsState[index];
 
     if (!field.enabled) {
-        alert("Habilita el campo para poder modificar sus propiedades.");
+        showToast("Habilita el campo para poder modificar sus propiedades.", "error");
         return;
     }
 
@@ -1046,7 +1077,7 @@ function openHierarchyEditor(index = null) {
     if (!field) return;
 
     if (!field.attributes || field.attributes.length === 0) {
-        alert("Selecciona primero la tabla de dimensión y sus atributos antes de crear una jerarquía.");
+        showToast("Selecciona primero la tabla de dimensión y sus atributos antes de crear una jerarquía.", "error");
         return;
     }
 
@@ -1282,12 +1313,12 @@ function saveHierarchyEditor() {
     const name = document.getElementById("hierarchyNameInput").value.trim();
 
     if (name === "") {
-        alert("Indica un nombre para la jerarquía.");
+        showToast("Indica un nombre para la jerarquía.", "error");
         return;
     }
 
     if (hierEditState.levels.length === 0) {
-        alert("Añade al menos un nivel a la jerarquía.");
+        showToast("Añade al menos un nivel a la jerarquía.", "error");
         return;
     }
 
@@ -1298,7 +1329,7 @@ function saveHierarchyEditor() {
     );
 
     if (duplicate) {
-        alert("Ya existe una jerarquía con ese nombre en esta dimensión.");
+        showToast("Ya existe una jerarquía con ese nombre en esta dimensión.", "error");
         return;
     }
 
@@ -1315,6 +1346,8 @@ function saveHierarchyEditor() {
 
     closeHierarchyEditor();
     renderHierarchiesList();
+
+    showToast(`Jerarquía "${name}" guardada.`, "success");
 
 }
 
@@ -1335,7 +1368,7 @@ async function generateSemanticModelInExcel() {
     currentModel = modelName;
 
     if (currentModel === "") {
-        alert("Indica primero el nombre del modelo.");
+        showToast("Indica primero el nombre del modelo.", "error");
         return;
     }
 
@@ -1362,10 +1395,10 @@ async function generateSemanticModelInExcel() {
             select.value = currentModel;
         }
 
-        alert("¡Modelo Semántico generado con éxito!");
+        showToast("¡Modelo Semántico generado con éxito!", "success");
 
     } catch (err) {
         console.error("Error al guardar el modelo semántico:", err);
-        alert("Error al guardar el modelo: " + err.message);
+        showToast("Error al guardar el modelo: " + err.message, "error");
     }
 }
