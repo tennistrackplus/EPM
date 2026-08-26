@@ -15,9 +15,26 @@
 <body>
     <div class="taskpane-container">
 
+        <!-- Barra de marca (idéntica en todas las pantallas del complemento) -->
+        <header class="app-topbar">
+            <div class="app-topbar-brand">
+                <span class="app-logo" aria-hidden="true">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <rect x="3" y="12" width="4" height="9" rx="1" fill="currentColor"/>
+                        <rect x="10" y="7" width="4" height="14" rx="1" fill="currentColor"/>
+                        <rect x="17" y="3" width="4" height="18" rx="1" fill="currentColor"/>
+                    </svg>
+                </span>
+                <div class="app-topbar-titles">
+                    <span class="app-topbar-title">EPM Data Studio</span>
+                    <span class="app-topbar-subtitle">Diseño del informe</span>
+                </div>
+            </div>
+        </header>
+
         <!-- Barra de herramientas de la vista -->
         <div class="view-toolbar">
-            <h2>Informe</h2>
+            <h2>Campos del informe</h2>
             <div style="display:flex; align-items:center; gap:6px;">
                 <span id="autoStatus" style="font-size: var(--fs-sm, 11px); color:#7045A9; min-width: 90px;"></span>
                 <button id="btnSaveDesign" class="btn-primary" style="padding:6px 14px; font-size: var(--fs-sm);">Guardar</button>
@@ -37,8 +54,15 @@
                         <path d="M6 2h4v2H6V2zM2 6h4v2H2V6zm6 0h6v2H8V6zM2 10h8v2H2v-2zm10 0h2v2h-2v-2z"/>
                     </svg>
                 </button>
+                <button id="btnRefresh" class="icon-button" title="Actualizar dimensiones">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M13.65 2.35A7.958 7.958 0 008 0C3.58 0 0 3.58 0 8s3.58 8 8 8c3.84 0 7.08-2.71 7.85-6.32h-1.63C13.48 12.37 11.01 14.5 8 14.5 4.41 14.5 1.5 11.59 1.5 8S4.41 1.5 8 1.5c1.79 0 3.41.73 4.59 1.91L10 6h6V0l-2.35 2.35z"/>
+                    </svg>
+                </button>
             </div>
         </div>
+
+        <p class="taskpane-instruction">Arrastra los campos a las áreas correspondientes:</p>
 
         <!-- Layout Principal -->
         <div class="taskpane-body">
@@ -204,10 +228,6 @@
         </div>
     </div>
 
-    <script src="js/config.js"></script>
-    <script src="js/bigquery.js"></script>
-    <script src="js/snowflake.js"></script>
-    <script src="js/provider.js"></script>
     <script src="js/excelService.js"></script>
     <script src="js/filterModal.js"></script>
     <script src="js/commands.js"></script>
