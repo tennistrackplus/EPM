@@ -1037,9 +1037,9 @@ async function actualizarInformeFixedCore() {
     // 1) LoadReportDefinition + BuildSQL_Fixed + escritura de A1
     await Excel.run(async (context) => {
         const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
-        const relGrid = await getValuesGrid(context, "MODEL_RELATIONSHIP");
-        const measuresGrid = await getValuesGrid(context, "MODEL_MEASURES");
-        const atributesGrid = await getValuesGrid(context, "MODEL_ATRIBUTES");
+        const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
+        const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+        const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
         const resultSheetName = resultSheetNameFromGrid(editReportGrid);
         const csvGrid = await getFormulaGrid(context, resultSheetName);
 
@@ -3405,9 +3405,9 @@ async function actualizarInformeCore() {
 
     await Excel.run(async (context) => {
         const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
-        const relGrid = await getValuesGrid(context, "MODEL_RELATIONSHIP");
-        const measuresGrid = await getValuesGrid(context, "MODEL_MEASURES");
-        const atributesGrid = await getValuesGrid(context, "MODEL_ATRIBUTES");
+        const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
+        const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+        const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
 
         resultSheetName = resultSheetNameFromGrid(editReportGrid);
         loadReportDefinition(editReportGrid);

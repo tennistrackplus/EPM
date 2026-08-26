@@ -16,32 +16,19 @@ Office.onReady(async (info) => {
 });
 
 /**
- * Asegura que existan las hojas técnicas base del modelo semántico:
- * - MODEL_FACT: si no existe la crea con su cabecera.
- * - EDIT_REPORT: si no existe la crea vacía, salvo D5 y D6 que llevan "X".
- * Ambas se ocultan (igual que el resto de hojas MODEL_*).
+ * Asegura que exista la hoja técnica EDIT_REPORT (estado del diseño del
+ * informe: filtros/filas/columnas). Se crea vacía si no existe, salvo D5 y
+ * D6 que llevan "X", y se oculta.
+ *
+ * El modelo semántico en sí (antes MODEL_FACT/MODEL_DIMENSION/...) ya NO
+ * se guarda en hojas: vive en SemanticModelStore (JSON dentro de las
+ * propiedades del documento, sin pestañas ni siquiera ocultas).
  */
 async function ensureCoreModelSheets() {
 
     await Excel.run(async (context) => {
 
         const sheets = context.workbook.worksheets;
-
-        // MODEL_FACT
-        let factSheet = sheets.getItemOrNullObject("MODEL_FACT");
-        await context.sync();
-
-        if (factSheet.isNullObject) {
-
-            factSheet = sheets.add("MODEL_FACT");
-
-            factSheet.getRangeByIndexes(0, 0, 1, 4).values = [
-                ["MODEL_NAME", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE"]
-            ];
-
-        }
-
-        factSheet.visibility = Excel.SheetVisibility.hidden;
 
         // EDIT_REPORT
         let editSheet = sheets.getItemOrNullObject("EDIT_REPORT");
@@ -284,25 +271,24 @@ async function saveNewModel()
 
     currentModel = name;
 
-    if (typeof Excel !== "undefined") {
+    try {
 
-        try {
+        await window.SemanticModelStore.saveModel(name, {
+            fact: { project: "", dataset: "", table: "" },
+            fields: []
+        });
 
-            await saveModelHeader();
+        loadSemanticModels();
 
-            await loadSemanticModels();
+        const select = document.getElementById("semanticModelSelect");
 
-            const select = document.getElementById("semanticModelSelect");
-
-            if (select) {
-                select.value = name;
-            }
-
-        } catch (err) {
-
-            console.error("Error al guardar el modelo en Excel:", err);
-
+        if (select) {
+            select.value = name;
         }
+
+    } catch (err) {
+
+        console.error("Error al guardar el modelo:", err);
 
     }
 
@@ -337,117 +323,46 @@ function restoreModelSelector()
 
 }
 
-async function loadSemanticModels()
+function loadSemanticModels()
 {
 
-    await Excel.run(async(context)=>{
+    const models = window.SemanticModelStore.listModelNames();
 
-        let sheet=context.workbook.worksheets.getItem("MODEL_FACT");
+    const select=document.getElementById("semanticModelSelect");
 
-        let range=sheet.getUsedRange();
+    select.innerHTML='<option value="">— Sin modelo seleccionado —</option>';
 
-        range.load("values");
+    models.forEach(model=>{
 
-        await context.sync();
+        const option=document.createElement("option");
 
-        const rows=range.values;
+        option.value=model;
 
-        const select=document.getElementById("semanticModelSelect");
+        option.text=model;
 
-        select.innerHTML='<option value="">— Sin modelo seleccionado —</option>';
-
-        const models=[];
-
-        for(let i=1;i<rows.length;i++)
-        {
-            models.push(rows[i][0]);
-        }
-
-        models.sort();
-
-        models.forEach(model=>{
-
-            const option=document.createElement("option");
-
-            option.value=model;
-
-            option.text=model;
-
-            select.appendChild(option);
-
-        });
+        select.appendChild(option);
 
     });
 
 }
 
-async function saveModelHeader()
+/**
+ * Determina el nombre del modelo actual a partir del selector / input de
+ * "nuevo modelo" del panel, igual que hacía antes de escribir en MODEL_FACT.
+ */
+function resolveCurrentModelName()
 {
 
-    await ensureCoreModelSheets();
-
-    await Excel.run(async(context)=>{
-
-        let sheet=context.workbook.worksheets.getItem("MODEL_FACT");
-
-        let range=sheet.getUsedRangeOrNullObject();
-
-        await context.sync();
-
-        let rows=[];
-
-        if(!range.isNullObject)
-        {
-            range.load("values");
-            await context.sync();
-            rows=range.values || [];
-        }
-
-        let modelName = "";
-		
-		
-	
     const selectElem = document.getElementById("semanticModelSelect");
     const inputElem = document.getElementById("newModelName");
 
     if (selectElem && selectElem.value && selectElem.value !== "") {
-        modelName = selectElem.value.trim();
-    } else if (inputElem && inputElem.value && inputElem.value.trim() !== "") {
-        modelName = inputElem.value.trim();
-    } else {
-        modelName = currentModel;
+        return selectElem.value.trim();
     }
-		
-		currentModel = modelName;
-
-        rows=rows.filter((r,i)=>{
-
-            if(i===0)
-                return true;
-
-            return r[0]!==currentModel;
-
-        });
-
-        rows.splice(1, 0, [
-
-            currentModel,
-
-            document.getElementById("factProject").value,
-
-            document.getElementById("factDataset").value,
-
-            document.getElementById("factTable").value
-
-        ]);
-
-        sheet.getUsedRange().clear();
-
-        sheet.getRangeByIndexes(0,0,rows.length,4).values=rows;
-
-        await context.sync();
-
-    });
+    if (inputElem && inputElem.value && inputElem.value.trim() !== "") {
+        return inputElem.value.trim();
+    }
+    return currentModel;
 
 }
 
@@ -456,41 +371,23 @@ async function loadModel(modelName)
 
     currentModel=modelName;
 
-    await Excel.run(async(context)=>{
+    await window.SemanticModelStore.setActiveModelName(modelName);
 
-        const sheet=context.workbook.worksheets.getItem("MODEL_FACT");
+    const model = window.SemanticModelStore.getModel(modelName);
 
-        const range=sheet.getUsedRange();
+    if (model && model.fact) {
 
-        range.load("values");
+        document.getElementById("factProject").value=model.fact.project || "";
 
-        await context.sync();
+        document.getElementById("factDataset").value=model.fact.dataset || "";
 
-        const rows=range.values;
+        document.getElementById("factTable").value=model.fact.table || "";
 
-        for(let i=1;i<rows.length;i++)
-        {
+        document.getElementById("factFullConcat").value=
 
-            if(rows[i][0]===modelName)
-            {
+            (model.fact.project||"")+"."+(model.fact.dataset||"")+"."+(model.fact.table||"");
 
-                document.getElementById("factProject").value=rows[i][1];
-
-                document.getElementById("factDataset").value=rows[i][2];
-
-                document.getElementById("factTable").value=rows[i][3];
-
-                document.getElementById("factFullConcat").value=
-
-                    rows[i][1]+"."+rows[i][2]+"."+rows[i][3];
-
-                break;
-
-            }
-
-        }
-
-    });
+    }
 
     await fetchFactFields(true);
 
@@ -499,85 +396,14 @@ async function loadModel(modelName)
 async function deleteModel()
 {
 
-    let modelName = "";
-    const selectElem = document.getElementById("semanticModelSelect");
-    const inputElem = document.getElementById("newModelName");
+    const modelName = resolveCurrentModelName();
 
-    if (selectElem && selectElem.value && selectElem.value !== "") {
-        modelName = selectElem.value.trim();
-    } else if (inputElem && inputElem.value && inputElem.value.trim() !== "") {
-        modelName = inputElem.value.trim();
-    } else {
-        modelName = currentModel;
-    }
     currentModel = modelName;
 
     if(currentModel==="")
         return;
 
-    await Excel.run(async(context)=>{
-
-        const targets = [
-            { name: "MODEL_FACT", modelCol: 0 },
-            { name: "MODEL_DIMENSION", modelCol: 10 },
-            { name: "MODEL_MEASURES", modelCol: 8 },
-            { name: "MODEL_RELATIONSHIP", modelCol: -1 },
-            { name: "MODEL_ATRIBUTES", modelCol: -1 },
-            { name: "MODEL_HIER", modelCol: -1 }
-        ];
-
-        for (const target of targets) {
-
-            let sheet = context.workbook.worksheets.getItemOrNullObject(target.name);
-
-            await context.sync();
-
-            if (!sheet.isNullObject) {
-
-                let range = sheet.getUsedRangeOrNullObject();
-
-                await context.sync();
-
-                if (!range.isNullObject) {
-
-                    range.load("values");
-
-                    await context.sync();
-
-                    let rows = range.values;
-
-                    if (rows && rows.length > 0) {
-
-                        rows = rows.filter((r, i) => {
-
-                            if (i === 0) return true;
-
-                            // modelCol === -1 significa "el nombre del modelo está en la última columna"
-                            const col = target.modelCol === -1 ? r.length - 1 : target.modelCol;
-
-                            return r[col] !== currentModel && r[r.length - 1] !== currentModel;
-
-                        });
-
-                        sheet.getUsedRange().clear();
-
-                        if (rows.length > 0) {
-
-                            sheet.getRangeByIndexes(0, 0, rows.length, rows[0].length).values = rows;
-
-                        }
-
-                    }
-
-                }
-
-            }
-
-        }
-
-        await context.sync();
-
-    });
+    await window.SemanticModelStore.deleteModel(currentModel);
 
     creatingModel = false;
 
@@ -585,7 +411,7 @@ async function deleteModel()
 
     clearCurrentModel();
 
-    await loadSemanticModels();
+    loadSemanticModels();
 
 }
 
@@ -839,199 +665,51 @@ async function fetchFactFields(isModelLoad = false) {
         const fields = await Provider.getTableFields(projectId, datasetId, tableId);
 
         if (fields && fields.length > 0) {
-            let savedDimFields = new Set();
-            let savedMeaFields = new Set();
-            let relMap = {};    // DIMENSION -> { relProject, relDataset, relTable }
-            let attrMap = {};   // DIMENSION -> [ {name, alias, dataType, isKey, enabled} ]
-            let hierMap = {};   // DIMENSION -> [ {name, levels:[{attribute}]} ]
 
-            if (isModelLoad && typeof Excel !== "undefined" && currentModel) {
-                try {
-                    await Excel.run(async (context) => {
-                        const sheets = context.workbook.worksheets;
+            // Config ya guardada de este modelo (SemanticModelStore), por
+            // nombre de campo, para fusionarla con el esquema recién leído
+            // del proveedor (por si hay columnas nuevas o eliminadas).
+            let savedByName = {};
 
-                        let sheetDim = sheets.getItemOrNullObject("MODEL_DIMENSION");
-                        await context.sync();
-                        if (!sheetDim.isNullObject) {
-                            let rangeDim = sheetDim.getUsedRangeOrNullObject();
-                            await context.sync();
-                            if (!rangeDim.isNullObject) {
-                                rangeDim.load("values");
-                                await context.sync();
-                                const rows = rangeDim.values || [];
-                                for (let i = 1; i < rows.length; i++) {
-                                    const r = rows[i];
-                                    if (r[10] === currentModel || r[r.length - 1] === currentModel) {
-                                        if (r[5]) savedDimFields.add(r[5]);
-                                    }
-                                }
-                            }
-                        }
-
-                        let sheetMea = sheets.getItemOrNullObject("MODEL_MEASURES");
-                        await context.sync();
-                        if (!sheetMea.isNullObject) {
-                            let rangeMea = sheetMea.getUsedRangeOrNullObject();
-                            await context.sync();
-                            if (!rangeMea.isNullObject) {
-                                rangeMea.load("values");
-                                await context.sync();
-                                const rows = rangeMea.values || [];
-                                for (let i = 1; i < rows.length; i++) {
-                                    const r = rows[i];
-                                    if (r[8] === currentModel || r[r.length - 1] === currentModel) {
-                                        if (r[5]) savedMeaFields.add(r[5]);
-                                    }
-                                }
-                            }
-                        }
-
-                        // MODEL_RELATIONSHIP -> relación de cada dimensión con su tabla
-                        let sheetRel = sheets.getItemOrNullObject("MODEL_RELATIONSHIP");
-                        await context.sync();
-                        if (!sheetRel.isNullObject) {
-                            let rangeRel = sheetRel.getUsedRangeOrNullObject();
-                            await context.sync();
-                            if (!rangeRel.isNullObject) {
-                                rangeRel.load("values");
-                                await context.sync();
-                                const rows = rangeRel.values || [];
-                                for (let i = 1; i < rows.length; i++) {
-                                    const r = rows[i];
-                                    if (r[r.length - 1] === currentModel) {
-                                        const dimName = r[1];
-                                        if (dimName) {
-                                            relMap[dimName] = {
-                                                relProject: r[6] || "",
-                                                relDataset: r[7] || "",
-                                                relTable: r[8] || ""
-                                            };
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // MODEL_ATRIBUTES -> atributos de cada dimensión
-                        let sheetAttr = sheets.getItemOrNullObject("MODEL_ATRIBUTES");
-                        await context.sync();
-                        if (!sheetAttr.isNullObject) {
-                            let rangeAttr = sheetAttr.getUsedRangeOrNullObject();
-                            await context.sync();
-                            if (!rangeAttr.isNullObject) {
-                                rangeAttr.load("values");
-                                await context.sync();
-                                const rows = rangeAttr.values || [];
-                                for (let i = 1; i < rows.length; i++) {
-                                    const r = rows[i];
-                                    if (r[r.length - 1] === currentModel) {
-                                        const dimName = r[1];
-                                        const attrName = r[2];
-                                        if (dimName && attrName) {
-                                            if (!attrMap[dimName]) attrMap[dimName] = [];
-                                            attrMap[dimName].push({
-                                                name: attrName,
-                                                alias: (r[7] && String(r[7]).trim() !== "") ? r[7] : attrName,
-                                                dataType: r[8] || "",
-                                                isKey: r[9] === "X" || r[9] === true,
-                                                enabled: true
-                                            });
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // MODEL_HIER -> jerarquías de cada dimensión
-                        let sheetHier = sheets.getItemOrNullObject("MODEL_HIER");
-                        await context.sync();
-                        if (!sheetHier.isNullObject) {
-                            let rangeHier = sheetHier.getUsedRangeOrNullObject();
-                            await context.sync();
-                            if (!rangeHier.isNullObject) {
-                                rangeHier.load("values");
-                                await context.sync();
-                                const rows = rangeHier.values || [];
-                                const rawMap = {}; // dimName -> hierName -> [{nivel, attribute}]
-                                for (let i = 1; i < rows.length; i++) {
-                                    const r = rows[i];
-                                    if (r[r.length - 1] === currentModel) {
-                                        const hierName = r[1];
-                                        const nivel = Number(r[2]);
-                                        const dimName = r[3];
-                                        const fieldName = r[8];
-                                        if (dimName && hierName && fieldName) {
-                                            if (!rawMap[dimName]) rawMap[dimName] = {};
-                                            if (!rawMap[dimName][hierName]) rawMap[dimName][hierName] = [];
-                                            rawMap[dimName][hierName].push({ nivel: nivel, attribute: fieldName });
-                                        }
-                                    }
-                                }
-                                Object.keys(rawMap).forEach(dimName => {
-                                    hierMap[dimName] = Object.keys(rawMap[dimName]).map(hierName => {
-                                        const levels = rawMap[dimName][hierName]
-                                            .sort((a, b) => a.nivel - b.nivel)
-                                            .map(l => ({ attribute: l.attribute }));
-                                        return { name: hierName, levels: levels };
-                                    });
-                                });
-                            }
-                        }
-                    });
-                } catch (err) {
-                    console.error("Error al consultar dimensiones, relaciones, atributos y jerarquías guardadas en Excel:", err);
+            if (isModelLoad && currentModel) {
+                const savedModel = window.SemanticModelStore.getModel(currentModel);
+                if (savedModel && savedModel.fields) {
+                    savedModel.fields.forEach(f => { savedByName[f.name] = f; });
                 }
             }
 
             fieldsState = fields.map(f => {
                 const isNumeric = ["INTEGER", "FLOAT", "NUMERIC", "BIGNUMERIC"].includes(f.type);
+                const saved = savedByName[f.name];
+
                 let fieldType = isNumeric ? "MEASURE" : "DIMENSION";
                 let isEnabled = true;
 
                 if (isModelLoad) {
-                    if (savedDimFields.has(f.name)) {
-                        fieldType = "DIMENSION";
-                        isEnabled = true;
-                    } else if (savedMeaFields.has(f.name)) {
-                        fieldType = "MEASURE";
-                        isEnabled = true;
+                    if (saved) {
+                        fieldType = saved.type || fieldType;
+                        isEnabled = !!saved.enabled;
                     } else {
                         isEnabled = false;
                     }
                 }
 
-                const field = {
+                return {
                     name: f.name,
                     alias: f.name,
                     dataType: f.type,
                     type: fieldType,
                     enabled: isEnabled,
                     // Config Medida
-                    aggregation: "SUM",
-                    format: "Auto",
+                    aggregation: (saved && saved.aggregation) || "SUM",
+                    format: (saved && saved.format) || "Auto",
                     // Config Dimensión (Relación)
-                    relProject: "",
-                    relDataset: "",
-                    relTable: "",
-                    attributes: [],
-                    hierarchies: []
+                    relProject: (saved && saved.relProject) || "",
+                    relDataset: (saved && saved.relDataset) || "",
+                    relTable: (saved && saved.relTable) || "",
+                    attributes: (saved && saved.attributes) || [],
+                    hierarchies: (saved && saved.hierarchies) || []
                 };
-
-                if (isModelLoad && fieldType === "DIMENSION" && isEnabled) {
-                    if (relMap[f.name]) {
-                        field.relProject = relMap[f.name].relProject;
-                        field.relDataset = relMap[f.name].relDataset;
-                        field.relTable = relMap[f.name].relTable;
-                    }
-                    if (attrMap[f.name]) {
-                        field.attributes = attrMap[f.name];
-                    }
-                    if (hierMap[f.name]) {
-                        field.hierarchies = hierMap[f.name];
-                    }
-                }
-
-                return field;
             });
 
             renderFieldsTable();
@@ -1641,92 +1319,19 @@ function saveHierarchyEditor() {
 }
 
 /**
- * Vuelca el modelo semántico completo a Excel rellenando las 5 pestañas objetivo
- */
- 
- 
- 
-/**
- * Fusiona en una hoja (sheetName) las filas nuevas (newRows) de un modelo,
- * conservando intactas las filas de los DEMÁS modelos que ya hubiera en la
- * hoja. Es la misma lógica que ya usaban MODEL_DIMENSION / MODEL_MEASURES,
- * generalizada para aplicarla también a MODEL_RELATIONSHIP, MODEL_ATRIBUTES
- * y MODEL_HIER, de forma que TODAS las pestañas del modelo semántico
- * guarden y respeten el nombre del modelo (MODEL_NAME, última columna).
- */
-async function mergeModelSheet(context, sheets, sheetName, headers, newRows, modelName) {
-
-    const modelNameColIdx = headers.length - 1; // MODEL_NAME siempre es la última columna
-
-    let sheet = sheets.getItemOrNullObject(sheetName);
-    await context.sync();
-
-    if (sheet.isNullObject) {
-        sheet = sheets.add(sheetName);
-    }
-
-    let range = sheet.getUsedRangeOrNullObject();
-    await context.sync();
-
-    let existingRows = [];
-
-    if (!range.isNullObject) {
-        range.load("values");
-        await context.sync();
-        existingRows = range.values || [];
-    }
-
-    let finalRows;
-
-    if (existingRows.length > 0) {
-
-        finalRows = existingRows.filter((r, i) => {
-
-            if (i === 0) return true; // conservar cabecera existente
-
-            return r[modelNameColIdx] !== modelName;
-
-        });
-
-    } else {
-
-        finalRows = [headers];
-
-    }
-
-    newRows.forEach(row => finalRows.push(row));
-
-    sheet.getUsedRangeOrNullObject().clear();
-
-    if (finalRows.length > 0) {
-        sheet.getRangeByIndexes(0, 0, finalRows.length, finalRows[0].length).values = finalRows;
-    }
-
-    // Todas las hojas técnicas del modelo semántico se ocultan
-    sheet.visibility = Excel.SheetVisibility.hidden;
-
-    return sheet;
-
-}
-
-/**
- * Vuelca el modelo semántico completo a Excel rellenando las 5 pestañas objetivo.
- * Todas las pestañas guardan el nombre del modelo (MODEL_NAME) en su última
- * columna y se fusionan con lo que ya hubiera de otros modelos (misma lógica
- * que MODEL_FACT / MODEL_DIMENSION), en vez de sobrescribir toda la hoja.
+ * Guarda el modelo semántico completo en SemanticModelStore (JSON dentro de
+ * las propiedades del documento, sin pestañas ni siquiera ocultas). Ya no
+ * hace falta reconstruir 5 tablas distintas (MODEL_RELATIONSHIP,
+ * MODEL_DIMENSION, MODEL_MEASURES, MODEL_ATRIBUTES, MODEL_HIER): fieldsState
+ * ya contiene toda esa información (relación, atributos y jerarquías por
+ * dimensión), así que se guarda tal cual junto con la tabla de hechos.
+ * Las filas equivalentes a esas 5 tablas se siguen pudiendo generar al
+ * vuelo cuando algo las necesita (ver SemanticModelStore.getModelGrid()).
  */
 async function generateSemanticModelInExcel() {
-    let modelName = "";
-    const selectElem = document.getElementById("semanticModelSelect");
-    const inputElem = document.getElementById("newModelName");
 
-    if (selectElem && selectElem.value && selectElem.value !== "") {
-        modelName = selectElem.value.trim();
-    } else if (inputElem && inputElem.value && inputElem.value.trim() !== "") {
-        modelName = inputElem.value.trim();
-    } else {
-        modelName = currentModel;
-    }
+    const modelName = resolveCurrentModelName();
+
     currentModel = modelName;
 
     if (currentModel === "") {
@@ -1734,258 +1339,33 @@ async function generateSemanticModelInExcel() {
         return;
     }
 
-    const factProject = document.getElementById("factProject").value.trim();
-    const factDataset = document.getElementById("factDataset").value;
-    const factTable = document.getElementById("factTable").value;
-
-    // 1. MODEL_RELATIONSHIP
-    const relHeaders = [
-        "FILA",
-        "DIMENSION",
-        "FACT_PROJECT",
-        "FACT_DATASET",
-        "FACT_TABLE",
-        "FACT_FIELD",
-        "DIM_PROJECT",
-        "DIM_DATASET",
-        "DIM_TABLE",
-        "DIM_FIELD",
-        "JOIN TYPE",
-        "MODEL_NAME"
-    ];
-
-    const relNewRows = [];
-
-    fieldsState.forEach((f, idx) => {
-
-        if (!f.enabled || f.type !== "DIMENSION" || !f.relTable)
-            return;
-
-        const keyAttr = (f.attributes || []).find(a => a.isKey);
-
-        relNewRows.push([
-            idx + 1,
-            f.name,
-            factProject,
-            factDataset,
-            factTable,
-            f.name,
-            f.relProject,
-            f.relDataset,
-            f.relTable,
-            keyAttr ? keyAttr.name : f.name,
-            "LEFT",
-            currentModel
-        ]);
-
-    });
-
-    // 2. MODEL_DIMENSION
-    const dimHeaders = [
-        "FILA",
-        "DIMENSION",
-        "FACT_PROJECT",
-        "FACT_DATASET",
-        "FACT_TABLE",
-        "FACT_FIELD",
-        "DIM_PROJECT",
-        "DIM_DATASET",
-        "DIM_TABLE",
-        "DIM_FIELD",
-        "MODEL_NAME"
-    ];
-
-    const dimNewRows = [];
-
-    fieldsState.forEach((f, idx) => {
-
-        if (!f.enabled || f.type !== "DIMENSION") return;
-
-        const keyAttr = (f.attributes || []).find(a => a.isKey);
-
-        dimNewRows.push([
-            idx + 1,
-            f.name,
-            factProject,
-            factDataset,
-            factTable,
-            f.name,
-            f.relProject || factProject,
-            f.relDataset || factDataset,
-            f.relTable || factTable,
-            keyAttr ? keyAttr.name : f.name,
-            currentModel
-        ]);
-
-    });
-
-    // 3. MODEL_MEASURES
-    const meaHeaders = [
-        "FILA",
-        "MEASURE",
-        "FACT_PROJECT",
-        "FACT_DATASET",
-        "FACT_TABLE",
-        "FACT_FIELD",
-        "AGGREGATION",
-        "FORMAT",
-        "MODEL_NAME"
-    ];
-
-    const meaNewRows = [];
-
-    fieldsState.forEach((f, idx) => {
-
-        if (!f.enabled || f.type !== "MEASURE") return;
-
-        meaNewRows.push([
-            idx + 1,
-            f.name,
-            factProject,
-            factDataset,
-            factTable,
-            f.name,
-            f.aggregation,
-            f.format,
-            currentModel
-        ]);
-
-    });
-
-    // 4. MODEL_ATRIBUTES
-    const attrHeaders = [
-        "FILA",
-        "DIMENSION",
-        "ATRIBUTE",
-        "DIM_PROJECT",
-        "DIM_DATASET",
-        "DIM_TABLE",
-        "DIM_FIELD",
-        "DISPLAY_NAME",
-        "DATA_TYPE",
-        "IS_KEY",
-        "MODEL_NAME"
-    ];
-
-    const attrNewRows = [];
-
-    fieldsState.forEach((f, idx) => {
-
-        if (!f.enabled || f.type !== "DIMENSION")
-            return;
-
-        if (f.attributes && f.attributes.length > 0) {
-
-            f.attributes
-                .filter(a => a.enabled)
-                .forEach(a => {
-
-                    attrNewRows.push([
-                        idx + 1,
-                        f.name,
-                        a.name,
-                        f.relProject || factProject,
-                        f.relDataset || factDataset,
-                        f.relTable || factTable,
-                        a.name,
-                        a.alias === a.name ? "" : a.alias,
-                        a.dataType,
-                        a.isKey ? "X" : "",
-                        currentModel
-                    ]);
-
-                });
-
-        }
-        else {
-
-            attrNewRows.push([
-                idx + 1,
-                f.name,
-                f.name,
-                factProject,
-                factDataset,
-                factTable,
-                f.name,
-                "",
-                f.dataType,
-                "X",
-                currentModel
-            ]);
-
-        }
-
-    });
-
-    // 5. MODEL_HIER
-    // Esquema esperado por excelService.js / commands.js:
-    // FILA | HIERARCHY | NIVEL | DIMENSION | ATRIBUTO | DIM_PROJECT | DIM_DATASET | DIM_TABLE | DIM_FIELD | MODEL_NAME
-    const hierHeaders = [
-        "FILA",
-        "HIERARCHY",
-        "NIVEL",
-        "DIMENSION",
-        "ATRIBUTO",
-        "DIM_PROJECT",
-        "DIM_DATASET",
-        "DIM_TABLE",
-        "DIM_FIELD",
-        "MODEL_NAME"
-    ];
-
-    const hierNewRows = [];
-    let hierFila = 1;
-
-    fieldsState.forEach(f => {
-
-        if (!f.enabled || f.type !== "DIMENSION" || !f.hierarchies || f.hierarchies.length === 0)
-            return;
-
-        f.hierarchies.forEach(hier => {
-
-            (hier.levels || []).forEach((lvl, levelIdx) => {
-
-                const attr = (f.attributes || []).find(a => a.name === lvl.attribute);
-
-                hierNewRows.push([
-                    hierFila++,
-                    hier.name,
-                    levelIdx + 1,
-                    f.name,
-                    attr ? (attr.alias || attr.name) : lvl.attribute,
-                    f.relProject || factProject,
-                    f.relDataset || factDataset,
-                    f.relTable || factTable,
-                    lvl.attribute,
-                    currentModel
-                ]);
-
-            });
-
-        });
-
-    });
+    const fact = {
+        project: document.getElementById("factProject").value.trim(),
+        dataset: document.getElementById("factDataset").value,
+        table: document.getElementById("factTable").value
+    };
 
     try {
-        await saveModelHeader();
 
-        await Excel.run(async (context) => {
-
-            const sheets = context.workbook.worksheets;
-
-            await mergeModelSheet(context, sheets, "MODEL_RELATIONSHIP", relHeaders, relNewRows, currentModel);
-            await mergeModelSheet(context, sheets, "MODEL_DIMENSION", dimHeaders, dimNewRows, currentModel);
-            await mergeModelSheet(context, sheets, "MODEL_MEASURES", meaHeaders, meaNewRows, currentModel);
-            await mergeModelSheet(context, sheets, "MODEL_ATRIBUTES", attrHeaders, attrNewRows, currentModel);
-            await mergeModelSheet(context, sheets, "MODEL_HIER", hierHeaders, hierNewRows, currentModel);
-
-            await context.sync();
-
-            alert("¡Modelo Semántico generado con éxito en Excel!");
-
+        await window.SemanticModelStore.saveModel(currentModel, {
+            fact: fact,
+            fields: fieldsState
         });
+
+        await window.SemanticModelStore.setActiveModelName(currentModel);
+
+        loadSemanticModels();
+
+        const select = document.getElementById("semanticModelSelect");
+
+        if (select) {
+            select.value = currentModel;
+        }
+
+        alert("¡Modelo Semántico generado con éxito!");
+
     } catch (err) {
-        console.error("Error al escribir el modelo semántico en Excel:", err);
-        alert("Error al escribir en Excel: " + err.message);
+        console.error("Error al guardar el modelo semántico:", err);
+        alert("Error al guardar el modelo: " + err.message);
     }
 }

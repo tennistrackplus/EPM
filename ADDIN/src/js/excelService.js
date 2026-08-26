@@ -221,16 +221,19 @@ async function executeSQLBigQuery(sql) {
 const ExcelService = {
 
     /**
-     * LoadDimensions + LoadAttributes: dimensiones (MODEL_ATRIBUTES),
-     * atributos + nombres de jerarquía (MODEL_HIER, solo NIVEL=1),
-     * y la pseudo-dimensión "MEASURE" con las medidas de MODEL_MEASURES.
+     * LoadDimensions + LoadAttributes: dimensiones (antes MODEL_ATRIBUTES),
+     * atributos + nombres de jerarquía (antes MODEL_HIER, solo NIVEL=1),
+     * y la pseudo-dimensión "MEASURE" con las medidas (antes MODEL_MEASURES).
+     * Los datos ya no viven en hojas: se generan al vuelo desde el modelo
+     * semántico activo guardado por SemanticModelStore (por ahora, el
+     * primero que exista; ver SemanticModelStore.getActiveModelName).
      */
     async readDim2Data() {
         try {
-            return await Excel.run(async (context) => {
-                const atribGrid = await getValuesGrid(context, "MODEL_ATRIBUTES");
-                const hierGrid = await getValuesGrid(context, "MODEL_HIER");
-                const measuresGrid = await getValuesGrid(context, "MODEL_MEASURES");
+            {
+                const atribGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+                const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
+                const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
 
                 const order = [];
                 const dimensionsMap = {};
@@ -279,9 +282,9 @@ const ExcelService = {
                 dimensionsList.push({ dimension: "MEASURE", hierarchies: [], attributes: measureNames });
 
                 return { data: dimensionsList };
-            });
+            }
         } catch (error) {
-            console.error("Error leyendo MODEL_ATRIBUTES/MODEL_HIER/MODEL_MEASURES:", error);
+            console.error("Error leyendo el modelo semántico (atributos/jerarquías/medidas):", error);
             return { error: "Error al leer los datos del modelo." };
         }
     },
@@ -291,18 +294,16 @@ const ExcelService = {
      * jerarquía y genera el SQL correspondiente. Devuelve "" si no existe.
      */
     async buildFilterValuesSQL(dimension, name) {
-        return await Excel.run(async (context) => {
-            const atribGrid = await getValuesGrid(context, "MODEL_ATRIBUTES");
-            const hierGrid = await getValuesGrid(context, "MODEL_HIER");
+        const atribGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+        const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
 
-            if (existsAttribute(atribGrid, dimension, name)) {
-                return buildAttributeSQL(atribGrid, dimension, name);
-            }
-            if (existsHierarchy(hierGrid, dimension, name)) {
-                return buildHierarchySQL(hierGrid, dimension, name);
-            }
-            return "";
-        });
+        if (existsAttribute(atribGrid, dimension, name)) {
+            return buildAttributeSQL(atribGrid, dimension, name);
+        }
+        if (existsHierarchy(hierGrid, dimension, name)) {
+            return buildHierarchySQL(hierGrid, dimension, name);
+        }
+        return "";
     },
 
     /**
@@ -311,24 +312,22 @@ const ExcelService = {
      * "Opciones de campo" (expandir hasta nivel / mostrar niveles).
      */
     async getHierarchyLevels(dimension, hierarchy) {
-        return await Excel.run(async (context) => {
-            const hierGrid = await getValuesGrid(context, "MODEL_HIER");
-            const lastRow = lastRowInColumnValues(hierGrid, 4);
-            const levels = [];
+        const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
+        const lastRow = lastRowInColumnValues(hierGrid, 4);
+        const levels = [];
 
-            for (let R = 2; R <= lastRow; R++) {
-                if (String(cellValue(hierGrid, R, 4)).toUpperCase() === String(dimension).toUpperCase()
-                    && String(cellValue(hierGrid, R, 2)).toUpperCase() === String(hierarchy).toUpperCase()) {
-                    levels.push({
-                        nivel: Number(cellValue(hierGrid, R, 3)),
-                        attribute: String(cellValue(hierGrid, R, 5)).trim()
-                    });
-                }
+        for (let R = 2; R <= lastRow; R++) {
+            if (String(cellValue(hierGrid, R, 4)).toUpperCase() === String(dimension).toUpperCase()
+                && String(cellValue(hierGrid, R, 2)).toUpperCase() === String(hierarchy).toUpperCase()) {
+                levels.push({
+                    nivel: Number(cellValue(hierGrid, R, 3)),
+                    attribute: String(cellValue(hierGrid, R, 5)).trim()
+                });
             }
+        }
 
-            levels.sort((a, b) => a.nivel - b.nivel);
-            return levels;
-        });
+        levels.sort((a, b) => a.nivel - b.nivel);
+        return levels;
     },
 
     async executeSQL(sql) {
@@ -446,9 +445,9 @@ const ExcelService = {
      * a través de MODEL_HIER igual que hacía frmReportDesigner2.
      */
     async saveEditReportDesign(state) {
+        const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-            const hierGrid = await getValuesGrid(context, "MODEL_HIER");
 
             // Limpiar bloques igual que hacía el VBA (ClearContents desde fila 15 hasta el final)
             sheet.getRange("C15:F5000").clear(Excel.ClearApplyTo.contents);
@@ -598,31 +597,13 @@ const ExcelService = {
     },
 
     /**
-     * Lista de modelos semánticos disponibles (columna A de MODEL_FACT,
-     * sin cabecera, únicos y ordenados). Usado SOLO para rellenar el
-     * listbox "Modelo semántico" de Propiedades del informe: es estético,
-     * de momento no cambia nada al seleccionar uno distinto.
+     * Lista de modelos semánticos disponibles (nombres únicos, ordenados).
+     * Usado para rellenar el listbox "Modelo semántico" de Propiedades del
+     * informe y, en el futuro, para el selector de modelo semántico del
+     * editor de informes.
      */
     async getSemanticModels() {
-        return await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItemOrNullObject("MODEL_FACT");
-            sheet.load("isNullObject");
-            await context.sync();
-            if (sheet.isNullObject) return [];
-
-            const range = sheet.getUsedRangeOrNullObject();
-            range.load(["values", "isNullObject"]);
-            await context.sync();
-            if (range.isNullObject) return [];
-
-            const rows = range.values;
-            const seen = new Set();
-            for (let i = 1; i < rows.length; i++) { // fila 0 = cabecera
-                const v = String(rows[i][0] || "").trim();
-                if (v) seen.add(v);
-            }
-            return Array.from(seen).sort();
-        });
+        return window.SemanticModelStore.listModelNames();
     }
 };
 

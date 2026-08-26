@@ -1015,9 +1015,10 @@ const TaskPaneApp = {
         await new Promise((resolve) => settings.saveAsync(resolve));
     },
 
-    // Rellena el listbox "Modelo semántico" (MODEL_FACT) del modal de
-    // Propiedades del informe. Puramente estético: se deja el primero
-    // seleccionado por defecto y no dispara ninguna acción al cambiarlo.
+    // Rellena el listbox "Modelo semántico" del modal de Propiedades del
+    // informe con los modelos guardados en SemanticModelStore. Puramente
+    // estético por ahora: se deja el primero seleccionado por defecto y no
+    // dispara ninguna acción al cambiarlo (futuro selector real de modelo).
     async populateSemanticModelDropdown() {
         const select = document.getElementById("propSemanticModel");
         if (!select) return;
@@ -1028,7 +1029,7 @@ const TaskPaneApp = {
                 : [];
             select.innerHTML = "";
             if (models.length === 0) {
-                select.innerHTML = "<option value=\"\">— Sin modelos en MODEL_FACT —</option>";
+                select.innerHTML = "<option value=\"\">— Sin modelos semánticos guardados —</option>";
                 return;
             }
             models.forEach(name => {
@@ -1039,7 +1040,7 @@ const TaskPaneApp = {
             });
             select.selectedIndex = 0; // por defecto, el primero
         } catch (err) {
-            console.warn("No se pudieron cargar los modelos semánticos de MODEL_FACT:", err);
+            console.warn("No se pudieron cargar los modelos semánticos guardados:", err);
             select.innerHTML = "<option value=\"\">— No disponible —</option>";
         }
     },
