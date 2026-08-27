@@ -461,3 +461,13 @@ tbody tr:hover {
 .checkbox-cell {
     text-align: center;
 }
+
+.gcp-project-manual {
+    display: flex;
+    gap: 8px;
+    margin-top: 6px;
+}
+
+.gcp-project-manual input {
+    flex: 1;
+}
