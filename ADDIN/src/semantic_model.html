@@ -871,6 +871,7 @@
                 <span class="card-title">Modelo semántico</span>
                 <div class="model-manager-actions">
                     <button type="button" class="icon-btn" id="btnOpenLkmlModel" title="Abrir modelo semántico desde LookML (.lkml)">📂 Abrir</button>
+                    <button type="button" class="icon-btn" id="btnSaveLkmlModel" title="Guardar modelo semántico como LookML (.lkml)">📤 LookML</button>
                     <button type="button" class="btn-generate" id="btnGenerateModel" title="Guardar modelo semántico en Excel">💾 Guardar</button>
                     <button type="button" class="icon-btn" id="btnNewModel" title="Crear nuevo modelo">+</button>
                     <button type="button" class="icon-btn danger" id="btnDeleteModel" title="Eliminar modelo">🗑</button>
@@ -966,6 +967,66 @@
             <div class="lkml-modal-footer">
                 <button type="button" class="icon-btn" id="btnCancelOpenLkml">Cancelar</button>
                 <button type="button" class="btn-generate" id="btnConfirmOpenLkml" disabled>Seleccionar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: GUARDAR MODELO SEMÁNTICO COMO LOOKML (.lkml) -->
+    <div id="saveLkmlModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Guardar modelo semántico (.lkml)</h3>
+                <span class="modal-close" id="btnCloseSaveLkmlModal">&times;</span>
+            </div>
+
+            <!-- Selector de modelo semántico: mismo comportamiento que el selector
+                 de la caja "Modelo semántico" (debajo del botón "+"), aquí para
+                 elegir QUÉ modelo se exporta a LookML. -->
+            <label class="lkml-field-label" for="lkmlSaveModelSelect">Modelo semántico</label>
+            <select class="lkml-select" id="lkmlSaveModelSelect">
+                <option value="">— Sin modelo seleccionado —</option>
+            </select>
+
+            <div class="lkml-tabs">
+                <div class="lkml-tab active" id="lkmlSaveTabServer" data-tab="server">Servidor</div>
+                <div class="lkml-tab" id="lkmlSaveTabLocal" data-tab="local">Local</div>
+            </div>
+
+            <!-- PESTAÑA SERVIDOR: repositorio Git (GitHub/GitLab) de la conexión -->
+            <div class="lkml-tab-panel active" id="lkmlSavePanelServer">
+                <label class="lkml-field-label" for="lkmlSaveServerConnection">Conexión</label>
+                <select class="lkml-select" id="lkmlSaveServerConnection">
+                    <option value="">— Sin conexiones guardadas —</option>
+                </select>
+
+                <label class="lkml-field-label" for="lkmlSaveServerPath">Ruta / carpeta en el repositorio</label>
+                <div style="display:flex; gap:6px;">
+                    <input type="text" class="lkml-input" id="lkmlSaveServerPath" placeholder="raíz del repositorio" style="flex:1;" />
+                    <button type="button" class="icon-btn" id="lkmlSaveServerUpBtn" title="Subir un nivel">⬆</button>
+                </div>
+
+                <div class="lkml-server-list" id="lkmlSaveServerList">
+                    <span class="lkml-empty-hint">Selecciona una conexión para explorar las carpetas del repositorio.</span>
+                </div>
+
+                <label class="lkml-field-label" for="lkmlSaveServerFileName">Nombre de fichero</label>
+                <input type="text" class="lkml-input" id="lkmlSaveServerFileName" placeholder="modelo.lkml" />
+            </div>
+
+            <!-- PESTAÑA LOCAL: en lugar de arrastrar un fichero (como en "Abrir"),
+                 aquí se indica el nombre y se guarda con el botón "Guardar" del
+                 pie del modal (descarga el .lkml al equipo del usuario). -->
+            <div class="lkml-tab-panel" id="lkmlSavePanelLocal">
+                <label class="lkml-field-label" for="lkmlSaveLocalFileName">Nombre de fichero</label>
+                <input type="text" class="lkml-input" id="lkmlSaveLocalFileName" placeholder="modelo.lkml" />
+                <p style="margin:10px 0 0; font-size:12.5px; color:#64748b; line-height:1.5;">
+                    Pulsa <strong>Guardar</strong> para descargar el fichero .lkml a tu equipo.
+                </p>
+            </div>
+
+            <div class="lkml-modal-footer">
+                <button type="button" class="icon-btn" id="btnCancelSaveLkml">Cancelar</button>
+                <button type="button" class="btn-generate" id="btnConfirmSaveLkml" disabled>Guardar</button>
             </div>
         </div>
     </div>
