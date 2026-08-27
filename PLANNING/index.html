@@ -240,6 +240,68 @@
         .gcp-project-picker select {
             width: 100%;
         }
+
+        /* ---------------------------------------------------- */
+        /* Conexiones guardadas (mismo componente visual que      */
+        /* ADDIN/src/login.html, mismo almacén localStorage vía   */
+        /* js/connections.js — ver ese fichero para más detalle)  */
+        /* ---------------------------------------------------- */
+        .saved-connections { margin-bottom: 16px; display: none; }
+        .saved-connections.visible { display: block; }
+        .saved-connections-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+
+        .conn-card {
+            background: var(--surface-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-xs);
+            padding: 10px 10px 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            cursor: pointer;
+            transition: border-color var(--transition-base), box-shadow var(--transition-base);
+        }
+        .conn-card:hover { border-color: var(--brand-primary); box-shadow: var(--shadow-sm); }
+        .conn-card.active { border: 1.5px solid var(--brand-primary); background-color: var(--brand-primary-light); }
+        .conn-info { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .conn-icon { width: 32px; height: 32px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-md); overflow: hidden; }
+        .conn-icon img { width: 32px; height: 32px; object-fit: contain; display: block; }
+        .conn-details { min-width: 0; }
+        .conn-details h3 { font-size: var(--fs-md); font-weight: 600; margin: 0; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .conn-details span { font-size: var(--fs-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+        .conn-side { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+        .link-toggle {
+            background: none; border: none; padding: 0; cursor: pointer;
+            font-size: var(--fs-sm); font-weight: 600; color: var(--brand-primary);
+        }
+        .link-toggle:hover { text-decoration: underline; }
+
+        .new-connection-block { display: block; }
+        .new-connection-block.collapsed { display: none; }
+
+        /* ---------------------------------------------------- */
+        /* Panel de instalación del esquema de control            */
+        /* ---------------------------------------------------- */
+        .install-panel {
+            margin-top: 14px;
+            display: none;
+            padding: 12px 14px;
+            border-radius: var(--radius-md);
+            background: var(--color-warning-light);
+            border: 1px solid #F3DFB8;
+        }
+        .install-panel.visible { display: block; }
+        .install-panel p {
+            font-size: var(--fs-sm);
+            color: var(--color-warning);
+            line-height: 1.5;
+            margin-bottom: 10px;
+        }
+        .install-panel .btn-action { background-color: var(--color-warning); }
+        .install-panel .btn-action:hover { background-color: #96540A; }
     </style>
 </head>
 <body>
@@ -267,7 +329,12 @@
                     <p>Selecciona el servicio de datos para conectar o gestionar la sesión:</p>
                 </div>
 
-                <div class="connectors-grid" id="connectorsContainer">
+                <div class="saved-connections" id="savedConnectionsSection">
+                    <div class="saved-connections-list" id="savedConnectionsList"></div>
+                    <button type="button" class="link-toggle" id="btnToggleNewConnection">+ Nueva conexión</button>
+                </div>
+
+                <div class="connectors-grid new-connection-block" id="connectorsContainer">
                     <div class="connector-card" data-provider="bigquery">
                         <div class="connector-info">
                             <div class="connector-icon">
@@ -352,7 +419,12 @@
                     <input type="text" id="sfRole" placeholder="ej. SYSADMIN">
                 </div>
 
-                <div class="action-footer">
+                <div class="install-panel" id="installPanel">
+                    <p id="installPanelMsg">No se ha encontrado el esquema de control de Draco (<code>DRACO_CONTROL</code>) en este proyecto. Puedes crearlo ahora — se instalarán las tablas de metadatos necesarias (proyectos, dimensiones, cubos, jerarquías, workflows...).</p>
+                    <button id="btnInstallSchema" class="btn-action">Instalar esquema de control</button>
+                </div>
+
+                <div class="action-footer" id="actionFooter">
                     <button id="btnAction" class="btn-action" disabled>1. Selecciona una fuente de datos</button>
                 </div>
             </div>
@@ -363,6 +435,7 @@
     <script src="js/bigquery.js"></script>
     <script src="js/snowflake.js"></script>
     <script src="js/provider.js"></script>
+    <script src="js/connections.js"></script>
     <script src="js/schema.js"></script>
     <script src="js/auth.js"></script>
 </body>

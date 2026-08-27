@@ -21,11 +21,19 @@ lenguaje visual que vuestra app anterior (EPM Data Studio).
   Requiere que un ACCOUNTADMIN ejecute una vez
   `sql/01_snowflake_oauth_integration.sql` para dar de alta el cliente
   OAuth de Draco Planning en tu cuenta de Snowflake.
-- **Bootstrap automático del esquema de control**: al conectar (con
-  cualquiera de los dos motores) y elegir tu "hogar" de trabajo (proyecto
-  GCP, o cuenta+warehouse de Snowflake), la app crea si no existen el
-  dataset/esquema `DRACO_CONTROL` y las 3 tablas maestras. El script SQL
-  equivalente está en `sql/00_control_schema.sql`.
+- **Bootstrap del esquema de control**: al conectar y elegir tu "hogar"
+  de trabajo (proyecto GCP, o cuenta+warehouse de Snowflake):
+  - **Snowflake**: se crea automáticamente y en silencio si no existe
+    (comportamiento sin cambios).
+  - **BigQuery (nuevo)**: en vez de crearlo en silencio, la app
+    comprueba primero si ya existe la primera tabla
+    (`DRACO_CONTROL.PROYECTOS`, `DracoSchema.controlSchemaExists()`
+    en `js/schema.js`). Si no existe, muestra un aviso con un botón
+    **"Instalar esquema de control"** (y, si la conexión todavía no
+    trae un proyecto GCP elegido, primero pide seleccionarlo). Solo al
+    pulsar el botón se crean el dataset y las tablas — ver
+    `js/auth.js::proceedBigQuery()` / `installControlSchema()`.
+  El script SQL equivalente está en `sql/00_control_schema.sql`.
 - **Panel principal (`app.html`)**: barra de proyecto (crear/eliminar),
   bloques **Administración** y **Mi Progreso** (maximizables/contraíbles),
   y dentro de Administración:
@@ -143,6 +151,37 @@ leer/escribir CSV y Excel sin necesitar backend.
 ⚠️ **Importante**: al editar una dimensión o cubo, la tabla física se recrea
 con `CREATE OR REPLACE TABLE`, lo que **borra los datos existentes** si
 cambias las columnas. Es el comportamiento esperado en fase de modelado.
+
+## 1bis. Conexiones compartidas con el add-in de Excel (nuevo)
+
+`js/connections.js` es una copia literal de `ADDIN/src/js/connections.js`
+(mismas claves de `localStorage`: `epm_connections` / `epm_active_connection_id`,
+mismo formato de objeto `{id, name, provider, config, ...}`). La landing
+(`index.html` + `js/auth.js`) ahora:
+
+- Al arrancar, si hay conexiones guardadas las lista arriba (mismo
+  componente visual `.conn-card` que el add-in); un clic reutiliza sus
+  parámetros y conecta sin volver a preguntarlos (si el token OAuth
+  sigue vivo, ni siquiera reabre el popup de login). "+ Nueva conexión"
+  despliega el selector de conectores de siempre.
+- Cada vez que conectas (o cambias el proyecto GCP / los campos de
+  Snowflake) se crea o actualiza una entrada en `Connections` con
+  `Connections.create()` / `Connections.update()`.
+- Para BigQuery se guardan dos campos de proyecto en `config`:
+  `homeProjectId` (el que usa Planning para `DRACO_CONTROL` y
+  `DRACO_<proyecto>`) y `billingProjectId` (el que ya usaba el add-in
+  para pagar las consultas). Por defecto se rellenan los dos con el
+  mismo valor, así una conexión creada en cualquiera de las dos apps
+  sirve tal cual en la otra.
+
+⚠️ **Importante — mismo origen**: esto solo funciona "de verdad" (lo
+creado en un sitio aparece en el otro sin tocar nada más) si Planning y
+el add-in se sirven desde el **mismo origen** (mismo esquema+dominio+
+puerto, aunque sea en rutas distintas: `https://tuapp.com/planning/` y
+`https://tuapp.com/addin/`), porque `localStorage` es por origen. Si
+alguna vez se despliegan en dominios distintos, dejan de compartir el
+almacén automáticamente y haría falta un backend común (o guardar las
+conexiones como filas en `DRACO_CONTROL` en vez de en `localStorage`).
 
 ## 2. Puesta en marcha — BigQuery
 
