@@ -8,7 +8,17 @@ const DracoConfig = {
     // ---------------------------------------------------------
     // BigQuery (Google OAuth 2.0 — flujo implícito)
     // ---------------------------------------------------------
-    googleClientId: "TU_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
+    // Mismo Client ID de Google que ya usa ADDIN/src/js/config.js: es un
+    // único OAuth Client ID de tipo "Aplicación web" que puede tener
+    // VARIAS "URI de redireccionamiento autorizadas" a la vez, así que no
+    // hace falta crear uno nuevo para Planning — solo añadir su
+    // auth-callback.html (tu-dominio-planning/auth-callback.html) a la
+    // lista de redirect URIs de este Client ID en Google Cloud Console
+    // (Credenciales → este Client ID → "URIs de redireccionamiento
+    // autorizados" → Añadir URI). Si el add-in y Planning van en el mismo
+    // dominio (recomendado, ver sección 1bis del README), puede que la
+    // URI ya esté cubierta si usan la misma ruta base.
+    googleClientId: "316357511817-lck6pdotv8mrb7n72pahuukt2e0fvsrt.apps.googleusercontent.com",
     googleScopes: [
         "https://www.googleapis.com/auth/bigquery",
         "https://www.googleapis.com/auth/userinfo.email"

@@ -317,6 +317,23 @@ const DracoSchema = {
              "WORKFLOWS_RUNS", "WORKFLOWS_RUNS_INSTANCIAS", "WORKFLOWS_RUNS_VARIABLES",
              "ACTUALIZACIONES"],
 
+    /**
+     * Comprobación ligera para la puerta de instalación (usada hoy solo
+     * para BigQuery, ver js/auth.js::proceedBigQuery): solo mira si existe
+     * el dataset/esquema DRACO_CONTROL y su PRIMERA tabla (PROYECTOS), en
+     * vez de recorrer las ~25 tablas de control como hace isBootstrapped().
+     */
+    async controlSchemaExists() {
+        const exists = await Provider.containerExists(DracoConfig.controlDataset);
+        if (!exists) return false;
+        try {
+            await Provider.runQuery(`SELECT 1 FROM ${Provider.qualifyControl("PROYECTOS")} LIMIT 1`);
+            return true;
+        } catch (e) {
+            return false;
+        }
+    },
+
     async isBootstrapped() {
         const exists = await Provider.containerExists(DracoConfig.controlDataset);
         if (!exists) return false;
