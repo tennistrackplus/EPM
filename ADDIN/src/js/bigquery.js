@@ -29,20 +29,22 @@ const BQ = {
         }
     },
 
-    /** { type: "github"|"gitlab"|"azure_devops"|"local"|"", url: "" } */
+    /** { type: "github"|"gitlab"|"azure_devops"|"local"|"", url: "", branch: "", token: "" } */
     getSemanticRepo() {
         try {
             const raw = localStorage.getItem("bq_semantic_repo");
-            return raw ? JSON.parse(raw) : { type: "", url: "" };
+            return raw ? JSON.parse(raw) : { type: "", url: "", branch: "", token: "" };
         } catch (e) {
-            return { type: "", url: "" };
+            return { type: "", url: "", branch: "", token: "" };
         }
     },
     setSemanticRepo(repo) {
         if (repo && (repo.type || repo.url)) {
             localStorage.setItem("bq_semantic_repo", JSON.stringify({
                 type: repo.type || "",
-                url: (repo.url || "").trim()
+                url: (repo.url || "").trim(),
+                branch: (repo.branch || "").trim(),
+                token: (repo.token || "").trim()
             }));
         } else {
             localStorage.removeItem("bq_semantic_repo");

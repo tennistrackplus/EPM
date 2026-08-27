@@ -109,6 +109,11 @@ const RangeAxis = {
 const TaskPaneApp = {
     draggedElementData: null,
 
+    // Id (secuencial, interno) del informe que se está editando ahora
+    // mismo en el taskpane. null = todavía no hay ningún informe creado
+    // (taskpane vacío, ver showEmptyState()).
+    currentReportId: null,
+
     // Estado del diseño (equivalente a lstFilters/lstRows/lstCols del VBA)
     state: {
         filters: [],
@@ -169,12 +174,14 @@ const TaskPaneApp = {
     },
 
     scheduleAutoUpdate() {
+        if (!this.currentReportId) return; // sin informe activo todavía: nada que guardar
         this.setAutoStatus("Cambios pendientes…");
         if (this.autoRefreshTimer) clearTimeout(this.autoRefreshTimer);
         this.autoRefreshTimer = setTimeout(() => this.runAutoSaveAndRefresh(), 700);
     },
 
     async runAutoSaveAndRefresh() {
+        if (!this.currentReportId) return;
         if (this.isAutoRefreshing) {
             this.autoRefreshQueued = true;
             return;
@@ -183,7 +190,7 @@ const TaskPaneApp = {
 
         try {
             this.setAutoStatus("Guardando…");
-            await window.ExcelService.saveEditReportDesign(this.collectDesignPayload());
+            await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
 
             if (this.isRefreshPaused()) {
                 // Pausa activa (botón de pausa marcado): se guarda el diseño
@@ -263,9 +270,10 @@ const TaskPaneApp = {
     // marcar/desmarcar Estático: el propio botón pide explícitamente que
     // eso no dispare un refresco automático.
     async saveDesignOnly() {
+        if (!this.currentReportId) return;
         try {
             this.setAutoStatus("Guardando…");
-            await window.ExcelService.saveEditReportDesign(this.collectDesignPayload());
+            await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
             this.setAutoStatus("Guardado ✓");
             setTimeout(() => {
                 const el = document.getElementById("autoStatus");
@@ -395,11 +403,21 @@ const TaskPaneApp = {
         // cargar el diseño.
         await safeStep("captureActiveEditContext", () => this.captureActiveEditContext());
 
+        // Selector de informes ("Informe") + selector de modelo semántico
+        // (justo encima del buscador de campo): determina currentReportId.
+        await safeStep("initReportAndModelSelectors", () => this.initReportAndModelSelectors());
+
         // loadFields() es lo más importante de esta pantalla (el árbol de
-        // campos de la izquierda): se ejecuta siempre, pase lo que pase
-        // con los pasos anteriores.
-        await safeStep("loadFields", () => this.loadFields());
-        await safeStep("loadDesignFromSheet", () => this.loadDesignFromSheet());
+        // campos de la izquierda), pero solo tiene sentido si ya hay un
+        // informe activo (y un modelo semántico elegido): si todavía no se
+        // ha creado ningún informe, el taskpane se queda vacío hasta que
+        // el usuario pulse "Añadir informe".
+        if (this.currentReportId) {
+            await safeStep("loadFields", () => this.loadFields());
+            await safeStep("loadDesignFromSheet", () => this.loadDesignFromSheet());
+        } else {
+            this.showEmptyState();
+        }
         await safeStep("handlePendingRibbonAction", () => this.handlePendingRibbonAction());
 
         // Registro temprano de los listeners de reconocimiento de miembros
@@ -443,8 +461,14 @@ const TaskPaneApp = {
         const fieldSearch = document.getElementById("fieldSearch");
         if (fieldSearch) fieldSearch.addEventListener("input", (e) => this.filterFields(e.target.value));
 
-        const btnSave = document.getElementById("btnSaveDesign");
-        if (btnSave) btnSave.addEventListener("click", () => this.saveDesign());
+        const btnAddReport = document.getElementById("btnAddReport");
+        if (btnAddReport) btnAddReport.addEventListener("click", () => this.addReport());
+
+        const reportSelector = document.getElementById("reportSelector");
+        if (reportSelector) reportSelector.addEventListener("change", (e) => this.onReportSelectorChange(e.target.value));
+
+        const modelSelector = document.getElementById("semanticModelSelector");
+        if (modelSelector) modelSelector.addEventListener("change", (e) => this.onModelSelectorChange(e.target.value));
 
         const btnEditReport = document.getElementById("btnEditReport");
         if (btnEditReport) btnEditReport.addEventListener("click", () => this.editReportFromTaskpane());
@@ -592,8 +616,9 @@ const TaskPaneApp = {
      * Carga del diseño existente desde EDIT_REPORT
      * ----------------------------------------------------------- */
     async loadDesignFromSheet() {
+        if (!this.currentReportId) return;
         try {
-            const design = await window.ExcelService.loadEditReportDesign();
+            const design = await window.ExcelService.loadEditReportDesign(this.currentReportId);
 
             this.state.filters = design.filters.map(f => ({
                 dimension: f.dimension,
@@ -627,6 +652,10 @@ const TaskPaneApp = {
             const rowsContent = document.querySelector('.zone-card[data-zone="rows"] .dropzone-content');
             const colsContent = document.querySelector('.zone-card[data-zone="columns"] .dropzone-content');
 
+            if (filtersContent) filtersContent.innerHTML = "";
+            if (rowsContent) rowsContent.innerHTML = "";
+            if (colsContent) colsContent.innerHTML = "";
+
             this.state.filters.forEach(f => this.renderTag(filtersContent, "filters", f));
             this.state.rows.forEach(r => this.renderTag(rowsContent, "rows", r));
             this.state.columns.forEach(c => this.renderTag(colsContent, "columns", c));
@@ -642,33 +671,157 @@ const TaskPaneApp = {
     },
 
     /* -------------------------------------------------------------
-     * Guardado del diseño en EDIT_REPORT (botón "Guardar")
+     * Selector de informes ("Informe") + selector de modelo semántico
+     * (encima del buscador de campo) + botón "Añadir informe".
      * ----------------------------------------------------------- */
-    async saveDesign() {
-        const btn = document.getElementById("btnSaveDesign");
-        const incomplete = this.state.filters.filter(f => !f.value);
 
-        if (incomplete.length > 0) {
-            const proceed = confirm(
-                `Hay ${incomplete.length} filtro(s) sin un valor seleccionado (doble clic sobre el filtro para elegirlo). ¿Guardar igualmente?`
-            );
-            if (!proceed) return;
+    async initReportAndModelSelectors() {
+        await this.populateReportSelector();
+        await this.populateModelSelectorMain();
+    },
+
+    // Vacía el árbol de campos y las tres zonas: se usa mientras no hay
+    // ningún informe creado todavía (justo después de abrir el taskpane
+    // por primera vez, antes de pulsar "Añadir informe").
+    showEmptyState() {
+        const container = document.getElementById("availableFieldsContainer");
+        if (container) {
+            container.innerHTML = "<div style='color:#605e5c; padding:4px;'>Pulsa \"Añadir informe\" para empezar.</div>";
+        }
+        ["filters", "rows", "columns"].forEach(zoneId => {
+            const content = document.querySelector(`.zone-card[data-zone="${zoneId}"] .dropzone-content`);
+            if (content) content.innerHTML = "";
+        });
+    },
+
+    async populateReportSelector() {
+        const select = document.getElementById("reportSelector");
+        if (!select || !window.ReportStore) return;
+
+        const reports = window.ReportStore.listReports();
+        this.currentReportId = window.ReportStore.getActiveReportId();
+
+        select.innerHTML = "";
+        if (reports.length === 0) {
+            select.innerHTML = "<option value=\"\">— Sin informes —</option>";
+            select.value = "";
+            return;
+        }
+        reports.forEach(r => {
+            const opt = document.createElement("option");
+            opt.value = String(r.id);
+            opt.textContent = r.name;
+            select.appendChild(opt);
+        });
+        select.value = this.currentReportId ? String(this.currentReportId) : "";
+    },
+
+    // Selector de modelo semántico del editor de informes (justo encima
+    // del buscador de campo). Si el informe actual todavía no tiene
+    // modelo asignado y solo existe uno guardado, se rellena solo.
+    async populateModelSelectorMain() {
+        const select = document.getElementById("semanticModelSelector");
+        if (!select) return;
+
+        const models = (window.ExcelService && window.ExcelService.getSemanticModels)
+            ? await window.ExcelService.getSemanticModels() : [];
+
+        select.innerHTML = "";
+        if (models.length === 0) {
+            select.innerHTML = "<option value=\"\">— Sin modelos semánticos —</option>";
+            select.disabled = true;
+            return;
+        }
+        select.disabled = false;
+        select.innerHTML = "<option value=\"\">— Selecciona un modelo semántico —</option>";
+        models.forEach(name => {
+            const opt = document.createElement("option");
+            opt.value = name;
+            opt.textContent = name;
+            select.appendChild(opt);
+        });
+
+        const report = (this.currentReportId && window.ReportStore) ? window.ReportStore.getReport(this.currentReportId) : null;
+        let modelName = report ? (report.semanticModelName || "") : "";
+
+        // Un único modelo semántico disponible: se asigna por defecto.
+        if (!modelName && models.length === 1 && report && window.ReportStore) {
+            modelName = models[0];
+            await window.ReportStore.setSemanticModel(this.currentReportId, modelName);
         }
 
+        select.value = modelName || "";
+        if (modelName && window.SemanticModelStore) {
+            await window.SemanticModelStore.setActiveModelName(modelName);
+        }
+    },
+
+    async onReportSelectorChange(reportIdStr) {
+        if (!reportIdStr || !window.ReportStore) return;
+        this.currentReportId = Number(reportIdStr);
+        await window.ReportStore.setActiveReportId(this.currentReportId);
+
+        this.loadReportPropertiesFromSettings();
+        await this.populateModelSelectorMain();
+        await this.loadFields();
+        await this.loadDesignFromSheet();
+    },
+
+    async onModelSelectorChange(modelName) {
+        if (!this.currentReportId || !window.ReportStore) return;
+        await window.ReportStore.setSemanticModel(this.currentReportId, modelName);
+        if (modelName && window.SemanticModelStore) {
+            await window.SemanticModelStore.setActiveModelName(modelName);
+        }
+        await this.loadFields();
+    },
+
+    /* -------------------------------------------------------------
+     * Botón "Añadir informe": crea un informe nuevo y VACÍO (nombre por
+     * defecto secuencial "Informe - 0XX"), lo selecciona como activo y
+     * deja el taskpane listo para diseñarlo desde cero. Sustituye al
+     * antiguo botón "Guardar" (el diseño ya se autoguarda solo, ver
+     * scheduleAutoUpdate/runAutoSaveAndRefresh).
+     * ----------------------------------------------------------- */
+    async addReport() {
+        const btn = document.getElementById("btnAddReport");
         try {
-            if (btn) { btn.disabled = true; btn.innerText = "Guardando…"; }
+            if (btn) { btn.disabled = true; btn.innerText = "Añadiendo…"; }
 
-            await window.ExcelService.saveEditReportDesign(this.collectDesignPayload());
+            const models = (window.ExcelService && window.ExcelService.getSemanticModels)
+                ? await window.ExcelService.getSemanticModels() : [];
+            const defaultModel = models.length === 1 ? models[0] : "";
 
-            if (btn) btn.innerText = "Guardado ✓";
+            const report = await window.ReportStore.createReport(defaultModel);
+            this.currentReportId = report.id;
+
+            // Estado en memoria del taskpane, vacío para el informe recién creado.
+            this.state.filters = [];
+            this.state.rows = [];
+            this.state.columns = [];
+            this.state.rowsStatic = false;
+            this.state.colsStatic = false;
+            this.state.fieldOptions = {};
+            this.reportProperties = Object.assign({}, this.reportProperties, {
+                reportName: report.name,
+                suppressZeroRows: false,
+                suppressZeroCols: false,
+                subtotalsOnTop: false,
+                overwriteFormats: true,
+                autoFitColumns: true
+            });
+            RangeAxis.loadFromAddresses("", "", "");
+
+            await this.populateReportSelector();
+            await this.populateModelSelectorMain();
+            this.showEmptyState();
+            await this.loadFields();
+            await this.loadDesignFromSheet();
         } catch (err) {
-            console.error("Error guardando el diseño en EDIT_REPORT:", err);
-            alert("Error al guardar: " + (err.message || err));
-            if (btn) btn.innerText = "Guardar";
+            console.error("Error al añadir el informe:", err);
+            alert("Error al añadir el informe: " + (err.message || err));
         } finally {
-            if (btn) {
-                setTimeout(() => { btn.disabled = false; btn.innerText = "Guardar"; }, 1500);
-            }
+            if (btn) { btn.disabled = false; btn.innerText = "Añadir informe"; }
         }
     },
 
@@ -998,11 +1151,16 @@ const TaskPaneApp = {
      * autoajustar columnas. Se guardan en Office roaming settings, para
      * que también las pueda leer commands.js (ribbon y jsonTo3Matrices).
      * ================================================================= */
+    // Lee las propiedades del informe ACTUAL (this.currentReportId) desde
+    // ReportStore. Cada informe tiene las suyas (antes había una única
+    // clave global "draco_reportProperties" compartida por todo el libro).
     loadReportPropertiesFromSettings() {
         try {
-            const raw = Office.context.document.settings.get("draco_reportProperties");
-            if (raw) {
-                this.reportProperties = Object.assign({}, this.reportProperties, JSON.parse(raw));
+            if (this.currentReportId && window.ReportStore) {
+                const report = window.ReportStore.getReport(this.currentReportId);
+                if (report && report.reportProperties) {
+                    this.reportProperties = Object.assign({}, this.reportProperties, report.reportProperties);
+                }
             }
         } catch (err) {
             console.warn("No se pudieron leer las propiedades del informe:", err);
@@ -1010,15 +1168,14 @@ const TaskPaneApp = {
     },
 
     async saveReportPropertiesToSettings() {
-        const settings = Office.context.document.settings;
-        settings.set("draco_reportProperties", JSON.stringify(this.reportProperties));
-        await new Promise((resolve) => settings.saveAsync(resolve));
+        if (!this.currentReportId || !window.ReportStore) return;
+        await window.ReportStore.saveReportProperties(this.currentReportId, this.reportProperties);
+        await this.populateReportSelector(); // por si ha cambiado el nombre del informe
     },
 
     // Rellena el listbox "Modelo semántico" del modal de Propiedades del
-    // informe con los modelos guardados en SemanticModelStore. Puramente
-    // estético por ahora: se deja el primero seleccionado por defecto y no
-    // dispara ninguna acción al cambiarlo (futuro selector real de modelo).
+    // informe (informativo: el selector real vive ahora encima del
+    // buscador de campo). Se preselecciona el modelo del informe actual.
     async populateSemanticModelDropdown() {
         const select = document.getElementById("propSemanticModel");
         if (!select) return;
@@ -1038,7 +1195,8 @@ const TaskPaneApp = {
                 opt.textContent = name;
                 select.appendChild(opt);
             });
-            select.selectedIndex = 0; // por defecto, el primero
+            const report = (this.currentReportId && window.ReportStore) ? window.ReportStore.getReport(this.currentReportId) : null;
+            select.value = report && report.semanticModelName ? report.semanticModelName : models[0];
         } catch (err) {
             console.warn("No se pudieron cargar los modelos semánticos guardados:", err);
             select.innerHTML = "<option value=\"\">— No disponible —</option>";
@@ -1082,9 +1240,6 @@ const TaskPaneApp = {
         try {
             if (btn) { btn.disabled = true; btn.innerText = "Guardando…"; }
             await this.saveReportPropertiesToSettings();
-            if (window.ExcelService && window.ExcelService.saveReportPropertiesToSheetCells) {
-                await window.ExcelService.saveReportPropertiesToSheetCells(this.reportProperties);
-            }
             this.closeReportPropertiesModal();
 
             // Al guardar las propiedades del informe, se refresca el

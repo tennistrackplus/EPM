@@ -270,6 +270,8 @@ const LoginApp = {
         document.getElementById("bqBillingProject").value = "";
         document.getElementById("bqRepoType").value = "";
         document.getElementById("bqRepoUrl").value = "";
+        document.getElementById("bqRepoBranch").value = "";
+        document.getElementById("bqRepoToken").value = "";
         document.getElementById("sfAccount").value = "";
         document.getElementById("sfWarehouse").value = "";
         document.getElementById("sfDatabase").value = "";
@@ -291,6 +293,8 @@ const LoginApp = {
                 document.getElementById("bqBillingProject").value = cfg.billingProjectId || "";
                 document.getElementById("bqRepoType").value = (cfg.semanticRepo && cfg.semanticRepo.type) || "";
                 document.getElementById("bqRepoUrl").value = (cfg.semanticRepo && cfg.semanticRepo.url) || "";
+                document.getElementById("bqRepoBranch").value = (cfg.semanticRepo && cfg.semanticRepo.branch) || "";
+                document.getElementById("bqRepoToken").value = (cfg.semanticRepo && cfg.semanticRepo.token) || "";
             } else if (conn.provider === "snowflake") {
                 document.getElementById("sfAccount").value = cfg.account || "";
                 document.getElementById("sfWarehouse").value = cfg.warehouse || "";
@@ -333,7 +337,9 @@ const LoginApp = {
                 billingProjectId: document.getElementById("bqBillingProject").value.trim(),
                 semanticRepo: {
                     type: document.getElementById("bqRepoType").value,
-                    url: document.getElementById("bqRepoUrl").value.trim()
+                    url: document.getElementById("bqRepoUrl").value.trim(),
+                    branch: document.getElementById("bqRepoBranch").value.trim(),
+                    token: document.getElementById("bqRepoToken").value.trim()
                 }
             };
         }

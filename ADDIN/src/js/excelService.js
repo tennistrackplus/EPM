@@ -336,264 +336,71 @@ const ExcelService = {
 
     /**
      * LoadFilters + LoadRows + LoadCols + LoadFixed + LoadRanges:
-     * lee el estado actual del diseño desde EDIT_REPORT.
+     * lee el estado actual del diseño del informe indicado (o el activo si
+     * no se pasa reportId) desde ReportStore (JSON). El único dato que
+     * sigue viniendo de la hoja física es el ancla E1 (celda seleccionada
+     * al pulsar "Editar informe" la primera vez).
      */
-    async loadEditReportDesign() {
-        return await Excel.run(async (context) => {
-            const grid = await getValuesGrid(context, "EDIT_REPORT");
+    async loadEditReportDesign(reportId) {
+        const id = reportId || (window.ReportStore ? window.ReportStore.getActiveReportId() : null);
+        const report = id && window.ReportStore ? window.ReportStore.getReport(id) : null;
+        const design = report ? (report.design || {}) : {};
 
-            // ---- Filtros: C=Dimension, D=Atributo real, E=Filtro(valor), F=Jerarquia ----
-            const filters = [];
-            {
-                const lastRow = lastRowInColumnValues(grid, 3);
-                for (let R = 15; R <= lastRow; R++) {
-                    const dimension = String(cellValue(grid, R, 3)).trim();
-                    if (dimension === "") continue;
+        // ---- Celda de anclaje para la PRIMERA vez que se monta el informe
+        // (EDIT_REPORT!E1, sigue siendo física: la escribe captureActiveEditContext
+        // en taskpane.js). Si está vacía o no es una dirección válida, se usa
+        // A1. Solo se aplica cuando todavía no hay rrAddress/rcAddress
+        // guardados (ver RangeAxis.loadFromAddresses en taskpane.js).
+        let anchorAddress = "";
+        try {
+            anchorAddress = await Excel.run(async (context) => {
+                const cell = context.workbook.worksheets.getItem("EDIT_REPORT").getRange("E1");
+                cell.load("values");
+                await context.sync();
+                return String((cell.values && cell.values[0] && cell.values[0][0]) || "").trim();
+            });
+        } catch (e) {
+            // La hoja EDIT_REPORT todavía no existe: sin ancla, se usará A1.
+        }
 
-                    const realAttribute = String(cellValue(grid, R, 4)).trim();
-                    const value = String(cellValue(grid, R, 5)).trim();
-                    const hierarchy = String(cellValue(grid, R, 6)).trim();
-
-                    filters.push({
-                        dimension: dimension,
-                        name: hierarchy !== "" ? hierarchy : realAttribute,
-                        isHierarchy: hierarchy !== "",
-                        realAttribute: realAttribute,
-                        value: value
-                    });
-                }
-            }
-
-            // ---- Filas: H=Dimension, I=Atributo, J=Nivel, K=Jerarquia (solo Nivel=1) ----
-            const rows = [];
-            {
-                const lastRow = lastRowInColumnValues(grid, 8);
-                for (let R = 15; R <= lastRow; R++) {
-                    const dimension = String(cellValue(grid, R, 8)).trim();
-                    if (dimension === "") continue;
-                    if (Number(cellValue(grid, R, 10)) !== 1) continue; // solo el primer nivel
-
-                    const attribute = String(cellValue(grid, R, 9)).trim();
-                    const hierarchy = String(cellValue(grid, R, 11)).trim();
-
-                    rows.push({
-                        dimension: dimension,
-                        name: hierarchy !== "" ? hierarchy : attribute,
-                        isHierarchy: hierarchy !== ""
-                    });
-                }
-            }
-
-            // ---- Columnas: N=Dimension, O=Atributo, P=Nivel, Q=Jerarquia (solo Nivel=1) ----
-            const columns = [];
-            {
-                const lastRow = lastRowInColumnValues(grid, 14);
-                for (let R = 15; R <= lastRow; R++) {
-                    const dimension = String(cellValue(grid, R, 14)).trim();
-                    if (dimension === "") continue;
-                    if (Number(cellValue(grid, R, 16)) !== 1) continue; // solo el primer nivel
-
-                    const attribute = String(cellValue(grid, R, 15)).trim();
-                    const hierarchy = String(cellValue(grid, R, 17)).trim();
-
-                    columns.push({
-                        dimension: dimension,
-                        name: hierarchy !== "" ? hierarchy : attribute,
-                        isHierarchy: hierarchy !== ""
-                    });
-                }
-            }
-
-            // ---- Fijo (Estático/Dinámico): H12 filas, N12 columnas ----
-            const rowsStatic = String(cellValue(grid, 12, 8)).trim().toUpperCase() === "X";
-            const colsStatic = String(cellValue(grid, 12, 14)).trim().toUpperCase() === "X";
-
-            // ---- Rangos: H10 filas, N10 columnas ----
-            const rrAddress = String(cellValue(grid, 10, 8)).trim();
-            const rcAddress = String(cellValue(grid, 10, 14)).trim();
-
-            // ---- Celda de anclaje para la PRIMERA vez que se monta el
-            // informe (EDIT_REPORT!E1). Si está vacía o no es una dirección
-            // válida, se usa A1 (comportamiento anterior). Solo se aplica
-            // cuando todavía no hay rrAddress/rcAddress guardados (ver
-            // RangeAxis.loadFromAddresses en taskpane.js).
-            const anchorAddress = String(cellValue(grid, 1, 5)).trim(); // E1
-
-            // ---- Opciones por campo (mostrar totales, orden, expandir hasta
-            // nivel, niveles visibles, formato de medida...): un único JSON
-            // guardado en S1, clave "zona|dimension|nombre" -> objeto opciones.
-            let fieldOptions = {};
-            try {
-                const raw = String(cellValue(grid, 1, 19)).trim(); // S1
-                if (raw) fieldOptions = JSON.parse(raw);
-            } catch (e) {
-                console.warn("No se pudieron leer las opciones de campo (S1):", e);
-            }
-
-            return {
-                filters, rows, columns,
-                rowsStatic, colsStatic,
-                rrAddress, rcAddress, anchorAddress,
-                fieldOptions
-            };
-        });
+        return {
+            filters: design.filters || [],
+            rows: design.rows || [],
+            columns: design.columns || [],
+            rowsStatic: !!design.rowsStatic,
+            colsStatic: !!design.colsStatic,
+            rrAddress: design.rrAddress || "",
+            rcAddress: design.rcAddress || "",
+            anchorAddress,
+            fieldOptions: design.fieldOptions || {}
+        };
     },
 
     /**
      * SaveFilters + SaveRows + SaveCols + SaveFixed + SaveRanges:
-     * vuelca el estado del diseño a EDIT_REPORT, expandiendo jerarquías
-     * a través de MODEL_HIER igual que hacía frmReportDesigner2.
+     * guarda el diseño del informe indicado (o el activo) en ReportStore
+     * (JSON), expandiendo jerarquías a través de MODEL_HIER igual que hacía
+     * antes frmReportDesigner2/esta misma función al escribir en la hoja.
+     * YA NO escribe nada en EDIT_REPORT: esa hoja se reserva para el
+     * último SQL/JSON (X1/Y1), la hoja/celda activas (D1/E1) y el picker
+     * de doble clic del XLAM.
      */
-    async saveEditReportDesign(state) {
-        const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
-        await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-
-            // Limpiar bloques igual que hacía el VBA (ClearContents desde fila 15 hasta el final)
-            sheet.getRange("C15:F5000").clear(Excel.ClearApplyTo.contents);
-            // H..K = dim/attr/nivel/jerarquía; L = subtotales; M = orden (UP/DOWN)
-            sheet.getRange("H15:M5000").clear(Excel.ClearApplyTo.contents);
-            // N..Q = dim/attr/nivel/jerarquía; R = subtotales; S = orden (UP/DOWN)
-            // (S1, usada para el JSON de opciones por campo, no se toca: el
-            // borrado empieza en la fila 15)
-            sheet.getRange("N15:S5000").clear(Excel.ClearApplyTo.contents);
-
-            // Devuelve ["X"|"", "UP"|"DOWN"|""] a partir de las opciones de
-            // campo (guardadas por el taskpane con clave "<zone>|DIM|NOMBRE").
-            // Solo tiene sentido para atributos NO jerarquía (ver
-            // renderFieldOptionsBody/buildDimensionOptionsForm): un campo de
-            // jerarquía no tiene ni "Subtotales" ni "Ordenar" en el panel,
-            // así que sus filas expandidas se dejan sin valor en L/M o R/S.
-            // De momento estos valores NO se usan al construir el SQL.
-            const subtotalAndOrder = (zoneId, dimension, name) => {
-                const opts = (state.fieldOptions || {})[`${zoneId}|${dimension}|${name}`] || {};
-                const subtotal = opts.showTotals ? "X" : "";
-                const order = opts.sortOrder === "asc" ? "UP" : (opts.sortOrder === "desc" ? "DOWN" : "");
-                return [subtotal, order];
-            };
-
-            // Niveles marcados en "Opciones de campo" para una jerarquía
-            // (clave "<zone>|DIM|NOMBRE"). null = todos los niveles (valor
-            // por defecto: al hacer drag&drop se rellenan todos los
-            // niveles); un array = solo esos niveles se escriben en
-            // EDIT_REPORT (los desmarcados se quitan).
-            const visibleLevelsFor = (zoneId, dimension, name) => {
-                const opts = (state.fieldOptions || {})[`${zoneId}|${dimension}|${name}`] || {};
-                return Array.isArray(opts.visibleLevels) ? opts.visibleLevels : null;
-            };
-
-            // ---- SaveFilters: C,D,E,F ----
-            let filaFilters = 15;
-            for (const f of state.filters) {
-                const row = sheet.getRangeByIndexes(filaFilters - 1, 2, 1, 4); // C..F (col index 2..5)
-                row.values = [[
-                    f.dimension,
-                    f.realAttribute || "",
-                    f.value || "",
-                    f.isHierarchy ? f.name : ""
-                ]];
-                filaFilters++;
-            }
-
-            // ---- SaveRows: H,I,J,K (expandiendo jerarquía si aplica) ----
-            let filaRows = 15;
-            for (const r of state.rows) {
-                if (r.isHierarchy && existsHierarchy(hierGrid, r.dimension, r.name)) {
-                    const visibleLevels = visibleLevelsFor("rows", r.dimension, r.name);
-                    const lastRow = lastRowInColumnValues(hierGrid, 4);
-                    for (let R = 2; R <= lastRow; R++) {
-                        if (String(cellValue(hierGrid, R, 4)).toUpperCase() === r.dimension.toUpperCase()
-                            && String(cellValue(hierGrid, R, 2)).toUpperCase() === r.name.toUpperCase()) {
-                            const nivel = Number(cellValue(hierGrid, R, 3));
-                            if (visibleLevels && !visibleLevels.includes(nivel)) continue; // nivel desmarcado: se quita de EDIT_REPORT
-                            const row = sheet.getRangeByIndexes(filaRows - 1, 7, 1, 4); // H..K
-                            row.values = [[
-                                cellValue(hierGrid, R, 4),  // DIMENSION
-                                cellValue(hierGrid, R, 5),  // ATRIBUTO
-                                cellValue(hierGrid, R, 3),  // NIVEL
-                                cellValue(hierGrid, R, 2)   // JERARQUIA
-                            ]];
-                            filaRows++;
-                        }
-                    }
-                } else {
-                    const row = sheet.getRangeByIndexes(filaRows - 1, 7, 1, 4);
-                    row.values = [[r.dimension, r.name, 1, ""]];
-                    const [subtotal, order] = subtotalAndOrder("rows", r.dimension, r.name);
-                    sheet.getRangeByIndexes(filaRows - 1, 11, 1, 2).values = [[subtotal, order]]; // L,M
-                    filaRows++;
-                }
-            }
-
-            // ---- SaveCols: N,O,P,Q (expandiendo jerarquía si aplica) ----
-            let filaCols = 15;
-            for (const c of state.columns) {
-                if (c.isHierarchy && existsHierarchy(hierGrid, c.dimension, c.name)) {
-                    const visibleLevels = visibleLevelsFor("columns", c.dimension, c.name);
-                    const lastRow = lastRowInColumnValues(hierGrid, 4);
-                    for (let R = 2; R <= lastRow; R++) {
-                        if (String(cellValue(hierGrid, R, 4)).toUpperCase() === c.dimension.toUpperCase()
-                            && String(cellValue(hierGrid, R, 2)).toUpperCase() === c.name.toUpperCase()) {
-                            const nivel = Number(cellValue(hierGrid, R, 3));
-                            if (visibleLevels && !visibleLevels.includes(nivel)) continue; // nivel desmarcado: se quita de EDIT_REPORT
-                            const row = sheet.getRangeByIndexes(filaCols - 1, 13, 1, 4); // N..Q
-                            row.values = [[
-                                cellValue(hierGrid, R, 4),
-                                cellValue(hierGrid, R, 5),
-                                cellValue(hierGrid, R, 3),
-                                cellValue(hierGrid, R, 2)
-                            ]];
-                            filaCols++;
-                        }
-                    }
-                } else {
-                    const row = sheet.getRangeByIndexes(filaCols - 1, 13, 1, 4);
-                    row.values = [[c.dimension, c.name, 1, ""]];
-                    const [subtotal, order] = subtotalAndOrder("columns", c.dimension, c.name);
-                    sheet.getRangeByIndexes(filaCols - 1, 17, 1, 2).values = [[subtotal, order]]; // R,S
-                    filaCols++;
-                }
-            }
-
-            // ---- SaveFixed: H12 / N12 ----
-            sheet.getRange("H12").values = [[state.rowsStatic ? "X" : ""]];
-            sheet.getRange("N12").values = [[state.colsStatic ? "X" : ""]];
-
-            // ---- SaveRanges: H10 / N10 ----
-            sheet.getRange("H10").values = [[state.rrAddress || ""]];
-            sheet.getRange("N10").values = [[state.rcAddress || ""]];
-
-            // ---- Opciones por campo: JSON en S1 ----
-            sheet.getRange("S1").values = [[JSON.stringify(state.fieldOptions || {})]];
-
-            await context.sync();
-        });
+    async saveEditReportDesign(reportId, state) {
+        const id = reportId || (window.ReportStore ? window.ReportStore.getActiveReportId() : null);
+        if (!id || !window.ReportStore) return;
+        await window.ReportStore.saveDesign(id, state);
     },
 
     /**
-     * Vuelca las "Propiedades del informe" (modal del taskpane) también
-     * como celdas individuales en EDIT_REPORT!D2:D6 (además de guardarlas
-     * en Office roaming settings, que es de donde las sigue leyendo
-     * jsonTo3Matrices/getDracoReportProperties). Cada checkbox se escribe
-     * como "X" (marcado) o "" (desmarcado), igual que el resto de checks
-     * de la hoja (H12/N12 = Estático).
-     *   D2: Suprimir ceros en filas
-     *   D3: Suprimir ceros en columnas
-     *   D4: Mostrar subtotales arriba
-     *   D5: Sobrescribir formatos al actualizar
-     *   D6: Autoajustar ancho de columnas al actualizar
+     * Guarda las "Propiedades del informe" (modal del taskpane) en
+     * ReportStore, para el informe indicado (o el activo). Sustituye a la
+     * antigua escritura en EDIT_REPORT!D2:D6 + clave global
+     * "draco_reportProperties": ahora cada informe tiene las suyas.
      */
-    async saveReportPropertiesToSheetCells(props) {
-        await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-            const x = (v) => (v ? "X" : "");
-            sheet.getRange("D2").values = [[x(props.suppressZeroRows)]];
-            sheet.getRange("D3").values = [[x(props.suppressZeroCols)]];
-            sheet.getRange("D4").values = [[x(props.subtotalsOnTop)]];
-            sheet.getRange("D5").values = [[x(props.overwriteFormats)]];
-            sheet.getRange("D6").values = [[x(props.autoFitColumns)]];
-            await context.sync();
-        });
+    async saveReportPropertiesToSheetCells(props, reportId) {
+        const id = reportId || (window.ReportStore ? window.ReportStore.getActiveReportId() : null);
+        if (!id || !window.ReportStore) return;
+        await window.ReportStore.saveReportProperties(id, props);
     },
 
     /**

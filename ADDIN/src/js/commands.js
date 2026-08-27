@@ -214,6 +214,63 @@ async function getValuesGrid(context, sheetName) {
     return { values: used.values, startRow: used.rowIndex, startCol: used.columnIndex };
 }
 
+/* ---------------------------------------------------------------------
+ * getEditReportGrid(): sustituye a getValuesGrid(context,"EDIT_REPORT")
+ * en todas las lecturas del DISEÑO del informe (filtros/filas/columnas/
+ * Estático/rangos H10-N10/H12-N12). Combina dos fuentes:
+ *
+ *   - El diseño del informe ACTIVO (ReportStore.getReportGrid), que ahora
+ *     vive en JSON (Office roaming settings) y no en la hoja.
+ *   - La hoja física EDIT_REPORT, para todo lo que sigue viviendo ahí:
+ *     D1/E1 (hoja/celda activas), X1/Y1 (último SQL/JSON), B1
+ *     (reconocimiento de miembros), A5 y el resto del picker de doble
+ *     clic con el XLAM.
+ *
+ * Las coordenadas de diseño (ver isDesignOwnedCell) las gana SIEMPRE el
+ * JSON, aunque estén vacías (para que un filtro/fila/columna borrado en
+ * el taskpane desaparezca también aquí); el resto lo gana la hoja.
+ * ------------------------------------------------------------------- */
+function isDesignOwnedCell(row1, col1) {
+    if (row1 === 10 && (col1 === 8 || col1 === 14)) return true;  // H10 / N10 (rangos)
+    if (row1 === 12 && (col1 === 8 || col1 === 14)) return true;  // H12 / N12 (Estático)
+    if (row1 >= 15) {
+        if (col1 >= 3 && col1 <= 6) return true;   // C:F  filtros
+        if (col1 >= 8 && col1 <= 13) return true;  // H:M  filas
+        if (col1 >= 14 && col1 <= 19) return true; // N:S  columnas
+    }
+    return false;
+}
+
+function mergeEditReportGrid(physicalGrid, designGrid) {
+    const maxRow = Math.max(
+        physicalGrid.values.length + physicalGrid.startRow,
+        designGrid.values.length + designGrid.startRow
+    );
+    const maxCol = 26; // hasta Z: cubre sobradamente D1/E1 (col 4/5), B1 (col 2), X1/Y1 (col 24/25)
+    const values = [];
+    for (let r = 0; r < maxRow; r++) {
+        const row1 = r + 1;
+        const rowArr = [];
+        for (let c = 0; c < maxCol; c++) {
+            const col1 = c + 1;
+            rowArr.push(isDesignOwnedCell(row1, col1)
+                ? cellValue(designGrid, row1, col1)
+                : cellValue(physicalGrid, row1, col1));
+        }
+        values.push(rowArr);
+    }
+    return { values, startRow: 0, startCol: 0 };
+}
+
+async function getEditReportGrid(context) {
+    const physicalGrid = await getValuesGrid(context, "EDIT_REPORT");
+    const reportId = window.ReportStore ? window.ReportStore.getActiveReportId() : null;
+    const designGrid = (window.ReportStore && reportId)
+        ? window.ReportStore.getReportGrid(reportId)
+        : { values: [], startRow: 0, startCol: 0 };
+    return mergeEditReportGrid(physicalGrid, designGrid);
+}
+
 async function getFormulaGrid(context, sheetName) {
     const sheet = context.workbook.worksheets.getItem(sheetName);
     const used = sheet.getUsedRangeOrNullObject();
@@ -1036,7 +1093,7 @@ async function actualizarInformeFixedCore() {
 
     // 1) LoadReportDefinition + BuildSQL_Fixed + escritura de A1
     await Excel.run(async (context) => {
-        const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
+        const editReportGrid = await getEditReportGrid(context);
         const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
         const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
@@ -1858,12 +1915,10 @@ function getDracoReportProperties() {
         autoFitColumns: true
     };
     try {
-        const raw = Office.context.document.settings.get("draco_reportProperties");
-        if (!raw) return defaults;
-        const parsed = JSON.parse(raw);
-        return Object.assign({}, defaults, parsed);
+        if (!window.ReportStore) return defaults;
+        return Object.assign({}, defaults, window.ReportStore.getActiveReportProperties());
     } catch (e) {
-        console.warn("No se pudieron leer las propiedades del informe, se usan valores por defecto:", e);
+        console.warn("No se pudieron leer las propiedades del informe activo, se usan valores por defecto:", e);
         return defaults;
     }
 }
@@ -1951,7 +2006,7 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
     }
 
     await Excel.run(async (context) => {
-        const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
+        const editReportGrid = await getEditReportGrid(context);
         loadReportDefinition(editReportGrid);
         const fields = buildAxisFieldsTable(editReportGrid, axis);
 
@@ -2102,7 +2157,7 @@ async function locateDracoAxisField(context, addr) {
 
     if (!axis) return null;
 
-    const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
+    const editReportGrid = await getEditReportGrid(context);
     loadReportDefinition(editReportGrid);
     const fields = buildAxisFieldsTable(editReportGrid, axis);
     const field = fields[level];
@@ -2805,7 +2860,7 @@ async function jsonTo3MatricesCore(context, json) {
     }
 
     // ---- PINTAR ----
-    const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
+    const editReportGrid = await getEditReportGrid(context);
 
     const RRows = parseAddress(cellValue(editReportGrid, 10, 8));  // EDIT_REPORT!H10
     const RCols = parseAddress(cellValue(editReportGrid, 10, 14)); // EDIT_REPORT!N10
@@ -3475,7 +3530,7 @@ async function actualizarInformeCore() {
     let resultSheetName;
 
     await Excel.run(async (context) => {
-        const editReportGrid = await getValuesGrid(context, "EDIT_REPORT");
+        const editReportGrid = await getEditReportGrid(context);
         const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
         const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
@@ -3546,7 +3601,7 @@ async function actualizarInforme(event) {
 async function actualizar(event) {
     try {
         const isFixed = await Excel.run(async (context) => {
-            const grid = await getValuesGrid(context, "EDIT_REPORT");
+            const grid = await getEditReportGrid(context);
             const h12 = String(cellValue(grid, 12, 8)).trim().toUpperCase();
             const n12 = String(cellValue(grid, 12, 14)).trim().toUpperCase();
             return h12 === "X" && n12 === "X";
