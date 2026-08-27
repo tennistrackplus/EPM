@@ -1463,8 +1463,8 @@ function populateLkmlConnectionSelect() {
     const select = document.getElementById("lkmlServerConnection");
     if (!select) return;
 
-    const connections = (window.Connections && typeof window.Connections.list === "function")
-        ? window.Connections.list() : [];
+    const connections = (typeof Connections !== "undefined" && typeof Connections.list === "function")
+        ? Connections.list() : [];
     const withRepo = connections.filter(c => {
         const repo = c.config && c.config.semanticRepo;
         return repo && (repo.type === "github" || repo.type === "gitlab") && repo.url;
@@ -1486,7 +1486,7 @@ function populateLkmlConnectionSelect() {
         select.appendChild(opt);
     });
 
-    const activeId = window.Connections.getActiveId ? window.Connections.getActiveId() : null;
+    const activeId = Connections.getActiveId ? Connections.getActiveId() : null;
     if (activeId && withRepo.some(c => c.id === activeId)) select.value = activeId;
 }
 
@@ -1507,7 +1507,7 @@ async function updateLkmlServerList() {
         return;
     }
 
-    const conn = window.Connections.getById(connectionId);
+    const conn = Connections.getById(connectionId);
     const repoConfig = conn && conn.config && conn.config.semanticRepo;
     if (!repoConfig) return;
 
@@ -1515,7 +1515,7 @@ async function updateLkmlServerList() {
     list.innerHTML = "<span class=\"lkml-empty-hint\">Cargando…</span>";
 
     try {
-        const items = await window.GitRepo.listContents(repoConfig, path);
+        const items = await GitRepo.listContents(repoConfig, path);
 
         if (items.length === 0) {
             list.classList.add("is-empty");
