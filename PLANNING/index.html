@@ -581,6 +581,11 @@
                                     <div class="gcp-project-picker" id="gcpProjectPicker">
                                         <label for="gcpProjectSelect">Proyecto de Google Cloud</label>
                                         <select id="gcpProjectSelect"></select>
+                                        <span class="hint">La API de Google solo lista proyectos que ya tienen BigQuery habilitado. Si el tuyo no aparece, escribe el ID manualmente:</span>
+                                        <div class="gcp-project-manual">
+                                            <input type="text" id="gcpProjectManual" placeholder="Ejemplo: mi-proyecto-gcp">
+                                            <button type="button" id="btnUseManualProject" class="btn-secondary">Usar este ID</button>
+                                        </div>
                                     </div>
 
                                     <div class="install-panel" id="installPanel">
