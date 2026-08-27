@@ -1,18 +1,32 @@
 /**
- * Lógica de la landing page: conexión OAuth a BigQuery o Snowflake,
- * configuración del "hogar" de trabajo (proyecto GCP / cuenta+warehouse)
- * y arranque del esquema de control sobre el motor elegido.
+ * Lógica de la landing page de Draco Planning (menú de conexiones,
+ * igual en comportamiento a ADDIN/src/js/login.js):
+ *
+ *  - Vista "Lista": conexiones ya guardadas (Connections). Un clic
+ *    reutiliza sus parámetros y continúa el flujo (conectar si hace
+ *    falta, elegir proyecto GCP si falta, comprobar/instalar el
+ *    esquema de control y entrar a la app).
+ *  - Vista "Crear/Editar": nombre + selector de origen de datos +
+ *    campos propios de cada proveedor, en un acordeón bajo la propia
+ *    tarjeta del conector (BigQuery: proyecto de facturación opcional,
+ *    seguido del selector de proyecto GCP y el panel de instalación
+ *    del esquema una vez conectado; Snowflake: cuenta/warehouse/base
+ *    de datos/rol).
  *
  * Las conexiones se guardan con el mismo almacén que usa el add-in de
- * Excel (`js/connections.js`, clave de localStorage `epm_connections`):
- * si Planning y el add-in se sirven desde el mismo origen, lo que se
- * crea en uno aparece automáticamente en el otro. Ver connections.js
- * para más detalle.
+ * Excel (js/connections.js, clave de localStorage "epm_connections"):
+ * si Planning y el add-in se sirven desde el mismo origen (aunque sea
+ * en rutas distintas, ej. https://tuapp.com/PLANNING/ y
+ * https://tuapp.com/ADDIN/src/), el navegador comparte el mismo
+ * localStorage y las conexiones creadas en uno aparecen
+ * automáticamente en el otro.
  */
 const LoginApp = {
-    selectedProvider: null,
+    view: "list",               // "list" | "create"
+    selectedProvider: null,     // proveedor elegido en la vista "crear/editar"
+    editingConnectionId: null,  // != null si la vista "crear" está editando/reconectando en vez de creando
+    connectMode: false,         // true si se abrió la vista para reconectar una conexión ya guardada
     connectedProviders: {},
-    activeConnectionId: null, // conexión guardada que se está usando/creando ahora mismo
     pendingInstallProvider: null, // "bigquery" mientras se muestra el panel de instalación del esquema
 
     PROVIDER_ICONS: {
@@ -25,14 +39,19 @@ const LoginApp = {
     },
 
     init() {
-        this.bindEvents();
-        this.renderSavedConnections();
+        this.bindStaticEvents();
         this.checkExistingTokens();
-        this.setupMessageListener();
+        this.renderList();
+        this.setupBrowserMessageListener();
     },
 
+    // =====================================================================
+    // Utilidades de UI
+    // =====================================================================
     showAlert(msg, isError = false) {
-        const toast = document.getElementById("toastMessage");
+        console.log("[Draco Planning]:", msg);
+        const toastId = this.view === "create" ? "toastMessageCreate" : "toastMessageList";
+        const toast = document.getElementById(toastId);
         if (toast) {
             toast.innerText = msg;
             toast.className = `toast-message visible ${isError ? "error" : "info"}`;
@@ -52,14 +71,39 @@ const LoginApp = {
             : (providerKey === "bigquery" ? "BigQuery" : providerKey === "snowflake" ? "Snowflake" : providerKey);
     },
 
-    bindEvents() {
-        const cards = document.querySelectorAll(".connector-card");
-        cards.forEach(card => {
+    switchView(view) {
+        this.view = view;
+        document.getElementById("viewList").classList.toggle("hidden", view !== "list");
+        document.getElementById("viewCreate").classList.toggle("hidden", view !== "create");
+        if (view === "list") {
+            this.renderList();
+        }
+    },
+
+    // =====================================================================
+    // Eventos que no dependen de contenido generado dinámicamente
+    // =====================================================================
+    bindStaticEvents() {
+        document.getElementById("btnNewConnection").addEventListener("click", () => {
+            this.openConnectionView(null, "create");
+        });
+
+        document.getElementById("btnCancelCreate").addEventListener("click", () => {
+            this.switchView("list");
+        });
+
+        // Selector de origen de datos dentro de la vista "crear/editar"
+        document.querySelectorAll("#viewCreate .connector-card").forEach(card => {
             card.addEventListener("click", () => {
-                cards.forEach(c => c.classList.remove("selected"));
+                const provider = card.getAttribute("data-provider");
+                if (!Connections.isImplemented(provider)) {
+                    this.showAlert(`El conector para ${this.getProviderDisplayName(provider)} estará disponible próximamente.`);
+                    return;
+                }
+                document.querySelectorAll("#viewCreate .connector-card").forEach(c => c.classList.remove("selected"));
                 card.classList.add("selected");
-                this.selectedProvider = card.getAttribute("data-provider");
-                this.activeConnectionId = null; // vista "crear": no hay conexión guardada detrás todavía
+                this.selectedProvider = provider;
+                this.connectMode = false;
                 this.hideInstallPanel();
                 this.togglePanels();
                 this.updateActionButton();
@@ -76,47 +120,64 @@ const LoginApp = {
             });
         }
 
-        const btnToggleNew = document.getElementById("btnToggleNewConnection");
-        if (btnToggleNew) {
-            btnToggleNew.addEventListener("click", () => this.showNewConnectionForm());
-        }
-
         const btnInstall = document.getElementById("btnInstallSchema");
         if (btnInstall) {
             btnInstall.addEventListener("click", () => this.installControlSchema());
         }
 
-        const savedList = document.getElementById("savedConnectionsList");
-        if (savedList) {
-            savedList.addEventListener("click", (e) => {
-                const card = e.target.closest(".conn-card");
-                if (!card) return;
-                this.connectExisting(card.getAttribute("data-id"));
-            });
-        }
+        // Delegación de eventos sobre la lista de conexiones guardadas
+        document.getElementById("savedConnectionsList").addEventListener("click", (e) => {
+            const delBtn = e.target.closest(".btn-delete-conn");
+            const editBtn = e.target.closest(".btn-edit-conn");
+            const logoutBtn = e.target.closest(".btn-logout-conn");
+            const card = e.target.closest(".conn-card");
+            if (!card) return;
+            const id = card.getAttribute("data-id");
+
+            if (delBtn) {
+                e.stopPropagation();
+                this.handleDeleteClick(delBtn, id);
+                return;
+            }
+            if (editBtn) {
+                e.stopPropagation();
+                this.openConnectionView(id, "edit");
+                return;
+            }
+            if (logoutBtn) {
+                e.stopPropagation();
+                this.logoutConnectionCard(id);
+                return;
+            }
+            this.openConnectionView(id, "connect");
+        });
     },
 
     // =====================================================================
-    // Conexiones guardadas (compartidas con el add-in vía Connections)
+    // Vista LISTA
     // =====================================================================
-    renderSavedConnections() {
-        const section = document.getElementById("savedConnectionsSection");
+    renderList() {
         const list = document.getElementById("savedConnectionsList");
-        if (!section || !list || !window.Connections) return;
+        if (!list || !window.Connections) return;
 
         const connections = Connections.list();
+        const activeId = Connections.getActiveId();
+
         if (connections.length === 0) {
-            section.classList.remove("visible");
-            this.showNewConnectionForm(); // sin conexiones guardadas, ir directo al formulario
+            list.innerHTML = `
+                <div class="empty-state">
+                    <strong>Todavía no hay conexiones</strong>
+                    <span>Crea la primera para empezar a modelar tus datos.</span>
+                </div>`;
             return;
         }
 
-        section.classList.add("visible");
-        const activeId = Connections.getActiveId();
         list.innerHTML = connections.map(conn => {
             const isActive = conn.id === activeId;
+            const isConnectedNow = isActive && Provider.key() === conn.provider && Provider.isConnected();
             const icon = this.PROVIDER_ICONS[conn.provider] || "";
             const subtitle = this.buildSubtitle(conn);
+
             return `
                 <div class="conn-card ${isActive ? "active" : ""}" data-id="${conn.id}">
                     <div class="conn-info">
@@ -127,12 +188,14 @@ const LoginApp = {
                         </div>
                     </div>
                     <div class="conn-side">
-                        <span class="badge-status">Usar</span>
+                        ${isConnectedNow
+                            ? `<button class="badge-status connected btn-logout-conn" title="Cerrar sesión" style="border:none;cursor:pointer;">Conectado</button>`
+                            : `<span class="badge-status">Usar</span>`}
+                        <button class="btn-icon btn-edit-conn" title="Editar conexión">✎</button>
+                        <button class="btn-icon danger btn-delete-conn" title="Eliminar conexión">✕</button>
                     </div>
                 </div>`;
         }).join("");
-
-        this.hideNewConnectionForm();
     },
 
     buildSubtitle(conn) {
@@ -148,22 +211,144 @@ const LoginApp = {
         return label;
     },
 
-    showNewConnectionForm() {
-        document.getElementById("connectorsContainer").classList.remove("collapsed");
+    /** Doble clic de seguridad para borrar: primer clic pide confirmación, segundo clic borra. */
+    handleDeleteClick(btn, id) {
+        if (btn.dataset.confirm === "1") {
+            Connections.remove(id);
+            this.showAlert("Conexión eliminada.");
+            this.renderList();
+            return;
+        }
+        btn.dataset.confirm = "1";
+        btn.classList.add("confirm-danger");
+        btn.title = "Pulsa de nuevo para confirmar";
+        setTimeout(() => {
+            btn.dataset.confirm = "";
+            btn.classList.remove("confirm-danger");
+            btn.title = "Eliminar conexión";
+        }, 3000);
     },
 
-    hideNewConnectionForm() {
-        document.getElementById("connectorsContainer").classList.add("collapsed");
+    /** Cierra la sesión (token OAuth) de una conexión, sin borrar sus parámetros guardados */
+    logoutConnectionCard(id) {
+        const conn = Connections.getById(id);
+        if (!conn) return;
+        this.logoutProvider(conn.provider);
+        this.renderList();
+    },
+
+    // =====================================================================
+    // Vista CREAR / EDITAR / CONECTAR
+    // =====================================================================
+    /**
+     * Abre la vista de conexión en uno de tres modos:
+     *  - "create":  formulario en blanco para una conexión nueva.
+     *  - "edit":    formulario relleno con los datos de una conexión guardada,
+     *               para cambiarle el nombre o sus parámetros (✎ en la lista).
+     *  - "connect": reutiliza una conexión guardada y continúa el flujo de
+     *               conexión automáticamente (clic sobre la propia tarjeta).
+     */
+    openConnectionView(connectionId, mode) {
+        this.editingConnectionId = connectionId;
+        this.connectMode = mode === "connect";
+        this.selectedProvider = null;
+
+        document.getElementById("connName").value = "";
+        document.getElementById("bqBillingProject").value = "";
+        document.getElementById("sfAccount").value = "";
+        document.getElementById("sfWarehouse").value = "";
+        document.getElementById("sfDatabase").value = "";
+        document.getElementById("sfRole").value = "";
+        document.querySelectorAll("#viewCreate .connector-card").forEach(c => c.classList.remove("selected"));
+        this.hideInstallPanel();
+
+        const title = document.getElementById("createTitle");
+        const subtitle = document.getElementById("createSubtitle");
+        let conn = null;
+
+        if (connectionId) {
+            conn = Connections.getById(connectionId);
+            if (!conn) return;
+            this.selectedProvider = conn.provider;
+
+            const cfg = conn.config || {};
+            document.getElementById("connName").value = conn.name;
+            if (conn.provider === "bigquery") {
+                document.getElementById("bqBillingProject").value = cfg.billingProjectId || cfg.homeProjectId || "";
+            } else if (conn.provider === "snowflake") {
+                document.getElementById("sfAccount").value = cfg.account || "";
+                document.getElementById("sfWarehouse").value = cfg.warehouse || "";
+                document.getElementById("sfDatabase").value = cfg.database || "";
+                document.getElementById("sfRole").value = cfg.role || "";
+            }
+
+            const card = document.querySelector(`#viewCreate .connector-card[data-provider="${conn.provider}"]`);
+            if (card) card.classList.add("selected");
+
+            if (mode === "edit") {
+                title.innerText = "Editar conexión";
+                subtitle.innerText = "Cambia el nombre o los parámetros de esta conexión.";
+            } else {
+                title.innerText = conn.name;
+                subtitle.innerText = "Continuando con esta conexión guardada...";
+            }
+        } else {
+            title.innerText = "Nueva conexión";
+            subtitle.innerText = "Ponle un nombre y elige el origen de datos.";
+        }
+
+        this.togglePanels();
+        this.updateActionButton();
+        this.switchView("create");
+
+        if (mode === "connect" && conn) {
+            Connections.setActiveId(conn.id);
+            Provider.setKey(conn.provider);
+            this.applyConnectionConfig(conn);
+            // Reutiliza el mismo botón de acción ya calculado por updateActionButton()
+            // (que ya sabe si hay que conectar, elegir proyecto o entrar directamente).
+            const btnAction = document.getElementById("btnAction");
+            if (btnAction && typeof btnAction.onclick === "function" && !btnAction.disabled) {
+                btnAction.onclick();
+            }
+        }
+    },
+
+    togglePanels() {
+        document.getElementById("bigqueryConfigPanel").classList.toggle("visible", this.selectedProvider === "bigquery");
+        document.getElementById("snowflakeConfigPanel").classList.toggle("visible", this.selectedProvider === "snowflake");
+
+        if (this.selectedProvider === "bigquery") {
+            const showPicker = BQ.isConnected();
+            document.getElementById("gcpProjectPicker").classList.toggle("visible", showPicker);
+            if (showPicker) this.maybeLoadGcpProjects();
+        } else {
+            document.getElementById("gcpProjectPicker").classList.remove("visible");
+        }
+
+        if (this.selectedProvider === "snowflake") {
+            document.getElementById("sfAccount").value = document.getElementById("sfAccount").value || SF.getAccount();
+            document.getElementById("sfWarehouse").value = document.getElementById("sfWarehouse").value || SF.getWarehouse();
+            document.getElementById("sfDatabase").value = document.getElementById("sfDatabase").value || SF.getDatabase();
+            document.getElementById("sfRole").value = document.getElementById("sfRole").value || SF.getRole();
+        }
+    },
+
+    maybeLoadGcpProjects() {
+        const select = document.getElementById("gcpProjectSelect");
+        if (select && !select.options.length) {
+            this.loadGcpProjects();
+        }
     },
 
     /** Carga en BQ/SF los parámetros guardados de una conexión (sin tocar los tokens de sesión) */
     applyConnectionConfig(conn) {
         const cfg = conn.config || {};
         if (conn.provider === "bigquery") {
-            // homeProjectId: proyecto "hogar" donde vive DRACO_CONTROL (propio de Planning).
-            // billingProjectId: campo que ya usaba el add-in; si la conexión se creó allí y
-            // todavía no se ha elegido un proyecto hogar en Planning, se usa como punto de
-            // partida razonable (normalmente coinciden).
+            // homeProjectId: lo usa Planning (dataset DRACO_CONTROL / DRACO_<proyecto>).
+            // billingProjectId: mismo campo que usa el add-in de Excel; si la conexión
+            // se creó allí y todavía no se ha elegido un proyecto hogar en Planning,
+            // se usa como punto de partida razonable (normalmente coinciden).
             BQ.setGcpProject(cfg.homeProjectId || cfg.billingProjectId || "");
         } else if (conn.provider === "snowflake") {
             SF.setAccount(cfg.account || "");
@@ -173,95 +358,71 @@ const LoginApp = {
         }
     },
 
-    /** Crea o actualiza (merge) la conexión activa con el estado actual de BQ/SF */
-    persistActiveConnectionConfig() {
-        if (!window.Connections || !this.selectedProvider) return;
-
-        let config = {};
+    /** Construye el config a partir de los campos visibles, validando lo mínimo por proveedor */
+    collectConfigFromForm() {
         if (this.selectedProvider === "bigquery") {
-            const project = BQ.getGcpProject() || "";
-            // homeProjectId: lo usa Planning (dataset DRACO_CONTROL / DRACO_<proyecto>).
-            // billingProjectId: mismo campo que ya usaba el add-in (proyecto que paga las
-            // consultas). Se rellenan ambos con el mismo valor por defecto para que una
-            // conexión creada en Planning ya sirva tal cual en el add-in, y viceversa
-            // (ver applyConnectionConfig, que hace el fallback contrario).
-            const existing = this.activeConnectionId && window.Connections ? Connections.getById(this.activeConnectionId) : null;
-            const existingBilling = existing && existing.config ? existing.config.billingProjectId : "";
-            config = { homeProjectId: project, billingProjectId: existingBilling || project };
-        } else if (this.selectedProvider === "snowflake") {
-            config = {
-                account: SF.getAccount() || "",
-                warehouse: SF.getWarehouse() || "",
-                database: SF.getDatabase() || DracoConfig.snowflakeDatabase,
-                role: SF.getRole() || ""
-            };
-        } else {
-            return;
+            const billingProjectId = document.getElementById("bqBillingProject").value.trim();
+            return { billingProjectId, homeProjectId: BQ.getGcpProject() || billingProjectId || "" };
         }
-
-        if (this.activeConnectionId) {
-            Connections.update(this.activeConnectionId, { config });
-        } else {
-            const conn = Connections.create({ provider: this.selectedProvider, config });
-            this.activeConnectionId = conn.id;
-        }
-        Connections.setActiveId(this.activeConnectionId);
-    },
-
-    /** Reutiliza los parámetros ya guardados de una conexión y conecta sin volver a preguntarlos */
-    async connectExisting(id) {
-        const conn = Connections.getById(id);
-        if (!conn) return;
-
-        this.activeConnectionId = id;
-        this.selectedProvider = conn.provider;
-        Connections.setActiveId(id);
-        Provider.setKey(conn.provider);
-        this.applyConnectionConfig(conn);
-        this.hideInstallPanel();
-
-        if (conn.provider === "bigquery") {
-            if (BQ.isConnected()) {
-                this.setProviderState("bigquery", true);
-                await this.proceedBigQuery();
-            } else {
-                this.connectBigQuery();
-            }
-            return;
-        }
-
-        if (conn.provider === "snowflake") {
-            if (SF.isConnected()) {
-                this.setProviderState("snowflake", true);
-                await this.proceedSnowflake();
-            } else {
-                try {
-                    await SF.connect();
-                } catch (err) {
-                    this.showAlert("Error al conectar con Snowflake: " + err.message, true);
-                }
-            }
-            return;
-        }
-
-        this.showAlert(`El conector para ${this.getProviderDisplayName(conn.provider)} estará disponible próximamente.`);
-    },
-
-    togglePanels() {
-        document.getElementById("gcpProjectPicker").classList.toggle(
-            "visible", this.selectedProvider === "bigquery" && BQ.isConnected());
-        document.getElementById("snowflakeConfigPanel").classList.toggle(
-            "visible", this.selectedProvider === "snowflake");
-
         if (this.selectedProvider === "snowflake") {
-            document.getElementById("sfAccount").value = SF.getAccount();
-            document.getElementById("sfWarehouse").value = SF.getWarehouse();
-            document.getElementById("sfDatabase").value = SF.getDatabase();
-            document.getElementById("sfRole").value = SF.getRole();
+            return {
+                account: document.getElementById("sfAccount").value.trim(),
+                warehouse: document.getElementById("sfWarehouse").value.trim(),
+                database: document.getElementById("sfDatabase").value.trim() || DracoConfig.snowflakeDatabase,
+                role: document.getElementById("sfRole").value.trim()
+            };
         }
+        return {};
     },
 
-    setupMessageListener() {
+    validateConfig(provider, config) {
+        if (provider === "snowflake") {
+            if (!config.account || !config.warehouse) {
+                return "Indica al menos la cuenta y el warehouse de Snowflake.";
+            }
+        }
+        return null;
+    },
+
+    /** Crea o actualiza (según editingConnectionId) la conexión con lo que hay en el formulario */
+    saveConnectionFromForm() {
+        if (!this.selectedProvider) return null;
+
+        const name = document.getElementById("connName").value.trim();
+        const config = this.collectConfigFromForm();
+        const validationError = this.validateConfig(this.selectedProvider, config);
+        if (validationError) {
+            this.showAlert(validationError, true);
+            return null;
+        }
+
+        let conn;
+        if (this.editingConnectionId) {
+            conn = Connections.update(this.editingConnectionId, {
+                name: name || undefined,
+                provider: this.selectedProvider,
+                config
+            });
+        } else {
+            conn = Connections.create({ name, provider: this.selectedProvider, config });
+        }
+        this.editingConnectionId = conn.id;
+        Connections.setActiveId(conn.id);
+        Provider.setKey(conn.provider);
+        return conn;
+    },
+
+    /** Guarda (merge) solo la config de la conexión activa, sin tocar su nombre */
+    persistActiveConnectionConfig() {
+        if (!window.Connections || !this.selectedProvider || !this.editingConnectionId) return;
+        const config = this.collectConfigFromForm();
+        Connections.update(this.editingConnectionId, { config });
+    },
+
+    // =====================================================================
+    // Mensajería entre ventanas (popups de OAuth)
+    // =====================================================================
+    setupBrowserMessageListener() {
         window.addEventListener("message", (event) => {
             if (typeof event.data !== "string") return;
             try {
@@ -273,14 +434,14 @@ const LoginApp = {
 
     checkExistingTokens() {
         if (BQ.isConnected()) {
-            this.setProviderState("bigquery", true);
+            this.connectedProviders.bigquery = true;
         } else {
             localStorage.removeItem("bigquery_access_token");
             localStorage.removeItem("bigquery_token_expires");
         }
 
         if (SF.isConnected()) {
-            this.setProviderState("snowflake", true);
+            this.connectedProviders.snowflake = true;
         } else {
             SF.logout();
         }
@@ -379,10 +540,11 @@ const LoginApp = {
                 if (response.status === "success") {
                     localStorage.setItem("bigquery_access_token", response.token);
                     localStorage.setItem("bigquery_token_expires", Date.now() + (parseInt(response.expiresIn, 10) * 1000));
-                    this.setProviderState("bigquery", true);
+                    this.connectedProviders.bigquery = true;
                     this.persistActiveConnectionConfig();
-                    this.updateActionButton();
                     this.showAlert("¡Conexión con Google BigQuery establecida con éxito!");
+                    this.togglePanels();
+                    this.updateActionButton();
                     await this.loadGcpProjects();
                     this.persistActiveConnectionConfig();
                 } else {
@@ -394,7 +556,7 @@ const LoginApp = {
             if (response.provider === "snowflake") {
                 if (response.status === "success" && response.code) {
                     await SF.handleAuthCode(response.code, response.state);
-                    this.setProviderState("snowflake", true);
+                    this.connectedProviders.snowflake = true;
                     this.persistActiveConnectionConfig();
                     this.updateActionButton();
                     this.showAlert("¡Conexión con Snowflake establecida con éxito!");
@@ -510,23 +672,15 @@ const LoginApp = {
             localStorage.removeItem("bigquery_access_token");
             localStorage.removeItem("bigquery_token_expires");
             localStorage.removeItem("draco_gcp_project");
-            document.getElementById("gcpProjectPicker").classList.remove("visible");
+            const picker = document.getElementById("gcpProjectPicker");
+            if (picker) picker.classList.remove("visible");
         } else if (providerKey === "snowflake") {
             SF.logout();
         }
-        this.setProviderState(providerKey, false);
+        this.connectedProviders[providerKey] = false;
         this.hideInstallPanel();
-        this.updateActionButton();
+        if (this.view === "create") this.updateActionButton();
         this.showAlert(`Sesión cerrada para ${this.getProviderDisplayName(providerKey)}`);
-    },
-
-    setProviderState(providerKey, isConnected) {
-        this.connectedProviders[providerKey] = isConnected;
-        const badge = document.getElementById(`badge-${providerKey}`);
-        if (badge) {
-            badge.innerText = isConnected ? "Conectado" : "Disponible";
-            badge.classList.toggle("connected", isConnected);
-        }
     },
 
     async enterApp(bootstrapMsgEl) {
@@ -547,6 +701,7 @@ const LoginApp = {
 
         const name = this.getProviderDisplayName(this.selectedProvider);
         btnAction.disabled = false;
+        btnAction.classList.remove("disconnect-mode");
 
         if (this.selectedProvider === "bigquery") {
             const isConnected = !!this.connectedProviders.bigquery;
@@ -554,15 +709,19 @@ const LoginApp = {
                 const hasProject = !!BQ.getGcpProject();
                 btnAction.innerText = hasProject ? "Entrar a Draco Planning →" : "Selecciona un proyecto de GCP";
                 btnAction.disabled = !hasProject;
-                btnAction.classList.remove("disconnect-mode");
                 btnAction.onclick = async () => {
                     if (!hasProject) return;
+                    this.saveConnectionFromForm();
                     await this.proceedBigQuery();
                 };
             } else {
                 btnAction.innerText = `Conectar a ${name}`;
-                btnAction.classList.remove("disconnect-mode");
-                btnAction.onclick = () => this.connectBigQuery();
+                btnAction.onclick = () => {
+                    const conn = this.saveConnectionFromForm();
+                    if (!conn) return;
+                    this.applyConnectionConfig(conn);
+                    this.connectBigQuery();
+                };
             }
             return;
         }
@@ -571,29 +730,24 @@ const LoginApp = {
             const isConnected = !!this.connectedProviders.snowflake;
             if (isConnected) {
                 btnAction.innerText = "Entrar a Draco Planning →";
-                btnAction.classList.remove("disconnect-mode");
-                btnAction.onclick = async () => { await this.proceedSnowflake(); };
+                btnAction.onclick = async () => {
+                    this.saveConnectionFromForm();
+                    await this.proceedSnowflake();
+                };
             } else {
-                btnAction.innerText = "Conectar a Snowflake";
-                btnAction.classList.remove("disconnect-mode");
-                btnAction.onclick = () => this.connectSnowflake();
+                btnAction.innerText = `Conectar a ${name}`;
+                btnAction.onclick = () => {
+                    const conn = this.saveConnectionFromForm();
+                    if (!conn) return;
+                    this.connectSnowflake();
+                };
             }
             return;
         }
 
         // Resto de conectores: todavía no implementados
-        const isConnected = !!this.connectedProviders[this.selectedProvider];
-        if (isConnected) {
-            btnAction.innerText = `Cerrar sesión (${name})`;
-            btnAction.classList.add("disconnect-mode");
-            btnAction.onclick = () => this.logoutProvider(this.selectedProvider);
-        } else {
-            btnAction.innerText = `Conectar a ${name}`;
-            btnAction.classList.remove("disconnect-mode");
-            btnAction.onclick = () => {
-                this.showAlert(`El conector para ${name} estará disponible próximamente.`);
-            };
-        }
+        btnAction.innerText = `El conector para ${name} estará disponible próximamente`;
+        btnAction.disabled = true;
     }
 };
 
