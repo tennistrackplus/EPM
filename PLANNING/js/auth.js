@@ -38,11 +38,14 @@ const LoginApp = {
         s4cds: "https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg"
     },
 
-    init() {
+    async init() {
         this.bindStaticEvents();
-        this.checkExistingTokens();
         this.renderList();
         this.setupBrowserMessageListener();
+        // Puede tardar una petición de red (renovar Snowflake); ya se
+        // pintó la lista arriba con lo que había en localStorage, y
+        // checkExistingTokens() vuelve a pintarla si logra renovar.
+        await this.checkExistingTokens();
     },
 
     // =====================================================================
@@ -116,6 +119,34 @@ const LoginApp = {
                 BQ.setGcpProject(gcpSelect.value);
                 this.persistActiveConnectionConfig();
                 this.hideInstallPanel();
+                this.updateActionButton();
+            });
+        }
+
+        // Respaldo manual: por si la API de Google no devuelve el proyecto
+        // (solo lista proyectos con BigQuery ya habilitado) o listProjects()
+        // falla (red/CORS). Sin esto, un listado vacío bloqueaba el flujo
+        // entero porque el botón dependía de tener un proyecto elegido.
+        const btnUseManualProject = document.getElementById("btnUseManualProject");
+        if (btnUseManualProject) {
+            btnUseManualProject.addEventListener("click", () => {
+                const input = document.getElementById("gcpProjectManual");
+                const projectId = (input.value || "").trim();
+                if (!projectId) {
+                    this.showAlert("Escribe el ID del proyecto de GCP.", true);
+                    return;
+                }
+                BQ.setGcpProject(projectId);
+                if (gcpSelect && ![...gcpSelect.options].some(o => o.value === projectId)) {
+                    const opt = document.createElement("option");
+                    opt.value = projectId;
+                    opt.text = projectId;
+                    gcpSelect.appendChild(opt);
+                }
+                if (gcpSelect) gcpSelect.value = projectId;
+                this.persistActiveConnectionConfig();
+                this.hideInstallPanel();
+                this.showAlert(`Usando el proyecto "${projectId}".`);
                 this.updateActionButton();
             });
         }
@@ -432,16 +463,22 @@ const LoginApp = {
         });
     },
 
-    checkExistingTokens() {
+    async checkExistingTokens() {
         if (BQ.isConnected()) {
             this.connectedProviders.bigquery = true;
         } else {
+            // El flujo implícito de Google no da refresh token: si caducó,
+            // no queda otra que limpiar y pedir reconectar.
             localStorage.removeItem("bigquery_access_token");
             localStorage.removeItem("bigquery_token_expires");
         }
 
-        if (SF.isConnected()) {
+        // Snowflake sí soporta refresh token: antes de rendirse y borrar la
+        // sesión, intenta renovar el access token en silencio con el que
+        // ya se guardó al conectar (ver SF.refreshAccessToken).
+        if (await SF.ensureConnected()) {
             this.connectedProviders.snowflake = true;
+            this.renderList();
         } else {
             SF.logout();
         }

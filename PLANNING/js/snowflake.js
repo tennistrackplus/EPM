@@ -166,11 +166,64 @@ const SF = {
         localStorage.removeItem("sf_oauth_state");
     },
 
+    /**
+     * Canjea el refresh token guardado por un access token nuevo, sin
+     * abrir ningún popup. Se pedía el scope "refresh_token" al conectar
+     * y se guardaba en sf_refresh_token, pero nada lo usaba: cada
+     * caducidad del access token forzaba a reconectar desde cero
+     * (y checkExistingTokens() en auth.js encima borraba el refresh
+     * token al detectar el access token caducado, perdiendo la
+     * posibilidad de renovar). Devuelve true si consiguió renovar.
+     */
+    async refreshAccessToken() {
+        const refreshToken = localStorage.getItem("sf_refresh_token");
+        if (!refreshToken || !this.getAccount()) return false;
+
+        try {
+            const body = new URLSearchParams({
+                grant_type: "refresh_token",
+                refresh_token: refreshToken,
+                client_id: DracoConfig.snowflakeClientId
+            });
+            const response = await fetch(`${this.base()}/oauth/token-request`, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: body.toString()
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || data.error) {
+                console.warn("[Draco] No se pudo renovar el token de Snowflake:", data.error_description || data.error);
+                return false;
+            }
+            localStorage.setItem("sf_access_token", data.access_token);
+            localStorage.setItem("sf_token_expires", Date.now() + (parseInt(data.expires_in || "3600", 10) * 1000));
+            // Snowflake puede rotar el refresh token en cada canje; si no manda uno nuevo, se conserva el actual.
+            if (data.refresh_token) localStorage.setItem("sf_refresh_token", data.refresh_token);
+            return true;
+        } catch (e) {
+            console.warn("[Draco] Error de red al renovar el token de Snowflake:", e.message);
+            return false;
+        }
+    },
+
+    /** Igual que isConnected(), pero intenta renovar en silencio con el refresh token antes de rendirse. */
+    async ensureConnected() {
+        if (this.isConnected()) return true;
+        return this.refreshAccessToken();
+    },
+
     // ---------------------------------------------------------
     // SQL API v2
     // ---------------------------------------------------------
     async execRaw(sql, { database, schema } = {}) {
-        const token = this.getToken();
+        let token = this.getToken();
+        if (!token) {
+            // El token pudo caducar a media sesión (consulta larga, pestaña
+            // abierta mucho rato...): intenta renovarlo antes de rendirte.
+            if (await this.refreshAccessToken()) {
+                token = this.getToken();
+            }
+        }
         if (!token) {
             const err = new Error("Sesión de Snowflake no válida o expirada.");
             err.code = "NO_AUTH";

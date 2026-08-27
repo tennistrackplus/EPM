@@ -9,6 +9,13 @@ const Draco = {
     currentModule: "dimensiones",
 
     async init() {
+        // Si el access token de Snowflake caducó mientras la app estaba
+        // abierta (o al recargar), intenta renovarlo en silencio con el
+        // refresh token antes de expulsar al usuario a index.html.
+        if (Provider.key() === "snowflake") {
+            await SF.ensureConnected();
+        }
+
         if (!Provider.isConnected() || !Provider.isReady()) {
             window.location.href = "index.html";
             return;
