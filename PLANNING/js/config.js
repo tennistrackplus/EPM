@@ -21,6 +21,7 @@ const DracoConfig = {
     googleClientId: "316357511817-lck6pdotv8mrb7n72pahuukt2e0fvsrt.apps.googleusercontent.com",
     googleScopes: [
         "https://www.googleapis.com/auth/bigquery",
+        "https://www.googleapis.com/auth/cloud-platform.read-only",
         "https://www.googleapis.com/auth/userinfo.email"
     ].join(" "),
 
