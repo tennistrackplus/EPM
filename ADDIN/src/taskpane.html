@@ -17,10 +17,12 @@
 
         <!-- Barra de herramientas de la vista -->
         <div class="view-toolbar">
-            <h2>Informe</h2>
+            <select id="reportSelector" title="Informe" style="font-weight:600; font-size: var(--fs-md, 14px); border:1px solid transparent; background:transparent; max-width: 160px;">
+                <option value="">— Sin informes —</option>
+            </select>
             <div style="display:flex; align-items:center; gap:6px;">
                 <span id="autoStatus" style="font-size: var(--fs-sm, 11px); color:#7045A9; min-width: 90px;"></span>
-                <button id="btnSaveDesign" class="btn-primary" style="padding:6px 14px; font-size: var(--fs-sm);">Guardar</button>
+                <button id="btnAddReport" class="btn-primary" style="padding:6px 14px; font-size: var(--fs-sm);">Añadir informe</button>
                 <button id="btnPauseRefresh" class="icon-button" title="Pausar actualización de datos" aria-pressed="false">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                         <rect x="4" y="3" width="3" height="10" rx="1"/>
@@ -45,6 +47,9 @@
 
             <!-- Panel Izquierdo: Lista de Dimensiones -->
             <section class="fields-section">
+                <select id="semanticModelSelector" title="Modelo semántico" style="width:100%; margin-bottom:6px; padding:6px 8px; font-size: var(--fs-sm, 12px); border:1px solid #E1DFDD; border-radius:4px;">
+                    <option value="">— Sin modelos semánticos —</option>
+                </select>
                 <div class="search-input-wrapper">
                     <svg class="search-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M11.742 10.344a6.5 6.5 0 10-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 001.415-1.414l-3.85-3.85a1.007 1.007 0 00-.115-.1zM12 6.5a5.5 5.5 0 11-11 0 5.5 5.5 0 0111 0z"/>
@@ -209,6 +214,7 @@
     <script src="js/snowflake.js"></script>
     <script src="js/provider.js"></script>
     <script src="js/semanticModelStore.js"></script>
+    <script src="js/reportStore.js"></script>
     <script src="js/excelService.js"></script>
     <script src="js/filterModal.js"></script>
     <script src="js/commands.js"></script>

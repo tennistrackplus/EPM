@@ -398,6 +398,149 @@
             background: #f8fafc;
         }
 
+        /* MODAL: Abrir modelo semántico (LookML) */
+        #openLkmlModal .modal-content {
+            max-width: 460px;
+        }
+
+        .lkml-tabs {
+            display: flex;
+            gap: 4px;
+            border-bottom: 1px solid #e2e8f0;
+            margin-bottom: 14px;
+        }
+
+        .lkml-tab {
+            flex: 1;
+            text-align: center;
+            padding: 8px 4px;
+            font-size: 13px;
+            font-weight: 600;
+            color: #64748b;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            user-select: none;
+        }
+
+        .lkml-tab.active {
+            color: #7045A9;
+            border-bottom-color: #7045A9;
+        }
+
+        .lkml-tab-panel {
+            display: none;
+        }
+
+        .lkml-tab-panel.active {
+            display: block;
+        }
+
+        .lkml-field-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            color: #475569;
+            margin: 10px 0 4px;
+        }
+
+        .lkml-select, .lkml-input {
+            width: 100%;
+            padding: 7px 8px;
+            font-size: 13px;
+            border: 1px solid #cbd5e1;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+
+        .lkml-server-list {
+            max-height: 220px;
+            overflow-y: auto;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            margin-top: 8px;
+            min-height: 90px;
+            padding: 4px;
+        }
+
+        .lkml-server-list.is-empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 10px;
+        }
+
+        .lkml-server-list .lkml-empty-hint {
+            color: #94a3b8;
+            font-size: 12.5px;
+            text-align: center;
+            line-height: 1.5;
+        }
+
+        .lkml-server-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            font-size: 13px;
+            cursor: pointer;
+            border-radius: 4px;
+        }
+
+        .lkml-server-item:hover {
+            background: #f1f5f9;
+        }
+
+        .lkml-server-item.selected {
+            background: #EDE7F6;
+            color: #7045A9;
+            font-weight: 600;
+        }
+
+        .lkml-dropzone {
+            margin-top: 10px;
+            border: 1.5px dashed #cbd5e1;
+            border-radius: 8px;
+            padding: 22px 12px;
+            text-align: center;
+            cursor: pointer;
+            color: #64748b;
+            font-size: 13px;
+            transition: border-color 0.15s ease, background-color 0.15s ease;
+        }
+
+        .lkml-dropzone:hover, .lkml-dropzone.dragover {
+            border-color: #7045A9;
+            background: #FAF8FD;
+        }
+
+        .lkml-dropzone .lkml-file-icon {
+            font-size: 22px;
+            display: block;
+            margin-bottom: 6px;
+        }
+
+        .lkml-selected-file {
+            margin-top: 10px;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-radius: 6px;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            font-size: 12.5px;
+            color: #334155;
+        }
+
+        .lkml-modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid #e2e8f0;
+        }
+
         .tree-list {
             list-style: none;
             padding-left: 14px;
@@ -727,6 +870,7 @@
             <div class="card-header">
                 <span class="card-title">Modelo semántico</span>
                 <div class="model-manager-actions">
+                    <button type="button" class="icon-btn" id="btnOpenLkmlModel" title="Abrir modelo semántico desde LookML (.lkml)">📂 Abrir</button>
                     <button type="button" class="btn-generate" id="btnGenerateModel" title="Guardar modelo semántico en Excel">💾 Guardar</button>
                     <button type="button" class="icon-btn" id="btnNewModel" title="Crear nuevo modelo">+</button>
                     <button type="button" class="icon-btn danger" id="btnDeleteModel" title="Eliminar modelo">🗑</button>
@@ -773,6 +917,57 @@
             </div>
         </div>
 
+    </div>
+
+    <!-- MODAL: ABRIR MODELO SEMÁNTICO DESDE LOOKML (.lkml) -->
+    <div id="openLkmlModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Abrir modelo semántico (.lkml)</h3>
+                <span class="modal-close" id="btnCloseOpenLkmlModal">&times;</span>
+            </div>
+
+            <div class="lkml-tabs">
+                <div class="lkml-tab active" id="lkmlTabServer" data-tab="server">Servidor</div>
+                <div class="lkml-tab" id="lkmlTabLocal" data-tab="local">Local</div>
+            </div>
+
+            <!-- PESTAÑA SERVIDOR: repositorio Git (GitHub/GitLab) de la conexión -->
+            <div class="lkml-tab-panel active" id="lkmlPanelServer">
+                <label class="lkml-field-label" for="lkmlServerConnection">Conexión</label>
+                <select class="lkml-select" id="lkmlServerConnection">
+                    <option value="">— Sin conexiones guardadas —</option>
+                </select>
+
+                <label class="lkml-field-label" for="lkmlServerPath">Ruta / carpeta en el repositorio</label>
+                <div style="display:flex; gap:6px;">
+                    <input type="text" class="lkml-input" id="lkmlServerPath" placeholder="raíz del repositorio" style="flex:1;" />
+                    <button type="button" class="icon-btn" id="lkmlServerUpBtn" title="Subir un nivel">⬆</button>
+                </div>
+
+                <div class="lkml-server-list" id="lkmlServerList">
+                    <span class="lkml-empty-hint">Selecciona una conexión para explorar los ficheros .lkml del repositorio.</span>
+                </div>
+            </div>
+
+            <!-- PESTAÑA LOCAL: fichero .lkml del equipo del usuario -->
+            <div class="lkml-tab-panel" id="lkmlPanelLocal">
+                <div class="lkml-dropzone" id="lkmlDropzone">
+                    <span class="lkml-file-icon">📄</span>
+                    Arrastra aquí un fichero <strong>.lkml</strong> o haz clic para buscarlo en tu equipo
+                </div>
+                <input type="file" id="lkmlFileInput" accept=".lkml" style="display:none;" />
+                <div class="lkml-selected-file" id="lkmlSelectedFile">
+                    <span>📄</span>
+                    <span id="lkmlSelectedFileName"></span>
+                </div>
+            </div>
+
+            <div class="lkml-modal-footer">
+                <button type="button" class="icon-btn" id="btnCancelOpenLkml">Cancelar</button>
+                <button type="button" class="btn-generate" id="btnConfirmOpenLkml" disabled>Seleccionar</button>
+            </div>
+        </div>
     </div>
 
     <!-- MODAL SELECCIÓN JERÁRQUICA DE TABLA -->
@@ -903,6 +1098,8 @@
     </div>
 
     <script src="js/config.js"></script>
+    <script src="js/connections.js"></script>
+    <script src="js/gitRepo.js"></script>
     <script src="js/bigquery.js"></script>
     <script src="js/snowflake.js"></script>
     <script src="js/provider.js"></script>

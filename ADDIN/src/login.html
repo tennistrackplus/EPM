@@ -555,7 +555,9 @@
                                     <option value="local">Carpeta local</option>
                                 </select>
                                 <input type="text" id="bqRepoUrl" style="margin-top:6px;" placeholder="ej. https://github.com/mi-org/mis-modelos.git">
-                                <span class="hint">Dónde se guardan/versionan las definiciones del modelo semántico (equivalente a un proyecto LookML).</span>
+                                <input type="text" id="bqRepoBranch" style="margin-top:6px;" placeholder="Rama (por defecto: main)">
+                                <input type="password" id="bqRepoToken" style="margin-top:6px;" placeholder="Personal Access Token (solo repos privados)" autocomplete="off">
+                                <span class="hint">Dónde se guardan/versionan las definiciones del modelo semántico (equivalente a un proyecto LookML). El token solo hace falta para repositorios privados; se usa para listar y leer los ficheros .lkml, igual que la "deploy key"/PAT de Looker.</span>
                             </div>
                         </div>
 
