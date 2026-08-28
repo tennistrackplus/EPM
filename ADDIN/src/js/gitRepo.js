@@ -105,6 +105,64 @@ const GitRepo = {
     },
 
     /**
+     * Lee el contenido de texto (UTF-8) de un fichero del repositorio, para
+     * poder importarlo (p.ej. un .lkml elegido en "Abrir modelo semántico").
+     *
+     * repoConfig: { type: "github"|"gitlab", url, branch, token }
+     * path: ruta completa del fichero dentro del repo
+     */
+    async getFileContent(repoConfig, path) {
+        const type = repoConfig && repoConfig.type;
+        if (type === "github") return this._getGitHubFileContent(repoConfig, path);
+        if (type === "gitlab") return this._getGitLabFileContent(repoConfig, path);
+        throw new Error(`Tipo de repositorio no soportado todavía para leer: "${type || "(ninguno)"}"`);
+    },
+
+    async _getGitHubFileContent(repoConfig, path) {
+        const ref = this.parseUrl(repoConfig.url);
+        if (!ref) throw new Error("URL de repositorio de GitHub no válida.");
+
+        const branch = (repoConfig.branch || "").trim();
+        const cleanPath = (path || "").replace(/^\/+|\/+$/g, "");
+        if (!cleanPath) throw new Error("Falta la ruta del fichero.");
+
+        let apiUrl = `https://api.github.com/repos/${ref.owner}/${ref.repo}/contents/${encodeURI(cleanPath)}`;
+        if (branch) apiUrl += `?ref=${encodeURIComponent(branch)}`;
+
+        const headers = { Accept: "application/vnd.github+json" };
+        if (repoConfig.token) headers.Authorization = `Bearer ${repoConfig.token}`;
+
+        const res = await fetch(apiUrl, { headers });
+        if (!res.ok) throw new Error(this._friendlyError(res.status, "GitHub"));
+
+        const data = await res.json();
+
+        if (!data || data.type !== "file" || typeof data.content !== "string") {
+            throw new Error("La ruta seleccionada no corresponde a un fichero válido.");
+        }
+
+        return this._fromBase64Utf8(data.content.replace(/\n/g, ""));
+    },
+
+    async _getGitLabFileContent(repoConfig, path) {
+        const ref = this.parseUrl(repoConfig.url);
+        if (!ref) throw new Error("URL de repositorio de GitLab no válida.");
+
+        const projectId = encodeURIComponent(`${ref.owner}/${ref.repo}`);
+        const branch = (repoConfig.branch || "").trim() || "main";
+        const cleanPath = (path || "").replace(/^\/+|\/+$/g, "");
+        if (!cleanPath) throw new Error("Falta la ruta del fichero.");
+
+        const rawUrl = `https://gitlab.com/api/v4/projects/${projectId}/repository/files/${encodeURIComponent(cleanPath)}/raw?ref=${encodeURIComponent(branch)}`;
+        const headers = repoConfig.token ? { "PRIVATE-TOKEN": repoConfig.token } : {};
+
+        const res = await fetch(rawUrl, { headers });
+        if (!res.ok) throw new Error(this._friendlyError(res.status, "GitLab"));
+
+        return await res.text();
+    },
+
+    /**
      * Crea o actualiza un fichero en el repositorio (commit directo sobre la
      * rama indicada). Si el fichero ya existe se sobrescribe (actualización);
      * si no existe, se crea.
@@ -125,6 +183,12 @@ const GitRepo = {
     // para poder codificar en base64 un contenido UTF-8 sin perder acentos.
     _toBase64Utf8(str) {
         return btoa(unescape(encodeURIComponent(str)));
+    },
+
+    // Inversa de _toBase64Utf8: decodifica un base64 (posiblemente con
+    // saltos de línea, como devuelve la API de GitHub) a texto UTF-8.
+    _fromBase64Utf8(b64) {
+        return decodeURIComponent(escape(atob(b64)));
     },
 
     async _putGitHub(repoConfig, path, content, commitMessage) {

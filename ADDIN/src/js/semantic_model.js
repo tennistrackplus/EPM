@@ -41,10 +41,44 @@ function showToast(message, type = "success", duration = 3500) {
 Office.onReady(async (info) => {
     if (info.host === Office.HostType.Excel) {
         initEvents();
+        setFactCardVisible(false); // sin modelo seleccionado todavía
 		await ensureCoreModelSheets();
 		loadSemanticModels();
     }
 });
+
+/**
+ * Muestra u oculta la caja "Tabla de hechos": solo tiene sentido si hay un
+ * modelo semántico seleccionado (o recién creado). Con "— Sin modelo
+ * seleccionado —" no debe aparecer.
+ */
+function setFactCardVisible(visible) {
+
+    const card = document.getElementById("factTableCard");
+
+    if (card) {
+        card.style.display = visible ? "" : "none";
+    }
+
+}
+
+/**
+ * Limpia los campos de la tabla de hechos y la lista de campos en el DOM
+ * (usado tanto al deseleccionar el modelo como al crear uno nuevo vacío).
+ */
+function resetFactAndFieldsUI() {
+
+    document.getElementById("factProject").value = "";
+    document.getElementById("factDataset").value = "";
+    document.getElementById("factTable").value = "";
+    document.getElementById("factFullConcat").value = "";
+
+    fieldsState = [];
+
+    document.getElementById("fieldsList").innerHTML = "";
+    document.getElementById("fieldsCard").style.display = "none";
+
+}
 
 /**
  * Asegura que exista la hoja técnica EDIT_REPORT (estado del diseño del
@@ -174,18 +208,26 @@ function initEvents() {
  */
 function openLkmlDialogFromTaskpane() {
 
-    const dialogUrl = new URL("openSemanticModel.html", window.location.href).href;
+    window.LkmlOpenBridge.openOpenLkmlDialog((modelName) => {
 
-    Office.context.ui.displayDialogAsync(
-        dialogUrl,
-        { height: 70, width: 45, displayInIframe: false },
-        (asyncResult) => {
-            if (asyncResult.status === Office.AsyncResultStatus.Failed) {
-                console.error("Error al abrir el diálogo de apertura de modelo semántico:", asyncResult.error);
-                showToast("No se ha podido abrir el diálogo: " + asyncResult.error.message, "error");
-            }
+        // El diálogo ya ha leído el .lkml, generado el modelo semántico y
+        // LkmlOpenBridge lo ha guardado en SemanticModelStore: aquí solo
+        // hace falta refrescar este taskpane para que se vea seleccionado.
+        creatingModel = false;
+        restoreModelSelector();
+        loadSemanticModels();
+
+        const select = document.getElementById("semanticModelSelect");
+
+        if (select) {
+            select.value = modelName;
         }
-    );
+
+        loadModel(modelName);
+
+        showToast(`Modelo semántico "${modelName}" importado desde LookML.`, "success");
+
+    });
 
 }
 
@@ -366,6 +408,9 @@ async function saveNewModel()
             fields: []
         });
 
+        resetFactAndFieldsUI();
+        setFactCardVisible(true);
+
         loadSemanticModels();
 
         const select = document.getElementById("semanticModelSelect");
@@ -377,6 +422,7 @@ async function saveNewModel()
     } catch (err) {
 
         console.error("Error al guardar el modelo:", err);
+        showToast("Error al crear el modelo: " + err.message, "error");
 
     }
 
@@ -416,7 +462,19 @@ function loadSemanticModels()
 
     const models = window.SemanticModelStore.listModelNames();
 
-    const select=document.getElementById("semanticModelSelect");
+    let select=document.getElementById("semanticModelSelect");
+
+    // Si el selector no existe todavía (p.ej. porque se está mostrando el
+    // input de "nuevo modelo" del modelSelectorContainer), lo restauramos
+    // primero: evita el "Cannot set properties of null (setting innerHTML)"
+    // si esta función se llama en ese momento.
+    if (!select) {
+        creatingModel = false;
+        restoreModelSelector();
+        select = document.getElementById("semanticModelSelect");
+    }
+
+    if (!select) return;
 
     select.innerHTML='<option value="">— Sin modelo seleccionado —</option>';
 
@@ -458,6 +516,8 @@ async function loadModel(modelName)
 {
 
     currentModel=modelName;
+
+    setFactCardVisible(true);
 
     await window.SemanticModelStore.setActiveModelName(modelName);
 
@@ -508,21 +568,15 @@ function clearCurrentModel()
 
     currentModel="";
 
-    fieldsState=[];
+    resetFactAndFieldsUI();
 
-    document.getElementById("factProject").value="";
+    setFactCardVisible(false);
 
-    document.getElementById("factDataset").value="";
+    const select = document.getElementById("semanticModelSelect");
 
-    document.getElementById("factTable").value="";
-
-    document.getElementById("factFullConcat").value="";
-
-    document.getElementById("fieldsList").innerHTML="";
-
-    document.getElementById("fieldsCard").style.display="none";
-
-    document.getElementById("semanticModelSelect").value="";
+    if (select) {
+        select.value="";
+    }
 
 }
 
@@ -1422,12 +1476,26 @@ async function generateSemanticModelInExcel() {
 
     const modelName = resolveCurrentModelName();
 
+    // Si se pulsa "Guardar" mientras todavía se está escribiendo el nombre
+    // del nuevo modelo (el "+"), el selector #semanticModelSelect no existe
+    // en el DOM en ese momento (está sustituido por el input #newModelName).
+    // Hay que resolver el nombre PRIMERO (arriba) y restaurar el selector
+    // AQUÍ, antes de que nada más intente tocar #semanticModelSelect —si no,
+    // loadSemanticModels() de más abajo revienta con
+    // "Cannot set properties of null (setting 'innerHTML')".
+    if (creatingModel) {
+        creatingModel = false;
+        restoreModelSelector();
+    }
+
     currentModel = modelName;
 
     if (currentModel === "") {
         showToast("Indica primero el nombre del modelo.", "error");
         return;
     }
+
+    setFactCardVisible(true);
 
     const fact = {
         project: document.getElementById("factProject").value.trim(),
@@ -1475,4 +1543,14 @@ async function generateSemanticModelInExcel() {
  *   - js/saveSemanticModelDialog.js (saveSemanticModel.html)
  *   - js/lkmlExport.js               (generación del contenido LookML,
  *                                      compartida por el diálogo de guardado)
+ *   - js/lkmlImport.js               (parseo del contenido LookML a modelo
+ *                                      semántico, usado por el diálogo de
+ *                                      apertura)
+ *   - js/lkmlSaveBridge.js           (escribe el LookML guardado en
+ *                                      EDIT_REPORT!G1, ya que el diálogo de
+ *                                      guardado no tiene acceso a Excel)
+ *   - js/lkmlOpenBridge.js           (guarda en SemanticModelStore el
+ *                                      modelo importado, ya que el diálogo
+ *                                      de apertura no tiene acceso a
+ *                                      Office.context.document.settings)
  * ============================================================ */

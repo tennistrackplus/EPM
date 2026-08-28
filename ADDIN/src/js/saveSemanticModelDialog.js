@@ -54,9 +54,20 @@ function showToast(message, type = "success", duration = 4000) {
 
 function closeDialog() {
     try {
-        Office.context.ui.closeContainer();
+        if (Office.context.ui && typeof Office.context.ui.closeContainer === "function") {
+            Office.context.ui.closeContainer();
+            return;
+        }
     } catch (error) {
-        console.error("Error al cerrar el diálogo:", error);
+        console.error("Error al cerrar el diálogo con closeContainer:", error);
+    }
+    // Alternativa por si closeContainer no está disponible en este host:
+    // el diálogo también es una ventana normal, así que window.close()
+    // debería cerrarla igualmente.
+    try {
+        window.close();
+    } catch (error2) {
+        console.error("Error al cerrar la ventana del diálogo:", error2);
     }
 }
 
@@ -126,8 +137,8 @@ function populateConnectionSelect() {
     const select = document.getElementById("lkmlSaveServerConnection");
     if (!select) return;
 
-    const connections = (window.Connections && typeof window.Connections.list === "function")
-        ? window.Connections.list() : [];
+    const connections = (Connections && typeof Connections.list === "function")
+        ? Connections.list() : [];
     const withRepo = connections.filter(c => {
         const repo = c.config && c.config.semanticRepo;
         return repo && (repo.type === "github" || repo.type === "gitlab") && repo.url;
@@ -149,7 +160,7 @@ function populateConnectionSelect() {
         select.appendChild(opt);
     });
 
-    const activeId = window.Connections.getActiveId ? window.Connections.getActiveId() : null;
+    const activeId = Connections.getActiveId ? Connections.getActiveId() : null;
     if (activeId && withRepo.some(c => c.id === activeId)) select.value = activeId;
 }
 
@@ -169,7 +180,7 @@ async function updateServerList() {
         return;
     }
 
-    const conn = window.Connections.getById(connectionId);
+    const conn = Connections.getById(connectionId);
     const repoConfig = conn && conn.config && conn.config.semanticRepo;
     if (!repoConfig) return;
 
@@ -177,7 +188,7 @@ async function updateServerList() {
     list.innerHTML = "<span class=\"lkml-empty-hint\">Cargando…</span>";
 
     try {
-        const items = await window.GitRepo.listContents(repoConfig, path);
+        const items = await GitRepo.listContents(repoConfig, path);
 
         if (items.length === 0) {
             list.classList.add("is-empty");
@@ -344,7 +355,7 @@ function initEvents() {
         const fileName = ensureLkmlExtension(document.getElementById("lkmlSaveServerFileName").value);
         if (!connectionId || !fileName) return;
 
-        const conn = window.Connections.getById(connectionId);
+        const conn = Connections.getById(connectionId);
         const repoConfig = conn && conn.config && conn.config.semanticRepo;
         if (!repoConfig) {
             showToast("La conexión elegida no tiene un repositorio configurado.", "error");
@@ -355,7 +366,7 @@ function initEvents() {
 
         setSaving(true, "Guardando en el repositorio…");
         try {
-            await window.GitRepo.putFile(repoConfig, fullPath, content, `Actualiza ${fullPath} desde el editor de modelos semánticos`);
+            await GitRepo.putFile(repoConfig, fullPath, content, `Actualiza ${fullPath} desde el editor de modelos semánticos`);
         } catch (err) {
             console.error("Error al guardar en el repositorio:", err);
             setSaving(false);

@@ -14,17 +14,11 @@ Office.onReady(() => {
  */
 function abrirModeloSemantico(event) {
     try {
-        const dialogUrl = new URL("openSemanticModel.html", window.location.href).href;
-
-        Office.context.ui.displayDialogAsync(
-            dialogUrl,
-            { height: 70, width: 45, displayInIframe: false },
-            (asyncResult) => {
-                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
-                    console.error("Error al abrir el diálogo de apertura de modelo semántico:", asyncResult.error);
-                }
-            }
-        );
+        // LkmlOpenBridge (js/lkmlOpenBridge.js) abre openSemanticModel.html
+        // y, cuando el usuario elige un fichero y confirma, guarda el
+        // modelo importado en SemanticModelStore desde este mismo runtime
+        // de comandos (que sí tiene acceso a Office.context.document.settings).
+        window.LkmlOpenBridge.openOpenLkmlDialog();
     } catch (error) {
         console.error("Error al abrir el diálogo de apertura de modelo semántico:", error);
     } finally {

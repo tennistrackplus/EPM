@@ -3,17 +3,21 @@
  * ------------------------------------------------------------------------
  * Se abre con Office.context.ui.displayDialogAsync directamente desde el
  * botón del ribbon "Abrir modelo semántico" (ver commands.js) o desde el
- * botón "📂 Abrir" del taskpane (ver semantic_model.js): en ambos casos es
- * la MISMA página independiente, no un popup superpuesto dentro del
- * taskpane. No tiene acceso al modelo de objetos de Excel (igual que
+ * botón "📂 Abrir" del taskpane (ver semantic_model.js), en ambos casos a
+ * través de js/lkmlOpenBridge.js: es la MISMA página independiente, no un
+ * popup superpuesto dentro del taskpane. No tiene acceso al modelo de
+ * objetos de Excel ni a Office.context.document.settings (igual que
  * dataPreview.html / hierarchyPreview.html): solo usa las conexiones
  * guardadas (localStorage, compartido con el resto del add-in) y el
  * repositorio Git elegido (GitRepo, vía fetch).
  *
- * A propósito, igual que el modal original del que procede, esta pantalla
- * NO procesa todavía el fichero elegido: solo deja "seleccionado" un
- * origen (local o de servidor). La importación real del LookML al modelo
- * semántico se conectará en un paso posterior.
+ * Al pulsar "Seleccionar": pide el nombre del modelo semántico (obligatorio),
+ * lee el fichero .lkml elegido (local o del repositorio, vía
+ * GitRepo.getFileContent), lo convierte en un modelo semántico con
+ * LkmlImport.parseContent (ver js/lkmlImport.js) y lo envía a quien abrió
+ * el diálogo con Office.context.ui.messageParent(), porque este diálogo NO
+ * tiene acceso a SemanticModelStore. Es js/lkmlOpenBridge.js, en el lado
+ * que sí tiene ese acceso, quien lo guarda de verdad y cierra el diálogo.
  */
 
 let lkmlSelection = null; // { source: "local"|"server", file?: File, connectionId?, path?, name? }
@@ -44,9 +48,20 @@ function showToast(message, type = "success", duration = 3500) {
 
 function closeDialog() {
     try {
-        Office.context.ui.closeContainer();
+        if (Office.context.ui && typeof Office.context.ui.closeContainer === "function") {
+            Office.context.ui.closeContainer();
+            return;
+        }
     } catch (error) {
-        console.error("Error al cerrar el diálogo:", error);
+        console.error("Error al cerrar el diálogo con closeContainer:", error);
+    }
+    // Alternativa por si closeContainer no está disponible en este host:
+    // el diálogo también es una ventana normal, así que window.close()
+    // debería cerrarla igualmente.
+    try {
+        window.close();
+    } catch (error2) {
+        console.error("Error al cerrar la ventana del diálogo:", error2);
     }
 }
 
@@ -143,6 +158,7 @@ async function updateLkmlServerList() {
                     list.querySelectorAll(".lkml-server-item.selected").forEach(el => el.classList.remove("selected"));
                     row.classList.add("selected");
                     lkmlSelection = { source: "server", connectionId, path: item.path, name: item.name };
+                    prefillModelName(item.name);
                     updateLkmlConfirmButtonState();
                 });
             }
@@ -158,7 +174,21 @@ async function updateLkmlServerList() {
 function updateLkmlConfirmButtonState() {
     const btn = document.getElementById("btnConfirmOpenLkml");
     if (!btn) return;
-    btn.disabled = !lkmlSelection;
+
+    const nameInput = document.getElementById("lkmlOpenModelName");
+    const modelName = nameInput ? nameInput.value.trim() : "";
+
+    btn.disabled = !lkmlSelection || modelName === "";
+}
+
+// Sugiere el nombre del modelo a partir del nombre del fichero (<nombre>.lkml)
+// si el usuario todavía no ha escrito uno propio.
+function prefillModelName(fileName) {
+    const nameInput = document.getElementById("lkmlOpenModelName");
+    if (!nameInput || nameInput.value.trim() !== "") return;
+
+    const suggested = (fileName || "").replace(/\.lkml$/i, "");
+    if (suggested) nameInput.value = suggested;
 }
 
 function handleLkmlLocalFile(file) {
@@ -171,12 +201,38 @@ function handleLkmlLocalFile(file) {
 
     document.getElementById("lkmlSelectedFileName").textContent = file.name;
     document.getElementById("lkmlSelectedFile").style.display = "flex";
+    prefillModelName(file.name);
     updateLkmlConfirmButtonState();
+}
+
+function readFileAsText(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error || new Error("No se ha podido leer el fichero."));
+        reader.readAsText(file);
+    });
+}
+
+function setImporting(isImporting, label) {
+    const btn = document.getElementById("btnConfirmOpenLkml");
+    const cancelBtn = document.getElementById("btnCancelOpenLkml");
+    if (!btn) return;
+
+    btn.textContent = isImporting ? (label || "Importando…") : "Seleccionar";
+    if (cancelBtn) cancelBtn.disabled = isImporting;
+    if (isImporting) {
+        btn.disabled = true;
+    } else {
+        updateLkmlConfirmButtonState();
+    }
 }
 
 function initEvents() {
 
     document.getElementById("btnCancelOpenLkml").addEventListener("click", closeDialog);
+
+    document.getElementById("lkmlOpenModelName").addEventListener("input", updateLkmlConfirmButtonState);
 
     document.getElementById("lkmlTabServer").addEventListener("click", () => setLkmlActiveTab("server"));
     document.getElementById("lkmlTabLocal").addEventListener("click", () => setLkmlActiveTab("local"));
@@ -224,16 +280,73 @@ function initEvents() {
         handleLkmlLocalFile(file);
     });
 
-    // "Seleccionar": por ahora no hace nada con el fichero, solo confirma
-    // el origen elegido y cierra el diálogo (la importación real del LookML
-    // se conectará en un paso posterior).
-    document.getElementById("btnConfirmOpenLkml").addEventListener("click", () => {
+    // "Seleccionar": lee el fichero elegido (local o del repositorio),
+    // genera el modelo semántico a partir de su LookML (LkmlImport) y lo
+    // envía a quien abrió el diálogo (LkmlOpenBridge, ver
+    // js/lkmlOpenBridge.js), que es quien tiene acceso a SemanticModelStore
+    // para guardarlo de verdad con el nombre indicado.
+    document.getElementById("btnConfirmOpenLkml").addEventListener("click", async () => {
+
         if (!lkmlSelection) return;
-        const label = lkmlSelection.source === "local"
-            ? lkmlSelection.file.name
-            : lkmlSelection.name;
-        showToast(`Fichero seleccionado: ${label}`, "success");
-        setTimeout(closeDialog, 900);
+
+        const modelName = document.getElementById("lkmlOpenModelName").value.trim();
+
+        if (!modelName) {
+            showToast("Indica el nombre con el que se guardará el modelo semántico.", "error");
+            return;
+        }
+
+        setImporting(true, "Leyendo fichero…");
+
+        try {
+
+            let content;
+
+            if (lkmlSelection.source === "local") {
+                content = await readFileAsText(lkmlSelection.file);
+            } else {
+                const conn = Connections.getById(lkmlSelection.connectionId);
+                const repoConfig = conn && conn.config && conn.config.semanticRepo;
+                if (!repoConfig) throw new Error("La conexión elegida no tiene un repositorio configurado.");
+                content = await GitRepo.getFileContent(repoConfig, lkmlSelection.path);
+            }
+
+            setImporting(true, "Generando modelo…");
+
+            const model = LkmlImport.parseContent(content);
+
+            setImporting(true, "Guardando…");
+
+            Office.context.ui.messageParent(JSON.stringify({ modelName, model }));
+
+        } catch (err) {
+            console.error("Error al leer o generar el modelo semántico:", err);
+            setImporting(false);
+            showToast("Error al importar el fichero: " + err.message, "error");
+        }
+
+    });
+
+    // Si quien nos abrió (LkmlOpenBridge) no ha podido guardar el modelo en
+    // SemanticModelStore, nos lo dice aquí para que el usuario lo sepa y
+    // pueda reintentar en vez de quedarse sin saber qué ha pasado.
+    Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg) => {
+
+        let payload = null;
+        try {
+            payload = JSON.parse(arg.message);
+        } catch (e) {
+            payload = null;
+        }
+
+        setImporting(false);
+        showToast(
+            (payload && payload.error)
+                ? `No se ha podido guardar el modelo semántico: ${payload.error}`
+                : "No se ha podido guardar el modelo semántico.",
+            "error"
+        );
+
     });
 
 }
