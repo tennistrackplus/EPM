@@ -128,7 +128,6 @@ const Cubes = {
             return;
         }
         const tableName = `${DracoConfig.prefix}${ident}`;
-        const fullTable = Provider.qualify(this.project.DATASET, tableName);
 
         const selectedDims = dimensionIds.map(id => this.dimensionsCache.find(d => d.DIMENSION_ID === id)).filter(Boolean);
         const dimSpecs = selectedDims.map(d => {
@@ -142,17 +141,24 @@ const Cubes = {
             };
         });
 
-        const dimColDefs = dimSpecs.map(d => `${d.colId} ${Provider.mapFieldType(d.type)}`);
-        const measureColDefs = measures.map(f => `${Provider.toIdentifier(f.name)} ${Provider.mapFieldType(f.type)}`);
-        const colDefs = [...dimColDefs, ...measureColDefs].join(", ");
+        // Nombres físicos (identificador) + tipo, para sincronizar columnas
+        // sin recrear la tabla (ver Provider.syncTableColumns).
+        const physicalFields = [
+            ...dimSpecs.map(d => ({ name: d.colId, type: d.type })),
+            ...measures.map(f => ({ name: Provider.toIdentifier(f.name), type: f.type }))
+        ];
 
-        if (!colDefs) {
+        if (!physicalFields.length) {
             UI.toast("El cubo necesita al menos una dimensión o una medida.", "error");
             return;
         }
 
         try {
-            await Provider.runQuery(`CREATE OR REPLACE TABLE ${fullTable} (${colDefs})`);
+            // No se usa CREATE OR REPLACE TABLE: eso borraría todos los
+            // datos ya cargados en el cubo cada vez que se edita. Se
+            // sincronizan las columnas físicas (se añaden las nuevas, se
+            // quitan las eliminadas) preservando los datos del resto.
+            await Provider.syncTableColumns(this.project.DATASET, tableName, physicalFields);
 
             const spec = { dimensions: dimSpecs, measures };
             const camposJson = JSON.stringify(spec).replace(/\\/g, "\\\\").replace(/'/g, "\\'");

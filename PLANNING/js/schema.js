@@ -338,9 +338,13 @@ const DracoSchema = {
         const exists = await Provider.containerExists(DracoConfig.controlDataset);
         if (!exists) return false;
         try {
-            for (const name of this.TABLES) {
-                await Provider.runQuery(`SELECT 1 FROM ${Provider.qualifyControl(name)} LIMIT 1`);
-            }
+            // Las 28 comprobaciones son independientes entre sí: lanzarlas
+            // todas a la vez (en vez de una por una con await secuencial)
+            // reduce el tiempo total al de la más lenta, no a la suma de
+            // todas. Ver la misma optimización en bootstrap() más abajo.
+            await Promise.all(this.TABLES.map(name =>
+                Provider.runQuery(`SELECT 1 FROM ${Provider.qualifyControl(name)} LIMIT 1`)
+            ));
             return true;
         } catch (e) {
             return false;
@@ -357,8 +361,10 @@ const DracoSchema = {
     async evolve(onProgress = () => {}) {
         onProgress("Verificando columnas del modelo semántico...");
         const cubos = Provider.qualifyControl("CUBOS");
-        await Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING`);
-        await Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP`);
+        await Promise.all([
+            Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING`),
+            Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP`)
+        ]);
     },
 
     async bootstrap(onProgress = () => {}) {
@@ -373,10 +379,12 @@ const DracoSchema = {
             await Provider.createContainer(DracoConfig.controlDataset, "Dataset/esquema de control de Draco Planning (proyectos, dimensiones, cubos, jerarquías, interfaces)");
         }
 
-        for (const name of this.TABLES) {
-            onProgress(`Verificando tabla ${name}...`);
-            await Provider.runQuery(this.ddl(name));
-        }
+        // Las 28 tablas son independientes (ninguna DDL depende de otra),
+        // así que se lanzan todas a la vez en vez de una por una: con
+        // await secuencial, 28 tablas a ~200ms cada una son ~5-6s solo
+        // aquí; en paralelo es ~el tiempo de la más lenta (~200-500ms).
+        onProgress(`Verificando ${this.TABLES.length} tablas de control...`);
+        await Promise.all(this.TABLES.map(name => Provider.runQuery(this.ddl(name))));
 
         await this.evolve(onProgress);
     }

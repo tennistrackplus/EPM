@@ -132,5 +132,54 @@ const Provider = {
                WHERE TABLE_NAME = '${this.esc(table)}' ORDER BY ORDINAL_POSITION`;
         const rows = await this.runQuery(sql);
         return rows.map(r => ({ name: r.COLUMN_NAME, type: r.DATA_TYPE }));
+    },
+
+    /**
+     * Sincroniza las columnas físicas de `container.table` con
+     * `desiredFields` ([{name, type}], nombres ya como identificador
+     * físico) SIN BORRAR los datos existentes:
+     *   - Si la tabla no existe todavía, se crea entera de una vez
+     *     (CREATE TABLE IF NOT EXISTS) con el esquema completo.
+     *   - Si ya existe, se añaden (ALTER TABLE ADD COLUMN) las columnas
+     *     que falten y se eliminan (ALTER TABLE DROP COLUMN) las que ya
+     *     no estén en `desiredFields`. Las columnas que se mantienen (y
+     *     sus datos) no se tocan.
+     * Usado por Dimensions.save() y Cubes.save() al editar, en vez de
+     * `CREATE OR REPLACE TABLE` (que recreaba la tabla vacía cada vez,
+     * borrando todo lo que hubiera cargado).
+     *
+     * No migra cambios de TIPO en una columna que se mantiene (p.ej.
+     * pasar un atributo de STRING a INTEGER): eso exigiría convertir los
+     * valores ya existentes y el tipo físico normalizado no siempre
+     * coincide con el canónico (BigQuery guarda INTEGER como INT64,
+     * BOOLEAN como BOOL, etc.), así que se deja el tipo físico tal cual
+     * estaba para no arriesgar un ALTER que falle o trunque datos.
+     */
+    async syncTableColumns(container, table, desiredFields) {
+        const fullTable = this.qualify(container, table);
+        const colDefs = desiredFields.map(f => `${f.name} ${this.mapFieldType(f.type)}`).join(", ");
+
+        const existingCols = await this.listColumns(container, table);
+        if (existingCols.length === 0) {
+            // Alta nueva (o la tabla se borró manualmente fuera de Draco):
+            // no hay nada que preservar, se crea entera de una vez.
+            await this.runQuery(`CREATE TABLE IF NOT EXISTS ${fullTable} (${colDefs})`);
+            return { created: true, added: desiredFields.map(f => f.name), dropped: [] };
+        }
+
+        const existingNames = new Set(existingCols.map(c => c.name.toUpperCase()));
+        const desiredNames = new Set(desiredFields.map(f => f.name.toUpperCase()));
+
+        const toAdd = desiredFields.filter(f => !existingNames.has(f.name.toUpperCase()));
+        const toDrop = existingCols.filter(c => !desiredNames.has(c.name.toUpperCase()));
+
+        for (const f of toAdd) {
+            await this.runQuery(`ALTER TABLE ${fullTable} ADD COLUMN IF NOT EXISTS ${f.name} ${this.mapFieldType(f.type)}`);
+        }
+        for (const c of toDrop) {
+            await this.runQuery(`ALTER TABLE ${fullTable} DROP COLUMN IF EXISTS ${c.name}`);
+        }
+
+        return { created: false, added: toAdd.map(f => f.name), dropped: toDrop.map(c => c.name) };
     }
 };

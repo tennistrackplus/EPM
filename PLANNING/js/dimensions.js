@@ -113,19 +113,21 @@ const Dimensions = {
             return;
         }
         const tableName = `${DracoConfig.prefix}${ident}`;
-        const fullTable = Provider.qualify(this.project.DATASET, tableName);
 
         // La clave principal siempre es el propio nombre de la dimensión.
         const keyField = { name: ident, type: keyType, key: true, __isPrimaryName: true };
         const allFields = [keyField, ...attributes];
 
-        const colDefs = allFields.map(f => {
-            const colIdent = Provider.toIdentifier(f.name);
-            return `${colIdent} ${Provider.mapFieldType(f.type)}`;
-        }).join(", ");
+        // Nombres físicos (identificador) + tipo, para sincronizar columnas
+        // sin recrear la tabla (ver Provider.syncTableColumns).
+        const physicalFields = allFields.map(f => ({ name: Provider.toIdentifier(f.name), type: f.type }));
 
         try {
-            await Provider.runQuery(`CREATE OR REPLACE TABLE ${fullTable} (${colDefs})`);
+            // No se usa CREATE OR REPLACE TABLE: eso borraría todos los
+            // datos ya cargados en la dimensión cada vez que se edita.
+            // Se sincronizan las columnas físicas (se añaden las nuevas,
+            // se quitan las eliminadas) preservando los datos del resto.
+            await Provider.syncTableColumns(this.project.DATASET, tableName, physicalFields);
 
             const camposJson = JSON.stringify(allFields).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
 
