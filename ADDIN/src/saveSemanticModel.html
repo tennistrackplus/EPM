@@ -17,7 +17,7 @@
 
         <div class="dialog-header">
             <h3>Guardar modelo semántico (.lkml)</h3>
-            <span class="dialog-subtitle">Genera el LookML del modelo y lo escribe en EDIT_REPORT!G1</span>
+            <span class="dialog-subtitle">Guarda el modelo (local o en un repositorio) y escribe su LookML en EDIT_REPORT!G1</span>
         </div>
 
         <div class="dialog-body">
@@ -27,11 +27,45 @@
                 <option value="">— Sin modelo seleccionado —</option>
             </select>
 
-            <p class="lkml-hint-text">
-                Al pulsar <strong>Guardar</strong> se genera el LookML del modelo elegido
-                (tabla de hechos, dimensiones, atributos y medidas) y se escribe en la
-                celda <strong>G1</strong> de la hoja <strong>EDIT_REPORT</strong>.
-            </p>
+            <div class="lkml-tabs">
+                <div class="lkml-tab active" id="lkmlSaveTabServer" data-tab="server">Servidor</div>
+                <div class="lkml-tab" id="lkmlSaveTabLocal" data-tab="local">Local</div>
+            </div>
+
+            <!-- PESTAÑA SERVIDOR: repositorio Git (GitHub/GitLab) de la conexión.
+                 "Guardar" hace commit del fichero en el repositorio y,
+                 además, escribe el mismo LookML en EDIT_REPORT!G1. -->
+            <div class="lkml-tab-panel active" id="lkmlSavePanelServer">
+                <label class="lkml-field-label" for="lkmlSaveServerConnection">Conexión</label>
+                <select class="lkml-select" id="lkmlSaveServerConnection">
+                    <option value="">— Sin conexiones guardadas —</option>
+                </select>
+
+                <label class="lkml-field-label" for="lkmlSaveServerPath">Ruta / carpeta en el repositorio</label>
+                <div style="display:flex; gap:6px;">
+                    <input type="text" class="lkml-input" id="lkmlSaveServerPath" placeholder="raíz del repositorio" style="flex:1;" />
+                    <button type="button" class="icon-btn" id="lkmlSaveServerUpBtn" title="Subir un nivel">⬆</button>
+                </div>
+
+                <div class="lkml-server-list" id="lkmlSaveServerList">
+                    <span class="lkml-empty-hint">Selecciona una conexión para explorar las carpetas del repositorio.</span>
+                </div>
+
+                <label class="lkml-field-label" for="lkmlSaveServerFileName">Nombre de fichero</label>
+                <input type="text" class="lkml-input" id="lkmlSaveServerFileName" placeholder="modelo.lkml" />
+            </div>
+
+            <!-- PESTAÑA LOCAL: descarga el .lkml al equipo del usuario Y,
+                 además, escribe el mismo LookML en EDIT_REPORT!G1. -->
+            <div class="lkml-tab-panel" id="lkmlSavePanelLocal">
+                <label class="lkml-field-label" for="lkmlSaveLocalFileName">Nombre de fichero</label>
+                <input type="text" class="lkml-input" id="lkmlSaveLocalFileName" placeholder="modelo.lkml" />
+                <p class="lkml-hint-text">
+                    Pulsa <strong>Guardar</strong> para descargar el fichero .lkml a tu equipo y,
+                    además, escribir el mismo LookML en la celda <strong>G1</strong> de la hoja
+                    <strong>EDIT_REPORT</strong>.
+                </p>
+            </div>
 
         </div>
 
@@ -42,6 +76,9 @@
 
     </div>
 
+    <script src="js/config.js"></script>
+    <script src="js/connections.js"></script>
+    <script src="js/gitRepo.js"></script>
     <script src="js/lkmlExport.js"></script>
     <script src="js/saveSemanticModelDialog.js"></script>
 </body>
