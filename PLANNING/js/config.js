@@ -102,7 +102,7 @@ const DracoConfig = {
         // and write"). Rellénalo antes de desplegar — sin token, el .lkml
         // se genera igualmente pero falla la subida (se avisa por toast,
         // nunca bloquea el guardado del cubo).
-        token: "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"
+        token: "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"
     }
 };
 
