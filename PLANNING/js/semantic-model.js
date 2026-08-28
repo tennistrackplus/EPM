@@ -252,9 +252,53 @@ const SemanticModel = {
                 UI.toast("Modelo semántico generado. No se pudo subir automáticamente al stage: se descarga el YAML.", "info");
                 UI.downloadBlob(fileName, yamlText, "text/yaml;charset=utf-8");
             }
+
+            // Si el proveedor activo es BigQuery, además del YAML se genera el
+            // .lkml equivalente (mismo formato que ya exporta el add-in de
+            // Excel, ver js/lkml-export.js) y se hace commit directo en el
+            // repositorio de GitHub configurado en DracoConfig.semanticModelGithub.
+            // Nunca bloquea el guardado del cubo: si falla, solo avisa.
+            if (Provider.key() === "bigquery") {
+                await this.generateAndPushLkml(model, path);
+            }
         } catch (err) {
             console.error("Error generando el modelo semántico:", err);
             UI.toast("Aviso: el cubo se guardó, pero falló la generación del modelo semántico YAML.", "error");
+        }
+    },
+
+    // ------------------------------------------------------------
+    // 4. BigQuery: además del YAML, genera el .lkml y lo sube a GitHub
+    // ------------------------------------------------------------
+    /**
+     * @param model    objeto de modelo ya construido por this.build()
+     * @param yamlPath ruta (dentro de FOLDER) del .yaml ya generado, para
+     *                 derivar la ruta hermana del .lkml (mismo nombre)
+     */
+    async generateAndPushLkml(model, yamlPath) {
+        try {
+            if (typeof LkmlExport === "undefined") {
+                console.error("js/lkml-export.js no está cargado: no se puede generar el .lkml.");
+                return;
+            }
+            if (typeof GithubRepo === "undefined") {
+                console.error("js/github-repo.js no está cargado: no se puede subir el .lkml a GitHub.");
+                return;
+            }
+
+            const lkmlText = LkmlExport.buildContent(model);
+            const lkmlPath = yamlPath.replace(/\.yaml$/i, ".lkml");
+
+            await GithubRepo.putFile(
+                lkmlPath,
+                lkmlText,
+                `Actualiza ${lkmlPath} desde Draco Planning (cubo "${model.model.name}")`
+            );
+
+            UI.toast(`Modelo LookML guardado en GitHub: ${lkmlPath}`, "success");
+        } catch (err) {
+            console.error("No se pudo generar/subir el modelo LookML a GitHub:", err);
+            UI.toast("Aviso: el modelo semántico YAML se guardó, pero falló la generación/subida del .lkml a GitHub: " + err.message, "error");
         }
     }
 };

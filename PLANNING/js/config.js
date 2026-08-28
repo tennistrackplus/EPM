@@ -83,6 +83,26 @@ const DracoConfig = {
     // valor conservador para no acercarse al límite de tamaño de sentencia
     // SQL de la SQL API v2; auméntalo si tus ficheros son grandes y quieres
     // menos peticiones, o bájalo si ves errores de "statement too large".
-    snowflakeUploadChunkBytes: 4 * 1024 * 1024
+    snowflakeUploadChunkBytes: 4 * 1024 * 1024,
+
+    // ---------------------------------------------------------
+    // Repositorio GitHub del modelo semántico LookML (.lkml) — BigQuery
+    // ---------------------------------------------------------
+    // Cuando el proveedor activo es BigQuery, al guardar un cubo (además
+    // del YAML de arriba) se genera su equivalente .lkml (mismo formato
+    // que ya exporta el add-in de Excel, ver ADDIN/src/js/lkmlExport.js
+    // y js/lkml-export.js) y se hace commit directo en este repositorio,
+    // vía la API REST de contenidos de GitHub (ver js/github-repo.js).
+    // Ruta dentro del repo: semantic_models/<proyecto>/<cubo>.lkml.
+    semanticModelGithub: {
+        url: "https://github.com/tennistrackplus/SEMANTIC_MODEL",
+        branch: "main",
+        // Personal Access Token de GitHub con permiso de escritura sobre
+        // el repo (classic: scope "repo"; fine-grained: "Contents: Read
+        // and write"). Rellénalo antes de desplegar — sin token, el .lkml
+        // se genera igualmente pero falla la subida (se avisa por toast,
+        // nunca bloquea el guardado del cubo).
+        token: "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"
+    }
 };
 
