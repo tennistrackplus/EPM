@@ -23,7 +23,7 @@
 
         Office.context.ui.displayDialogAsync(
             dialogUrl,
-            { height: 45, width: 35, displayInIframe: false },
+            { height: 75, width: 45, displayInIframe: false },
             (asyncResult) => {
 
                 if (asyncResult.status === Office.AsyncResultStatus.Failed) {

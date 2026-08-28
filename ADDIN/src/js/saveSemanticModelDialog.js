@@ -7,13 +7,18 @@
  * a través de js/lkmlSaveBridge.js: es la MISMA página independiente, no un
  * popup superpuesto dentro del taskpane.
  *
- * Al pulsar "Guardar" NO se descarga ningún fichero ni se escribe en
- * GitHub/GitLab: se genera el LookML del modelo elegido (tabla de hechos,
- * dimensiones, atributos, jerarquías, measures y relaciones) y se envía a
- * quien abrió el diálogo con Office.context.ui.messageParent(), porque este
- * diálogo NO tiene acceso al modelo de objetos de Excel. Es
- * js/lkmlSaveBridge.js, en el lado que sí tiene ese acceso, quien escribe
- * el resultado en la celda EDIT_REPORT!G1 y cierra el diálogo.
+ * En ambas pestañas, "Guardar":
+ *   1) Genera el LookML del modelo elegido (tabla de hechos, dimensiones,
+ *      atributos, jerarquías, measures y relaciones) con LkmlExport.
+ *   2) Guarda de verdad el fichero:
+ *        - Local:    lo descarga al equipo del usuario.
+ *        - Servidor: hace commit del fichero en el repositorio Git
+ *                     (GitHub/GitLab) de la conexión elegida, vía GitRepo.
+ *   3) Envía ese mismo LookML a quien abrió el diálogo con
+ *      Office.context.ui.messageParent(), porque este diálogo NO tiene
+ *      acceso al modelo de objetos de Excel. Es js/lkmlSaveBridge.js, en el
+ *      lado que sí tiene ese acceso, quien lo escribe en EDIT_REPORT!G1 y
+ *      cierra el diálogo.
  *
  * Los modelos semánticos tampoco están disponibles aquí directamente (no
  * hay Office.context.document.settings en un diálogo): quien abre esta
@@ -72,6 +77,17 @@ function getModel(modelName) {
     return modelsData[modelName] || null;
 }
 
+function ensureLkmlExtension(fileName) {
+    fileName = (fileName || "").trim();
+    if (!fileName) return fileName;
+    return fileName.toLowerCase().endsWith(".lkml") ? fileName : `${fileName}.lkml`;
+}
+
+function joinRepoPath(folder, fileName) {
+    const cleanFolder = (folder || "").replace(/^\/+|\/+$/g, "");
+    return cleanFolder ? `${cleanFolder}/${fileName}` : fileName;
+}
+
 function populateModelSelect(activeModel) {
     const select = document.getElementById("lkmlSaveModelSelect");
     if (!select) return;
@@ -92,33 +108,206 @@ function populateModelSelect(activeModel) {
     }
 }
 
+function setActiveTab(tabId) {
+    document.getElementById("lkmlSaveTabServer").classList.toggle("active", tabId === "server");
+    document.getElementById("lkmlSaveTabLocal").classList.toggle("active", tabId === "local");
+    document.getElementById("lkmlSavePanelServer").classList.toggle("active", tabId === "server");
+    document.getElementById("lkmlSavePanelLocal").classList.toggle("active", tabId === "local");
+    updateConfirmButtonState();
+}
+
+function getActiveTab() {
+    return document.getElementById("lkmlSaveTabLocal").classList.contains("active") ? "local" : "server";
+}
+
+// Rellena el selector de conexiones con las que tienen repositorio de
+// modelos semánticos configurado (GitHub/GitLab).
+function populateConnectionSelect() {
+    const select = document.getElementById("lkmlSaveServerConnection");
+    if (!select) return;
+
+    const connections = (window.Connections && typeof window.Connections.list === "function")
+        ? window.Connections.list() : [];
+    const withRepo = connections.filter(c => {
+        const repo = c.config && c.config.semanticRepo;
+        return repo && (repo.type === "github" || repo.type === "gitlab") && repo.url;
+    });
+
+    select.innerHTML = "";
+    if (withRepo.length === 0) {
+        select.innerHTML = "<option value=\"\">— Ninguna conexión tiene repositorio configurado —</option>";
+        select.disabled = true;
+        return;
+    }
+
+    select.disabled = false;
+    select.innerHTML = "<option value=\"\">— Selecciona una conexión —</option>";
+    withRepo.forEach(conn => {
+        const opt = document.createElement("option");
+        opt.value = conn.id;
+        opt.textContent = `${conn.name} (${conn.config.semanticRepo.type === "github" ? "GitHub" : "GitLab"})`;
+        select.appendChild(opt);
+    });
+
+    const activeId = window.Connections.getActiveId ? window.Connections.getActiveId() : null;
+    if (activeId && withRepo.some(c => c.id === activeId)) select.value = activeId;
+}
+
+// Lista el contenido de la carpeta actual del repositorio (navegación de
+// carpetas). Al hacer clic en un .lkml existente se propone como nombre de
+// fichero (para sobrescribirlo al guardar).
+async function updateServerList() {
+    const list = document.getElementById("lkmlSaveServerList");
+    if (!list) return;
+
+    const connectionId = document.getElementById("lkmlSaveServerConnection").value;
+    const path = document.getElementById("lkmlSaveServerPath").value.trim();
+
+    if (!connectionId) {
+        list.classList.add("is-empty");
+        list.innerHTML = "<span class=\"lkml-empty-hint\">Selecciona una conexión para explorar las carpetas del repositorio.</span>";
+        return;
+    }
+
+    const conn = window.Connections.getById(connectionId);
+    const repoConfig = conn && conn.config && conn.config.semanticRepo;
+    if (!repoConfig) return;
+
+    list.classList.add("is-empty");
+    list.innerHTML = "<span class=\"lkml-empty-hint\">Cargando…</span>";
+
+    try {
+        const items = await window.GitRepo.listContents(repoConfig, path);
+
+        if (items.length === 0) {
+            list.classList.add("is-empty");
+            list.innerHTML = "<span class=\"lkml-empty-hint\">Esta carpeta no tiene subcarpetas ni ficheros .lkml.</span>";
+            return;
+        }
+
+        list.classList.remove("is-empty");
+        list.innerHTML = "";
+        items.forEach(item => {
+            const row = document.createElement("div");
+            row.className = "lkml-server-item";
+            row.innerHTML = `<span>${item.type === "dir" ? "📁" : "📄"}</span><span>${item.name}</span>`;
+
+            if (item.type === "dir") {
+                row.addEventListener("click", () => {
+                    document.getElementById("lkmlSaveServerPath").value = item.path;
+                    updateServerList();
+                });
+            } else {
+                row.addEventListener("click", () => {
+                    list.querySelectorAll(".lkml-server-item.selected").forEach(el => el.classList.remove("selected"));
+                    row.classList.add("selected");
+                    document.getElementById("lkmlSaveServerFileName").value = item.name;
+                    updateConfirmButtonState();
+                });
+            }
+            list.appendChild(row);
+        });
+    } catch (err) {
+        console.error("Error al listar el repositorio:", err);
+        list.classList.add("is-empty");
+        list.innerHTML = `<span class="lkml-empty-hint">${err.message || "Error al listar el repositorio."}</span>`;
+    }
+}
+
+// Propone un nombre de fichero (<modelo>.lkml) en ambas pestañas al elegir
+// un modelo, si el usuario todavía no ha escrito uno propio.
+function prefillFileNames() {
+    const modelName = document.getElementById("lkmlSaveModelSelect").value;
+    if (!modelName) return;
+
+    const suggested = `${modelName}.lkml`;
+
+    const localInput = document.getElementById("lkmlSaveLocalFileName");
+    if (localInput && localInput.value.trim() === "") localInput.value = suggested;
+
+    const serverInput = document.getElementById("lkmlSaveServerFileName");
+    if (serverInput && serverInput.value.trim() === "") serverInput.value = suggested;
+}
+
 function updateConfirmButtonState() {
     const btn = document.getElementById("btnConfirmSaveLkml");
     if (!btn) return;
-    btn.disabled = document.getElementById("lkmlSaveModelSelect").value === "";
+
+    const modelName = document.getElementById("lkmlSaveModelSelect").value;
+    if (!modelName) {
+        btn.disabled = true;
+        return;
+    }
+
+    if (getActiveTab() === "local") {
+        const fileName = document.getElementById("lkmlSaveLocalFileName").value.trim();
+        btn.disabled = fileName === "";
+        return;
+    }
+
+    const connectionId = document.getElementById("lkmlSaveServerConnection").value;
+    const fileName = document.getElementById("lkmlSaveServerFileName").value.trim();
+    btn.disabled = !(connectionId && fileName !== "");
 }
 
-function setSaving(isSaving) {
+function setSaving(isSaving, label) {
     const btn = document.getElementById("btnConfirmSaveLkml");
     const cancelBtn = document.getElementById("btnCancelSaveLkml");
     if (!btn) return;
 
-    btn.textContent = isSaving ? "Guardando…" : "Guardar";
-    btn.disabled = isSaving || document.getElementById("lkmlSaveModelSelect").value === "";
+    btn.textContent = isSaving ? (label || "Guardando…") : "Guardar";
     if (cancelBtn) cancelBtn.disabled = isSaving;
+    if (isSaving) {
+        btn.disabled = true;
+    } else {
+        updateConfirmButtonState();
+    }
+}
+
+// Envía el LookML ya guardado (local o en el repositorio) a quien abrió el
+// diálogo, para que lo escriba en EDIT_REPORT!G1 (este diálogo no tiene
+// acceso a Excel). El diálogo se queda a la espera: lo cierra el padre al
+// terminar, o nos avisa del error si falla (ver el handler más abajo).
+function sendContentToParentForG1(modelName, content) {
+    setSaving(true, "Escribiendo en Excel…");
+    Office.context.ui.messageParent(JSON.stringify({ modelName, content }));
 }
 
 function initEvents() {
 
     document.getElementById("btnCancelSaveLkml").addEventListener("click", closeDialog);
 
-    document.getElementById("lkmlSaveModelSelect").addEventListener("change", updateConfirmButtonState);
+    document.getElementById("lkmlSaveTabServer").addEventListener("click", () => setActiveTab("server"));
+    document.getElementById("lkmlSaveTabLocal").addEventListener("click", () => setActiveTab("local"));
 
-    // "Guardar": genera el LookML del modelo elegido y se lo envía a quien
-    // abrió el diálogo (messageParent), que es quien tiene acceso a Excel
-    // para escribirlo en EDIT_REPORT!G1. El diálogo se queda a la espera:
-    // lo cierra el padre cuando termina, o nos avisa del error si falla.
-    document.getElementById("btnConfirmSaveLkml").addEventListener("click", () => {
+    document.getElementById("lkmlSaveModelSelect").addEventListener("change", () => {
+        prefillFileNames();
+        updateConfirmButtonState();
+    });
+
+    document.getElementById("lkmlSaveServerConnection").addEventListener("change", () => {
+        document.getElementById("lkmlSaveServerPath").value = "";
+        updateServerList();
+        updateConfirmButtonState();
+    });
+
+    document.getElementById("lkmlSaveServerUpBtn").addEventListener("click", () => {
+        const pathInput = document.getElementById("lkmlSaveServerPath");
+        const parts = pathInput.value.split("/").filter(Boolean);
+        parts.pop();
+        pathInput.value = parts.join("/");
+        updateServerList();
+    });
+
+    document.getElementById("lkmlSaveServerPath").addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        updateServerList();
+    });
+
+    document.getElementById("lkmlSaveServerFileName").addEventListener("input", updateConfirmButtonState);
+    document.getElementById("lkmlSaveLocalFileName").addEventListener("input", updateConfirmButtonState);
+
+    document.getElementById("btnConfirmSaveLkml").addEventListener("click", async () => {
 
         const modelName = document.getElementById("lkmlSaveModelSelect").value;
         if (!modelName) return;
@@ -132,15 +321,58 @@ function initEvents() {
             return;
         }
 
-        setSaving(true);
-        Office.context.ui.messageParent(JSON.stringify({ modelName, content }));
+        if (getActiveTab() === "local") {
+
+            const fileName = ensureLkmlExtension(document.getElementById("lkmlSaveLocalFileName").value);
+            if (!fileName) return;
+
+            try {
+                LkmlExport.downloadTextFile(fileName, content);
+            } catch (err) {
+                console.error("Error al descargar el fichero .lkml:", err);
+                showToast("Error al descargar el fichero: " + err.message, "error");
+                return;
+            }
+
+            sendContentToParentForG1(modelName, content);
+            return;
+        }
+
+        // Pestaña Servidor: commit real del fichero en el repositorio.
+        const connectionId = document.getElementById("lkmlSaveServerConnection").value;
+        const folder = document.getElementById("lkmlSaveServerPath").value.trim();
+        const fileName = ensureLkmlExtension(document.getElementById("lkmlSaveServerFileName").value);
+        if (!connectionId || !fileName) return;
+
+        const conn = window.Connections.getById(connectionId);
+        const repoConfig = conn && conn.config && conn.config.semanticRepo;
+        if (!repoConfig) {
+            showToast("La conexión elegida no tiene un repositorio configurado.", "error");
+            return;
+        }
+
+        const fullPath = joinRepoPath(folder, fileName);
+
+        setSaving(true, "Guardando en el repositorio…");
+        try {
+            await window.GitRepo.putFile(repoConfig, fullPath, content, `Actualiza ${fullPath} desde el editor de modelos semánticos`);
+        } catch (err) {
+            console.error("Error al guardar en el repositorio:", err);
+            setSaving(false);
+            showToast("Error al guardar en el repositorio: " + err.message, "error");
+            return;
+        }
+
+        sendContentToParentForG1(modelName, content);
 
     });
 
     // Si quien nos abrió no ha podido escribir en EDIT_REPORT!G1 (p.ej. la
     // hoja no existe o el libro está protegido), nos lo dice aquí para que
     // el usuario lo sepa y pueda reintentar en vez de quedarse sin saber
-    // qué ha pasado.
+    // qué ha pasado. El fichero (local o en el repositorio) ya se ha
+    // guardado en ese punto, así que solo se avisa del fallo al escribir
+    // en Excel.
     Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg) => {
 
         let payload = null;
@@ -152,7 +384,9 @@ function initEvents() {
 
         setSaving(false);
         showToast(
-            (payload && payload.error) ? `No se ha podido guardar: ${payload.error}` : "No se ha podido guardar.",
+            (payload && payload.error)
+                ? `El fichero se ha guardado, pero no se ha podido escribir en Excel: ${payload.error}`
+                : "El fichero se ha guardado, pero no se ha podido escribir en Excel.",
             "error"
         );
 
@@ -165,5 +399,9 @@ Office.onReady(() => {
 
     initEvents();
     populateModelSelect(active);
+    setActiveTab("server");
+    populateConnectionSelect();
+    updateServerList();
+    prefillFileNames();
     updateConfirmButtonState();
 });

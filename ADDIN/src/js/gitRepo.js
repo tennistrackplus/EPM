@@ -104,6 +104,114 @@ const GitRepo = {
             .sort(this._sortDirsFirst);
     },
 
+    /**
+     * Crea o actualiza un fichero en el repositorio (commit directo sobre la
+     * rama indicada). Si el fichero ya existe se sobrescribe (actualización);
+     * si no existe, se crea.
+     *
+     * repoConfig: { type: "github"|"gitlab", url, branch, token }
+     * path: ruta completa del fichero dentro del repo (carpeta + nombre)
+     * content: contenido de texto a guardar (UTF-8)
+     * commitMessage: mensaje de commit
+     */
+    async putFile(repoConfig, path, content, commitMessage) {
+        const type = repoConfig && repoConfig.type;
+        if (type === "github") return this._putGitHub(repoConfig, path, content, commitMessage);
+        if (type === "gitlab") return this._putGitLab(repoConfig, path, content, commitMessage);
+        throw new Error(`Tipo de repositorio no soportado todavía para guardar: "${type || "(ninguno)"}"`);
+    },
+
+    // btoa solo admite Latin1: hay que pasar por encodeURIComponent/escape
+    // para poder codificar en base64 un contenido UTF-8 sin perder acentos.
+    _toBase64Utf8(str) {
+        return btoa(unescape(encodeURIComponent(str)));
+    },
+
+    async _putGitHub(repoConfig, path, content, commitMessage) {
+        const ref = this.parseUrl(repoConfig.url);
+        if (!ref) throw new Error("URL de repositorio de GitHub no válida.");
+
+        const branch = (repoConfig.branch || "").trim();
+        const cleanPath = (path || "").replace(/^\/+|\/+$/g, "");
+        if (!cleanPath) throw new Error("Falta la ruta/nombre de fichero.");
+
+        const headers = { Accept: "application/vnd.github+json" };
+        if (repoConfig.token) headers.Authorization = `Bearer ${repoConfig.token}`;
+
+        const apiUrl = `https://api.github.com/repos/${ref.owner}/${ref.repo}/contents/${encodeURI(cleanPath)}`;
+
+        // Si el fichero ya existe hay que mandar su "sha" para actualizarlo
+        // en vez de que GitHub rechace la petición por conflicto.
+        let sha;
+        const getUrl = branch ? `${apiUrl}?ref=${encodeURIComponent(branch)}` : apiUrl;
+        const getRes = await fetch(getUrl, { headers });
+        if (getRes.ok) {
+            const existing = await getRes.json();
+            sha = existing.sha;
+        } else if (getRes.status !== 404) {
+            throw new Error(this._friendlyError(getRes.status, "GitHub"));
+        }
+
+        const body = {
+            message: commitMessage || `Actualiza ${cleanPath}`,
+            content: this._toBase64Utf8(content)
+        };
+        if (branch) body.branch = branch;
+        if (sha) body.sha = sha;
+
+        const putRes = await fetch(apiUrl, {
+            method: "PUT",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify(body)
+        });
+
+        if (!putRes.ok) {
+            const errBody = await putRes.json().catch(() => null);
+            throw new Error((errBody && errBody.message) ? `GitHub: ${errBody.message}` : this._friendlyError(putRes.status, "GitHub"));
+        }
+
+        return await putRes.json();
+    },
+
+    async _putGitLab(repoConfig, path, content, commitMessage) {
+        const ref = this.parseUrl(repoConfig.url);
+        if (!ref) throw new Error("URL de repositorio de GitLab no válida.");
+
+        const projectId = encodeURIComponent(`${ref.owner}/${ref.repo}`);
+        const branch = (repoConfig.branch || "").trim() || "main";
+        const cleanPath = (path || "").replace(/^\/+|\/+$/g, "");
+        if (!cleanPath) throw new Error("Falta la ruta/nombre de fichero.");
+
+        const fileUrl = `https://gitlab.com/api/v4/projects/${projectId}/repository/files/${encodeURIComponent(cleanPath)}`;
+        const authHeaders = repoConfig.token ? { "PRIVATE-TOKEN": repoConfig.token } : {};
+
+        // GitLab distingue crear (POST) de actualizar (PUT): hay que saber
+        // primero si el fichero ya existe en esa rama.
+        const getRes = await fetch(`${fileUrl}?ref=${encodeURIComponent(branch)}`, { headers: authHeaders });
+        if (!getRes.ok && getRes.status !== 404) {
+            throw new Error(this._friendlyError(getRes.status, "GitLab"));
+        }
+        const method = getRes.ok ? "PUT" : "POST";
+
+        const res = await fetch(fileUrl, {
+            method,
+            headers: { ...authHeaders, "Content-Type": "application/json" },
+            body: JSON.stringify({
+                branch,
+                content,
+                encoding: "text",
+                commit_message: commitMessage || `Actualiza ${cleanPath}`
+            })
+        });
+
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => null);
+            throw new Error((errBody && errBody.message) ? `GitLab: ${errBody.message}` : this._friendlyError(res.status, "GitLab"));
+        }
+
+        return await res.json();
+    },
+
     _sortDirsFirst(a, b) {
         if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
         return a.name.localeCompare(b.name);

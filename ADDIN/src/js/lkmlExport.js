@@ -164,6 +164,22 @@
         return lines.join("\n");
     }
 
-    window.LkmlExport = { buildContent };
+    // Descarga "content" como fichero de texto llamado "fileName" en el
+    // equipo del usuario (no requiere backend: Blob + enlace temporal).
+    function downloadTextFile(fileName, content) {
+        const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        URL.revokeObjectURL(url);
+    }
+
+    window.LkmlExport = { buildContent, downloadTextFile };
 
 })();
