@@ -156,11 +156,65 @@ function initEvents() {
 
     document.getElementById("btnGenerateModel").addEventListener("click",generateSemanticModelInExcel);
 
-    document.getElementById("btnOpenLkmlModel").addEventListener("click", openLkmlModal);
-    initLkmlModalEvents();
+    // "Abrir"/"Guardar" ya no muestran un popup dentro del taskpane: abren
+    // el mismo diálogo independiente (Office Dialog API) que usan los
+    // botones del ribbon "Abrir modelo semántico" / "Guardar modelo
+    // semántico" del manifiesto (ver commands.js), así que el
+    // comportamiento es idéntico se entre por donde se entre.
+    document.getElementById("btnOpenLkmlModel").addEventListener("click", openLkmlDialogFromTaskpane);
+    document.getElementById("btnSaveLkmlModel").addEventListener("click", openSaveLkmlDialogFromTaskpane);
 
-    document.getElementById("btnSaveLkmlModel").addEventListener("click", openSaveLkmlModal);
-    initSaveLkmlModalEvents();
+}
+
+/**
+ * Abre el diálogo independiente "Abrir modelo semántico (.lkml)"
+ * (openSemanticModel.html) con Office.context.ui.displayDialogAsync: la
+ * misma página que abre directamente el botón del ribbon "Abrir modelo
+ * semántico", para que el comportamiento no dependa de este taskpane.
+ */
+function openLkmlDialogFromTaskpane() {
+
+    const dialogUrl = new URL("openSemanticModel.html", window.location.href).href;
+
+    Office.context.ui.displayDialogAsync(
+        dialogUrl,
+        { height: 70, width: 45, displayInIframe: false },
+        (asyncResult) => {
+            if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                console.error("Error al abrir el diálogo de apertura de modelo semántico:", asyncResult.error);
+                showToast("No se ha podido abrir el diálogo: " + asyncResult.error.message, "error");
+            }
+        }
+    );
+
+}
+
+/**
+ * Abre el diálogo independiente "Guardar modelo semántico (.lkml)"
+ * (saveSemanticModel.html) con Office.context.ui.displayDialogAsync: la
+ * misma página que abre directamente el botón del ribbon "Guardar modelo
+ * semántico". El diálogo no tiene acceso a SemanticModelStore (no
+ * comparte el modelo de objetos del documento), así que aquí, que sí lo
+ * tenemos, le pasamos los modelos ya "aplanados" en JSON por querystring.
+ */
+function openSaveLkmlDialogFromTaskpane() {
+
+    const models = window.SemanticModelStore.getAllModels();
+    const active = currentModel || window.SemanticModelStore.getActiveModelName();
+
+    const query = `models=${encodeURIComponent(JSON.stringify(models))}&active=${encodeURIComponent(active)}`;
+    const dialogUrl = new URL(`saveSemanticModel.html?${query}`, window.location.href).href;
+
+    Office.context.ui.displayDialogAsync(
+        dialogUrl,
+        { height: 75, width: 45, displayInIframe: false },
+        (asyncResult) => {
+            if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                console.error("Error al abrir el diálogo de guardado de modelo semántico:", asyncResult.error);
+                showToast("No se ha podido abrir el diálogo: " + asyncResult.error.message, "error");
+            }
+        }
+    );
 
 }
 
@@ -1410,584 +1464,18 @@ async function generateSemanticModelInExcel() {
 }
 
 /* ============================================================
- * MODAL "ABRIR MODELO SEMÁNTICO" (LookML .lkml)
- * ------------------------------------------------------------
- * Dos pestañas:
- *   - Servidor: repositorio Git (GitHub/GitLab) indicado en la
- *     conexión activa/guardada. Por ahora solo el selector (conexión +
- *     ruta + listado); explorar y descargar el fichero real del
- *     repositorio queda para una fase posterior.
- *   - Local: fichero .lkml del equipo del usuario (selector de
- *     archivos nativo / arrastrar y soltar).
- * A propósito, esta pantalla NO procesa el fichero elegido: solo deja
- * "seleccionado" un origen (local o de servidor) para que un paso
- * posterior lo lea e importe.
+ * Los antiguos popups "Abrir modelo semántico (.lkml)" y "Guardar
+ * modelo semántico (.lkml)" (con sus pestañas Servidor/Local para
+ * GitHub/GitLab o fichero local) ya NO viven aquí como un modal
+ * superpuesto dentro del taskpane. Esa lógica se ha movido a dos
+ * páginas de diálogo independientes (Office.context.ui.displayDialogAsync),
+ * que se abren igual desde los botones del ribbon del manifiesto
+ * ("Abrir modelo semántico" / "Guardar modelo semántico", ver
+ * commands.js) que desde los botones "📂 Abrir" / "📤 LookML" de este
+ * taskpane (ver openLkmlDialogFromTaskpane() / openSaveLkmlDialogFromTaskpane()
+ * más arriba):
+ *   - js/openSemanticModelDialog.js  (openSemanticModel.html)
+ *   - js/saveSemanticModelDialog.js (saveSemanticModel.html)
+ *   - js/lkmlExport.js               (generación del contenido LookML,
+ *                                      compartida por el diálogo de guardado)
  * ============================================================ */
-
-let lkmlSelection = null; // { source: "local"|"server", file?: File, connectionId?, path? }
-
-function openLkmlModal() {
-    lkmlSelection = null;
-
-    // Pestaña por defecto: Servidor
-    setLkmlActiveTab("server");
-    document.getElementById("lkmlServerPath").value = "";
-
-    // Fichero local: limpiar selección anterior
-    const fileInput = document.getElementById("lkmlFileInput");
-    if (fileInput) fileInput.value = "";
-    const selectedFileBox = document.getElementById("lkmlSelectedFile");
-    if (selectedFileBox) selectedFileBox.style.display = "none";
-
-    populateLkmlConnectionSelect();
-    updateLkmlServerList();
-    updateLkmlConfirmButtonState();
-
-    document.getElementById("openLkmlModal").style.display = "block";
-}
-
-function closeLkmlModal() {
-    document.getElementById("openLkmlModal").style.display = "none";
-}
-
-function setLkmlActiveTab(tabId) {
-    document.getElementById("lkmlTabServer").classList.toggle("active", tabId === "server");
-    document.getElementById("lkmlTabLocal").classList.toggle("active", tabId === "local");
-    document.getElementById("lkmlPanelServer").classList.toggle("active", tabId === "server");
-    document.getElementById("lkmlPanelLocal").classList.toggle("active", tabId === "local");
-    updateLkmlConfirmButtonState();
-}
-
-// Rellena el selector de conexiones: solo las que tienen un repositorio de
-// modelos semánticos (GitHub/GitLab) configurado (ver "Repositorio de
-// modelos semánticos" en la pantalla de Conexión), que es el único caso
-// en el que la pestaña "Servidor" puede listar algo.
-function populateLkmlConnectionSelect() {
-    const select = document.getElementById("lkmlServerConnection");
-    if (!select) return;
-
-const connections = (typeof Connections !== "undefined" && typeof Connections.list === "function")
-    ? Connections.list() : [];
-    const withRepo = connections.filter(c => {
-        const repo = c.config && c.config.semanticRepo;
-        return repo && (repo.type === "github" || repo.type === "gitlab") && repo.url;
-    });
-
-    select.innerHTML = "";
-    if (withRepo.length === 0) {
-        select.innerHTML = "<option value=\"\">— Ninguna conexión tiene repositorio configurado —</option>";
-        select.disabled = true;
-        return;
-    }
-
-    select.disabled = false;
-    select.innerHTML = "<option value=\"\">— Selecciona una conexión —</option>";
-    withRepo.forEach(conn => {
-        const opt = document.createElement("option");
-        opt.value = conn.id;
-        opt.textContent = `${conn.name} (${conn.config.semanticRepo.type === "github" ? "GitHub" : "GitLab"})`;
-        select.appendChild(opt);
-    });
-
-    const activeId = Connections.getActiveId ? Connections.getActiveId() : null;
-    if (activeId && withRepo.some(c => c.id === activeId)) select.value = activeId;
-}
-
-// Lista el contenido de la carpeta actual del repositorio de la conexión
-// elegida (vía GitRepo: solo metadatos — nombre/ruta/tipo — nunca el
-// contenido de ningún fichero). Las carpetas navegan; los .lkml se
-// pueden seleccionar.
-async function updateLkmlServerList() {
-    const list = document.getElementById("lkmlServerList");
-    if (!list) return;
-
-    const connectionId = document.getElementById("lkmlServerConnection").value;
-    const path = document.getElementById("lkmlServerPath").value.trim();
-
-    if (!connectionId) {
-        list.classList.add("is-empty");
-        list.innerHTML = "<span class=\"lkml-empty-hint\">Selecciona una conexión para explorar los ficheros .lkml del repositorio.</span>";
-        return;
-    }
-
-   const conn = Connections.getById(connectionId);
-    const repoConfig = conn && conn.config && conn.config.semanticRepo;
-    if (!repoConfig) return;
-
-    list.classList.add("is-empty");
-    list.innerHTML = "<span class=\"lkml-empty-hint\">Cargando…</span>";
-
-    try {
-        const items = await GitRepo.listContents(repoConfig, path);
-
-        if (items.length === 0) {
-            list.classList.add("is-empty");
-            list.innerHTML = "<span class=\"lkml-empty-hint\">Esta carpeta no tiene subcarpetas ni ficheros .lkml.</span>";
-            return;
-        }
-
-        list.classList.remove("is-empty");
-        list.innerHTML = "";
-        items.forEach(item => {
-            const row = document.createElement("div");
-            row.className = "lkml-server-item";
-            row.innerHTML = `<span>${item.type === "dir" ? "📁" : "📄"}</span><span>${item.name}</span>`;
-
-            if (item.type === "dir") {
-                row.addEventListener("click", () => {
-                    document.getElementById("lkmlServerPath").value = item.path;
-                    lkmlSelection = null;
-                    updateLkmlConfirmButtonState();
-                    updateLkmlServerList();
-                });
-            } else {
-                row.addEventListener("click", () => {
-                    list.querySelectorAll(".lkml-server-item.selected").forEach(el => el.classList.remove("selected"));
-                    row.classList.add("selected");
-                    lkmlSelection = { source: "server", connectionId, path: item.path, name: item.name };
-                    updateLkmlConfirmButtonState();
-                });
-            }
-            list.appendChild(row);
-        });
-    } catch (err) {
-        console.error("Error al listar el repositorio:", err);
-        list.classList.add("is-empty");
-        list.innerHTML = `<span class="lkml-empty-hint">${err.message || "Error al listar el repositorio."}</span>`;
-    }
-}
-
-function updateLkmlConfirmButtonState() {
-    const btn = document.getElementById("btnConfirmOpenLkml");
-    if (!btn) return;
-    btn.disabled = !lkmlSelection;
-}
-
-function handleLkmlLocalFile(file) {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".lkml")) {
-        showToast("Selecciona un fichero con extensión .lkml", "error");
-        return;
-    }
-    lkmlSelection = { source: "local", file };
-
-    document.getElementById("lkmlSelectedFileName").textContent = file.name;
-    document.getElementById("lkmlSelectedFile").style.display = "flex";
-    updateLkmlConfirmButtonState();
-}
-
-function initLkmlModalEvents() {
-    document.getElementById("btnCloseOpenLkmlModal").addEventListener("click", closeLkmlModal);
-    document.getElementById("btnCancelOpenLkml").addEventListener("click", closeLkmlModal);
-
-    document.getElementById("lkmlTabServer").addEventListener("click", () => setLkmlActiveTab("server"));
-    document.getElementById("lkmlTabLocal").addEventListener("click", () => setLkmlActiveTab("local"));
-
-    document.getElementById("lkmlServerConnection").addEventListener("change", () => {
-        lkmlSelection = null;
-        document.getElementById("lkmlServerPath").value = "";
-        updateLkmlServerList();
-        updateLkmlConfirmButtonState();
-    });
-
-    document.getElementById("lkmlServerUpBtn").addEventListener("click", () => {
-        const pathInput = document.getElementById("lkmlServerPath");
-        const parts = pathInput.value.split("/").filter(Boolean);
-        parts.pop();
-        pathInput.value = parts.join("/");
-        lkmlSelection = null;
-        updateLkmlConfirmButtonState();
-        updateLkmlServerList();
-    });
-
-    document.getElementById("lkmlServerPath").addEventListener("keydown", (e) => {
-        if (e.key !== "Enter") return;
-        lkmlSelection = null;
-        updateLkmlConfirmButtonState();
-        updateLkmlServerList();
-    });
-
-    // Selector de fichero local: clic en la dropzone abre el <input type="file">
-    const dropzone = document.getElementById("lkmlDropzone");
-    const fileInput = document.getElementById("lkmlFileInput");
-
-    dropzone.addEventListener("click", () => fileInput.click());
-    fileInput.addEventListener("change", (e) => handleLkmlLocalFile(e.target.files && e.target.files[0]));
-
-    dropzone.addEventListener("dragover", (e) => {
-        e.preventDefault();
-        dropzone.classList.add("dragover");
-    });
-    dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
-    dropzone.addEventListener("drop", (e) => {
-        e.preventDefault();
-        dropzone.classList.remove("dragover");
-        const file = e.dataTransfer.files && e.dataTransfer.files[0];
-        handleLkmlLocalFile(file);
-    });
-
-    // "Seleccionar": por ahora no hace nada con el fichero, solo confirma
-    // el origen elegido y cierra el modal (la importación real del LookML
-    // se conectará en un paso posterior).
-    document.getElementById("btnConfirmOpenLkml").addEventListener("click", () => {
-        if (!lkmlSelection) return;
-        const label = lkmlSelection.source === "local"
-            ? lkmlSelection.file.name
-            : lkmlSelection.name;
-        showToast(`Fichero seleccionado: ${label}`, "success");
-        closeLkmlModal();
-    });
-}
-
-/* ============================================================
- * MODAL "GUARDAR MODELO SEMÁNTICO COMO LOOKML" (.lkml)
- * ------------------------------------------------------------
- * Misma pantalla que "Abrir" (selector de modelo semántico +
- * pestañas Servidor / Local), pero al revés: en lugar de traer un
- * .lkml, genera el LookML del modelo elegido y lo guarda.
- *   - Servidor: repositorio Git (GitHub/GitLab) de la conexión
- *     seleccionada. Aquí solo se deja elegido el destino
- *     (conexión + carpeta + nombre de fichero); el guardado real
- *     contra el repositorio (commit/push) se conectará en un paso
- *     posterior, igual que la importación en el modal "Abrir".
- *   - Local: no hay que arrastrar nada — se indica el nombre de
- *     fichero y el botón "Guardar" descarga el .lkml al equipo.
- * La generación del contenido LookML en sí (a partir de fact,
- * dimensiones, medidas, relaciones y jerarquías del modelo) se
- * completará en un paso posterior; por ahora buildLkmlContent()
- * deja una plantilla mínima lista para ampliar.
- * ============================================================ */
-
-let lkmlSaveSelection = null; // { source: "local"|"server", connectionId?, path? }
-
-function openSaveLkmlModal() {
-
-    lkmlSaveSelection = null;
-
-    // Pestaña por defecto: Servidor
-    setLkmlSaveActiveTab("server");
-    document.getElementById("lkmlSaveServerPath").value = "";
-    document.getElementById("lkmlSaveServerFileName").value = "";
-    document.getElementById("lkmlSaveLocalFileName").value = "";
-
-    populateLkmlSaveModelSelect();
-    populateLkmlSaveConnectionSelect();
-    updateLkmlSaveServerList();
-    prefillLkmlSaveFileNames();
-    updateSaveLkmlConfirmButtonState();
-
-    document.getElementById("saveLkmlModal").style.display = "block";
-
-}
-
-function closeSaveLkmlModal() {
-    document.getElementById("saveLkmlModal").style.display = "none";
-}
-
-// Selector de modelo semántico del modal de guardado: mismas opciones que
-// el selector principal (debajo del botón "+"), a partir de
-// SemanticModelStore.listModelNames(). Si hay un modelo cargado en el
-// panel principal, se preselecciona.
-function populateLkmlSaveModelSelect() {
-
-    const select = document.getElementById("lkmlSaveModelSelect");
-    if (!select) return;
-
-    const models = window.SemanticModelStore.listModelNames();
-
-    select.innerHTML = '<option value="">— Sin modelo seleccionado —</option>';
-
-    models.forEach(model => {
-        const option = document.createElement("option");
-        option.value = model;
-        option.text = model;
-        select.appendChild(option);
-    });
-
-    if (currentModel && models.includes(currentModel)) {
-        select.value = currentModel;
-    }
-
-}
-
-function setLkmlSaveActiveTab(tabId) {
-    document.getElementById("lkmlSaveTabServer").classList.toggle("active", tabId === "server");
-    document.getElementById("lkmlSaveTabLocal").classList.toggle("active", tabId === "local");
-    document.getElementById("lkmlSavePanelServer").classList.toggle("active", tabId === "server");
-    document.getElementById("lkmlSavePanelLocal").classList.toggle("active", tabId === "local");
-    updateSaveLkmlConfirmButtonState();
-}
-
-// Rellena el selector de conexiones con las que tienen repositorio de
-// modelos semánticos configurado (mismo criterio que en "Abrir").
-function populateLkmlSaveConnectionSelect() {
-    const select = document.getElementById("lkmlSaveServerConnection");
-    if (!select) return;
-
-    const connections = (window.Connections && typeof window.Connections.list === "function")
-        ? window.Connections.list() : [];
-    const withRepo = connections.filter(c => {
-        const repo = c.config && c.config.semanticRepo;
-        return repo && (repo.type === "github" || repo.type === "gitlab") && repo.url;
-    });
-
-    select.innerHTML = "";
-    if (withRepo.length === 0) {
-        select.innerHTML = "<option value=\"\">— Ninguna conexión tiene repositorio configurado —</option>";
-        select.disabled = true;
-        return;
-    }
-
-    select.disabled = false;
-    select.innerHTML = "<option value=\"\">— Selecciona una conexión —</option>";
-    withRepo.forEach(conn => {
-        const opt = document.createElement("option");
-        opt.value = conn.id;
-        opt.textContent = `${conn.name} (${conn.config.semanticRepo.type === "github" ? "GitHub" : "GitLab"})`;
-        select.appendChild(opt);
-    });
-
-    const activeId = window.Connections.getActiveId ? window.Connections.getActiveId() : null;
-    if (activeId && withRepo.some(c => c.id === activeId)) select.value = activeId;
-}
-
-// Lista el contenido de la carpeta actual del repositorio (navegación de
-// carpetas, igual que en "Abrir"). Aquí es solo para elegir el destino:
-// al hacer clic en un .lkml existente se propone como nombre de fichero
-// (para sobrescribirlo), pero no se lee su contenido.
-async function updateLkmlSaveServerList() {
-    const list = document.getElementById("lkmlSaveServerList");
-    if (!list) return;
-
-    const connectionId = document.getElementById("lkmlSaveServerConnection").value;
-    const path = document.getElementById("lkmlSaveServerPath").value.trim();
-
-    if (!connectionId) {
-        list.classList.add("is-empty");
-        list.innerHTML = "<span class=\"lkml-empty-hint\">Selecciona una conexión para explorar las carpetas del repositorio.</span>";
-        return;
-    }
-
-    const conn = window.Connections.getById(connectionId);
-    const repoConfig = conn && conn.config && conn.config.semanticRepo;
-    if (!repoConfig) return;
-
-    list.classList.add("is-empty");
-    list.innerHTML = "<span class=\"lkml-empty-hint\">Cargando…</span>";
-
-    try {
-        const items = await window.GitRepo.listContents(repoConfig, path);
-
-        if (items.length === 0) {
-            list.classList.add("is-empty");
-            list.innerHTML = "<span class=\"lkml-empty-hint\">Esta carpeta no tiene subcarpetas ni ficheros .lkml.</span>";
-            return;
-        }
-
-        list.classList.remove("is-empty");
-        list.innerHTML = "";
-        items.forEach(item => {
-            const row = document.createElement("div");
-            row.className = "lkml-server-item";
-            row.innerHTML = `<span>${item.type === "dir" ? "📁" : "📄"}</span><span>${item.name}</span>`;
-
-            if (item.type === "dir") {
-                row.addEventListener("click", () => {
-                    document.getElementById("lkmlSaveServerPath").value = item.path;
-                    updateLkmlSaveServerList();
-                });
-            } else {
-                row.addEventListener("click", () => {
-                    list.querySelectorAll(".lkml-server-item.selected").forEach(el => el.classList.remove("selected"));
-                    row.classList.add("selected");
-                    document.getElementById("lkmlSaveServerFileName").value = item.name;
-                    updateSaveLkmlConfirmButtonState();
-                });
-            }
-            list.appendChild(row);
-        });
-    } catch (err) {
-        console.error("Error al listar el repositorio:", err);
-        list.classList.add("is-empty");
-        list.innerHTML = `<span class="lkml-empty-hint">${err.message || "Error al listar el repositorio."}</span>`;
-    }
-}
-
-// Propone un nombre de fichero (<modelo>.lkml) en ambas pestañas al elegir
-// un modelo, si el usuario todavía no ha escrito uno propio.
-function prefillLkmlSaveFileNames() {
-    const modelName = document.getElementById("lkmlSaveModelSelect").value;
-    if (!modelName) return;
-
-    const suggested = `${modelName}.lkml`;
-
-    const localInput = document.getElementById("lkmlSaveLocalFileName");
-    if (localInput && localInput.value.trim() === "") localInput.value = suggested;
-
-    const serverInput = document.getElementById("lkmlSaveServerFileName");
-    if (serverInput && serverInput.value.trim() === "") serverInput.value = suggested;
-}
-
-function updateSaveLkmlConfirmButtonState() {
-    const btn = document.getElementById("btnConfirmSaveLkml");
-    if (!btn) return;
-
-    const modelName = document.getElementById("lkmlSaveModelSelect").value;
-    const activeTab = document.getElementById("lkmlSaveTabLocal").classList.contains("active") ? "local" : "server";
-
-    if (!modelName) {
-        btn.disabled = true;
-        return;
-    }
-
-    if (activeTab === "local") {
-        const fileName = document.getElementById("lkmlSaveLocalFileName").value.trim();
-        btn.disabled = fileName === "";
-        return;
-    }
-
-    const connectionId = document.getElementById("lkmlSaveServerConnection").value;
-    const fileName = document.getElementById("lkmlSaveServerFileName").value.trim();
-    btn.disabled = !(connectionId && fileName !== "");
-}
-
-/**
- * Genera el contenido LookML del modelo indicado.
- *
- * TODO (paso posterior): construir el LookML real a partir de
- * fact/fieldsState del modelo (dimensiones, medidas, relaciones y
- * jerarquías). Por ahora deja una plantilla mínima con la tabla de
- * hechos y el listado de campos, para que el botón "Guardar" ya
- * produzca un fichero .lkml válido y descargable.
- */
-function buildLkmlContent(modelName) {
-
-    const model = window.SemanticModelStore.getModel(modelName);
-    const fact = (model && model.fact) || { project: "", dataset: "", table: "" };
-    const fields = (model && model.fields) || [];
-
-    const viewName = modelName.toLowerCase().replace(/[^a-z0-9_]+/g, "_");
-    const sqlTableName = [fact.project, fact.dataset, fact.table].filter(Boolean).join(".");
-
-    const lines = [];
-    lines.push(`view: ${viewName} {`);
-    if (sqlTableName) {
-        lines.push(`  sql_table_name: \`${sqlTableName}\` ;;`);
-    }
-    lines.push("");
-
-    fields.forEach(field => {
-        const fieldName = (field.alias || field.name || "").toLowerCase().replace(/[^a-z0-9_]+/g, "_");
-        if (!fieldName) return;
-
-        if (field.type === "measure") {
-            lines.push(`  measure: ${fieldName} {`);
-            lines.push(`    type: ${(field.aggregation || "sum").toLowerCase()}`);
-            lines.push(`    sql: \${TABLE}.${field.name} ;;`);
-            lines.push("  }");
-        } else {
-            lines.push(`  dimension: ${fieldName} {`);
-            lines.push(`    sql: \${TABLE}.${field.name} ;;`);
-            lines.push("  }");
-        }
-        lines.push("");
-    });
-
-    lines.push("}");
-
-    return lines.join("\n");
-}
-
-// Descarga "content" como fichero de texto llamado "fileName" en el
-// equipo del usuario (no requiere backend: Blob + enlace temporal).
-function downloadTextFile(fileName, content) {
-    const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-
-    URL.revokeObjectURL(url);
-}
-
-function initSaveLkmlModalEvents() {
-
-    document.getElementById("btnCloseSaveLkmlModal").addEventListener("click", closeSaveLkmlModal);
-    document.getElementById("btnCancelSaveLkml").addEventListener("click", closeSaveLkmlModal);
-
-    document.getElementById("lkmlSaveTabServer").addEventListener("click", () => setLkmlSaveActiveTab("server"));
-    document.getElementById("lkmlSaveTabLocal").addEventListener("click", () => setLkmlSaveActiveTab("local"));
-
-    document.getElementById("lkmlSaveModelSelect").addEventListener("change", () => {
-        prefillLkmlSaveFileNames();
-        updateSaveLkmlConfirmButtonState();
-    });
-
-    document.getElementById("lkmlSaveServerConnection").addEventListener("change", () => {
-        document.getElementById("lkmlSaveServerPath").value = "";
-        updateLkmlSaveServerList();
-        updateSaveLkmlConfirmButtonState();
-    });
-
-    document.getElementById("lkmlSaveServerUpBtn").addEventListener("click", () => {
-        const pathInput = document.getElementById("lkmlSaveServerPath");
-        const parts = pathInput.value.split("/").filter(Boolean);
-        parts.pop();
-        pathInput.value = parts.join("/");
-        updateLkmlSaveServerList();
-    });
-
-    document.getElementById("lkmlSaveServerPath").addEventListener("keydown", (e) => {
-        if (e.key !== "Enter") return;
-        updateLkmlSaveServerList();
-    });
-
-    document.getElementById("lkmlSaveServerFileName").addEventListener("input", updateSaveLkmlConfirmButtonState);
-    document.getElementById("lkmlSaveLocalFileName").addEventListener("input", updateSaveLkmlConfirmButtonState);
-
-    // "Guardar": en Local descarga el .lkml al equipo; en Servidor, por
-    // ahora, solo confirma el destino elegido (el commit/push real al
-    // repositorio se conectará en un paso posterior).
-    document.getElementById("btnConfirmSaveLkml").addEventListener("click", () => {
-
-        const modelName = document.getElementById("lkmlSaveModelSelect").value;
-        if (!modelName) return;
-
-        const activeTab = document.getElementById("lkmlSaveTabLocal").classList.contains("active") ? "local" : "server";
-
-        if (activeTab === "local") {
-
-            let fileName = document.getElementById("lkmlSaveLocalFileName").value.trim();
-            if (!fileName) return;
-            if (!fileName.toLowerCase().endsWith(".lkml")) fileName += ".lkml";
-
-            try {
-                const content = buildLkmlContent(modelName);
-                downloadTextFile(fileName, content);
-                showToast(`Fichero "${fileName}" descargado.`, "success");
-                closeSaveLkmlModal();
-            } catch (err) {
-                console.error("Error al generar el LookML:", err);
-                showToast("Error al generar el LookML: " + err.message, "error");
-            }
-
-            return;
-        }
-
-        // Pestaña Servidor: todavía no hay commit/push real al repositorio.
-        const connectionId = document.getElementById("lkmlSaveServerConnection").value;
-        const path = document.getElementById("lkmlSaveServerPath").value.trim();
-        const fileName = document.getElementById("lkmlSaveServerFileName").value.trim();
-        if (!connectionId || !fileName) return;
-
-        lkmlSaveSelection = { source: "server", connectionId, path, fileName };
-        showToast("Destino seleccionado. El guardado en el repositorio del servidor estará disponible en una fase posterior.", "success");
-        closeSaveLkmlModal();
-
-    });
-
-}
