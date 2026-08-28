@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Guardar modelo semántico (.lkml)</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/lkmlDialog.css">
+</head>
+<body>
+
+    <div id="appToastContainer" aria-live="polite"></div>
+
+    <div class="dialog-page">
+
+        <div class="dialog-header">
+            <h3>Guardar modelo semántico (.lkml)</h3>
+            <span class="dialog-subtitle">Exporta un modelo a un repositorio o descárgalo como fichero local</span>
+        </div>
+
+        <div class="dialog-body">
+
+            <label class="lkml-field-label" for="lkmlSaveModelSelect">Modelo semántico</label>
+            <select class="lkml-select" id="lkmlSaveModelSelect">
+                <option value="">— Sin modelo seleccionado —</option>
+            </select>
+
+            <div class="lkml-tabs">
+                <div class="lkml-tab active" id="lkmlSaveTabServer" data-tab="server">Servidor</div>
+                <div class="lkml-tab" id="lkmlSaveTabLocal" data-tab="local">Local</div>
+            </div>
+
+            <!-- PESTAÑA SERVIDOR: repositorio Git (GitHub/GitLab) de la conexión -->
+            <div class="lkml-tab-panel active" id="lkmlSavePanelServer">
+                <label class="lkml-field-label" for="lkmlSaveServerConnection">Conexión</label>
+                <select class="lkml-select" id="lkmlSaveServerConnection">
+                    <option value="">— Sin conexiones guardadas —</option>
+                </select>
+
+                <label class="lkml-field-label" for="lkmlSaveServerPath">Ruta / carpeta en el repositorio</label>
+                <div style="display:flex; gap:6px;">
+                    <input type="text" class="lkml-input" id="lkmlSaveServerPath" placeholder="raíz del repositorio" style="flex:1;" />
+                    <button type="button" class="icon-btn" id="lkmlSaveServerUpBtn" title="Subir un nivel">⬆</button>
+                </div>
+
+                <div class="lkml-server-list" id="lkmlSaveServerList">
+                    <span class="lkml-empty-hint">Selecciona una conexión para explorar las carpetas del repositorio.</span>
+                </div>
+
+                <label class="lkml-field-label" for="lkmlSaveServerFileName">Nombre de fichero</label>
+                <input type="text" class="lkml-input" id="lkmlSaveServerFileName" placeholder="modelo.lkml" />
+            </div>
+
+            <!-- PESTAÑA LOCAL: se indica el nombre y se guarda con el botón "Guardar" del pie -->
+            <div class="lkml-tab-panel" id="lkmlSavePanelLocal">
+                <label class="lkml-field-label" for="lkmlSaveLocalFileName">Nombre de fichero</label>
+                <input type="text" class="lkml-input" id="lkmlSaveLocalFileName" placeholder="modelo.lkml" />
+                <p class="lkml-hint-text">
+                    Pulsa <strong>Guardar</strong> para descargar el fichero .lkml a tu equipo.
+                </p>
+            </div>
+
+        </div>
+
+        <div class="lkml-modal-footer">
+            <button type="button" class="icon-btn" id="btnCancelSaveLkml">Cancelar</button>
+            <button type="button" class="btn-generate" id="btnConfirmSaveLkml" disabled>Guardar</button>
+        </div>
+
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/connections.js"></script>
+    <script src="js/gitRepo.js"></script>
+    <script src="js/lkmlExport.js"></script>
+    <script src="js/saveSemanticModelDialog.js"></script>
+</body>
+</html>
