@@ -746,8 +746,9 @@
             </div>
         </div>
 
-        <!-- CAJA 2: TABLA DE HECHOS -->
-        <div class="card compact">
+        <!-- CAJA 2: TABLA DE HECHOS (oculta hasta que haya un modelo semántico
+             seleccionado o creado: ver setFactCardVisible() en semantic_model.js) -->
+        <div class="card compact" id="factTableCard" style="display: none;">
             <div class="card-header">
                 <div class="card-title-group">
                     <span class="card-title">Tabla de hechos</span>
@@ -922,6 +923,7 @@
     <script src="js/provider.js"></script>
     <script src="js/semanticModelStore.js"></script>
     <script src="js/lkmlSaveBridge.js"></script>
+    <script src="js/lkmlOpenBridge.js"></script>
     <script src="js/semantic_model.js"></script>
 </body>
 </html>
