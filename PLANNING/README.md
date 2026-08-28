@@ -359,6 +359,31 @@ el mismo cubo dos veces se **sobrescribe** el mismo fichero
 (`overwrite=True` en `session.file.put_stream()`), no se acumulan
 versiones.
 
+### 8bis. LookML (.lkml) en GitHub — solo BigQuery
+
+Cuando el proveedor activo es **BigQuery**, al guardar un cubo (además
+del YAML de arriba) Draco genera también su equivalente **.lkml**
+(`js/lkml-export.js`, mismo formato que ya exporta el add-in de Excel
+en `ADDIN/src/js/lkmlExport.js`: un `view` con la tabla de hechos y sus
+measures, un `view` por dimensión con sus atributos/PK y jerarquías
+documentadas como comentario, y un `explore` con los joins) y hace
+commit directo de ese fichero en el repositorio de GitHub configurado
+en `js/config.js` → `DracoConfig.semanticModelGithub` (por defecto,
+`https://github.com/tennistrackplus/SEMANTIC_MODEL`), vía la API REST
+de contenidos (`js/github-repo.js`, mismo mecanismo que
+`ADDIN/src/js/gitRepo.js`). Ruta dentro del repo (misma carpeta y
+nombre que el YAML, solo cambia la extensión):
+
+```
+semantic_models/<PROYECTO_identificador>/<CUBO_identificador>.lkml
+```
+
+Hace falta rellenar `DracoConfig.semanticModelGithub.token` con un
+Personal Access Token de GitHub con permiso de escritura sobre el
+repo. Igual que el YAML, esto **nunca bloquea el guardado del cubo**:
+si falla la generación o la subida (falta el token, sin conexión,
+repo/rama no encontrados...), solo se avisa por toast.
+
 Estructura completa (los tipos entre paréntesis son orientativos):
 
 ```yaml
