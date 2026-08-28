@@ -197,24 +197,21 @@ function openLkmlDialogFromTaskpane() {
  * comparte el modelo de objetos del documento), así que aquí, que sí lo
  * tenemos, le pasamos los modelos ya "aplanados" en JSON por querystring.
  */
+/**
+ * Abre el diálogo independiente "Guardar modelo semántico (.lkml)"
+ * (saveSemanticModel.html) con Office.context.ui.displayDialogAsync: la
+ * misma página que abre directamente el botón del ribbon "Guardar modelo
+ * semántico". La escritura real en EDIT_REPORT!G1 la hace LkmlSaveBridge
+ * (ver js/lkmlSaveBridge.js), que sí tiene acceso a Excel.run desde este
+ * taskpane, ya que el propio diálogo no tiene acceso al modelo de
+ * objetos del documento.
+ */
 function openSaveLkmlDialogFromTaskpane() {
 
     const models = window.SemanticModelStore.getAllModels();
     const active = currentModel || window.SemanticModelStore.getActiveModelName();
 
-    const query = `models=${encodeURIComponent(JSON.stringify(models))}&active=${encodeURIComponent(active)}`;
-    const dialogUrl = new URL(`saveSemanticModel.html?${query}`, window.location.href).href;
-
-    Office.context.ui.displayDialogAsync(
-        dialogUrl,
-        { height: 75, width: 45, displayInIframe: false },
-        (asyncResult) => {
-            if (asyncResult.status === Office.AsyncResultStatus.Failed) {
-                console.error("Error al abrir el diálogo de guardado de modelo semántico:", asyncResult.error);
-                showToast("No se ha podido abrir el diálogo: " + asyncResult.error.message, "error");
-            }
-        }
-    );
+    window.LkmlSaveBridge.openSaveLkmlDialog(models, active);
 
 }
 

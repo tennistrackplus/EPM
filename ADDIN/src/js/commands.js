@@ -6,6 +6,53 @@ Office.onReady(() => {
 });
 
 /**
+ * Botón de ribbon "Abrir modelo semántico" (ModeloAbrirButton).
+ * Abre directamente el diálogo independiente de importación LookML
+ * (Office.context.ui.displayDialogAsync), sin depender de que el taskpane
+ * del modelo semántico esté abierto ni de ningún popup dentro de él.
+ * @param {Office.AddinCommands.Event} event
+ */
+function abrirModeloSemantico(event) {
+    try {
+        const dialogUrl = new URL("openSemanticModel.html", window.location.href).href;
+
+        Office.context.ui.displayDialogAsync(
+            dialogUrl,
+            { height: 70, width: 45, displayInIframe: false },
+            (asyncResult) => {
+                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                    console.error("Error al abrir el diálogo de apertura de modelo semántico:", asyncResult.error);
+                }
+            }
+        );
+    } catch (error) {
+        console.error("Error al abrir el diálogo de apertura de modelo semántico:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+/**
+ * Botón de ribbon "Guardar modelo semántico" (ModeloGuardarButton).
+ * Abre directamente el diálogo independiente de exportación a LookML; la
+ * escritura real en EDIT_REPORT!G1 la hace LkmlSaveBridge (ver
+ * js/lkmlSaveBridge.js), que sí tiene acceso a Excel.run desde este mismo
+ * runtime de comandos.
+ * @param {Office.AddinCommands.Event} event
+ */
+function guardarModeloSemantico(event) {
+    try {
+        const models = window.SemanticModelStore.getAllModels();
+        const active = window.SemanticModelStore.getActiveModelName();
+        window.LkmlSaveBridge.openSaveLkmlDialog(models, active);
+    } catch (error) {
+        console.error("Error al abrir el diálogo de guardado de modelo semántico:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+/**
  * Función que maneja el botón 'Ocultar panel' (HidePaneButton) definido en el manifiesto
  * @param {Office.AddinCommands.Event} event
  */
@@ -3811,6 +3858,8 @@ async function openFieldOptions(event) {
 // por si el host no expone esa API fuera de ese contexto.
 try {
     Office.actions.associate("hidePane", hidePane);
+    Office.actions.associate("abrirModeloSemantico", abrirModeloSemantico);
+    Office.actions.associate("guardarModeloSemantico", guardarModeloSemantico);
     Office.actions.associate("writeHolaInA1", writeHolaInA1);
     Office.actions.associate("actualizarInformeFixed", actualizarInformeFixed);
     Office.actions.associate("actualizarInforme", actualizarInforme);
