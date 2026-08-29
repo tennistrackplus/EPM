@@ -962,6 +962,10 @@ const TableUpdates = {
         this.runFields = this.safeParse(record.CAMPOS_JSON, []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         this.gridState = null;
         this.selOptState = {};
+        // Si la pantalla no tiene variables definidas, no tiene sentido mostrar
+        // esa pestaña ni pedir al usuario que pulse "Cargar tabla": se muestra
+        // únicamente la pestaña Tabla y se carga directamente al abrir.
+        this.hasScreenVars = this.runScreen.blocks.length > 0;
 
         let overlay = document.getElementById("actUpdRunModal");
         if (!overlay) {
@@ -982,25 +986,49 @@ const TableUpdates = {
                     <button class="modal-close" id="actUpdRunClose">&times;</button>
                 </div>
                 <div class="flow-run-tabs" id="actUpdRunTabs">
-                    <button type="button" class="flow-run-tab active" id="actUpdRunTabScreen">Pantalla de variables</button>
-                    <button type="button" class="flow-run-tab" id="actUpdRunTabTable">📋 Tabla</button>
+                    ${this.hasScreenVars ? `<button type="button" class="flow-run-tab active" id="actUpdRunTabScreen">Pantalla de variables</button>` : ""}
+                    <button type="button" class="flow-run-tab ${this.hasScreenVars ? "" : "active"}" id="actUpdRunTabTable">📋 Tabla</button>
                 </div>
                 <div class="modal-body modal-body-flush" id="actUpdRunBody"></div>
             </div>`;
 
         document.getElementById("actUpdRunClose").addEventListener("click", () => overlay.remove());
-        document.getElementById("actUpdRunTabScreen").addEventListener("click", () => this.switchRunTab("screen"));
+        const screenTabBtn = document.getElementById("actUpdRunTabScreen");
+        if (screenTabBtn) screenTabBtn.addEventListener("click", () => this.switchRunTab("screen"));
         document.getElementById("actUpdRunTabTable").addEventListener("click", () => this.switchRunTab("table"));
 
-        this.switchRunTab("screen");
+        if (this.hasScreenVars) {
+            this.switchRunTab("screen");
+        } else {
+            this.runView = "table";
+            this.autoLoadRunTable();
+        }
     },
 
     switchRunTab(tab) {
         this.runView = tab;
-        document.getElementById("actUpdRunTabScreen").classList.toggle("active", tab === "screen");
+        const screenTabBtn = document.getElementById("actUpdRunTabScreen");
+        if (screenTabBtn) screenTabBtn.classList.toggle("active", tab === "screen");
         document.getElementById("actUpdRunTabTable").classList.toggle("active", tab === "table");
         if (tab === "screen") this.renderRunScreenView();
         else this.renderRunTableView();
+    },
+
+    /** Carga la tabla directamente al abrir, sin pasar por la pantalla de
+     *  variables (usado cuando la actualización no tiene variables definidas). */
+    async autoLoadRunTable() {
+        const body = document.getElementById("actUpdRunBody");
+        if (body) body.innerHTML = `<div class="module-empty"><span class="spinner"></span> Cargando datos...</div>`;
+        try {
+            const where = this.buildWhere(this.runFields, {});
+            const table = Provider.qualify(this.project.DATASET, this.runRecord.TABLA);
+            const rows = await Provider.runQuery(`SELECT * FROM ${table} ${where}`);
+            await this.buildGridState(this.runRecord, this.runFields, rows, where);
+            this.renderRunTableView();
+        } catch (err) {
+            UI.toast("Error al cargar la tabla: " + err.message, "error");
+            if (body) body.innerHTML = `<div class="module-empty">Error al cargar la tabla.</div>`;
+        }
     },
 
     // ---------------- Pestaña 1: pantalla de variables ----------------
@@ -1326,7 +1354,9 @@ const TableUpdates = {
     renderRunTableView() {
         const body = document.getElementById("actUpdRunBody");
         if (!this.gridState) {
-            body.innerHTML = `<div class="module-empty">Todavía no se ha cargado la tabla. Pulsa "▶ Cargar tabla" en la pestaña "Pantalla de variables".</div>`;
+            body.innerHTML = this.hasScreenVars
+                ? `<div class="module-empty">Todavía no se ha cargado la tabla. Pulsa "▶ Cargar tabla" en la pestaña "Pantalla de variables".</div>`
+                : `<div class="module-empty">Todavía no se ha cargado la tabla.</div>`;
             return;
         }
         const state = this.gridState;
@@ -1428,11 +1458,17 @@ const TableUpdates = {
     renderGrid() {
         const state = this.gridState;
         const wrap = document.getElementById("actUpdGridWrap");
+
+        // Sin filas no tiene sentido pintar las columnas: se muestra un aviso
+        // y el usuario decide si añade una fila manualmente (lo que sí pinta
+        // ya las columnas) en vez de forzar siempre una fila en blanco.
         if (!state.currentRows.length) {
-            const blank = {};
-            state.columns.forEach(c => { blank[c] = ""; });
-            state.currentRows.push({ ...blank, __rowId: Provider.newId(), __isNew: true });
+            wrap.innerHTML = `<div class="module-empty module-empty--inline">No hay datos en esta tabla. Usa "+ Añadir fila" para empezar a cargar registros.</div>`;
+            const countEl = document.getElementById("actUpdGridCount");
+            if (countEl) countEl.textContent = "0 fila(s)";
+            return;
         }
+
         const filtered = this.getFilteredSortedRows();
         const visible = filtered.slice(0, state.visibleCount);
 
