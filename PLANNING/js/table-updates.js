@@ -1388,7 +1388,7 @@ const TableUpdates = {
                 <span class="values-row-count" id="actUpdGridCount"></span>
                 <button class="btn btn-primary btn-sm" id="actUpdGridSave">Grabar</button>
             </div>
-            <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). Filtra escribiendo bajo el nombre de cada columna. Marca la casilla de varias filas (Mayús+clic para seleccionar un rango) y usa "🗑 Eliminar seleccionadas" para borrarlas de golpe. "Grabar" sustituye estas filas en la tabla; la clave (${UI.escapeHtml(state.columns[0])}) debe ser única.</p>
+            <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). Filtra escribiendo bajo el nombre de cada columna. Marca la casilla de varias filas (Mayús+clic para seleccionar un rango) y usa "🗑 Eliminar seleccionadas" para borrarlas de golpe. "Grabar" sustituye estas filas en la tabla; la clave (${UI.escapeHtml(this.getKeyColumns(state).join(" + "))}) debe ser única.</p>
             <div class="values-grid-wrap values-grid-wrap--modal" id="actUpdGridWrap"><span class="spinner"></span></div>`;
 
         document.getElementById("actUpdGridAddRow").addEventListener("click", () => {
@@ -1562,8 +1562,8 @@ const TableUpdates = {
             <table class="values-grid actupd-values-grid">
                 <colgroup>${colsHtml}</colgroup>
                 <thead>
-                    <tr><th class="values-row-select"><input type="checkbox" id="actUpdSelectAll" ${allFilteredSelected ? "checked" : ""}></th>${headerCells}<th></th></tr>
-                    <tr><th class="values-row-select"></th>${filterCells}<th></th></tr>
+                    <tr><th class="values-row-select"><input type="checkbox" id="actUpdSelectAll" ${allFilteredSelected ? "checked" : ""}></th>${headerCells}<th class="values-row-remove"></th></tr>
+                    <tr><th class="values-row-select"></th>${filterCells}<th class="values-row-remove"></th></tr>
                 </thead>
                 <tbody id="actUpdGridBody">${rowsHtml}</tbody>
             </table>
@@ -1957,22 +1957,43 @@ const TableUpdates = {
         }
     },
 
+    /**
+     * Columnas que forman la clave de la tabla (se admite clave compuesta:
+     * cada campo puede marcarse con "key: true" en el diseñador de tablas de
+     * parametrización). Si ninguna está marcada (tablas antiguas), se usa la
+     * primera columna como antes, por compatibilidad.
+     */
+    getKeyColumns(state) {
+        const keys = state.fields.filter(f => f.key).map(f => f.name);
+        return keys.length ? keys : [state.columns[0]];
+    },
+
+    /** Valor de clave (simple o compuesta) de una fila, normalizado para comparar. */
+    rowKeyValue(row, keyCols) {
+        return keyCols.map(c => String(row[c] ?? "").trim().toUpperCase()).join("\u0001");
+    },
+
+    /** Texto legible de la clave (simple o compuesta) de una fila, para mensajes al usuario. */
+    rowKeyLabel(row, keyCols) {
+        return keyCols.map(c => String(row[c] ?? "")).join(" / ");
+    },
+
     computeDiff() {
         const state = this.gridState;
-        const keyCol = state.columns[0];
-        const originalByKey = new Map(state.originalRows.map(r => [String(r[keyCol]), r]));
+        const keyCols = this.getKeyColumns(state);
+        const originalByKey = new Map(state.originalRows.map(r => [this.rowKeyValue(r, keyCols), r]));
 
         const added = [], modified = [], unchanged = [];
         state.currentRows.forEach(row => {
             if (row.__isNew) { added.push(row); return; }
-            const orig = originalByKey.get(String(row[keyCol]));
+            const orig = originalByKey.get(this.rowKeyValue(row, keyCols));
             if (!orig) { added.push(row); return; }
             const changed = state.columns.some(c => String(orig[c] ?? "") !== String(row[c] ?? ""));
             if (changed) modified.push({ before: orig, after: row }); else unchanged.push(row);
         });
 
-        const currentKeys = new Set(state.currentRows.map(r => String(r[keyCol])));
-        const deleted = state.originalRows.filter(r => !currentKeys.has(String(r[keyCol])));
+        const currentKeys = new Set(state.currentRows.map(r => this.rowKeyValue(r, keyCols)));
+        const deleted = state.originalRows.filter(r => !currentKeys.has(this.rowKeyValue(r, keyCols)));
 
         return { added, modified, deleted };
     },
@@ -1982,10 +2003,10 @@ const TableUpdates = {
         const tbody = document.getElementById("actUpdGridBody");
         if (!tbody) return;
         const state = this.gridState;
-        const keyCol = state.columns[0];
+        const keyCols = this.getKeyColumns(state);
         tbody.querySelectorAll("tr").forEach(tr => tr.classList.remove("duplicate-row"));
         state.currentRows.forEach(r => {
-            if (dupKeys.has(String(r[keyCol]).trim().toUpperCase())) {
+            if (dupKeys.has(this.rowKeyValue(r, keyCols))) {
                 const tr = tbody.querySelector(`tr[data-row="${r.__rowId}"]`);
                 if (tr) tr.classList.add("duplicate-row");
             }
@@ -1996,19 +2017,20 @@ const TableUpdates = {
         const state = this.gridState;
         this.syncGridFromDom();
 
-        // Clave única (misma validación que Mantenimiento de dimensiones).
-        const keyCol = state.columns[0];
+        // Clave única (simple o compuesta; misma validación que Mantenimiento
+        // de dimensiones pero comparando TODAS las columnas marcadas como clave).
+        const keyCols = this.getKeyColumns(state);
         const seen = new Map();
         const dupKeys = new Set();
         state.currentRows.forEach(r => {
-            const k = String(r[keyCol] ?? "").trim().toUpperCase();
-            if (!k) return;
+            const k = this.rowKeyValue(r, keyCols);
+            if (!k.replace(/\u0001/g, "")) return;
             if (seen.has(k)) dupKeys.add(k); else seen.set(k, true);
         });
         if (dupKeys.size) {
             this.renderGrid();
             this.highlightDuplicateRows(dupKeys);
-            UI.toast(`No se puede grabar: hay ${dupKeys.size} valor(es) de "${keyCol}" repetidos. Corrige o elimina las filas duplicadas (marcadas en rojo).`, "error");
+            UI.toast(`No se puede grabar: hay ${dupKeys.size} valor(es) de "${keyCols.join(" + ")}" repetidos. Corrige o elimina las filas duplicadas (marcadas en rojo).`, "error");
             return;
         }
 
@@ -2095,11 +2117,11 @@ const TableUpdates = {
         document.getElementById("actUpdSummaryDetail").addEventListener("click", (e) => {
             const box = document.getElementById("actUpdSummaryDetailBox");
             if (box.style.display === "none") {
-                const keyCol = state.columns[0];
+                const keyCols = this.getKeyColumns(state);
                 box.innerHTML = `
-                    ${diff.added.length ? `<h4>Añadidas</h4>` + diff.added.map(r => `<div class="actupd-summary-row">+ ${UI.escapeHtml(String(r[keyCol]))}</div>`).join("") : ""}
-                    ${diff.modified.length ? `<h4>Modificadas</h4>` + diff.modified.map(m => `<div class="actupd-summary-row">~ ${UI.escapeHtml(String(m.after[keyCol]))}</div>`).join("") : ""}
-                    ${diff.deleted.length ? `<h4>Eliminadas</h4>` + diff.deleted.map(r => `<div class="actupd-summary-row">− ${UI.escapeHtml(String(r[keyCol]))}</div>`).join("") : ""}
+                    ${diff.added.length ? `<h4>Añadidas</h4>` + diff.added.map(r => `<div class="actupd-summary-row">+ ${UI.escapeHtml(this.rowKeyLabel(r, keyCols))}</div>`).join("") : ""}
+                    ${diff.modified.length ? `<h4>Modificadas</h4>` + diff.modified.map(m => `<div class="actupd-summary-row">~ ${UI.escapeHtml(this.rowKeyLabel(m.after, keyCols))}</div>`).join("") : ""}
+                    ${diff.deleted.length ? `<h4>Eliminadas</h4>` + diff.deleted.map(r => `<div class="actupd-summary-row">− ${UI.escapeHtml(this.rowKeyLabel(r, keyCols))}</div>`).join("") : ""}
                 `;
                 box.style.display = "block";
                 e.target.textContent = "Ocultar detalle";
