@@ -1576,15 +1576,21 @@ const TableUpdates = {
                 e.stopPropagation();
                 e.preventDefault();
                 const key = handle.dataset.col;
-                const colEl = wrap.querySelector(`col[data-col="${CSS.escape(key)}"]`) || (() => {
+                const isDesc = key.endsWith("__desc");
+                const colEl = isDesc
                     // columna "__desc": es el <col> inmediatamente siguiente al
-                    // de su campo base.
-                    const base = wrap.querySelector(`col[data-col="${CSS.escape(key.replace("__desc", ""))}"]`);
-                    return base ? base.nextElementSibling : null;
-                })();
+                    // de su campo base (no lleva su propio data-col).
+                    ? (() => {
+                        const base = wrap.querySelector(`col[data-col="${CSS.escape(key.replace("__desc", ""))}"]`);
+                        return base ? base.nextElementSibling : null;
+                    })()
+                    : wrap.querySelector(`col[data-col="${CSS.escape(key)}"]`);
                 if (!colEl) return;
                 const startX = e.clientX;
-                const startWidth = colEl.getBoundingClientRect().width;
+                // OJO: getBoundingClientRect() sobre un <col> no es fiable (no
+                // es una caja de renderizado normal); se parte del ancho que
+                // nosotros mismos le asignamos, no del que reporte el DOM.
+                const startWidth = state.colWidths[key] || (isDesc ? DEFAULT_DESC_W : DEFAULT_COL_W);
                 const onMove = (ev) => {
                     colEl.style.width = `${Math.max(60, startWidth + (ev.clientX - startX))}px`;
                 };
