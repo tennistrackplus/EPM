@@ -195,7 +195,7 @@ const UI = {
                                 <label>Campos</label>
                                 <div class="fields-builder fields-builder--params">
                                     <div class="fields-builder-header fields-builder-header--params">
-                                        <span>Nombre del campo</span><span>Descripción</span><span>Tipo</span><span>Clave</span><span></span>
+                                        <span>Nombre del campo</span><span>Descripción</span><span>Tipo</span><span class="col-center">Clave</span><span></span>
                                     </div>
                                     <div class="fields-builder-rows" id="paramFormRows"></div>
                                     <div class="fields-builder-footer">
@@ -302,7 +302,7 @@ const UI = {
                                 <label>Atributos</label>
                                 <div class="fields-builder fields-builder--with-desc">
                                     <div class="fields-builder-header">
-                                        <span>Nombre del atributo</span><span>Tipo</span><span>Clave</span><span>Desc.</span><span></span>
+                                        <span>Nombre del atributo</span><span>Tipo</span><span class="col-center">Clave</span><span class="col-center">Desc.</span><span></span>
                                     </div>
                                     <div class="fields-builder-rows" id="dimFormRows"></div>
                                     <div class="fields-builder-footer">

@@ -301,6 +301,11 @@ const TableUpdates = {
         // Respeta el orden guardado si todas las columnas siguen existiendo.
         this.fields.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
+        // Si la tabla es de una Tabla de parametrización, la clave se toma de
+        // ahí automáticamente (no se marca a mano en este diseñador).
+        const paramKeys = await this.getParamKeyColumns(record.TABLA);
+        this.applyParamKeys(this.fields, paramKeys);
+
         let overlay = document.getElementById("actUpdEditorModal");
         if (!overlay) {
             overlay = document.createElement("div");
@@ -361,6 +366,51 @@ const TableUpdates = {
                 searchHelp: "LISTBOX"
             }
         };
+    },
+
+    /**
+     * Si `tableName` es la tabla física de una Tabla de parametrización de
+     * este proyecto, devuelve el Set (en mayúsculas) de sus columnas clave
+     * (según CAMPOS_JSON de PARAMETRIZACIONES) — puede ser un Set vacío si
+     * esa tabla no tiene ninguna columna marcada como clave todavía.
+     * Si `tableName` NO es una tabla de parametrización (es cualquier otra
+     * tabla del esquema), devuelve null: en ese caso la clave se sigue
+     * marcando a mano en el diseñador de esta pantalla, como hasta ahora.
+     */
+    async getParamKeyColumns(tableName) {
+        try {
+            const sql = `SELECT CAMPOS_JSON
+                         FROM ${Provider.qualifyControl("PARAMETRIZACIONES")}
+                         WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                           AND UPPER(TABLA) = UPPER('${Provider.esc(tableName)}')
+                         LIMIT 1`;
+            const rows = await Provider.runQuery(sql);
+            if (!rows.length) return null;
+            const paramFields = this.safeParse(rows[0].CAMPOS_JSON, []);
+            // Los nombres en CAMPOS_JSON de Parametrización son el texto tal
+            // cual lo escribió el usuario (ej. "Escenario"); la columna física
+            // real es su identificador (ej. "ESCENARIO", ver
+            // Parametrizacion.save/physicalFields), así que hay que normalizar
+            // igual para poder comparar con los nombres de listColumns().
+            return new Set(paramFields.filter(f => f.key).map(f => Provider.toIdentifier(f.name)));
+        } catch (err) {
+            // Tabla de control PARAMETRIZACIONES inexistente o error de red:
+            // no bloquea el diseñador, simplemente se cae al modo manual.
+            console.error("No se pudo comprobar si la tabla proviene de Parametrización:", err);
+            return null;
+        }
+    },
+
+    /** Aplica (o quita) la herencia automática de "Clave" desde Parametrización sobre una lista de fields. */
+    applyParamKeys(fields, paramKeys) {
+        fields.forEach(f => {
+            if (paramKeys) {
+                f.key = paramKeys.has(Provider.toIdentifier(f.name));
+                f.keyFromParam = true;
+            } else {
+                f.keyFromParam = false;
+            }
+        });
     },
 
     async loadDimensions() {
@@ -634,10 +684,12 @@ const TableUpdates = {
     // ---------------- Bloque B: campos de la tabla ----------------
     renderFieldsBlock() {
         const part = document.getElementById("actUpdFieldsPart");
+        const isParamTable = this.fields.some(f => f.keyFromParam);
         part.innerHTML = `
             <div class="flow-screen-header"><strong>Campos</strong>
                 <span class="flow-screen-hint">Arrastra para ordenar · el orden aquí es el orden de columnas al ejecutar · marca "Clave" en uno o varios campos para identificar cada fila al grabar (se admite clave compuesta)</span>
             </div>
+            ${isParamTable ? `<p class="form-hint actupd-param-hint">🔒 Esta tabla proviene de una <strong>Tabla de parametrización</strong>: la columna "Clave" se toma automáticamente de su definición (Administración → Parametrización) y no se puede editar aquí. Para cambiarla, edita la clave en Parametrización.</p>` : ""}
             <div class="actupd-fields-header">
                 <span></span><span>Clave</span><span>Campo</span><span>Descripción</span><span>Filtro</span><span>Validación</span>
             </div>
@@ -656,10 +708,13 @@ const TableUpdates = {
         rowsEl.innerHTML = this.fields.map((f, idx) => {
             const filterActive = f.filter && f.filter.type !== "NONE";
             const validActive = f.validation && f.validation.type !== "NONE";
+            const keyTitle = f.keyFromParam
+                ? "Clave heredada de la Tabla de parametrización — se edita desde Administración → Parametrización"
+                : "Marca los campos que forman la clave (se admite clave compuesta)";
             return `
             <div class="actupd-field-row" draggable="true" data-idx="${idx}">
                 <span class="actupd-drag-handle" title="Arrastrar">⠿</span>
-                <span class="actupd-field-key"><input type="checkbox" class="actupd-field-key-cb" data-idx="${idx}" ${f.key ? "checked" : ""} title="Marca los campos que forman la clave (se admite clave compuesta)"></span>
+                <span class="actupd-field-key"><input type="checkbox" class="actupd-field-key-cb" data-idx="${idx}" ${f.key ? "checked" : ""} ${f.keyFromParam ? "disabled" : ""} title="${keyTitle}"></span>
                 <span class="actupd-field-name">${UI.escapeHtml(f.name)}</span>
                 <input type="text" class="actupd-field-desc" data-idx="${idx}" placeholder="Descripción del campo" value="${UI.escapeHtml(f.description || "")}">
                 <button type="button" class="actupd-icon-btn ${filterActive ? "active" : ""}" data-filter-idx="${idx}" title="Filtro">⏷</button>
@@ -667,7 +722,7 @@ const TableUpdates = {
             </div>`;
         }).join("");
 
-        rowsEl.querySelectorAll(".actupd-field-key-cb").forEach(cb => {
+        rowsEl.querySelectorAll(".actupd-field-key-cb:not([disabled])").forEach(cb => {
             cb.addEventListener("change", (e) => { this.fields[parseInt(e.target.dataset.idx, 10)].key = e.target.checked; });
         });
         rowsEl.querySelectorAll(".actupd-field-desc").forEach(inp => {
@@ -972,6 +1027,12 @@ const TableUpdates = {
         this.runRecord = record;
         this.runScreen = this.parseScreen(record.VARIABLES_JSON);
         this.runFields = this.safeParse(record.CAMPOS_JSON, []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+        // La clave se recalcula aquí en vivo desde Parametrización (si aplica)
+        // en lugar de fiarse solo de lo grabado en CAMPOS_JSON: así, si alguien
+        // cambia la clave en Parametrización pero no vuelve a abrir/guardar
+        // esta Actualización, la ejecución igualmente usa la clave correcta.
+        const paramKeys = await this.getParamKeyColumns(record.TABLA);
+        this.applyParamKeys(this.runFields, paramKeys);
         this.gridState = null;
         this.selOptState = {};
         // Al ejecutar directamente desde el listado (sin pasar por "Editar")
