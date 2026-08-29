@@ -919,8 +919,10 @@ const TableUpdates = {
         if (!name) { UI.toast("El nombre no puede estar vacío.", "error"); return; }
 
         this.fields.forEach((f, i) => { f.order = i; });
-        const varsJson = JSON.stringify(this.screen).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-        const fieldsJson = JSON.stringify(this.fields).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        const varsJsonPlain = JSON.stringify(this.screen);
+        const fieldsJsonPlain = JSON.stringify(this.fields);
+        const varsJson = varsJsonPlain.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        const fieldsJson = fieldsJsonPlain.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         const id = this.editing[this.ID_COL];
 
         try {
@@ -939,7 +941,12 @@ const TableUpdates = {
                     WHERE ${this.ID_COL} = '${Provider.esc(id)}'`);
                 UI.toast(`Actualización "${name}" guardada.`, "success");
             }
+            // Refresca el registro en memoria (VARIABLES_JSON/CAMPOS_JSON) con lo
+            // que se acaba de grabar, para que "▶ Ejecutar" use los cambios
+            // recién guardados sin tener que cerrar y reabrir desde la lista.
             this.editing[this.NAME_COL] = name;
+            this.editing.VARIABLES_JSON = varsJsonPlain;
+            this.editing.CAMPOS_JSON = fieldsJsonPlain;
             await this.loadList();
             const runBtn = document.getElementById("actUpdEditorRun");
             if (runBtn) runBtn.disabled = false;
@@ -962,10 +969,12 @@ const TableUpdates = {
         this.runFields = this.safeParse(record.CAMPOS_JSON, []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         this.gridState = null;
         this.selOptState = {};
-        // Si la pantalla no tiene variables definidas, no tiene sentido mostrar
-        // esa pestaña ni pedir al usuario que pulse "Cargar tabla": se muestra
-        // únicamente la pestaña Tabla y se carga directamente al abrir.
-        this.hasScreenVars = this.runScreen.blocks.length > 0;
+        // Si la pantalla no tiene variables definidas (ni sueltas ni dentro de
+        // frames), no tiene sentido mostrar esa pestaña ni pedir al usuario que
+        // pulse "Cargar tabla": se muestra únicamente la pestaña Tabla y se
+        // carga directamente al abrir. OJO: blocks.length no vale por sí solo,
+        // puede haber frames/textos/saltos de línea sin ninguna variable real.
+        this.hasScreenVars = this.flatVars(this.runScreen).length > 0;
 
         let overlay = document.getElementById("actUpdRunModal");
         if (!overlay) {
@@ -1565,7 +1574,7 @@ const TableUpdates = {
             } else {
                 inputHtml = `<select class="actupd-cell-input" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}">
                     <option value="">${v.allowEmpty ? "(vacío)" : "— selecciona —"}</option>
-                    ${options.map(o => `<option value="${UI.escapeHtml(o.id)}" ${String(val) === String(o.id) ? "selected" : ""}>${UI.escapeHtml(o.id)}${o.desc ? " — " + UI.escapeHtml(o.desc) : ""}</option>`).join("")}
+                    ${options.map(o => `<option value="${UI.escapeHtml(o.id)}" ${o.desc ? `title="${UI.escapeHtml(o.desc)}"` : ""} ${String(val) === String(o.id) ? "selected" : ""}>${UI.escapeHtml(o.id)}</option>`).join("")}
                 </select>`;
             }
         }
