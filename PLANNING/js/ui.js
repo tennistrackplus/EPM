@@ -132,6 +132,135 @@ const UI = {
     },
 
     /**
+     * Fila de campo para el diseñador de "Tablas de parametrización":
+     * Nombre, Descripción (texto libre), Tipo y Clave. A diferencia de
+     * `_fieldRow` (usada en Dimensiones/Cubos), aquí la descripción es un
+     * campo de texto por cada fila, no un marcador único tipo radio.
+     */
+    _paramFieldRow(f = { name: "", description: "", type: "STRING", key: false }) {
+        const row = document.createElement("div");
+        row.className = "field-row param-field-row";
+        row.innerHTML = `
+            <input type="text" class="f-name" placeholder="ej. codigo" value="${UI.escapeHtml(f.name)}">
+            <input type="text" class="f-description" placeholder="Descripción del campo" value="${UI.escapeHtml(f.description || "")}">
+            <select class="f-type">
+                ${UI.FIELD_TYPES.map(t => `<option value="${t}" ${t === f.type ? "selected" : ""}>${t}</option>`).join("")}
+            </select>
+            <span class="field-key"><input type="checkbox" class="f-key" ${f.key ? "checked" : ""}></span>
+            <button type="button" class="field-remove" title="Eliminar">✕</button>`;
+        row.querySelector(".field-remove").addEventListener("click", () => row.remove());
+        return row;
+    },
+
+    _readParamFieldRows(container) {
+        return Array.from(container.querySelectorAll(".param-field-row")).map(r => ({
+            name: r.querySelector(".f-name").value.trim(),
+            description: r.querySelector(".f-description").value.trim(),
+            type: r.querySelector(".f-type").value,
+            key: r.querySelector(".f-key").checked
+        })).filter(f => f.name);
+    },
+
+    /**
+     * Modal de "Tabla de parametrización": nombre + descripción + diseñador
+     * de campos (nombre, descripción, tipo, clave). No hay clave automática
+     * (a diferencia de Dimensiones): el usuario marca la(s) clave(s) él mismo.
+     * Devuelve una Promise<{name, description, fields}|null>.
+     */
+    openParamTableFormModal({ title, name = "", description = "", fields = [], nameEditable = true }) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("paramFormModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "paramFormModal";
+                overlay.innerHTML = `
+                    <div class="modal-box modal-wide">
+                        <div class="modal-header">
+                            <h3 id="paramFormTitle"></h3>
+                            <button class="modal-close" id="paramFormClose">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Nombre de la tabla</label>
+                                    <input type="text" id="paramFormName" placeholder="Ej. Parametros_calculo">
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Descripción</label>
+                                <textarea id="paramFormDesc" rows="2"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label>Campos</label>
+                                <div class="fields-builder fields-builder--params">
+                                    <div class="fields-builder-header fields-builder-header--params">
+                                        <span>Nombre del campo</span><span>Descripción</span><span>Tipo</span><span>Clave</span><span></span>
+                                    </div>
+                                    <div class="fields-builder-rows" id="paramFormRows"></div>
+                                    <div class="fields-builder-footer">
+                                        <button class="btn btn-secondary btn-sm" id="paramFormAddField">+ Añadir campo</button>
+                                    </div>
+                                </div>
+                                <p class="form-hint">Marca "Clave" en, al menos, un campo (se admite clave compuesta).</p>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-secondary" id="paramFormCancel">Cancelar</button>
+                            <button class="btn btn-primary" id="paramFormSave">Guardar</button>
+                        </div>
+                    </div>`;
+                document.body.appendChild(overlay);
+            }
+
+            const rowsContainer = overlay.querySelector("#paramFormRows");
+            const nameInput = overlay.querySelector("#paramFormName");
+
+            const addRow = (f) => rowsContainer.appendChild(UI._paramFieldRow(f));
+            rowsContainer.innerHTML = "";
+            (fields.length ? fields : [{ name: "", description: "", type: "STRING", key: true }]).forEach(f => addRow(f));
+
+            overlay.querySelector("#paramFormTitle").textContent = title;
+            nameInput.value = name;
+            nameInput.disabled = !nameEditable;
+            overlay.querySelector("#paramFormDesc").value = description;
+            overlay.querySelector("#paramFormAddField").onclick = () => addRow();
+
+            overlay.classList.add("visible");
+            setTimeout(() => nameInput.focus(), 50);
+
+            const cleanup = (result) => {
+                overlay.classList.remove("visible");
+                resolve(result);
+            };
+
+            overlay.querySelector("#paramFormCancel").onclick = () => cleanup(null);
+            overlay.querySelector("#paramFormClose").onclick = () => cleanup(null);
+            overlay.querySelector("#paramFormSave").onclick = () => {
+                const nameVal = nameInput.value.trim();
+                if (!nameVal) {
+                    UI.toast("Indica un nombre para la tabla.", "error");
+                    return;
+                }
+                const fieldsVal = UI._readParamFieldRows(rowsContainer);
+                if (!fieldsVal.length) {
+                    UI.toast("Añade al menos un campo.", "error");
+                    return;
+                }
+                if (!fieldsVal.some(f => f.key)) {
+                    UI.toast("Marca al menos un campo como clave.", "error");
+                    return;
+                }
+                cleanup({
+                    name: nameVal,
+                    description: overlay.querySelector("#paramFormDesc").value.trim(),
+                    fields: fieldsVal
+                });
+            };
+        });
+    },
+
+    /**
      * Modal de Dimensión: nombre + descripción + clave principal (= nombre de
      * la dimensión, automática) + diseñador de atributos. Los atributos
      * también se pueden marcar como clave (para claves compuestas).

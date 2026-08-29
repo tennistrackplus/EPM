@@ -6,7 +6,14 @@
  *  - Añadir filas, pegar bloques copiados de Excel.
  *  - Exportar a CSV / Excel.
  *  - Importar desde archivo (CSV/XLSX), sustituyendo todo o
- *    fusionando de forma incremental por clave.
+ *    fusionando de forma incremental por clave. El mapeo de columnas
+ *    del archivo importado se hace por ORDEN/POSICIÓN, no por el
+ *    nombre de la cabecera: la primera fila del archivo se descarta
+ *    siempre (se asume cabecera) pero su contenido no se usa para
+ *    decidir qué columna va a qué campo.
+ *  - Selección múltiple de filas (individual / todas las visibles)
+ *    para borrado masivo, buscador que filtra por cualquier columna
+ *    y orden ascendente/descendente pulsando en la cabecera.
  *  - "Guardar" vuelca la rejilla completa a la tabla física
  *    (TRUNCATE + INSERT). Es decir: lo que ves es lo que se guarda.
  */
@@ -18,7 +25,12 @@ const DimensionData = {
         this.dim = dim;
         this.fields = Dimensions.parseFields(dim).map(f => ({ ...f, colId: Provider.toIdentifier(f.name) }));
         this.fullTable = Provider.qualify(project.DATASET, dim.TABLA);
-        this.rows = []; // array de objetos { COLID: valor, ... }
+        this.rows = []; // array de objetos { __uid, COLID: valor, ... }
+        this.selected = new Set();  // __uid de las filas seleccionadas
+        this.searchText = "";
+        this.sortCol = null;
+        this.sortDir = "asc";
+        this._uidSeq = 0;
 
         let overlay = document.getElementById("valuesModal");
         if (!overlay) {
@@ -44,22 +56,30 @@ const DimensionData = {
                         <button class="btn btn-secondary btn-sm" id="btnExportXlsx">Exportar Excel</button>
                         <button class="btn btn-secondary btn-sm" id="btnImportFile">Importar archivo</button>
                         <input type="file" id="importFileInput" accept=".csv,.xlsx,.xls" style="display:none;">
+                        <button class="btn btn-danger btn-sm" id="btnDeleteSelected" disabled>Eliminar seleccionadas</button>
                         <span class="values-toolbar-spacer"></span>
+                        <input type="search" id="valuesSearchInput" class="values-search-input" placeholder="Buscar...">
                         <span class="values-row-count" id="valuesRowCount"></span>
                         <button class="btn btn-primary btn-sm" id="btnSaveValues">Guardar cambios</button>
                     </div>
-                    <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). "Guardar" sustituye por completo el contenido de la tabla con lo que ves aquí. La clave debe ser única: las filas con clave repetida se marcan en rojo y bloquean el guardado.</p>
+                    <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). Al importar un archivo, el orden de las columnas del fichero debe coincidir con el de esta rejilla (la cabecera del archivo se descarta y no se usa para el mapeo). Marca filas con la casilla para borrarlas en bloque, usa el buscador para filtrar y pulsa una cabecera de columna para ordenar. "Guardar" sustituye por completo el contenido de la tabla con lo que ves aquí. La clave debe ser única: las filas con clave repetida se marcan en rojo y bloquean el guardado.</p>
                     <div class="values-grid-wrap values-grid-wrap--modal" id="valuesGridWrap"><span class="spinner"></span></div>
                 </div>
             </div>`;
 
         document.getElementById("btnCloseValuesModal").addEventListener("click", () => this.close());
-        document.getElementById("btnAddRow").addEventListener("click", () => { this.addEmptyRow(); this.renderGrid(); });
+        document.getElementById("btnAddRow").addEventListener("click", () => { this.syncRowsFromDom(); this.addEmptyRow(); this.renderGrid(); });
         document.getElementById("btnExportCsv").addEventListener("click", () => this.exportCsv());
         document.getElementById("btnExportXlsx").addEventListener("click", () => this.exportXlsx());
         document.getElementById("btnImportFile").addEventListener("click", () => document.getElementById("importFileInput").click());
         document.getElementById("importFileInput").addEventListener("change", (e) => this.handleImportFile(e));
+        document.getElementById("btnDeleteSelected").addEventListener("click", () => this.deleteSelected());
         document.getElementById("btnSaveValues").addEventListener("click", () => this.save());
+        document.getElementById("valuesSearchInput").addEventListener("input", (e) => {
+            this.syncRowsFromDom();
+            this.searchText = e.target.value.trim();
+            this.renderGrid();
+        });
 
         overlay.classList.add("visible");
         await this.loadData();
@@ -70,12 +90,19 @@ const DimensionData = {
         if (overlay) overlay.classList.remove("visible");
     },
 
+    nextUid() {
+        this._uidSeq = (this._uidSeq || 0) + 1;
+        return "r" + this._uidSeq;
+    },
+
     async loadData() {
         const wrap = document.getElementById("valuesGridWrap");
         try {
             const cols = this.fields.map(f => f.colId).join(", ");
             const sql = `SELECT ${cols} FROM ${this.fullTable} LIMIT ${this.MAX_ROWS_LOAD}`;
-            this.rows = await Provider.runQuery(sql);
+            const data = await Provider.runQuery(sql);
+            this.rows = data.map(r => ({ ...r, __uid: this.nextUid() }));
+            this.selected = new Set();
             this.renderGrid();
         } catch (err) {
             wrap.innerHTML = `<div class="module-empty">Error al cargar los valores: ${UI.escapeHtml(err.message)}</div>`;
@@ -83,74 +110,174 @@ const DimensionData = {
     },
 
     addEmptyRow() {
-        const row = {};
+        const row = { __uid: this.nextUid() };
         this.fields.forEach(f => { row[f.colId] = ""; });
         this.rows.push(row);
     },
 
+    // ------------------------------------------------------------
+    // Filtro (buscador) + orden por columna, sin tocar this.rows
+    // (que sigue siendo la fuente de la verdad en su orden original)
+    // ------------------------------------------------------------
+    getVisibleRows() {
+        let rows = this.rows;
+
+        if (this.searchText) {
+            const q = this.searchText.toLowerCase();
+            rows = rows.filter(r => this.fields.some(f => String(r[f.colId] ?? "").toLowerCase().includes(q)));
+        }
+
+        if (this.sortCol) {
+            const col = this.sortCol;
+            const dir = this.sortDir === "desc" ? -1 : 1;
+            rows = [...rows].sort((a, b) => {
+                const av = a[col] ?? "";
+                const bv = b[col] ?? "";
+                const an = parseFloat(String(av).replace(",", "."));
+                const bn = parseFloat(String(bv).replace(",", "."));
+                const bothNumeric = String(av).trim() !== "" && String(bv).trim() !== "" && !isNaN(an) && !isNaN(bn);
+                const cmp = bothNumeric
+                    ? (an - bn)
+                    : String(av).localeCompare(String(bv), "es", { sensitivity: "base", numeric: true });
+                return cmp * dir;
+            });
+        }
+
+        return rows;
+    },
+
+    updateDeleteSelectedBtn() {
+        const btn = document.getElementById("btnDeleteSelected");
+        if (!btn) return;
+        btn.disabled = this.selected.size === 0;
+        btn.textContent = this.selected.size ? `Eliminar seleccionadas (${this.selected.size})` : "Eliminar seleccionadas";
+    },
+
     renderGrid() {
         const wrap = document.getElementById("valuesGridWrap");
-        document.getElementById("valuesRowCount").textContent = `${this.rows.length} fila(s)`;
-
         if (!this.rows.length) this.addEmptyRow();
 
-        const header = this.fields.map(f =>
-            `<th>${UI.escapeHtml(f.name)}${f.key ? ' <span class="key-dot" title="Clave">🔑</span>' : ""}<br><span class="col-type">${f.type}</span></th>`
-        ).join("");
+        const visibleRows = this.getVisibleRows();
+        document.getElementById("valuesRowCount").textContent = this.searchText
+            ? `${visibleRows.length} de ${this.rows.length} fila(s)`
+            : `${this.rows.length} fila(s)`;
 
-        const bodyRows = this.rows.map((row, rIdx) => `
-            <tr data-row-idx="${rIdx}">
-                ${this.fields.map((f, cIdx) => `
-                    <td><input type="text" data-col-idx="${cIdx}" data-col="${f.colId}" value="${UI.escapeHtml(row[f.colId] ?? "")}"></td>
-                `).join("")}
-                <td class="values-row-remove"><button type="button" data-remove-row="${rIdx}" title="Eliminar fila">✕</button></td>
-            </tr>
-        `).join("");
+        const allVisibleSelected = visibleRows.length > 0 && visibleRows.every(r => this.selected.has(r.__uid));
+        const sortArrow = (colId) => this.sortCol === colId ? (this.sortDir === "asc" ? " ▲" : " ▼") : "";
+
+        const header = `
+            <th class="values-col-check"><input type="checkbox" id="valuesSelectAll" ${allVisibleSelected ? "checked" : ""} title="Seleccionar todas"></th>
+            ${this.fields.map(f => `
+                <th class="values-col-sortable" data-sort-col="${f.colId}" title="Ordenar por ${UI.escapeHtml(f.name)}">
+                    ${UI.escapeHtml(f.name)}${f.key ? ' <span class="key-dot" title="Clave">🔑</span>' : ""}<span class="sort-arrow">${sortArrow(f.colId)}</span><br><span class="col-type">${f.type}</span>
+                </th>`).join("")}
+            <th></th>`;
+
+        const bodyRows = visibleRows.length
+            ? visibleRows.map(row => `
+                <tr data-uid="${row.__uid}" class="${this.selected.has(row.__uid) ? "row-selected" : ""}">
+                    <td class="values-col-check"><input type="checkbox" class="row-select" data-uid="${row.__uid}" ${this.selected.has(row.__uid) ? "checked" : ""}></td>
+                    ${this.fields.map((f, cIdx) => `
+                        <td><input type="text" data-col-idx="${cIdx}" data-col="${f.colId}" value="${UI.escapeHtml(row[f.colId] ?? "")}"></td>
+                    `).join("")}
+                    <td class="values-row-remove"><button type="button" data-remove-uid="${row.__uid}" title="Eliminar fila">✕</button></td>
+                </tr>
+            `).join("")
+            : `<tr><td colspan="${this.fields.length + 2}" class="values-empty">No hay filas que coincidan con la búsqueda.</td></tr>`;
 
         wrap.innerHTML = `
             <table class="values-grid">
-                <thead><tr>${header}<th></th></tr></thead>
+                <thead><tr>${header}</tr></thead>
                 <tbody id="valuesGridBody">${bodyRows}</tbody>
             </table>`;
 
         const tbody = document.getElementById("valuesGridBody");
 
-        tbody.querySelectorAll("input").forEach(input => {
+        tbody.querySelectorAll('input[type="text"]').forEach(input => {
             input.addEventListener("change", () => {
-                const tr = input.closest("tr");
-                const rIdx = parseInt(tr.dataset.rowIdx, 10);
-                const col = input.dataset.col;
-                this.rows[rIdx][col] = input.value;
+                const uid = input.closest("tr").dataset.uid;
+                const row = this.rows.find(r => r.__uid === uid);
+                if (row) row[input.dataset.col] = input.value;
             });
         });
 
-        tbody.querySelectorAll("[data-remove-row]").forEach(btn => {
+        tbody.querySelectorAll("[data-remove-uid]").forEach(btn => {
             btn.addEventListener("click", () => {
                 this.syncRowsFromDom();
-                this.rows.splice(parseInt(btn.dataset.removeRow, 10), 1);
+                const uid = btn.dataset.removeUid;
+                this.rows = this.rows.filter(r => r.__uid !== uid);
+                this.selected.delete(uid);
+                this.renderGrid();
+            });
+        });
+
+        tbody.querySelectorAll(".row-select").forEach(cb => {
+            cb.addEventListener("change", () => {
+                this.syncRowsFromDom();
+                if (cb.checked) this.selected.add(cb.dataset.uid);
+                else this.selected.delete(cb.dataset.uid);
+                cb.closest("tr").classList.toggle("row-selected", cb.checked);
+                const selectAll = document.getElementById("valuesSelectAll");
+                if (selectAll) selectAll.checked = this.getVisibleRows().every(r => this.selected.has(r.__uid));
+                this.updateDeleteSelectedBtn();
+            });
+        });
+
+        const selectAllCb = document.getElementById("valuesSelectAll");
+        if (selectAllCb) {
+            selectAllCb.addEventListener("change", (e) => {
+                this.syncRowsFromDom();
+                const vis = this.getVisibleRows();
+                vis.forEach(r => e.target.checked ? this.selected.add(r.__uid) : this.selected.delete(r.__uid));
+                this.renderGrid();
+            });
+        }
+
+        wrap.querySelectorAll("[data-sort-col]").forEach(th => {
+            th.addEventListener("click", () => {
+                this.syncRowsFromDom();
+                const col = th.dataset.sortCol;
+                if (this.sortCol === col) this.sortDir = this.sortDir === "asc" ? "desc" : "asc";
+                else { this.sortCol = col; this.sortDir = "asc"; }
                 this.renderGrid();
             });
         });
 
         tbody.addEventListener("paste", (e) => this.handlePaste(e));
+
+        this.updateDeleteSelectedBtn();
     },
 
     /** Vuelca lo que hay actualmente en los <input> del DOM a this.rows, por si hay cambios sin "change" disparado */
     syncRowsFromDom() {
         const tbody = document.getElementById("valuesGridBody");
         if (!tbody) return;
-        tbody.querySelectorAll("tr").forEach(tr => {
-            const rIdx = parseInt(tr.dataset.rowIdx, 10);
-            if (!this.rows[rIdx]) return;
-            tr.querySelectorAll("input").forEach(input => {
-                this.rows[rIdx][input.dataset.col] = input.value;
+        tbody.querySelectorAll("tr[data-uid]").forEach(tr => {
+            const row = this.rows.find(r => r.__uid === tr.dataset.uid);
+            if (!row) return;
+            tr.querySelectorAll('input[type="text"]').forEach(input => {
+                row[input.dataset.col] = input.value;
             });
         });
     },
 
+    async deleteSelected() {
+        if (!this.selected.size) return;
+        const ok = await UI.confirm(
+            "Eliminar filas seleccionadas",
+            `Se eliminarán <strong>${this.selected.size}</strong> fila(s) de la rejilla. Esto no afecta a la base de datos hasta que pulses "Guardar cambios".`
+        );
+        if (!ok) return;
+
+        this.syncRowsFromDom();
+        this.rows = this.rows.filter(r => !this.selected.has(r.__uid));
+        this.selected.clear();
+        this.renderGrid();
+    },
+
     handlePaste(e) {
         const target = e.target;
-        if (!target.matches("input")) return;
+        if (!target.matches('input[type="text"]')) return;
         const text = (e.clipboardData || window.clipboardData).getData("text");
         if (!text || (!text.includes("\t") && !text.includes("\n"))) return; // pegado simple de una celda: comportamiento nativo
 
@@ -158,19 +285,42 @@ const DimensionData = {
         this.syncRowsFromDom();
 
         const pastedRows = text.replace(/\r/g, "").split("\n").filter((r, i, arr) => !(i === arr.length - 1 && r === ""));
-        const startRowIdx = parseInt(target.closest("tr").dataset.rowIdx, 10);
+        const startUid = target.closest("tr").dataset.uid;
         const startColIdx = parseInt(target.dataset.colIdx, 10);
 
+        // Si hay un filtro de búsqueda u orden activo, la posición visible de
+        // las filas no coincide con this.rows, así que no se pueden crear
+        // filas nuevas "al final" de forma fiable: el pegado solo sobrescribe
+        // filas ya visibles.
+        const filtering = !!this.searchText || !!this.sortCol;
+        const visibleRows = this.getVisibleRows();
+        const startVisibleIdx = visibleRows.findIndex(r => r.__uid === startUid);
+        if (startVisibleIdx === -1) return;
+
+        let clipped = false;
         pastedRows.forEach((rowText, rOffset) => {
             const cells = rowText.split("\t");
-            const rowIdx = startRowIdx + rOffset;
-            while (rowIdx >= this.rows.length) this.addEmptyRow();
+            const visibleIdx = startVisibleIdx + rOffset;
+            let targetRow;
+            if (visibleIdx < visibleRows.length) {
+                targetRow = visibleRows[visibleIdx];
+            } else if (!filtering) {
+                this.addEmptyRow();
+                targetRow = this.rows[this.rows.length - 1];
+            } else {
+                clipped = true;
+                return;
+            }
             cells.forEach((cellText, cOffset) => {
                 const colIdx = startColIdx + cOffset;
                 if (colIdx >= this.fields.length) return;
-                this.rows[rowIdx][this.fields[colIdx].colId] = cellText;
+                targetRow[this.fields[colIdx].colId] = cellText;
             });
         });
+
+        if (clipped) {
+            UI.toast('Quita el buscador/orden para poder pegar filas nuevas al final de la rejilla.', "info");
+        }
 
         this.renderGrid();
     },
@@ -219,17 +369,19 @@ const DimensionData = {
                 return;
             }
 
-            const [headerRow, ...dataRows] = aoa;
-            const headerMap = headerRow.map(h => String(h).trim().toUpperCase());
+            // La primera fila se descarta por ser la cabecera, pero su
+            // contenido (nombres de columna) NO se usa para el mapeo: los
+            // valores se asignan a los campos de la dimensión por ORDEN,
+            // es decir, la 1ª columna del archivo va al 1er campo de la
+            // rejilla, la 2ª al 2º, etc., independientemente de cómo se
+            // llame la cabecera en el archivo.
+            const [, ...dataRows] = aoa;
             const importedObjs = dataRows
                 .filter(r => r.some(c => String(c ?? "").trim() !== ""))
                 .map(r => {
-                    const obj = {};
-                    this.fields.forEach(f => {
-                        const idx = headerMap.indexOf(f.name.toUpperCase()) !== -1
-                            ? headerMap.indexOf(f.name.toUpperCase())
-                            : headerMap.indexOf(f.colId);
-                        obj[f.colId] = idx !== -1 ? String(r[idx] ?? "") : "";
+                    const obj = { __uid: this.nextUid() };
+                    this.fields.forEach((f, idx) => {
+                        obj[f.colId] = idx < r.length ? String(r[idx] ?? "") : "";
                     });
                     return obj;
                 });
@@ -241,7 +393,7 @@ const DimensionData = {
 
             const choice = await UI.choiceModal(
                 "Importar valores",
-                `Se han leído <strong>${importedObjs.length}</strong> fila(s) de <strong>${UI.escapeHtml(file.name)}</strong>. ¿Cómo quieres aplicarlas a la rejilla?`,
+                `Se han leído <strong>${importedObjs.length}</strong> fila(s) de <strong>${UI.escapeHtml(file.name)}</strong> (columnas mapeadas por orden). ¿Cómo quieres aplicarlas a la rejilla?`,
                 [
                     { key: "incremental", label: "Incremental (por clave)", style: "primary" },
                     { key: "replace", label: "Sustituir todo", style: "secondary" }
@@ -250,6 +402,11 @@ const DimensionData = {
             if (!choice) return;
 
             this.syncRowsFromDom();
+            this.selected.clear();
+            this.searchText = "";
+            this.sortCol = null;
+            const searchInput = document.getElementById("valuesSearchInput");
+            if (searchInput) searchInput.value = "";
 
             if (choice === "replace") {
                 this.rows = importedObjs;
@@ -271,12 +428,20 @@ const DimensionData = {
             reader.onerror = () => reject(new Error("No se pudo leer el archivo."));
             reader.onload = () => {
                 try {
-                    const wb = isCsv
-                        ? XLSX.read(reader.result, { type: "string" })
-                        : XLSX.read(new Uint8Array(reader.result), { type: "array" });
-                    const ws = wb.Sheets[wb.SheetNames[0]];
-                    const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
-                    resolve(aoa);
+                    if (isCsv) {
+                        // OJO: el CSV se parsea a mano en vez de pasarlo por SheetJS.
+                        // SheetJS autodetecta fechas/números en el texto y los
+                        // reformatea según su propio locale/formato por defecto (p.ej.
+                        // "2023-01-01" podía acabar convertido a un serial de fecha u
+                        // otro formato de texto). Parseando el CSV directamente se
+                        // preserva el valor tal cual viene escrito en el archivo.
+                        resolve(this.parseCsvText(reader.result));
+                    } else {
+                        const wb = XLSX.read(new Uint8Array(reader.result), { type: "array" });
+                        const ws = wb.Sheets[wb.SheetNames[0]];
+                        const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: false });
+                        resolve(aoa);
+                    }
                 } catch (err) {
                     reject(err);
                 }
@@ -284,6 +449,58 @@ const DimensionData = {
             if (isCsv) reader.readAsText(file, "utf-8");
             else reader.readAsArrayBuffer(file);
         });
+    },
+
+    /**
+     * Parseo manual de CSV a array-de-arrays de strings, sin ninguna
+     * conversión de tipo (fechas, números...). Soporta campos entre
+     * comillas dobles (con comas/saltos de línea dentro y "" como
+     * comilla escapada), autodetecta si el separador es "," o ";" mirando
+     * la primera línea, y quita el BOM inicial si lo hay.
+     */
+    parseCsvText(text) {
+        if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
+        const firstLine = text.split(/\r\n|\n/, 1)[0] || "";
+        const delimiter = (firstLine.split(";").length > firstLine.split(",").length) ? ";" : ",";
+
+        const rows = [];
+        let row = [];
+        let field = "";
+        let inQuotes = false;
+        let sawAny = false;
+
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i];
+
+            if (inQuotes) {
+                if (ch === '"') {
+                    if (text[i + 1] === '"') { field += '"'; i++; }
+                    else inQuotes = false;
+                } else {
+                    field += ch;
+                }
+                continue;
+            }
+
+            if (ch === '"') { inQuotes = true; sawAny = true; continue; }
+            if (ch === delimiter) { row.push(field); field = ""; sawAny = true; continue; }
+            if (ch === "\r") continue; // el salto de línea real lo marca \n
+            if (ch === "\n") {
+                row.push(field);
+                rows.push(row);
+                row = []; field = ""; sawAny = false;
+                continue;
+            }
+            field += ch;
+            sawAny = true;
+        }
+        if (sawAny || field !== "" || row.length) {
+            row.push(field);
+            rows.push(row);
+        }
+
+        return rows;
     },
 
     /** Fusiona filas importadas en this.rows: si la clave coincide, sobrescribe; si no, añade */
@@ -298,7 +515,10 @@ const DimensionData = {
         importedObjs.forEach(imp => {
             const s = sig(imp);
             if (index.has(s)) {
-                this.rows[index.get(s)] = { ...this.rows[index.get(s)], ...imp };
+                const i = index.get(s);
+                // Conserva el __uid de la fila existente para no romper la
+                // selección/orden de la rejilla que ya estuviera en pantalla.
+                this.rows[i] = { ...this.rows[i], ...imp, __uid: this.rows[i].__uid };
             } else {
                 this.rows.push(imp);
                 index.set(s, this.rows.length - 1);
@@ -329,13 +549,10 @@ const DimensionData = {
         if (!tbody) return;
         tbody.querySelectorAll("tr").forEach(tr => tr.classList.remove("duplicate-row"));
 
-        // Mapea cada fila válida (por índice dentro de this.rows) a su posición real en el DOM
-        this.rows.forEach((r, idx) => {
-            if (!validRows.includes(r)) return;
-            if (dupSignatures.has(sigOf(r))) {
-                const tr = tbody.querySelector(`tr[data-row-idx="${idx}"]`);
-                if (tr) tr.classList.add("duplicate-row");
-            }
+        validRows.forEach(r => {
+            if (!dupSignatures.has(sigOf(r))) return;
+            const tr = tbody.querySelector(`tr[data-uid="${r.__uid}"]`);
+            if (tr) tr.classList.add("duplicate-row");
         });
     },
 
@@ -364,6 +581,14 @@ const DimensionData = {
         });
 
         if (dupSignatures.size) {
+            // Quita cualquier filtro de búsqueda para que las filas duplicadas
+            // (que se van a marcar en rojo) sean visibles siempre.
+            if (this.searchText) {
+                this.searchText = "";
+                const searchInput = document.getElementById("valuesSearchInput");
+                if (searchInput) searchInput.value = "";
+            }
+            this.renderGrid();
             this.highlightDuplicateRows(validRows, sigOf, dupSignatures);
             const sample = Array.from(dupSignatures).slice(0, 5).join(" · ");
             UI.toast(

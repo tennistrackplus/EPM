@@ -303,12 +303,24 @@ const DracoSchema = {
                     USUARIO STRING,
                     FECHA_CREACION TIMESTAMP,
                     FECHA_MODIFICACION TIMESTAMP
+                )`,
+            PARAMETRIZACIONES: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    PARAMETRIZACION_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    NOMBRE STRING NOT NULL,
+                    DESCRIPCION STRING,
+                    TABLA STRING NOT NULL,       -- tabla física DRACO_PARAM_<nombre>
+                    CAMPOS_JSON STRING,          -- definición de campos (nombre/descripción/tipo/clave) en JSON
+                    USUARIO STRING,
+                    FECHA_CREACION TIMESTAMP,
+                    FECHA_MODIFICACION TIMESTAMP
                 )`
         };
         return ddl[table];
     },
 
-    TABLES: ["PROYECTOS", "DIMENSIONES", "CUBOS", "JERARQUIAS",
+    TABLES: ["PROYECTOS", "DIMENSIONES", "CUBOS", "JERARQUIAS", "PARAMETRIZACIONES",
              "INTERFACES", "INTERFACES_VALUES", "INTERFACES_INPUT", "INTERFACES_INPUT_FILTERS", "INTERFACES_MAPPING",
              "FLUJOS", "FLUJOS_INTERFACES", "FLUJOS_INTERFACES_TARGETS", "FLUJOS_SCREEN_BLOCKS", "FLUJOS_SCREEN_VARIABLES",
              "FLUJOS_RUNS", "FLUJOS_RUN_STEPS",

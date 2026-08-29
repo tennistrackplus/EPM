@@ -193,6 +193,7 @@ const Draco = {
                 `DELETE FROM ${Provider.qualifyControl(table)} WHERE ${col} = '${Provider.esc(p.PROYECTO_ID)}'`);
             await del("DIMENSIONES", "PROYECTO_ID");
             await del("CUBOS", "PROYECTO_ID");
+            await del("PARAMETRIZACIONES", "PROYECTO_ID");
             await del("PROYECTOS", "PROYECTO_ID");
 
             UI.toast(`Proyecto "${p.PROYECTO}" eliminado.`, "success");
@@ -218,6 +219,7 @@ const Draco = {
         const modules = {
             dimensiones: () => Dimensions.render(container, this.currentProject),
             cubos: () => Cubes.render(container, this.currentProject),
+            parametrizacion: () => Parametrizacion.render(container, this.currentProject),
             actualizaciones: () => TableUpdates.render(container, this.currentProject),
             cargas: () => Loads.render(container, this.currentProject),
             "flujos-carga": () => Flows.render(container, this.currentProject),
