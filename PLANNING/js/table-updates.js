@@ -349,6 +349,7 @@ const TableUpdates = {
             name,
             description: "",
             order,
+            key: false,
             filter: { type: "NONE", value: "" },
             validation: {
                 type: "NONE",
@@ -635,10 +636,10 @@ const TableUpdates = {
         const part = document.getElementById("actUpdFieldsPart");
         part.innerHTML = `
             <div class="flow-screen-header"><strong>Campos</strong>
-                <span class="flow-screen-hint">Arrastra para ordenar · el orden aquí es el orden de columnas al ejecutar</span>
+                <span class="flow-screen-hint">Arrastra para ordenar · el orden aquí es el orden de columnas al ejecutar · marca "Clave" en uno o varios campos para identificar cada fila al grabar (se admite clave compuesta)</span>
             </div>
             <div class="actupd-fields-header">
-                <span></span><span>Campo</span><span>Descripción</span><span>Filtro</span><span>Validación</span>
+                <span></span><span>Clave</span><span>Campo</span><span>Descripción</span><span>Filtro</span><span>Validación</span>
             </div>
             <div id="actUpdFieldsRows" class="actupd-fields-rows"></div>`;
         this.renderFieldRows();
@@ -658,6 +659,7 @@ const TableUpdates = {
             return `
             <div class="actupd-field-row" draggable="true" data-idx="${idx}">
                 <span class="actupd-drag-handle" title="Arrastrar">⠿</span>
+                <span class="actupd-field-key"><input type="checkbox" class="actupd-field-key-cb" data-idx="${idx}" ${f.key ? "checked" : ""} title="Marca los campos que forman la clave (se admite clave compuesta)"></span>
                 <span class="actupd-field-name">${UI.escapeHtml(f.name)}</span>
                 <input type="text" class="actupd-field-desc" data-idx="${idx}" placeholder="Descripción del campo" value="${UI.escapeHtml(f.description || "")}">
                 <button type="button" class="actupd-icon-btn ${filterActive ? "active" : ""}" data-filter-idx="${idx}" title="Filtro">⏷</button>
@@ -665,6 +667,9 @@ const TableUpdates = {
             </div>`;
         }).join("");
 
+        rowsEl.querySelectorAll(".actupd-field-key-cb").forEach(cb => {
+            cb.addEventListener("change", (e) => { this.fields[parseInt(e.target.dataset.idx, 10)].key = e.target.checked; });
+        });
         rowsEl.querySelectorAll(".actupd-field-desc").forEach(inp => {
             inp.addEventListener("input", (e) => { this.fields[parseInt(e.target.dataset.idx, 10)].description = e.target.value; });
         });
