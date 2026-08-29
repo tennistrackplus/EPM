@@ -308,6 +308,12 @@
     background: var(--surface-sunken);
 }
 
+/* Diseñador de campos de "Tablas de parametrización": Nombre / Descripción / Tipo / Clave */
+.fields-builder-header--params,
+.param-field-row {
+    grid-template-columns: 1fr 1.4fr 120px 50px 34px;
+}
+
 /* Confirmación de eliminación */
 .confirm-text {
     font-size: var(--fs-base);

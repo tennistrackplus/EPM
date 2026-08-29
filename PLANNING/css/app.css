@@ -539,6 +539,56 @@ table.values-grid tr.duplicate-row td input {
     font-weight: 600;
 }
 
+/* ---------- Selección de filas / buscador / orden ---------- */
+.values-search-input {
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    padding: 6px 10px;
+    font-size: var(--fs-sm);
+    width: 220px;
+    background: var(--surface-card);
+    color: var(--text-primary);
+}
+
+.btn-danger {
+    background-color: var(--color-danger);
+    color: var(--text-inverse);
+    border-color: var(--color-danger);
+}
+
+.btn-danger:hover:not(:disabled) { background-color: #b82920; }
+
+.values-col-check {
+    width: 30px;
+    text-align: center;
+    padding: 4px !important;
+}
+
+.values-col-check input[type="checkbox"] { cursor: pointer; }
+
+table.values-grid th.values-col-sortable {
+    cursor: pointer;
+    user-select: none;
+}
+
+table.values-grid th.values-col-sortable:hover { background: var(--gray-100); }
+
+.sort-arrow {
+    color: var(--brand-primary);
+    font-size: 10px;
+}
+
+table.values-grid tr.row-selected td {
+    background: var(--brand-primary-light);
+}
+
+.values-empty {
+    text-align: center;
+    color: var(--text-muted);
+    padding: 24px !important;
+    font-size: var(--fs-sm);
+}
+
 /* ---------- Editor de jerarquías ---------- */
 .hier-chip-list {
     display: flex;
