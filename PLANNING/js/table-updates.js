@@ -969,6 +969,11 @@ const TableUpdates = {
         this.runFields = this.safeParse(record.CAMPOS_JSON, []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         this.gridState = null;
         this.selOptState = {};
+        // Al ejecutar directamente desde el listado (sin pasar por "Editar")
+        // this.dimensionsCache nunca se ha cargado, así que las validaciones de
+        // tipo dimensión/jerarquía no encontraban nada. Se asegura aquí, igual
+        // que hace openEditor().
+        await this.loadDimensions();
         // Si la pantalla no tiene variables definidas (ni sueltas ni dentro de
         // frames), no tiene sentido mostrar esa pestaña ni pedir al usuario que
         // pulse "Cargar tabla": se muestra únicamente la pestaña Tabla y se
@@ -1546,6 +1551,12 @@ const TableUpdates = {
             const evt = el.tagName === "SELECT" || el.type === "checkbox" ? "change" : "input";
             el.addEventListener(evt, (e) => this.onCellChange(e, el));
         });
+        // "Listbox (desplegable)": clic en la celda abre el desplegable anclado
+        // (no un modal). La lista muestra "clave — texto"; al elegir, solo la
+        // clave queda en la celda.
+        wrap.querySelectorAll(".actupd-listbox-input").forEach(el => {
+            el.addEventListener("click", () => this.openListboxDropdown(el.dataset.row, el.dataset.field, el));
+        });
         wrap.querySelectorAll(".actupd-search-trigger").forEach(btn => {
             btn.addEventListener("click", () => this.openSearchHelp(btn.dataset.row, btn.dataset.field));
         });
@@ -1572,10 +1583,10 @@ const TableUpdates = {
                     <button type="button" class="actupd-search-trigger" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" title="Buscar">🔍</button>
                 </span>`;
             } else {
-                inputHtml = `<select class="actupd-cell-input" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}">
-                    <option value="">${v.allowEmpty ? "(vacío)" : "— selecciona —"}</option>
-                    ${options.map(o => `<option value="${UI.escapeHtml(o.id)}" ${o.desc ? `title="${UI.escapeHtml(o.desc)}"` : ""} ${String(val) === String(o.id) ? "selected" : ""}>${UI.escapeHtml(o.id)}</option>`).join("")}
-                </select>`;
+                // "Listbox (desplegable)": desplegable real anclado bajo la celda
+                // (no un modal). La lista muestra "id — texto"; al hacer clic en
+                // una opción solo se guarda el id en la celda.
+                inputHtml = `<input type="text" class="actupd-cell-input actupd-listbox-input" readonly data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" data-col-idx="${this.gridState.columns.indexOf(f.name)}" value="${UI.escapeHtml(val)}" placeholder="${v.allowEmpty ? "(vacío)" : "— selecciona —"}">`;
             }
         }
 
@@ -1661,6 +1672,46 @@ const TableUpdates = {
         });
 
         this.renderGrid();
+    },
+
+    // "Listbox (desplegable)": desplegable real anclado a la celda (no modal).
+    // Muestra "clave — texto" en cada opción; al elegir, solo la clave se
+    // guarda en la celda.
+    openListboxDropdown(rowId, field, anchorEl) {
+        document.querySelectorAll(".actupd-listbox-popover").forEach(p => p.remove());
+        const state = this.gridState;
+        const options = state.optionsByField[field] || [];
+        const currentVal = anchorEl.value;
+
+        const pop = document.createElement("div");
+        pop.className = "actupd-popover actupd-listbox-popover";
+        pop.innerHTML = `<div class="actupd-sh-results">
+            ${options.map(o => `<div class="actupd-sh-item ${String(currentVal) === String(o.id) ? "actupd-sh-item-selected" : ""}" data-id="${UI.escapeHtml(o.id)}">${UI.escapeHtml(o.id)}${o.desc ? " — " + UI.escapeHtml(o.desc) : ""}</div>`).join("") || `<div class="hierarchy-levels-empty">Sin valores disponibles.</div>`}
+        </div>`;
+        document.body.appendChild(pop);
+        const r = anchorEl.getBoundingClientRect();
+        pop.style.top = `${r.bottom + window.scrollY + 4}px`;
+        pop.style.left = `${r.left + window.scrollX}px`;
+        pop.style.width = `${Math.max(r.width, 220)}px`;
+
+        const close = () => {
+            pop.remove();
+            document.removeEventListener("click", closeOnOutside, true);
+        };
+        const closeOnOutside = (e) => {
+            if (!pop.contains(e.target) && e.target !== anchorEl) close();
+        };
+        setTimeout(() => document.addEventListener("click", closeOnOutside, true), 0);
+
+        pop.querySelectorAll(".actupd-sh-item").forEach(item => {
+            item.addEventListener("click", () => {
+                this.syncGridFromDom();
+                const row = state.currentRows.find(r => r.__rowId === rowId);
+                row[field] = item.dataset.id;
+                close();
+                this.renderGrid();
+            });
+        });
     },
 
     openSearchHelp(rowId, field) {
