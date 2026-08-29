@@ -1352,7 +1352,9 @@ const TableUpdates = {
             colFilters: {},
             sortCol: null, sortDir: 1,
             visibleCount: this.RENDER_CHUNK,
-            optionsByField: {}
+            optionsByField: {},
+            selectedRowIds: new Set(),
+            lastClickedRowId: null
         };
         this.gridState = state;
 
@@ -1381,11 +1383,12 @@ const TableUpdates = {
                 <button class="btn btn-secondary btn-sm" id="actUpdGridExportXlsx">Exportar Excel</button>
                 <button class="btn btn-secondary btn-sm" id="actUpdGridImport">Importar archivo</button>
                 <input type="file" id="actUpdGridFileInput" accept=".csv,.xlsx,.xls" style="display:none;">
+                <button class="btn btn-danger btn-sm" id="actUpdGridDeleteSel" style="display:none;">🗑 Eliminar seleccionadas</button>
                 <span class="values-toolbar-spacer"></span>
                 <span class="values-row-count" id="actUpdGridCount"></span>
                 <button class="btn btn-primary btn-sm" id="actUpdGridSave">Grabar</button>
             </div>
-            <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). Filtra escribiendo bajo el nombre de cada columna. "Grabar" sustituye estas filas en la tabla; la clave (${UI.escapeHtml(state.columns[0])}) debe ser única.</p>
+            <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). Filtra escribiendo bajo el nombre de cada columna. Marca la casilla de varias filas (Mayús+clic para seleccionar un rango) y usa "🗑 Eliminar seleccionadas" para borrarlas de golpe. "Grabar" sustituye estas filas en la tabla; la clave (${UI.escapeHtml(state.columns[0])}) debe ser única.</p>
             <div class="values-grid-wrap values-grid-wrap--modal" id="actUpdGridWrap"><span class="spinner"></span></div>`;
 
         document.getElementById("actUpdGridAddRow").addEventListener("click", () => {
@@ -1398,6 +1401,7 @@ const TableUpdates = {
         document.getElementById("actUpdGridExportXlsx").addEventListener("click", () => this.exportGrid("xlsx"));
         document.getElementById("actUpdGridImport").addEventListener("click", () => document.getElementById("actUpdGridFileInput").click());
         document.getElementById("actUpdGridFileInput").addEventListener("change", (e) => this.uploadGrid(e));
+        document.getElementById("actUpdGridDeleteSel").addEventListener("click", () => this.deleteSelectedRows());
         document.getElementById("actUpdGridSave").addEventListener("click", () => this.commitGrid());
 
         this.renderGrid();
@@ -1469,6 +1473,25 @@ const TableUpdates = {
         return rows;
     },
 
+    // Borra de golpe todas las filas marcadas con la casilla de selección
+    // (equivalente al botón "Eliminar" de un ALV tras seleccionar con
+    // casillas / Mayús+clic).
+    async deleteSelectedRows() {
+        const state = this.gridState;
+        const n = state.selectedRowIds.size;
+        if (!n) return;
+        const ok = await UI.confirm("Eliminar filas seleccionadas", `¿Seguro que quieres eliminar ${n} fila(s) seleccionada(s)?`);
+        if (!ok) return;
+        this.syncGridFromDom();
+        state.currentRows.forEach(r => {
+            if (state.selectedRowIds.has(r.__rowId) && !r.__isNew) state.deletedRowIds.push(r.__rowId);
+        });
+        state.currentRows = state.currentRows.filter(r => !state.selectedRowIds.has(r.__rowId));
+        state.selectedRowIds.clear();
+        state.lastClickedRowId = null;
+        this.renderGrid();
+    },
+
     renderGrid() {
         const state = this.gridState;
         const wrap = document.getElementById("actUpdGridWrap");
@@ -1486,8 +1509,25 @@ const TableUpdates = {
         const filtered = this.getFilteredSortedRows();
         const visible = filtered.slice(0, state.visibleCount);
 
+        // La selección solo debe conservar filas que sigan existiendo (por si
+        // se borraron/filtraron entre renders).
+        const currentIds = new Set(state.currentRows.map(r => r.__rowId));
+        state.selectedRowIds.forEach(id => { if (!currentIds.has(id)) state.selectedRowIds.delete(id); });
+
         const countEl = document.getElementById("actUpdGridCount");
         if (countEl) countEl.textContent = `${filtered.length} de ${state.currentRows.length} fila(s)`;
+
+        const delBtn = document.getElementById("actUpdGridDeleteSel");
+        if (delBtn) {
+            if (state.selectedRowIds.size > 0) {
+                delBtn.style.display = "";
+                delBtn.textContent = `🗑 Eliminar seleccionadas (${state.selectedRowIds.size})`;
+            } else {
+                delBtn.style.display = "none";
+            }
+        }
+
+        const allFilteredSelected = filtered.length > 0 && filtered.every(r => state.selectedRowIds.has(r.__rowId));
 
         const headerCells = state.fields.map(f => {
             const arrow = state.sortCol === f.name ? (state.sortDir === 1 ? " ▲" : " ▼") : "";
@@ -1501,19 +1541,56 @@ const TableUpdates = {
 
         const rowsHtml = visible.map(row => {
             const cells = state.fields.map(f => this.renderCell(row, f)).join("");
-            return `<tr data-row="${row.__rowId}">${cells}<td class="values-row-remove"><button type="button" data-remove-row="${row.__rowId}" title="Eliminar fila">✕</button></td></tr>`;
+            const checked = state.selectedRowIds.has(row.__rowId);
+            return `<tr data-row="${row.__rowId}" class="${checked ? "actupd-row-selected" : ""}"><td class="values-row-select"><input type="checkbox" class="actupd-row-select" data-row="${row.__rowId}" ${checked ? "checked" : ""}></td>${cells}<td class="values-row-remove"><button type="button" data-remove-row="${row.__rowId}" title="Eliminar fila">✕</button></td></tr>`;
         }).join("");
 
         wrap.innerHTML = `
             <table class="values-grid actupd-values-grid">
                 <thead>
-                    <tr>${headerCells}<th></th></tr>
-                    <tr>${filterCells}<th></th></tr>
+                    <tr><th class="values-row-select"><input type="checkbox" id="actUpdSelectAll" ${allFilteredSelected ? "checked" : ""}></th>${headerCells}<th></th></tr>
+                    <tr><th class="values-row-select"></th>${filterCells}<th></th></tr>
                 </thead>
                 <tbody id="actUpdGridBody">${rowsHtml}</tbody>
             </table>
             ${filtered.length > visible.length ? `<button class="btn btn-secondary btn-sm" id="actUpdGridMore">Mostrar más (${filtered.length - visible.length} restantes)</button>` : ""}
         `;
+
+        const selectAllEl = document.getElementById("actUpdSelectAll");
+        if (selectAllEl) {
+            selectAllEl.addEventListener("change", () => {
+                if (selectAllEl.checked) filtered.forEach(r => state.selectedRowIds.add(r.__rowId));
+                else filtered.forEach(r => state.selectedRowIds.delete(r.__rowId));
+                this.renderGrid();
+            });
+        }
+        // Casilla por fila: clic normal marca/desmarca solo esa fila; con Mayús
+        // pulsado, marca (o desmarca, según el estado de la fila de partida) el
+        // rango completo entre la última fila tocada y esta, igual que en un
+        // ALV o en Excel.
+        wrap.querySelectorAll(".actupd-row-select").forEach(cb => {
+            cb.addEventListener("click", (e) => {
+                const rowId = cb.dataset.row;
+                if (e.shiftKey && state.lastClickedRowId) {
+                    const ids = visible.map(r => r.__rowId);
+                    const from = ids.indexOf(state.lastClickedRowId);
+                    const to = ids.indexOf(rowId);
+                    if (from !== -1 && to !== -1) {
+                        const [start, end] = from < to ? [from, to] : [to, from];
+                        const makeChecked = cb.checked;
+                        for (let i = start; i <= end; i++) {
+                            if (makeChecked) state.selectedRowIds.add(ids[i]);
+                            else state.selectedRowIds.delete(ids[i]);
+                        }
+                    }
+                } else {
+                    if (cb.checked) state.selectedRowIds.add(rowId);
+                    else state.selectedRowIds.delete(rowId);
+                }
+                state.lastClickedRowId = rowId;
+                this.renderGrid();
+            });
+        });
 
         wrap.querySelectorAll("th[data-sort]").forEach(th => {
             th.addEventListener("click", () => {
@@ -1543,6 +1620,7 @@ const TableUpdates = {
                 const row = state.currentRows.find(r => r.__rowId === rowId);
                 if (row && !row.__isNew) state.deletedRowIds.push(rowId);
                 state.currentRows = state.currentRows.filter(r => r.__rowId !== rowId);
+                state.selectedRowIds.delete(rowId);
                 this.renderGrid();
             });
         });
@@ -1550,12 +1628,6 @@ const TableUpdates = {
         wrap.querySelectorAll(".actupd-cell-input").forEach(el => {
             const evt = el.tagName === "SELECT" || el.type === "checkbox" ? "change" : "input";
             el.addEventListener(evt, (e) => this.onCellChange(e, el));
-        });
-        // "Listbox (desplegable)": clic en la celda abre el desplegable anclado
-        // (no un modal). La lista muestra "clave — texto"; al elegir, solo la
-        // clave queda en la celda.
-        wrap.querySelectorAll(".actupd-listbox-input").forEach(el => {
-            el.addEventListener("click", () => this.openListboxDropdown(el.dataset.row, el.dataset.field, el));
         });
         wrap.querySelectorAll(".actupd-search-trigger").forEach(btn => {
             btn.addEventListener("click", () => this.openSearchHelp(btn.dataset.row, btn.dataset.field));
@@ -1583,10 +1655,15 @@ const TableUpdates = {
                     <button type="button" class="actupd-search-trigger" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" title="Buscar">🔍</button>
                 </span>`;
             } else {
-                // "Listbox (desplegable)": desplegable real anclado bajo la celda
-                // (no un modal). La lista muestra "id — texto"; al hacer clic en
-                // una opción solo se guarda el id en la celda.
-                inputHtml = `<input type="text" class="actupd-cell-input actupd-listbox-input" readonly data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" data-col-idx="${this.gridState.columns.indexOf(f.name)}" value="${UI.escapeHtml(val)}" placeholder="${v.allowEmpty ? "(vacío)" : "— selecciona —"}">`;
+                // "Listbox (desplegable)": un <select> nativo real (estándar,
+                // accesible, navegable con teclado). No es posible mostrar
+                // "clave — texto" en la lista y solo la clave ya cerrado, así
+                // que se opta por mostrar solo la clave en ambos casos; la
+                // descripción queda disponible como tooltip al pasar el ratón.
+                inputHtml = `<select class="actupd-cell-input" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}">
+                    <option value="">${v.allowEmpty ? "(vacío)" : "— selecciona —"}</option>
+                    ${options.map(o => `<option value="${UI.escapeHtml(o.id)}" ${o.desc ? `title="${UI.escapeHtml(o.desc)}"` : ""} ${String(val) === String(o.id) ? "selected" : ""}>${UI.escapeHtml(o.id)}</option>`).join("")}
+                </select>`;
             }
         }
 
@@ -1672,46 +1749,6 @@ const TableUpdates = {
         });
 
         this.renderGrid();
-    },
-
-    // "Listbox (desplegable)": desplegable real anclado a la celda (no modal).
-    // Muestra "clave — texto" en cada opción; al elegir, solo la clave se
-    // guarda en la celda.
-    openListboxDropdown(rowId, field, anchorEl) {
-        document.querySelectorAll(".actupd-listbox-popover").forEach(p => p.remove());
-        const state = this.gridState;
-        const options = state.optionsByField[field] || [];
-        const currentVal = anchorEl.value;
-
-        const pop = document.createElement("div");
-        pop.className = "actupd-popover actupd-listbox-popover";
-        pop.innerHTML = `<div class="actupd-sh-results">
-            ${options.map(o => `<div class="actupd-sh-item ${String(currentVal) === String(o.id) ? "actupd-sh-item-selected" : ""}" data-id="${UI.escapeHtml(o.id)}">${UI.escapeHtml(o.id)}${o.desc ? " — " + UI.escapeHtml(o.desc) : ""}</div>`).join("") || `<div class="hierarchy-levels-empty">Sin valores disponibles.</div>`}
-        </div>`;
-        document.body.appendChild(pop);
-        const r = anchorEl.getBoundingClientRect();
-        pop.style.top = `${r.bottom + window.scrollY + 4}px`;
-        pop.style.left = `${r.left + window.scrollX}px`;
-        pop.style.width = `${Math.max(r.width, 220)}px`;
-
-        const close = () => {
-            pop.remove();
-            document.removeEventListener("click", closeOnOutside, true);
-        };
-        const closeOnOutside = (e) => {
-            if (!pop.contains(e.target) && e.target !== anchorEl) close();
-        };
-        setTimeout(() => document.addEventListener("click", closeOnOutside, true), 0);
-
-        pop.querySelectorAll(".actupd-sh-item").forEach(item => {
-            item.addEventListener("click", () => {
-                this.syncGridFromDom();
-                const row = state.currentRows.find(r => r.__rowId === rowId);
-                row[field] = item.dataset.id;
-                close();
-                this.renderGrid();
-            });
-        });
     },
 
     openSearchHelp(rowId, field) {
