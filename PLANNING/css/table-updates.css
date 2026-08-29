@@ -151,12 +151,13 @@
 /* ---------------- Grid formato Excel (igual que Mantenimiento de dimensiones) ---------------- */
 table.actupd-values-grid {
     /* table-layout fijo: respeta al milímetro los anchos del <colgroup> en
-       lugar de repartir el espacio sobrante entre todas las columnas (que es
-       lo que hacía que la columna de la casilla saliera mucho más ancha de
-       lo indicado). */
+       lugar de repartir el espacio sobrante entre todas las columnas. OJO:
+       nada de min-width/width:100% aquí — eso obliga a la tabla a ser más
+       ancha que la suma de sus columnas y el navegador reparte ese sobrante
+       entre TODAS las columnas (incluidas las de ancho fijo), que es
+       justo lo que hacía que la casilla saliera más ancha de lo indicado. */
     table-layout: fixed;
     width: auto;
-    min-width: 100%;
 }
 table.actupd-values-grid th {
     white-space: nowrap;
