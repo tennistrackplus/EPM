@@ -199,6 +199,14 @@
     font-weight: 600;
 }
 
+/* Aviso de "clave heredada de Parametrización" en el diseñador de Actualización de tablas */
+.actupd-param-hint {
+    border-style: solid;
+    border-color: var(--brand-primary, #6366f1);
+    background: var(--brand-primary-light, rgba(99, 102, 241, 0.08));
+    color: var(--text-primary);
+}
+
 /* Diseñador de campos (dimensiones / cubos) */
 .fields-builder {
     border: 1px solid var(--border-subtle);
@@ -219,9 +227,18 @@
     color: var(--text-secondary);
 }
 
+.fields-builder-header .col-center {
+    text-align: center;
+}
+
 .fields-builder-rows {
     max-height: 260px;
     overflow-y: auto;
+    /* Reserva el hueco del scrollbar siempre (aunque no haga falta) para que
+       las columnas de la cabecera (fuera de este contenedor) no se desplacen
+       respecto a las columnas de las filas cuando aparece la barra al añadir
+       más campos de los que caben en 260px. */
+    scrollbar-gutter: stable;
 }
 
 .field-row {
