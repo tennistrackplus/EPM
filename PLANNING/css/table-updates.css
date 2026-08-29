@@ -240,6 +240,26 @@ table.actupd-values-grid td select.actupd-cell-input:focus {
 .values-row-select {
     text-align: center;
 }
+/* Ancho fijo real de la casilla de selección y el botón ✕: se fija también
+   aquí (no solo en el <col>) porque una celda de cabecera con position:sticky
+   puede hacer que algunos navegadores ignoren el ancho del <col> para esa
+   columna y la ensanchen más de la cuenta, descuadrando además la casilla
+   de la cabecera (alineada a la izquierda por la regla general de thead th)
+   respecto a las de las filas (centradas). Fijando aquí ancho + box-sizing +
+   alineación, con más especificidad que esas reglas genéricas, cabecera y
+   filas quedan siempre idénticas. */
+table.actupd-values-grid th.values-row-select,
+table.actupd-values-grid td.values-row-select,
+table.actupd-values-grid th.values-row-remove,
+table.actupd-values-grid td.values-row-remove {
+    width: 32px;
+    min-width: 32px;
+    max-width: 32px;
+    box-sizing: border-box;
+    text-align: center;
+    padding: 4px;
+    white-space: nowrap;
+}
 /* Resaltado de fila seleccionada: bien visible (no el azul casi blanco de
    --brand-primary-light) y con una franja de color a la izquierda, como en
    un ALV. */
