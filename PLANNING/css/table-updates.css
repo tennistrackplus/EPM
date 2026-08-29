@@ -50,7 +50,7 @@
 /* Bloque B: campos */
 .actupd-fields-header {
     display: grid;
-    grid-template-columns: 28px 1fr 2fr 60px 60px;
+    grid-template-columns: 28px 46px 1fr 2fr 60px 60px;
     gap: 8px;
     padding: 6px 16px;
     font-size: var(--fs-xs);
@@ -65,11 +65,14 @@
 }
 .actupd-field-row {
     display: grid;
-    grid-template-columns: 28px 1fr 2fr 60px 60px;
+    grid-template-columns: 28px 46px 1fr 2fr 60px 60px;
     gap: 8px;
     align-items: center;
     padding: 6px 0;
     border-bottom: 1px solid var(--border-subtle);
+}
+.actupd-field-key {
+    text-align: center;
 }
 .actupd-field-row.dragging {
     opacity: 0.4;
