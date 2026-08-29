@@ -1476,12 +1476,10 @@ const TableUpdates = {
     // Borra de golpe todas las filas marcadas con la casilla de selección
     // (equivalente al botón "Eliminar" de un ALV tras seleccionar con
     // casillas / Mayús+clic).
-    async deleteSelectedRows() {
+    deleteSelectedRows() {
         const state = this.gridState;
         const n = state.selectedRowIds.size;
         if (!n) return;
-        const ok = await UI.confirm("Eliminar filas seleccionadas", `¿Seguro que quieres eliminar ${n} fila(s) seleccionada(s)?`);
-        if (!ok) return;
         this.syncGridFromDom();
         state.currentRows.forEach(r => {
             if (state.selectedRowIds.has(r.__rowId) && !r.__isNew) state.deletedRowIds.push(r.__rowId);
@@ -1529,9 +1527,24 @@ const TableUpdates = {
 
         const allFilteredSelected = filtered.length > 0 && filtered.every(r => state.selectedRowIds.has(r.__rowId));
 
+        // Anchos de columna: fijos para casilla/✕ (no se pueden arrastrar), y
+        // ajustables (con un tirador en el borde derecho de la cabecera) para
+        // el resto. Se recuerdan en el propio gridState entre renders.
+        if (!state.colWidths) state.colWidths = {};
+        const DEFAULT_COL_W = 170;
+        const DEFAULT_DESC_W = 140;
+        const colsHtml = `<col class="actupd-col-fixed">` +
+            state.fields.map(f => {
+                const w = state.colWidths[f.name] || DEFAULT_COL_W;
+                const descCol = f.validation && f.validation.showText
+                    ? `<col style="width:${state.colWidths[f.name + "__desc"] || DEFAULT_DESC_W}px">` : "";
+                return `<col data-col="${UI.escapeHtml(f.name)}" style="width:${w}px">${descCol}`;
+            }).join("") +
+            `<col class="actupd-col-fixed">`;
+
         const headerCells = state.fields.map(f => {
             const arrow = state.sortCol === f.name ? (state.sortDir === 1 ? " ▲" : " ▼") : "";
-            return `<th data-sort="${UI.escapeHtml(f.name)}" title="${UI.escapeHtml(f.description || "")}">${UI.escapeHtml(f.description || f.name)}${arrow}<br><span class="col-type">${UI.escapeHtml((f.validation && f.validation.type !== "NONE") ? "validado" : "texto")}</span></th>${f.validation && f.validation.showText ? `<th class="actupd-desc-col">Texto</th>` : ""}`;
+            return `<th data-sort="${UI.escapeHtml(f.name)}" title="${UI.escapeHtml(f.description || "")}">${UI.escapeHtml(f.description || f.name)}${arrow}<br><span class="col-type">${UI.escapeHtml((f.validation && f.validation.type !== "NONE") ? "validado" : "texto")}</span><span class="actupd-col-resize" data-col="${UI.escapeHtml(f.name)}" title="Arrastra para ajustar el ancho"></span></th>${f.validation && f.validation.showText ? `<th class="actupd-desc-col">Texto<span class="actupd-col-resize" data-col="${UI.escapeHtml(f.name)}__desc" title="Arrastra para ajustar el ancho"></span></th>` : ""}`;
         }).join("");
 
         const filterCells = state.fields.map(f => `
@@ -1547,6 +1560,7 @@ const TableUpdates = {
 
         wrap.innerHTML = `
             <table class="values-grid actupd-values-grid">
+                <colgroup>${colsHtml}</colgroup>
                 <thead>
                     <tr><th class="values-row-select"><input type="checkbox" id="actUpdSelectAll" ${allFilteredSelected ? "checked" : ""}></th>${headerCells}<th></th></tr>
                     <tr><th class="values-row-select"></th>${filterCells}<th></th></tr>
@@ -1555,6 +1569,34 @@ const TableUpdates = {
             </table>
             ${filtered.length > visible.length ? `<button class="btn btn-secondary btn-sm" id="actUpdGridMore">Mostrar más (${filtered.length - visible.length} restantes)</button>` : ""}
         `;
+
+        wrap.querySelectorAll(".actupd-col-resize").forEach(handle => {
+            handle.addEventListener("click", (e) => e.stopPropagation());
+            handle.addEventListener("mousedown", (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const key = handle.dataset.col;
+                const colEl = wrap.querySelector(`col[data-col="${CSS.escape(key)}"]`) || (() => {
+                    // columna "__desc": es el <col> inmediatamente siguiente al
+                    // de su campo base.
+                    const base = wrap.querySelector(`col[data-col="${CSS.escape(key.replace("__desc", ""))}"]`);
+                    return base ? base.nextElementSibling : null;
+                })();
+                if (!colEl) return;
+                const startX = e.clientX;
+                const startWidth = colEl.getBoundingClientRect().width;
+                const onMove = (ev) => {
+                    colEl.style.width = `${Math.max(60, startWidth + (ev.clientX - startX))}px`;
+                };
+                const onUp = (ev) => {
+                    state.colWidths[key] = Math.max(60, startWidth + (ev.clientX - startX));
+                    document.removeEventListener("mousemove", onMove);
+                    document.removeEventListener("mouseup", onUp);
+                };
+                document.addEventListener("mousemove", onMove);
+                document.addEventListener("mouseup", onUp);
+            });
+        });
 
         const selectAllEl = document.getElementById("actUpdSelectAll");
         if (selectAllEl) {
@@ -1994,8 +2036,10 @@ const TableUpdates = {
             const table = Provider.qualify(this.project.DATASET, state.record.TABLA);
             // Estrategia simple y robusta (no requiere clave garantizada a
             // nivel de motor): se borra el subconjunto filtrado y se
-            // reinserta completo.
-            await Provider.runQuery(`DELETE FROM ${table} ${state.where}`);
+            // reinserta completo. Si no hay filtro (sin variables o tabla de
+            // partida vacía), state.where es "" y el motor exige un WHERE
+            // explícito para el DELETE — se usa WHERE TRUE para borrar todo.
+            await Provider.runQuery(`DELETE FROM ${table} ${state.where || "WHERE TRUE"}`);
 
             const CHUNK = 500;
             for (let i = 0; i < state.currentRows.length; i += CHUNK) {
