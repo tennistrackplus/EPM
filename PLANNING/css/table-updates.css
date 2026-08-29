@@ -149,8 +149,24 @@
 }
 
 /* ---------------- Grid formato Excel (igual que Mantenimiento de dimensiones) ---------------- */
+table.actupd-values-grid {
+    /* table-layout fijo: respeta al milímetro los anchos del <colgroup> en
+       lugar de repartir el espacio sobrante entre todas las columnas (que es
+       lo que hacía que la columna de la casilla saliera mucho más ancha de
+       lo indicado). */
+    table-layout: fixed;
+    width: auto;
+    min-width: 100%;
+}
 table.actupd-values-grid th {
     white-space: nowrap;
+    position: relative;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* Casilla de selección y botón ✕: ancho fijo, no forman parte del resize. */
+col.actupd-col-fixed {
+    width: 32px;
 }
 .actupd-filter-th {
     padding: 2px 4px !important;
@@ -190,6 +206,21 @@ table.actupd-values-grid td select.actupd-cell-input:focus {
     flex: 0 0 auto;
 }
 
+/* Tirador de ajuste de ancho de columna (todas menos casilla y ✕). */
+.actupd-col-resize {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 2;
+}
+.actupd-col-resize:hover, .actupd-col-resize:active {
+    background: var(--brand-primary);
+    opacity: 0.5;
+}
+
 .actupd-sh-results {
     max-height: 320px;
     overflow-y: auto;
@@ -203,6 +234,21 @@ table.actupd-values-grid td select.actupd-cell-input:focus {
 }
 .actupd-sh-item:hover {
     background: var(--brand-primary-light);
+}
+
+.values-row-select {
+    text-align: center;
+}
+/* Resaltado de fila seleccionada: bien visible (no el azul casi blanco de
+   --brand-primary-light) y con una franja de color a la izquierda, como en
+   un ALV. */
+table.actupd-values-grid tr.actupd-row-selected td {
+    background: #CFE0FF;
+    box-shadow: inset 3px 0 0 var(--brand-primary);
+}
+table.actupd-values-grid tr.actupd-row-selected td select.actupd-cell-input,
+table.actupd-values-grid tr.actupd-row-selected td input:not(:focus) {
+    background: transparent;
 }
 
 .actupd-summary-detail {
