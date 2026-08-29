@@ -1,0 +1,113 @@
+/**
+ * BigQuery Excel Connector - Utility Classes
+ * Atomic helpers for Spacing, Layout, Display, Text & Accessibility
+ */
+
+/* ==========================================================================
+   1. DISPLAY & FLEXBOX HELPERS
+   ========================================================================== */
+
+.d-flex { display: flex !important; }
+.d-inline-flex { display: inline-flex !important; }
+.d-block { display: block !important; }
+.d-none { display: none !important; }
+
+.flex-col { flex-direction: column !important; }
+.flex-row { flex-direction: row !important; }
+.flex-wrap { flex-wrap: wrap !important; }
+
+.items-center { align-items: center !important; }
+.items-start { align-items: flex-start !important; }
+.items-end { align-items: flex-end !important; }
+
+.justify-between { justify-content: space-between !important; }
+.justify-center { justify-content: center !important; }
+.justify-end { justify-content: flex-end !important; }
+
+.flex-1 { flex: 1 1 0% !important; }
+.flex-shrink-0 { flex-shrink: 0 !important; }
+
+
+/* ==========================================================================
+   2. GAP & SPACING HELPERS
+   ========================================================================== */
+
+.gap-2xs { gap: var(--space-2xs) !important; }
+.gap-xs { gap: var(--space-xs) !important; }
+.gap-sm { gap: var(--space-sm) !important; }
+.gap-md { gap: var(--space-md) !important; }
+.gap-base { gap: var(--space-base) !important; }
+.gap-lg { gap: var(--space-lg) !important; }
+
+/* Margin Helpers */
+.m-0 { margin: 0 !important; }
+.mt-xs { margin-top: var(--space-xs) !important; }
+.mt-sm { margin-top: var(--space-sm) !important; }
+.mt-md { margin-top: var(--space-md) !important; }
+.mt-base { margin-top: var(--space-base) !important; }
+.mb-xs { margin-bottom: var(--space-xs) !important; }
+.mb-sm { margin-bottom: var(--space-sm) !important; }
+.mb-md { margin-bottom: var(--space-md) !important; }
+.mb-base { margin-bottom: var(--space-base) !important; }
+
+/* Padding Helpers */
+.p-0 { padding: 0 !important; }
+.p-xs { padding: var(--space-xs) !important; }
+.p-sm { padding: var(--space-sm) !important; }
+.p-md { padding: var(--space-md) !important; }
+.p-base { padding: var(--space-base) !important; }
+
+
+/* ==========================================================================
+   3. TEXT & TYPOGRAPHY UTILITIES
+   ========================================================================== */
+
+.text-left { text-align: left !important; }
+.text-center { text-align: center !important; }
+.text-right { text-align: right !important; }
+
+.text-xs { font-size: var(--font-size-xs) !important; }
+.text-sm { font-size: var(--font-size-sm) !important; }
+.text-md { font-size: var(--font-size-md) !important; }
+.text-base { font-size: var(--font-size-base) !important; }
+.text-lg { font-size: var(--font-size-lg) !important; }
+
+.font-regular { font-weight: var(--font-weight-regular) !important; }
+.font-medium { font-weight: var(--font-weight-medium) !important; }
+.font-semibold { font-weight: var(--font-weight-semibold) !important; }
+.font-bold { font-weight: var(--font-weight-bold) !important; }
+
+.color-primary { color: var(--color-primary) !important; }
+.color-secondary { color: var(--color-text-secondary) !important; }
+.color-error { color: var(--color-error) !important; }
+.color-success { color: var(--color-success) !important; }
+
+.text-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+/* ==========================================================================
+   4. ACCESSIBILITY & MISC UTILITIES
+   ========================================================================== */
+
+/* Screen reader only utility */
+.sr-only {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.w-full { width: 100% !important; }
+.h-full { height: 100% !important; }
+
+.border-top { border-top: 1px solid var(--color-border) !important; }
+.border-bottom { border-bottom: 1px solid var(--color-border) !important; }
