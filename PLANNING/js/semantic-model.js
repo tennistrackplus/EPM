@@ -289,10 +289,18 @@ const SemanticModel = {
             const lkmlText = LkmlExport.buildContent(model);
             const lkmlPath = yamlPath.replace(/\.yaml$/i, ".lkml");
 
+            // Justo antes de llamar a GitHub: el token no sale de
+            // DracoConfig.semanticModelGithub.token (config.js), sino del
+            // secreto "github-pat-draco" en Google Secret Manager.
+            const cfg = (typeof DracoConfig !== "undefined" && DracoConfig.semanticModelGithub) || {};
+            const token = await BQ.getGithubPatFromSecretManager();
+            const repoConfig = { url: cfg.url, branch: cfg.branch, token };
+
             await GithubRepo.putFile(
                 lkmlPath,
                 lkmlText,
-                `Actualiza ${lkmlPath} desde Draco Planning (cubo "${model.model.name}")`
+                `Actualiza ${lkmlPath} desde Draco Planning (cubo "${model.model.name}")`,
+                repoConfig
             );
 
             UI.toast(`Modelo LookML guardado en GitHub: ${lkmlPath}`, "success");

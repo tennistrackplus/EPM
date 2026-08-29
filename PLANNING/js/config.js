@@ -21,7 +21,7 @@ const DracoConfig = {
     googleClientId: "316357511817-lck6pdotv8mrb7n72pahuukt2e0fvsrt.apps.googleusercontent.com",
     googleScopes: [
         "https://www.googleapis.com/auth/bigquery",
-        "https://www.googleapis.com/auth/cloud-platform.read-only",
+        "https://www.googleapis.com/auth/cloud-platform",
         "https://www.googleapis.com/auth/userinfo.email"
     ].join(" "),
 
@@ -97,12 +97,12 @@ const DracoConfig = {
     semanticModelGithub: {
         url: "https://github.com/tennistrackplus/SEMANTIC_MODEL",
         branch: "main",
-        // Personal Access Token de GitHub con permiso de escritura sobre
-        // el repo (classic: scope "repo"; fine-grained: "Contents: Read
-        // and write"). Rellénalo antes de desplegar — sin token, el .lkml
-        // se genera igualmente pero falla la subida (se avisa por toast,
-        // nunca bloquea el guardado del cubo).
-        token: "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"
+        // El PAT ya NO se guarda aquí (GitHub lo bloqueaba al detectarlo
+        // en el código). Se lee en el momento de hacer el commit desde el
+        // secreto "github-pat-draco" de Google Secret Manager — ver
+        // BQ.getGithubPatFromSecretManager() en js/bigquery.js y su uso en
+        // SemanticModel.generateAndPushLkml() (js/semantic-model.js).
+        token: ""
     }
 };
 

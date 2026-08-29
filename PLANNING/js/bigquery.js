@@ -26,6 +26,60 @@ const BQ = {
         localStorage.setItem("draco_gcp_project", projectId);
     },
 
+    // ---------------------------------------------------------
+    // PAT de GitHub vía Google Secret Manager
+    // ---------------------------------------------------------
+    // GitHub bloquea el push si detecta el token de DracoConfig.
+    // semanticModelGithub.token pegado tal cual en config.js, así que en
+    // vez de leerlo de ahí se lee, justo antes de usarlo, desde Secret
+    // Manager (secreto "github-pat-draco").
+    GITHUB_PAT_SECRET_NAME: "github-pat-draco",
+
+    /**
+     * Lee la última versión del secreto "github-pat-draco" en Secret
+     * Manager y devuelve su valor en texto (el PAT de GitHub). Usa el
+     * mismo token OAuth de la sesión de BigQuery activa (hace falta el
+     * scope "cloud-platform" en DracoConfig.googleScopes, además de que
+     * el usuario tenga el rol "Secret Manager Secret Accessor" sobre ese
+     * secreto en el proyecto indicado).
+     *
+     * projectId: proyecto GCP donde vive el secreto (por defecto, el
+     * proyecto GCP activo en Planning, BQ.getGcpProject()).
+     */
+    async getGithubPatFromSecretManager(projectId) {
+        const token = this.getToken();
+        if (!token) {
+            const err = new Error("Sesión de BigQuery no válida o expirada.");
+            err.code = "NO_AUTH";
+            throw err;
+        }
+        const proj = projectId || this.getGcpProject();
+        if (!proj) {
+            throw new Error(`Falta el proyecto GCP donde está el secreto "${this.GITHUB_PAT_SECRET_NAME}".`);
+        }
+
+        const url = `https://secretmanager.googleapis.com/v1/projects/${encodeURIComponent(proj)}/secrets/${this.GITHUB_PAT_SECRET_NAME}/versions/latest:access`;
+
+        const res = await fetch(url, {
+            headers: { "Authorization": `Bearer ${token}` }
+        });
+
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => null);
+            const msg = (errBody && errBody.error && errBody.error.message) || `HTTP ${res.status}`;
+            throw new Error(`No se pudo leer el secreto "${this.GITHUB_PAT_SECRET_NAME}" de Secret Manager: ${msg}`);
+        }
+
+        const data = await res.json();
+        const b64 = data && data.payload && data.payload.data;
+        if (!b64) {
+            throw new Error(`El secreto "${this.GITHUB_PAT_SECRET_NAME}" no devolvió ningún valor en Secret Manager.`);
+        }
+
+        // El payload viene en base64 (posible UTF-8): decodificación segura.
+        return decodeURIComponent(escape(atob(b64))).trim();
+    },
+
     isConnected() {
         return !!this.getToken();
     },
