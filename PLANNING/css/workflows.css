@@ -41,6 +41,12 @@
     color: var(--brand-primary-hover, #4338ca);
 }
 
+.wf-newrun-vars {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 4px 20px;
+}
+
 /* ---------- Propiedades: Inicio / Finalización lado a lado ---------- */
 .wf-timing-grid {
     display: grid;
@@ -319,40 +325,16 @@
     padding-left: 23px;
 }
 
-/* ---------- Ejecuciones: cadena de pasos con badge de asignación ---------- */
-.wf-run-chain-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    font-weight: 700;
-    padding: 2px 7px;
-    border-radius: 999px;
-    margin-top: 4px;
-}
-
-.wf-run-chain-badge--assigned {
-    background: rgba(47, 158, 88, 0.15);
-    color: var(--color-success, #2f9e58);
-}
-
-.wf-run-chain-badge--unassigned {
-    background: rgba(214, 69, 69, 0.12);
-    color: var(--color-danger, #d64545);
-}
-
-.wf-newrun-vars {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-    gap: 4px 20px;
-}
-
 /* ---------- Ejecuciones: resumen (progreso + variables globales) ---------- */
 .wf-run-summary {
     display: flex;
     flex-direction: column;
     gap: 10px;
-    margin-bottom: 18px;
+    margin-bottom: 20px;
+    padding: 14px 16px;
+    background: var(--surface-sunken, #f7f7f9);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
 }
 
 .wf-run-summary-progress {
@@ -370,6 +352,49 @@
     font-weight: 600;
 }
 
+.wf-run-summary-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-base);
+    color: var(--text-primary);
+}
+
+.wf-run-summary-title .btn-icon {
+    opacity: 0.55;
+}
+
+.wf-run-summary-title:hover .btn-icon {
+    opacity: 1;
+}
+
+.wf-run-summary-description {
+    margin: -2px 0 2px;
+    font-size: var(--fs-sm, 13px);
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+}
+
+.btn-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: background-color var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.btn-icon:hover {
+    background: var(--gray-100);
+    color: var(--brand-primary);
+}
+
 .wf-run-progress-bar {
     height: 8px;
     background: var(--gray-100, #eee);
@@ -383,19 +408,119 @@
     transition: width 0.3s ease;
 }
 
-/* ---------- Ejecuciones: cadena de pasos como pestañas ---------- */
-.wf-run-tabs {
-    margin-bottom: 18px;
+/* ---------- Ejecuciones: cadena de pasos como "stepper" horizontal ---------- */
+.wf-run-steps {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
 }
 
-.wf-run-tab {
+.wf-run-step-tab {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 14px 8px 8px;
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
     cursor: pointer;
-    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
 }
 
-.wf-run-tab.is-selected {
+.wf-run-step-tab:hover {
     border-color: var(--brand-primary);
+}
+
+.wf-run-step-tab.is-selected {
+    border-color: var(--brand-primary);
+    background: var(--brand-primary-light, #eef2ff);
     box-shadow: 0 0 0 1px var(--brand-primary);
+}
+
+.wf-run-step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--gray-100);
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.wf-run-step-tab.is-selected .wf-run-step-num {
+    background: var(--brand-primary);
+    color: var(--text-inverse);
+}
+
+.wf-run-step-tab.is-done .wf-run-step-num {
+    background: var(--color-success-light);
+    color: var(--color-success);
+}
+
+.wf-run-step-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.wf-run-step-name {
+    font-size: var(--fs-sm, 13px);
+    font-weight: 700;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 220px;
+}
+
+.wf-run-step-connector {
+    width: 24px;
+    height: 1px;
+    background: var(--border-default);
+    flex-shrink: 0;
+    margin: 0 -2px;
+}
+
+/* ---------- Ejecuciones: badge de asignación en cada paso ---------- */
+.wf-run-chain-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+}
+
+.wf-run-chain-badge-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.wf-run-chain-badge--assigned .wf-run-chain-badge-dot {
+    background: var(--color-success, #2f9e58);
+}
+
+.wf-run-chain-badge--assigned {
+    color: var(--color-success, #2f9e58);
+}
+
+.wf-run-chain-badge--unassigned .wf-run-chain-badge-dot {
+    background: var(--color-warning, #b5690a);
+}
+
+.wf-run-chain-badge--unassigned {
+    color: var(--color-warning, #b5690a);
 }
 
 /* ---------- Ejecuciones: instancias del paso seleccionado, en rejilla ---------- */
@@ -494,4 +619,41 @@
     background: none;
     color: inherit;
     border-color: transparent;
+}
+
+/* ---------- Ejecuciones: buscador de usuarios en "Asignado a" (BigQuery) ---------- */
+.user-search {
+    position: relative;
+}
+
+.user-search-input {
+    width: 100%;
+}
+
+.user-search-results {
+    position: absolute;
+    z-index: 30;
+    top: calc(100% + 2px);
+    left: 0;
+    right: 0;
+    max-height: 180px;
+    overflow-y: auto;
+    background: var(--surface-card);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.12));
+}
+
+.user-search-item {
+    padding: 6px 10px;
+    font-size: var(--fs-sm, 13px);
+    color: var(--text-primary);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.user-search-item:hover {
+    background: var(--gray-100);
 }
