@@ -204,6 +204,7 @@ const DracoSchema = {
                     INICIO_TIPO STRING NOT NULL,
                     INICIO_FECHA STRING,
                     REVISION BOOLEAN,
+                    NO_BLOQUEA_REVISION BOOLEAN,
                     FIN_TIPO STRING NOT NULL,
                     FIN_FECHA STRING,
                     DRIVER_DIMENSION_ID STRING,
@@ -279,6 +280,7 @@ const DracoSchema = {
                     REVISOR STRING,
                     ESTADO STRING NOT NULL,
                     FECHA_PROGRAMADA STRING,
+                    FECHA_PROGRAMADA_FIN STRING,
                     FECHA_INICIO TIMESTAMP,
                     FECHA_FIN TIMESTAMP
                 )`,
@@ -378,11 +380,14 @@ const DracoSchema = {
         const cubos = Provider.qualifyControl("CUBOS");
         const workflowsRuns = Provider.qualifyControl("WORKFLOWS_RUNS");
         const workflowsRunsInstancias = Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS");
+        const workflowsPasos = Provider.qualifyControl("WORKFLOWS_PASOS");
         await Promise.all([
             Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING`),
             Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP`),
             Provider.runQuery(`ALTER TABLE ${workflowsRuns} ADD COLUMN IF NOT EXISTS DESCRIPCION STRING`),
-            Provider.runQuery(`ALTER TABLE ${workflowsRunsInstancias} ADD COLUMN IF NOT EXISTS REVISOR STRING`)
+            Provider.runQuery(`ALTER TABLE ${workflowsRunsInstancias} ADD COLUMN IF NOT EXISTS REVISOR STRING`),
+            Provider.runQuery(`ALTER TABLE ${workflowsRunsInstancias} ADD COLUMN IF NOT EXISTS FECHA_PROGRAMADA_FIN STRING`),
+            Provider.runQuery(`ALTER TABLE ${workflowsPasos} ADD COLUMN IF NOT EXISTS NO_BLOQUEA_REVISION BOOLEAN`)
         ]);
     },
 

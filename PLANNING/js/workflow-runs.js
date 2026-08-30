@@ -61,6 +61,29 @@ const WorkflowRuns = {
         COMPLETADO: { label: "Completada", cls: "run-status-completado" }
     },
 
+    // Estado resumido de un PASO (no de cada instancia) que se muestra en
+    // la cadena de arriba: empieza Pendiente; en cuanto se pulsa play en
+    // alguna instancia pasa a Activo; si se pulsa stop pasa a Suspendido;
+    // si la propia ejecución está suspendida, el paso se ve Suspendido
+    // pase lo que pase con sus instancias; el resto de casos (bloqueado,
+    // en revisión, completado, mezcla de estados...) se agrupan como "En
+    // construcción". Ver stepRunEstado().
+    STEP_ESTADOS: {
+        PENDIENTE: { label: "Pendiente", cls: "wf-step-status--pendiente" },
+        ACTIVO: { label: "Activo", cls: "wf-step-status--activo" },
+        SUSPENDIDO: { label: "Suspendido", cls: "wf-step-status--suspendido" },
+        EN_CONSTRUCCION: { label: "En construcción", cls: "wf-step-status--construccion" }
+    },
+
+    stepRunEstado(instances) {
+        if (this.currentRun && this.currentRun.estado === "SUSPENDIDO") return "SUSPENDIDO";
+        if (!instances.length) return "PENDIENTE";
+        if (instances.some(i => i.estado === "SUSPENDIDO")) return "SUSPENDIDO";
+        if (instances.some(i => i.estado === "EN_CURSO")) return "ACTIVO";
+        if (instances.every(i => i.estado === "PENDIENTE")) return "PENDIENTE";
+        return "EN_CONSTRUCCION";
+    },
+
     project: null,
     workflow: null,          // definición completa (Workflows.loadDetail)
     runs: [],
@@ -314,11 +337,14 @@ const WorkflowRuns = {
                     estadoInicial = "PENDIENTE"; // sin scheduler: queda disponible, solo se informa la fecha prevista
                 }
 
+                let fechaProgramadaFin = "";
+                if (step.fin.tipo === "FECHA") fechaProgramadaFin = step.fin.fecha || "";
+
                 valores.forEach(v => {
                     instancias.push({
                         id: Provider.newId(), pasoId: step.id, orden: idx,
                         driverValor: v, asignado: "", estado: estadoInicial,
-                        fechaProgramada
+                        fechaProgramada, fechaProgramadaFin
                     });
                 });
             }
@@ -337,10 +363,10 @@ const WorkflowRuns = {
                 const vals = instancias.map(i => `(
                     '${Provider.esc(runId)}', '${Provider.esc(i.pasoId)}', '${Provider.esc(i.id)}', ${i.orden},
                     ${i.driverValor !== null ? `'${Provider.esc(i.driverValor)}'` : "NULL"},
-                    '${Provider.esc(i.asignado)}', '${Provider.esc(i.estado)}', '${Provider.esc(i.fechaProgramada)}', NULL, NULL
+                    '${Provider.esc(i.asignado)}', '${Provider.esc(i.estado)}', '${Provider.esc(i.fechaProgramada)}', '${Provider.esc(i.fechaProgramadaFin)}', NULL, NULL
                 )`).join(",\n");
                 runInserts.push(Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
-                    (RUN_ID, PASO_ID, INSTANCIA_ID, ORDEN, DRIVER_VALOR, ASIGNADO, ESTADO, FECHA_PROGRAMADA, FECHA_INICIO, FECHA_FIN)
+                    (RUN_ID, PASO_ID, INSTANCIA_ID, ORDEN, DRIVER_VALOR, ASIGNADO, ESTADO, FECHA_PROGRAMADA, FECHA_PROGRAMADA_FIN, FECHA_INICIO, FECHA_FIN)
                     VALUES ${vals}`));
             }
 
@@ -470,7 +496,7 @@ const WorkflowRuns = {
                 instancias: instRows.map(i => ({
                     id: i.INSTANCIA_ID, pasoId: i.PASO_ID, orden: parseInt(i.ORDEN || "0", 10),
                     driverValor: i.DRIVER_VALOR || null, asignado: i.ASIGNADO || "", revisor: i.REVISOR || "",
-                    estado: i.ESTADO, fechaProgramada: i.FECHA_PROGRAMADA || "",
+                    estado: i.ESTADO, fechaProgramada: i.FECHA_PROGRAMADA || "", fechaProgramadaFin: i.FECHA_PROGRAMADA_FIN || "",
                     variables: varsByInst[i.INSTANCIA_ID] || {}
                 }))
             };
@@ -535,11 +561,13 @@ const WorkflowRuns = {
                 fechaProgramada = step.inicio.fecha || "";
                 estadoInicial = "PENDIENTE";
             }
+            let fechaProgramadaFin = "";
+            if (step.fin.tipo === "FECHA") fechaProgramadaFin = step.fin.fecha || "";
 
             valores.forEach(v => {
                 newInstances.push({
                     id: Provider.newId(), pasoId: step.id, orden: idx,
-                    driverValor: v, asignado: "", estado: estadoInicial, fechaProgramada
+                    driverValor: v, asignado: "", estado: estadoInicial, fechaProgramada, fechaProgramadaFin
                 });
             });
         }
@@ -550,14 +578,14 @@ const WorkflowRuns = {
             const vals = newInstances.map(i => `(
                 '${Provider.esc(runId)}', '${Provider.esc(i.pasoId)}', '${Provider.esc(i.id)}', ${i.orden},
                 ${i.driverValor !== null ? `'${Provider.esc(i.driverValor)}'` : "NULL"},
-                '${Provider.esc(i.asignado)}', '${Provider.esc(i.estado)}', '${Provider.esc(i.fechaProgramada)}', NULL, NULL
+                '${Provider.esc(i.asignado)}', '${Provider.esc(i.estado)}', '${Provider.esc(i.fechaProgramada)}', '${Provider.esc(i.fechaProgramadaFin)}', NULL, NULL
             )`).join(",\n");
             await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
-                (RUN_ID, PASO_ID, INSTANCIA_ID, ORDEN, DRIVER_VALOR, ASIGNADO, ESTADO, FECHA_PROGRAMADA, FECHA_INICIO, FECHA_FIN)
+                (RUN_ID, PASO_ID, INSTANCIA_ID, ORDEN, DRIVER_VALOR, ASIGNADO, ESTADO, FECHA_PROGRAMADA, FECHA_PROGRAMADA_FIN, FECHA_INICIO, FECHA_FIN)
                 VALUES ${vals}`);
             newInstances.forEach(i => this.currentRun.instancias.push({
                 id: i.id, pasoId: i.pasoId, orden: i.orden, driverValor: i.driverValor,
-                asignado: "", revisor: "", estado: i.estado, fechaProgramada: i.fechaProgramada, variables: {}
+                asignado: "", revisor: "", estado: i.estado, fechaProgramada: i.fechaProgramada, fechaProgramadaFin: i.fechaProgramadaFin, variables: {}
             }));
         } catch (err) {
             UI.toast("No se han podido preparar los pasos nuevos de esta ejecución: " + err.message, "error");
@@ -650,11 +678,13 @@ const WorkflowRuns = {
             const fullyAssigned = instances.length > 0 && assignedCount === instances.length;
             const stepDone = instances.length > 0 && instances.every(i => i.estado === "COMPLETADO");
             const selected = step.id === this.selectedRunStepId;
+            const stepEstadoInfo = this.STEP_ESTADOS[this.stepRunEstado(instances)];
             const card = `
                 <div class="wf-run-step-tab ${selected ? "is-selected" : ""} ${stepDone ? "is-done" : ""}" data-run-step="${step.id}">
                     <span class="wf-run-step-num">${stepDone ? "✓" : (idx + 1) + "."}</span>
                     <div class="wf-run-step-info">
                         <span class="wf-run-step-name">${UI.escapeHtml(step.name)}</span>
+                        <span class="table-tag ${stepEstadoInfo.cls}">${stepEstadoInfo.label}</span>
                         <span class="wf-run-chain-badge ${fullyAssigned ? "wf-run-chain-badge--assigned" : "wf-run-chain-badge--unassigned"}">
                             <span class="wf-run-chain-badge-dot">${fullyAssigned ? "✓" : "⚠"}</span>${assignedCount}/${instances.length} asignada${instances.length === 1 ? "" : "s"}
                         </span>
@@ -692,6 +722,7 @@ const WorkflowRuns = {
                     ${dim ? `<span class="table-tag">Driver: ${UI.escapeHtml(dim.DIMENSION)}</span>` : ""}
                     ${taskCount ? `<button type="button" class="btn btn-secondary btn-sm" id="btnToggleTasks">Tareas (${taskCount})</button>` : ""}
                 </div>
+                ${this.stepDatesBlockHtml(step, instances)}
                 <div class="flow-frame-vars" id="wfTasksPanel" style="display:none;">
                     ${bloques.map(b => `
                         <p class="form-hint"><strong>${UI.escapeHtml(b.titulo)}</strong></p>
@@ -709,7 +740,65 @@ const WorkflowRuns = {
         });
 
         this.bindRunEvents(wrap);
+        this.bindStepDatesEvents(step, instances);
         this.fetchDriverLabels(step, instances);
+    },
+
+    // Cuando el Inicio y/o la Finalización del paso están definidos como
+    // "Fecha concreta", la fecha ya no se fija en la definición del
+    // workflow (ver Workflows.renderPropiedadesTab): se pide aquí, una
+    // única vez por paso, y se aplica a todas sus instancias. Se muestra
+    // un bloque con los selectores que correspondan, antes del bloque de
+    // tareas.
+    stepDatesBlockHtml(step, instances) {
+        const needsInicio = step.inicio.tipo === "FECHA";
+        const needsFin = step.fin.tipo === "FECHA";
+        if (!needsInicio && !needsFin) return "";
+
+        const fechaInicio = instances.length ? (instances[0].fechaProgramada || "") : "";
+        const fechaFin = instances.length ? (instances[0].fechaProgramadaFin || "") : "";
+
+        return `
+            <div class="flow-frame-vars" id="wfStepDatesPanel">
+                <p class="form-hint"><strong>Fechas del paso</strong></p>
+                <div class="wf-step-dates-row">
+                    ${needsInicio ? `
+                        <div class="form-group">
+                            <label>Fecha de inicio</label>
+                            <input type="date" id="stepRunFechaInicio" value="${UI.escapeHtml(fechaInicio)}">
+                        </div>` : ""}
+                    ${needsFin ? `
+                        <div class="form-group">
+                            <label>Fecha de fin</label>
+                            <input type="date" id="stepRunFechaFin" value="${UI.escapeHtml(fechaFin)}">
+                        </div>` : ""}
+                </div>
+            </div>`;
+    },
+
+    bindStepDatesEvents(step, instances) {
+        const inicioInput = document.getElementById("stepRunFechaInicio");
+        if (inicioInput) inicioInput.addEventListener("change", (e) => this.updateStepFecha(step, instances, "fechaProgramada", "FECHA_PROGRAMADA", e.target.value));
+        const finInput = document.getElementById("stepRunFechaFin");
+        if (finInput) finInput.addEventListener("change", (e) => this.updateStepFecha(step, instances, "fechaProgramadaFin", "FECHA_PROGRAMADA_FIN", e.target.value));
+    },
+
+    // Aplica la misma fecha a TODAS las instancias del paso (no hay una
+    // fecha distinta por instancia): actualiza en memoria y persiste con
+    // un único UPDATE por PASO_ID + RUN_ID.
+    async updateStepFecha(step, instances, field, column, value) {
+        const anteriores = instances.map(i => i[field]);
+        instances.forEach(i => { i[field] = value; });
+        try {
+            await Provider.runQuery(`
+                UPDATE ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
+                SET ${column} = '${Provider.esc(value)}'
+                WHERE RUN_ID = '${Provider.esc(this.currentRun.id)}' AND PASO_ID = '${Provider.esc(step.id)}'`);
+            this.renderRunStepBody();
+        } catch (err) {
+            instances.forEach((i, idx) => { i[field] = anteriores[idx]; });
+            UI.toast("Error al guardar la fecha: " + err.message, "error");
+        }
     },
 
     driverLabelCacheKey(step, driverValor) {

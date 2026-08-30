@@ -295,6 +295,7 @@ const Workflows = {
             name: "Variables del workflow",
             inicio: { tipo: "INICIO_WORKFLOW", fecha: "" },
             revision: false,
+            noBloqueaRevision: false,
             fin: { tipo: "COMPLETAR", fecha: "" },
             driver: { dimensionId: null, valores: [] },
             variables: [],
@@ -309,6 +310,7 @@ const Workflows = {
             name: name || "",
             inicio: { tipo: "INICIO_WORKFLOW", fecha: "" },
             revision: false,
+            noBloqueaRevision: false,
             fin: { tipo: "COMPLETAR", fecha: "" },
             driver: { dimensionId: null, valores: [] },
             variables: [],
@@ -383,6 +385,7 @@ const Workflows = {
             name: p.PASO,
             inicio: { tipo: p.INICIO_TIPO || "INICIO_WORKFLOW", fecha: p.INICIO_FECHA || "" },
             revision: !!(p.REVISION === true || p.REVISION === "true" || p.REVISION === 1),
+            noBloqueaRevision: !!(p.NO_BLOQUEA_REVISION === true || p.NO_BLOQUEA_REVISION === "true" || p.NO_BLOQUEA_REVISION === 1),
             fin: { tipo: p.FIN_TIPO || "COMPLETAR", fecha: p.FIN_FECHA || "" },
             driver: { dimensionId: p.DRIVER_DIMENSION_ID || null, valores: driverValsByPaso[p.PASO_ID] || [] },
             variables: varsByPaso[p.PASO_ID] || [],
@@ -694,8 +697,8 @@ const Workflows = {
 
     // -------------------- Propiedades (nombre + inicio/fin + driver) --------------------
     finOptions(step) {
-        const opts = [["NA", "N/A"]];
-        opts.push(step.revision ? ["REVISION", "Al enviarse a revisión"] : ["COMPLETAR", "Al completarse el paso"]);
+        const opts = [["NA", "Al finalizar el workflow"]];
+        opts.push(step.revision ? ["REVISION", "Al validar todos los procesos"] : ["COMPLETAR", "Al completarse el paso"]);
         opts.push(["FECHA", "Fecha concreta"]);
         return opts;
     },
@@ -720,8 +723,9 @@ const Workflows = {
                             <option value="PASO_ANTERIOR" ${step.inicio.tipo === "PASO_ANTERIOR" ? "selected" : ""}>Al completar el paso anterior</option>
                             <option value="FECHA" ${step.inicio.tipo === "FECHA" ? "selected" : ""}>Fecha concreta</option>
                         </select>
-                        ${step.inicio.tipo === "FECHA" ? `<input type="date" id="stepInicioFecha" value="${UI.escapeHtml(step.inicio.fecha)}">` : ""}
+                        ${step.inicio.tipo === "FECHA" ? `<p class="form-hint">La fecha se indicará al ejecutar el workflow.</p>` : ""}
                         <label class="wf-timing-check"><input type="checkbox" id="stepRevision" ${step.revision ? "checked" : ""}> Requiere revisión</label>
+                        ${step.revision ? `<label class="wf-timing-check"><input type="checkbox" id="stepNoBloqueaRevision" ${step.noBloqueaRevision ? "checked" : ""}> No bloquear durante la revisión</label>` : ""}
                     </div>
                     <div class="wf-timing-arrow">→</div>
                     <div class="wf-timing-card wf-timing-card--end">
@@ -729,7 +733,7 @@ const Workflows = {
                         <select id="stepFinTipo">
                             ${finOpts.map(([k, l]) => `<option value="${k}" ${step.fin.tipo === k ? "selected" : ""}>${l}</option>`).join("")}
                         </select>
-                        ${step.fin.tipo === "FECHA" ? `<input type="date" id="stepFinFecha" value="${UI.escapeHtml(step.fin.fecha)}">` : ""}
+                        ${step.fin.tipo === "FECHA" ? `<p class="form-hint">La fecha se indicará al ejecutar el workflow.</p>` : ""}
                         <p class="form-hint">Dispara el "al completar el paso anterior" del siguiente paso.</p>
                     </div>
                 </div>
@@ -765,23 +769,23 @@ const Workflows = {
             step.inicio.tipo = e.target.value;
             this.renderPropiedadesTab(body, step);
         });
-        const inicioFecha = document.getElementById("stepInicioFecha");
-        if (inicioFecha) inicioFecha.addEventListener("input", (e) => { step.inicio.fecha = e.target.value; });
 
         document.getElementById("stepRevision").addEventListener("change", (e) => {
             step.revision = e.target.checked;
+            if (!step.revision) step.noBloqueaRevision = false;
             if (step.fin.tipo === "REVISION" || step.fin.tipo === "COMPLETAR") {
                 step.fin.tipo = step.revision ? "REVISION" : "COMPLETAR";
             }
             this.renderPropiedadesTab(body, step);
             this.renderStepsPart();
         });
+        const noBloqueaRevision = document.getElementById("stepNoBloqueaRevision");
+        if (noBloqueaRevision) noBloqueaRevision.addEventListener("change", (e) => { step.noBloqueaRevision = e.target.checked; });
+
         document.getElementById("stepFinTipo").addEventListener("change", (e) => {
             step.fin.tipo = e.target.value;
             this.renderPropiedadesTab(body, step);
         });
-        const finFecha = document.getElementById("stepFinFecha");
-        if (finFecha) finFecha.addEventListener("input", (e) => { step.fin.fecha = e.target.value; });
 
         const pickBtn = document.getElementById("btnDriverPick");
         if (pickBtn) pickBtn.addEventListener("click", async () => {
@@ -1215,7 +1219,7 @@ const Workflows = {
         const pasoVals = wf.steps.map((s, idx) => `(
             '${Provider.esc(s.id)}', '${Provider.esc(id)}', '${Provider.esc(pid)}', '${Provider.esc(s.name)}', ${idx},
             ${s.isPaso0 ? "TRUE" : "FALSE"},
-            '${Provider.esc(s.inicio.tipo)}', '${Provider.esc(s.inicio.fecha || "")}', ${s.revision ? "TRUE" : "FALSE"},
+            '${Provider.esc(s.inicio.tipo)}', '${Provider.esc(s.inicio.fecha || "")}', ${s.revision ? "TRUE" : "FALSE"}, ${s.noBloqueaRevision ? "TRUE" : "FALSE"},
             '${Provider.esc(s.fin.tipo)}', '${Provider.esc(s.fin.fecha || "")}',
             ${s.driver.dimensionId ? `'${Provider.esc(s.driver.dimensionId)}'` : "NULL"},
             '${s.driver.dimensionId ? (s.driver.valores.length ? "VALORES" : "TODOS") : "NINGUNO"}'
@@ -1250,7 +1254,7 @@ const Workflows = {
         // la vez con Promise.all en vez de uno detrás de otro.
         const inserts = [
             Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS")}
-                (PASO_ID, WORKFLOW_ID, PROYECTO_ID, PASO, ORDEN, ES_PASO0, INICIO_TIPO, INICIO_FECHA, REVISION, FIN_TIPO, FIN_FECHA, DRIVER_DIMENSION_ID, DRIVER_MODO)
+                (PASO_ID, WORKFLOW_ID, PROYECTO_ID, PASO, ORDEN, ES_PASO0, INICIO_TIPO, INICIO_FECHA, REVISION, NO_BLOQUEA_REVISION, FIN_TIPO, FIN_FECHA, DRIVER_DIMENSION_ID, DRIVER_MODO)
                 VALUES ${pasoVals}`)
         ];
         if (driverVals.length) {
