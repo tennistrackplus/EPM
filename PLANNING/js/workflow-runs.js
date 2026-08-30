@@ -61,13 +61,13 @@ const WorkflowRuns = {
         COMPLETADO: { label: "Completada", cls: "run-status-completado" }
     },
 
-    // Estado resumido de un PASO (no de cada instancia) que se muestra en
-    // la cadena de arriba: empieza Pendiente; en cuanto se pulsa play en
-    // alguna instancia pasa a Activo; si se pulsa stop pasa a Suspendido;
-    // si la propia ejecución está suspendida, el paso se ve Suspendido
-    // pase lo que pase con sus instancias; el resto de casos (bloqueado,
-    // en revisión, completado, mezcla de estados...) se agrupan como "En
-    // construcción". Ver stepRunEstado().
+    // Estado resumido de una INSTANCIA (Pendiente / Activo / Suspendido /
+    // En construcción) que se muestra como badge en su tarjeta: empieza
+    // Pendiente; en cuanto se pulsa play pasa a Activo; si se pulsa stop
+    // pasa a Suspendido; si la ejecución completa está suspendida, la
+    // instancia se ve Suspendida pase lo que pase con su propio estado;
+    // el resto de casos (bloqueada, en revisión, completada...) se
+    // agrupan como "En construcción". Ver instanceRunEstado().
     STEP_ESTADOS: {
         PENDIENTE: { label: "Pendiente", cls: "wf-step-status--pendiente" },
         ACTIVO: { label: "Activo", cls: "wf-step-status--activo" },
@@ -75,12 +75,11 @@ const WorkflowRuns = {
         EN_CONSTRUCCION: { label: "En construcción", cls: "wf-step-status--construccion" }
     },
 
-    stepRunEstado(instances) {
+    instanceRunEstado(inst) {
         if (this.currentRun && this.currentRun.estado === "SUSPENDIDO") return "SUSPENDIDO";
-        if (!instances.length) return "PENDIENTE";
-        if (instances.some(i => i.estado === "SUSPENDIDO")) return "SUSPENDIDO";
-        if (instances.some(i => i.estado === "EN_CURSO")) return "ACTIVO";
-        if (instances.every(i => i.estado === "PENDIENTE")) return "PENDIENTE";
+        if (inst.estado === "SUSPENDIDO") return "SUSPENDIDO";
+        if (inst.estado === "EN_CURSO") return "ACTIVO";
+        if (inst.estado === "PENDIENTE") return "PENDIENTE";
         return "EN_CONSTRUCCION";
     },
 
@@ -678,13 +677,11 @@ const WorkflowRuns = {
             const fullyAssigned = instances.length > 0 && assignedCount === instances.length;
             const stepDone = instances.length > 0 && instances.every(i => i.estado === "COMPLETADO");
             const selected = step.id === this.selectedRunStepId;
-            const stepEstadoInfo = this.STEP_ESTADOS[this.stepRunEstado(instances)];
             const card = `
                 <div class="wf-run-step-tab ${selected ? "is-selected" : ""} ${stepDone ? "is-done" : ""}" data-run-step="${step.id}">
                     <span class="wf-run-step-num">${stepDone ? "✓" : (idx + 1) + "."}</span>
                     <div class="wf-run-step-info">
                         <span class="wf-run-step-name">${UI.escapeHtml(step.name)}</span>
-                        <span class="table-tag ${stepEstadoInfo.cls}">${stepEstadoInfo.label}</span>
                         <span class="wf-run-chain-badge ${fullyAssigned ? "wf-run-chain-badge--assigned" : "wf-run-chain-badge--unassigned"}">
                             <span class="wf-run-chain-badge-dot">${fullyAssigned ? "✓" : "⚠"}</span>${assignedCount}/${instances.length} asignada${instances.length === 1 ? "" : "s"}
                         </span>
@@ -710,34 +707,20 @@ const WorkflowRuns = {
 
         const instances = this.instancesForStep(step.id);
         const dim = step.driver.dimensionId ? Workflows.dimensionById(step.driver.dimensionId) : null;
-        const bloques = step.bloques || [];
-        const taskCount = bloques.reduce((n, b) => n + (b.tareas || []).length, 0);
 
         wrap.innerHTML = `
-            <div class="flow-screen-block flow-screen-block--frame" style="margin-bottom:0;">
+            <div class="flow-screen-block flow-screen-block--frame" style="margin-bottom:12px;">
                 <div class="flow-frame-header">
                     <span><strong>${UI.escapeHtml(step.name)}</strong></span>
                     <span class="load-fn-toolbar-spacer"></span>
                     ${step.revision ? `<span class="table-tag">Con revisión</span>` : ""}
                     ${dim ? `<span class="table-tag">Driver: ${UI.escapeHtml(dim.DIMENSION)}</span>` : ""}
-                    ${taskCount ? `<button type="button" class="btn btn-secondary btn-sm" id="btnToggleTasks">Tareas (${taskCount})</button>` : ""}
                 </div>
-                ${this.stepDatesBlockHtml(step, instances)}
-                <div class="flow-frame-vars" id="wfTasksPanel" style="display:none;">
-                    ${bloques.map(b => `
-                        <p class="form-hint"><strong>${UI.escapeHtml(b.titulo)}</strong></p>
-                        ${(b.tareas || []).map(t => this.taskRowHtml(t)).join("")}`).join("") || `<p class="form-hint">Sin tareas.</p>`}
-                </div>
-                <div class="wf-instance-grid">
-                    ${instances.length ? instances.map(i => this.instanceCardHtml(step, i)).join("") : `<div class="module-empty">Este paso todavía no tiene instancias.</div>`}
-                </div>
+            </div>
+            ${this.stepDatesBlockHtml(step, instances)}
+            <div class="wf-instance-grid">
+                ${instances.length ? instances.map(i => this.instanceCardHtml(step, i)).join("") : `<div class="module-empty">Este paso todavía no tiene instancias.</div>`}
             </div>`;
-
-        const toggleBtn = document.getElementById("btnToggleTasks");
-        if (toggleBtn) toggleBtn.addEventListener("click", () => {
-            const panel = document.getElementById("wfTasksPanel");
-            panel.style.display = panel.style.display === "none" ? "block" : "none";
-        });
 
         this.bindRunEvents(wrap);
         this.bindStepDatesEvents(step, instances);
@@ -748,8 +731,8 @@ const WorkflowRuns = {
     // "Fecha concreta", la fecha ya no se fija en la definición del
     // workflow (ver Workflows.renderPropiedadesTab): se pide aquí, una
     // única vez por paso, y se aplica a todas sus instancias. Se muestra
-    // un bloque con los selectores que correspondan, antes del bloque de
-    // tareas.
+    // como una tarjeta independiente (no dentro del bloque del paso),
+    // con los selectores que correspondan, antes de las instancias.
     stepDatesBlockHtml(step, instances) {
         const needsInicio = step.inicio.tipo === "FECHA";
         const needsFin = step.fin.tipo === "FECHA";
@@ -759,8 +742,8 @@ const WorkflowRuns = {
         const fechaFin = instances.length ? (instances[0].fechaProgramadaFin || "") : "";
 
         return `
-            <div class="flow-frame-vars" id="wfStepDatesPanel">
-                <p class="form-hint"><strong>Fechas del paso</strong></p>
+            <div class="wf-step-dates-card">
+                <div class="wf-step-dates-card-title">📅 Fechas del paso</div>
                 <div class="wf-step-dates-row">
                     ${needsInicio ? `
                         <div class="form-group">
@@ -853,19 +836,11 @@ const WorkflowRuns = {
         });
     },
 
-    taskRowHtml(t) {
-        const typeInfo = Workflows.TASK_TYPES[t.tipo] || { label: t.tipo, icon: "•" };
-        const runLink = t.tipo === "FLUJO_MANUAL" && t.refId
-            ? `<button type="button" class="btn btn-secondary btn-sm" data-open-flow="${t.refId}">▶ Ejecutar</button>`
-            : "";
-        const showRef = t.refNombre && t.refNombre !== t.nombre;
-        return `<div class="flow-target-row" title="${UI.escapeHtml(t.descripcion || "")}"><span class="flow-target-label">${typeInfo.icon} ${UI.escapeHtml(t.nombre || typeInfo.label)}${showRef ? " — " + UI.escapeHtml(t.refNombre) : ""}</span>${runLink}</div>`;
-    },
-
     instanceCardHtml(step, inst) {
         const estadoInfo = this.ESTADOS[inst.estado] || this.ESTADOS.PENDIENTE;
         const visibleVars = step.variables || [];
         const controlsDisabled = inst.estado === "BLOQUEADO" || inst.estado === "COMPLETADO";
+        const runEstadoInfo = this.STEP_ESTADOS[this.instanceRunEstado(inst)];
 
         // Los 3 botones (play/stop/restablecer) cubren Pendiente, En curso
         // y Suspendido. Bloqueado/En revisión/Completado son estados que no
@@ -876,10 +851,8 @@ const WorkflowRuns = {
         let actions = "";
         if (inst.estado === "BLOQUEADO") {
             actions = `<span class="form-hint">Se desbloqueará al completarse el paso anterior.</span>`;
-        } else if (inst.estado === "EN_CURSO") {
-            actions = step.revision
-                ? `<button class="btn btn-primary btn-sm" data-inst-action="review:${inst.id}">Enviar a revisión</button>`
-                : `<button class="btn btn-primary btn-sm" data-inst-action="complete:${inst.id}">Completar</button>`;
+        } else if (inst.estado === "EN_CURSO" && step.revision) {
+            actions = `<button class="btn btn-primary btn-sm" data-inst-action="review:${inst.id}">Enviar a revisión</button>`;
         } else if (inst.estado === "EN_REVISION") {
             actions = `<button class="btn btn-primary btn-sm" data-inst-action="approve:${inst.id}">Aprobar</button>
                        <button class="btn btn-secondary btn-sm" data-inst-action="reject:${inst.id}">Rechazar</button>`;
@@ -896,7 +869,10 @@ const WorkflowRuns = {
                         ? `<span class="table-tag ${estadoInfo.cls}">${estadoInfo.label}</span>`
                         : this.instControlsHtml(inst, controlsDisabled)}
                 </div>
-                ${inst.fechaProgramada ? `<span class="table-tag" style="margin-bottom:8px;">Programado: ${UI.escapeHtml(inst.fechaProgramada)}</span>` : ""}
+                <div class="wf-instance-card-badges">
+                    <span class="table-tag ${runEstadoInfo.cls}">${runEstadoInfo.label}</span>
+                    ${inst.fechaProgramada ? `<span class="table-tag">Programado: ${UI.escapeHtml(inst.fechaProgramada)}</span>` : ""}
+                </div>
                 ${this.assigneeBlockHtml(step, inst)}
                 ${visibleVars.length ? `
                     <div class="form-group">
