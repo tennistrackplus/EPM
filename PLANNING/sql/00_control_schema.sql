@@ -62,6 +62,19 @@ CREATE TABLE IF NOT EXISTS `{PROJECT}.DRACO_CONTROL.CUBOS` (
 -- ALTER TABLE `{PROJECT}.DRACO_CONTROL.CUBOS` ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING;
 -- ALTER TABLE `{PROJECT}.DRACO_CONTROL.CUBOS` ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP;
 
+-- 4ter. Tabla de tablas de parametrización -------------------------------------
+CREATE TABLE IF NOT EXISTS `{PROJECT}.DRACO_CONTROL.PARAMETRIZACIONES` (
+  PARAMETRIZACION_ID  STRING NOT NULL,
+  PROYECTO_ID         STRING NOT NULL,   -- FK -> PROYECTOS.PROYECTO_ID
+  NOMBRE              STRING NOT NULL,   -- nombre de la tabla de parametrización
+  DESCRIPCION         STRING,
+  TABLA               STRING NOT NULL,   -- tabla física DRACO_PARAM_<nombre>
+  CAMPOS_JSON         STRING,            -- definición de campos (nombre/descripción/tipo/clave) en JSON
+  USUARIO             STRING,
+  FECHA_CREACION      TIMESTAMP,
+  FECHA_MODIFICACION  TIMESTAMP
+);
+
 -- 5. Tabla de jerarquías -------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `{PROJECT}.DRACO_CONTROL.JERARQUIAS` (
   JERARQUIA_ID        STRING NOT NULL,
