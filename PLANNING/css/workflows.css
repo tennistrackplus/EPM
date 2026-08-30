@@ -337,6 +337,17 @@
     border-radius: var(--radius-md);
 }
 
+/* Versión reducida: solo la fila de variables globales (p.ej.
+   "Escenario = REAL") + el botón de modificar, sin nombre, estado,
+   descripción ni barra de progreso. */
+.wf-run-summary--compact {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 16px;
+}
+
 .wf-run-summary-progress {
     display: flex;
     flex-direction: column;
@@ -537,12 +548,13 @@
 .wf-instance-card {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     padding: 14px;
     background: var(--surface-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     border-left-width: 3px;
+    border-left-color: var(--border-subtle);
 }
 
 .wf-instance-card-top {
@@ -557,6 +569,11 @@
     font-size: var(--fs-base);
 }
 
+.wf-instance-card-title-sub {
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
 .wf-instance-card .form-group {
     margin: 0;
 }
@@ -569,8 +586,150 @@
     letter-spacing: 0.02em;
 }
 
-.wf-instance-card.flow-run-step--en_curso {
-    animation: none;
+/* ---------- Instancias: color por estado, siempre a plena opacidad
+   (antes usaban las clases del runner de flujos, con opacity:.55 en
+   pendiente, y por eso las tarjetas parecían deshabilitadas) ---------- */
+.wf-inst-status--bloqueado { border-left-color: var(--border-default, var(--border-subtle)); }
+.wf-inst-status--pendiente { border-left-color: var(--gray-300, #c7ccd6); }
+.wf-inst-status--en_curso { border-left-color: var(--color-info); }
+.wf-inst-status--suspendido { border-left-color: var(--color-warning); }
+.wf-inst-status--en_revision { border-left-color: var(--color-info); }
+.wf-inst-status--completado { border-left-color: var(--color-success); }
+
+.table-tag.wf-inst-status--bloqueado { background: var(--gray-100); color: var(--text-secondary); }
+.table-tag.wf-inst-status--en_revision { background: var(--color-info-light); color: var(--color-info); }
+.table-tag.wf-inst-status--completado { background: var(--color-success-light); color: var(--color-success); }
+
+/* ---------- Instancias: controles play / stop / restablecer ---------- */
+.wf-inst-controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.wf-inst-ctrl-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--border-subtle);
+    background: var(--surface-card);
+    color: var(--text-secondary);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    cursor: pointer;
+    transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.wf-inst-ctrl-btn:hover:not(:disabled) {
+    border-color: var(--brand-primary);
+    color: var(--brand-primary);
+}
+
+.wf-inst-ctrl-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.wf-inst-ctrl-btn.is-active--en_curso {
+    background: var(--color-info-light);
+    border-color: var(--color-info);
+    color: var(--color-info);
+}
+
+.wf-inst-ctrl-btn.is-active--suspendido {
+    background: var(--color-warning-light);
+    border-color: var(--color-warning);
+    color: var(--color-warning);
+}
+
+.wf-inst-ctrl-btn.is-active--pendiente {
+    background: var(--gray-100);
+    border-color: var(--gray-300, #c7ccd6);
+    color: var(--text-secondary);
+}
+
+/* ---------- Instancias: pestañas Responsable / Revisor ---------- */
+.wf-assignee-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.wf-assignee-tab {
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid var(--border-subtle);
+    background: var(--surface-card);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+    transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.wf-assignee-tab:hover {
+    border-color: var(--brand-primary);
+}
+
+.wf-assignee-tab.is-active {
+    background: var(--brand-primary);
+    border-color: var(--brand-primary);
+    color: var(--text-inverse);
+}
+
+/* ---------- Instancias: selector múltiple de personas/grupos ---------- */
+.wf-assignee-multi {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.wf-assignee-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.wf-assignee-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 6px 3px 8px;
+    background: var(--brand-primary-light);
+    color: var(--brand-primary-hover);
+    border-radius: 999px;
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.wf-assignee-chip--group {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+
+.wf-assignee-chip-icon {
+    font-size: 10px;
+}
+
+.wf-assignee-chip-remove {
+    border: none;
+    background: none;
+    cursor: pointer;
+    color: inherit;
+    opacity: 0.6;
+    font-size: 13px;
+    line-height: 1;
+    padding: 0 0 0 2px;
+}
+
+.wf-assignee-chip-remove:hover {
+    opacity: 1;
 }
 
 
