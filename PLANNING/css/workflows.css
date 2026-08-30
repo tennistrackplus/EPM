@@ -445,3 +445,53 @@
     animation: none;
 }
 
+
+/* ---------- Listado de ejecuciones: estado de cabecera y variables ---------- */
+.run-status-en_curso {
+    background-color: var(--color-info-light);
+    color: var(--color-info);
+}
+
+.run-status-suspendido {
+    background-color: var(--color-warning-light);
+    color: var(--color-warning);
+}
+
+.run-status-completado {
+    background-color: var(--color-success-light);
+    color: var(--color-success);
+}
+
+.run-status-pendiente {
+    background-color: var(--gray-100);
+    color: var(--text-secondary);
+}
+
+.run-vars-summary {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 11px;
+    color: var(--text-secondary);
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+    vertical-align: bottom;
+}
+
+.run-vars-empty {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.row-actions button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.row-actions button:disabled:hover {
+    background: none;
+    color: inherit;
+    border-color: transparent;
+}
