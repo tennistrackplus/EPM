@@ -981,28 +981,34 @@ const Workflows = {
         const typeInfo = this.TASK_TYPES[task.tipo] || { label: task.tipo, icon: "•" };
         const canAddCustomVar = task.tipo === "PLANTILLA_EXCEL" || task.tipo === "PLANTILLA_WEB" || task.tipo === "PLANTILLA" || task.tipo === "FUNCION" || task.tipo === "HTML";
         const showRef = task.refNombre && task.refNombre !== task.nombre;
+        const varsEmptyMsg = task.tipo === "PARAMETRIZACION" ? "Esta tarea no necesita variables adicionales." : "Sin variables asignadas.";
         return `
-            <div class="flow-screen-block" data-task-idx="${tIdx}" style="margin-bottom:8px;">
-                <div class="flow-frame-header">
-                    <span>${typeInfo.icon} <strong>${UI.escapeHtml(task.nombre || typeInfo.label)}</strong>
-                        <span class="table-tag">${UI.escapeHtml(typeInfo.label)}</span>
-                        ${showRef ? `<span class="col-type"> · ${UI.escapeHtml(task.refNombre)}</span>` : ""}
-                    </span>
-                    <span class="load-fn-toolbar-spacer"></span>
-                    ${canAddCustomVar ? `<button type="button" class="btn btn-secondary btn-sm" data-add-taskvar="${tIdx}">+ Variable</button>` : ""}
-                    <button type="button" class="flow-chain-card-remove" data-edit-task="${tIdx}" title="Editar tarea">✎</button>
-                    <button type="button" class="flow-chain-card-remove" data-remove-task="${tIdx}" title="Eliminar tarea">✕</button>
+            <div class="wf-task-card" data-task-idx="${tIdx}">
+                <div class="wf-task-card-header">
+                    <span class="wf-task-icon">${typeInfo.icon}</span>
+                    <div class="wf-task-title-wrap">
+                        <div class="wf-task-name">${UI.escapeHtml(task.nombre || typeInfo.label)}</div>
+                        <div class="wf-task-meta">
+                            <span class="table-tag">${UI.escapeHtml(typeInfo.label)}</span>
+                            ${showRef ? `<span class="wf-task-meta-ref">· ${UI.escapeHtml(task.refNombre)}</span>` : ""}
+                        </div>
+                    </div>
+                    <div class="wf-task-actions">
+                        ${canAddCustomVar ? `<button type="button" class="wf-task-action-btn" data-add-taskvar="${tIdx}" title="Añadir variable">+</button>` : ""}
+                        <button type="button" class="wf-task-action-btn" data-edit-task="${tIdx}" title="Editar tarea">✎</button>
+                        <button type="button" class="wf-task-action-btn wf-task-action-btn--danger" data-remove-task="${tIdx}" title="Eliminar tarea">✕</button>
+                    </div>
                 </div>
-                ${task.descripcion ? `<p class="form-hint" style="margin:4px 0 0;">${UI.escapeHtml(task.descripcion)}</p>` : ""}
+                ${task.descripcion ? `<p class="wf-task-desc">${UI.escapeHtml(task.descripcion)}</p>` : ""}
                 ${task.valores.length ? `
-                    <div class="flow-mapping-vars-list">
+                    <div class="wf-task-vars">
                         ${task.valores.map((v, vIdx) => `
                             <div class="flow-target-row" data-edit-taskval="${tIdx}:${vIdx}" style="cursor:pointer;">
                                 <span class="flow-target-label">${UI.escapeHtml(v.etiqueta || v.clave)}</span>
                                 <span class="table-tag">${v.tipo === "variable" ? "= " + UI.escapeHtml(v.valor || "—") : UI.escapeHtml(v.valor || "(vacío)")}</span>
                                 ${v.ocultar ? `<span class="table-tag">Oculta</span>` : ""}
                             </div>`).join("")}
-                    </div>` : `<p class="form-hint">${task.tipo === "PARAMETRIZACION" ? "Esta tarea no necesita variables adicionales." : "Sin variables asignadas."}</p>`}
+                    </div>` : `<p class="wf-task-vars-empty">${varsEmptyMsg}</p>`}
             </div>`;
     },
 
