@@ -61,25 +61,25 @@ const WorkflowRuns = {
         COMPLETADO: { label: "Completada", cls: "run-status-completado" }
     },
 
-    // Estado resumido de una INSTANCIA (Pendiente / Activo / Suspendido /
-    // En construcción) que se muestra como badge en su tarjeta: empieza
-    // Pendiente; en cuanto se pulsa play pasa a Activo; si se pulsa stop
-    // pasa a Suspendido; si la ejecución completa está suspendida, la
-    // instancia se ve Suspendida pase lo que pase con su propio estado;
-    // el resto de casos (bloqueada, en revisión, completada...) se
-    // agrupan como "En construcción". Ver instanceRunEstado().
+    // Estado resumido de una INSTANCIA (Activo / Suspendido / En
+    // construcción) que se muestra como badge en su tarjeta. Se evalúa
+    // en este orden estricto, y en cuanto una condición se cumple no se
+    // miran las siguientes (ver instanceRunEstado()):
+    //   1) Si en el paso está pulsado play  -> Activo
+    //   2) Si en el paso está pulsado stop  -> Suspendido
+    //   3) Si el estado de la EJECUCIÓN (no el del paso) es Suspendido -> Suspendido
+    //   4) Para el resto de casos (pendiente, bloqueada, en revisión,
+    //      completada...) -> En construcción
     STEP_ESTADOS: {
-        PENDIENTE: { label: "Pendiente", cls: "wf-step-status--pendiente" },
         ACTIVO: { label: "Activo", cls: "wf-step-status--activo" },
         SUSPENDIDO: { label: "Suspendido", cls: "wf-step-status--suspendido" },
         EN_CONSTRUCCION: { label: "En construcción", cls: "wf-step-status--construccion" }
     },
 
     instanceRunEstado(inst) {
-        if (this.currentRun && this.currentRun.estado === "SUSPENDIDO") return "SUSPENDIDO";
-        if (inst.estado === "SUSPENDIDO") return "SUSPENDIDO";
         if (inst.estado === "EN_CURSO") return "ACTIVO";
-        if (inst.estado === "PENDIENTE") return "PENDIENTE";
+        if (inst.estado === "SUSPENDIDO") return "SUSPENDIDO";
+        if (this.currentRun && this.currentRun.estado === "SUSPENDIDO") return "SUSPENDIDO";
         return "EN_CONSTRUCCION";
     },
 
