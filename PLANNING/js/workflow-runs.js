@@ -662,11 +662,11 @@ const WorkflowRuns = {
             const selected = step.id === this.selectedRunStepId;
             const card = `
                 <div class="wf-run-step-tab ${selected ? "is-selected" : ""} ${stepDone ? "is-done" : ""}" data-run-step="${step.id}">
-                    <span class="wf-run-step-num">${stepDone ? "✓" : idx + 1}</span>
+                    <span class="wf-run-step-num">${stepDone ? "✓" : (idx + 1) + "."}</span>
                     <div class="wf-run-step-info">
                         <span class="wf-run-step-name">${UI.escapeHtml(step.name)}</span>
                         <span class="wf-run-chain-badge ${fullyAssigned ? "wf-run-chain-badge--assigned" : "wf-run-chain-badge--unassigned"}">
-                            <span class="wf-run-chain-badge-dot"></span>${assignedCount}/${instances.length} asignada${instances.length === 1 ? "" : "s"}
+                            <span class="wf-run-chain-badge-dot">${fullyAssigned ? "✓" : "⚠"}</span>${assignedCount}/${instances.length} asignada${instances.length === 1 ? "" : "s"}
                         </span>
                     </div>
                 </div>`;
