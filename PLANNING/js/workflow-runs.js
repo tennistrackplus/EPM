@@ -36,12 +36,20 @@
  */
 const WorkflowRuns = {
     ESTADOS: {
-        BLOQUEADO: { label: "Bloqueado", cls: "flow-run-step--pendiente" },
-        PENDIENTE: { label: "Pendiente", cls: "flow-run-step--pendiente" },
-        EN_CURSO: { label: "En curso", cls: "flow-run-step--en_curso" },
-        EN_REVISION: { label: "En revisión", cls: "flow-run-step--en_curso" },
-        COMPLETADO: { label: "Completado", cls: "flow-run-step--ok" }
+        BLOQUEADO: { label: "Bloqueado", cls: "wf-inst-status--bloqueado" },
+        PENDIENTE: { label: "Pendiente", cls: "wf-inst-status--pendiente" },
+        EN_CURSO: { label: "En curso", cls: "wf-inst-status--en_curso" },
+        SUSPENDIDO: { label: "Suspendido", cls: "wf-inst-status--suspendido" },
+        EN_REVISION: { label: "En revisión", cls: "wf-inst-status--en_revision" },
+        COMPLETADO: { label: "Completado", cls: "wf-inst-status--completado" }
     },
+
+    // Pestaña de asignación (Responsable/Revisor) seleccionada por
+    // instancia, solo en memoria (no persiste): por defecto Responsable.
+    _assigneeTab: {},
+    // Caché de "código -> texto descriptivo" del driver por dimensión,
+    // para no repetir la consulta al cambiar de paso. Ver fetchDriverLabels.
+    _driverLabelCache: {},
 
     // Estados de la CABECERA de una ejecución (WORKFLOWS_RUNS.ESTADO), usados
     // en el listado. Independientes de this.ESTADOS, que son los de cada
@@ -461,7 +469,7 @@ const WorkflowRuns = {
                 variables: globalVars,
                 instancias: instRows.map(i => ({
                     id: i.INSTANCIA_ID, pasoId: i.PASO_ID, orden: parseInt(i.ORDEN || "0", 10),
-                    driverValor: i.DRIVER_VALOR || null, asignado: i.ASIGNADO || "",
+                    driverValor: i.DRIVER_VALOR || null, asignado: i.ASIGNADO || "", revisor: i.REVISOR || "",
                     estado: i.ESTADO, fechaProgramada: i.FECHA_PROGRAMADA || "",
                     variables: varsByInst[i.INSTANCIA_ID] || {}
                 }))
@@ -549,7 +557,7 @@ const WorkflowRuns = {
                 VALUES ${vals}`);
             newInstances.forEach(i => this.currentRun.instancias.push({
                 id: i.id, pasoId: i.pasoId, orden: i.orden, driverValor: i.driverValor,
-                asignado: "", estado: i.estado, fechaProgramada: i.fechaProgramada, variables: {}
+                asignado: "", revisor: "", estado: i.estado, fechaProgramada: i.fechaProgramada, variables: {}
             }));
         } catch (err) {
             UI.toast("No se han podido preparar los pasos nuevos de esta ejecución: " + err.message, "error");
@@ -566,36 +574,18 @@ const WorkflowRuns = {
 
     renderRunDetail() {
         const run = this.currentRun;
-        const steps = this.execSteps();
-        const total = run.instancias.length;
-        const done = run.instancias.filter(i => i.estado === "COMPLETADO").length;
-        const pct = total ? Math.round((done / total) * 100) : 0;
         const globalVarEntries = Object.entries(run.variables || {});
-        const estadoInfo = this.RUN_ESTADOS[run.estado] || { label: run.estado, cls: "" };
 
         this.setModalTitle(run.name, this.workflow.name);
 
         const body = document.getElementById("wfRunsModalBody");
         body.innerHTML = `
-            <div class="wf-run-summary">
-                <div class="wf-run-summary-progress">
-                    <div class="wf-run-summary-progress-top">
-                        <div class="wf-run-summary-title">
-                            <strong>${UI.escapeHtml(run.name)}</strong>
-                            <button type="button" class="btn-icon" id="btnEditRunInfo" title="Modificar nombre, descripción y variables">✎</button>
-                        </div>
-                        <span class="table-tag ${estadoInfo.cls}">${UI.escapeHtml(estadoInfo.label)}</span>
-                    </div>
-                    ${run.description ? `<p class="wf-run-summary-description">${UI.escapeHtml(run.description)}</p>` : ""}
-                    <div class="wf-run-summary-progress-top">
-                        <span class="form-hint" style="margin:0;">${done}/${total} instancias completadas</span>
-                    </div>
-                    <div class="wf-run-progress-bar"><div class="wf-run-progress-fill" style="width:${pct}%;"></div></div>
-                </div>
+            <div class="wf-run-summary wf-run-summary--compact">
                 ${globalVarEntries.length ? `
-                    <div class="chip-row">
+                    <div class="chip-row" style="margin:0;">
                         ${globalVarEntries.map(([k, v]) => `<span class="hier-chip">${UI.escapeHtml(k)} = ${UI.escapeHtml(v || "—")}</span>`).join("")}
-                    </div>` : ""}
+                    </div>` : "<span></span>"}
+                <button type="button" class="btn-icon" id="btnEditRunInfo" title="Modificar nombre, descripción y variables">✎</button>
             </div>
 
             <div class="wf-run-steps" id="wfRunChainWrap"></div>
@@ -719,6 +709,59 @@ const WorkflowRuns = {
         });
 
         this.bindRunEvents(wrap);
+        this.fetchDriverLabels(step, instances);
+    },
+
+    driverLabelCacheKey(step, driverValor) {
+        return `${step.driver.dimensionId || ""}::${driverValor}`;
+    },
+
+    // Además del código del driver (p.ej. CC-1001), busca el texto
+    // descriptivo del miembro en la propia tabla de la dimensión, para
+    // mostrar "CC-1001 — Marketing" en la tarjeta. Como el esquema de una
+    // dimensión es libre (no hay una columna "descripción" fija), se toma
+    // la primera columna de texto que no sea la propia clave. No bloquea
+    // el pintado inicial de las tarjetas: se resuelve en segundo plano y
+    // luego se aplica solo al título (patchDriverLabels).
+    async fetchDriverLabels(step, instances) {
+        if (!step.driver.dimensionId) return;
+        const dim = Workflows.dimensionById(step.driver.dimensionId);
+        if (!dim) return;
+
+        const codes = [...new Set(instances.map(i => i.driverValor).filter(v => v !== null))]
+            .filter(code => this._driverLabelCache[this.driverLabelCacheKey(step, code)] === undefined);
+        if (!codes.length) return;
+
+        try {
+            const keyCol = Provider.toIdentifier(dim.DIMENSION);
+            const fullTable = Provider.qualify(this.project.DATASET, dim.TABLA);
+            const inList = codes.map(c => `'${Provider.esc(c)}'`).join(",");
+            const rows = await Provider.runQuery(`SELECT * FROM ${fullTable} WHERE ${keyCol} IN (${inList})`);
+            rows.forEach(row => {
+                const otherKeys = Object.keys(row).filter(k => k !== keyCol);
+                const labelKey = otherKeys.find(k => typeof row[k] === "string" && row[k]);
+                const code = String(row[keyCol]);
+                this._driverLabelCache[this.driverLabelCacheKey(step, code)] = labelKey ? row[labelKey] : "";
+            });
+            codes.forEach(code => {
+                const key = this.driverLabelCacheKey(step, code);
+                if (this._driverLabelCache[key] === undefined) this._driverLabelCache[key] = "";
+            });
+            this.patchDriverLabels(step, instances);
+        } catch (e) {
+            // Sin descripción disponible: se sigue mostrando solo el código.
+        }
+    },
+
+    patchDriverLabels(step, instances) {
+        instances.forEach(inst => {
+            const label = this._driverLabelCache[this.driverLabelCacheKey(step, inst.driverValor)];
+            if (!label) return;
+            const el = document.querySelector(`[data-inst-title="${inst.id}"]`);
+            if (el && !el.querySelector(".wf-instance-card-title-sub")) {
+                el.insertAdjacentHTML("beforeend", ` <span class="wf-instance-card-title-sub">— ${UI.escapeHtml(label)}</span>`);
+            }
+        });
     },
 
     taskRowHtml(t) {
@@ -733,12 +776,17 @@ const WorkflowRuns = {
     instanceCardHtml(step, inst) {
         const estadoInfo = this.ESTADOS[inst.estado] || this.ESTADOS.PENDIENTE;
         const visibleVars = step.variables || [];
+        const controlsDisabled = inst.estado === "BLOQUEADO" || inst.estado === "COMPLETADO";
+
+        // Los 3 botones (play/stop/restablecer) cubren Pendiente, En curso
+        // y Suspendido. Bloqueado/En revisión/Completado son estados que no
+        // se fijan a mano con estos botones, así que ahí se muestra la
+        // etiqueta en su lugar.
+        const showStatusLabel = ["BLOQUEADO", "EN_REVISION", "COMPLETADO"].includes(inst.estado);
 
         let actions = "";
         if (inst.estado === "BLOQUEADO") {
             actions = `<span class="form-hint">Se desbloqueará al completarse el paso anterior.</span>`;
-        } else if (inst.estado === "PENDIENTE") {
-            actions = `<button class="btn btn-secondary btn-sm" data-inst-action="start:${inst.id}">Iniciar</button>`;
         } else if (inst.estado === "EN_CURSO") {
             actions = step.revision
                 ? `<button class="btn btn-primary btn-sm" data-inst-action="review:${inst.id}">Enviar a revisión</button>`
@@ -746,21 +794,21 @@ const WorkflowRuns = {
         } else if (inst.estado === "EN_REVISION") {
             actions = `<button class="btn btn-primary btn-sm" data-inst-action="approve:${inst.id}">Aprobar</button>
                        <button class="btn btn-secondary btn-sm" data-inst-action="reject:${inst.id}">Rechazar</button>`;
-        } else if (inst.estado === "COMPLETADO") {
-            actions = `<span class="form-hint">Completado.</span>`;
         }
+
+        const title = inst.driverValor !== null ? UI.escapeHtml(inst.driverValor) : "Instancia única";
+        const label = this._driverLabelCache[this.driverLabelCacheKey(step, inst.driverValor)];
 
         return `
             <div class="wf-instance-card ${estadoInfo.cls}" data-instance-card="${inst.id}">
                 <div class="wf-instance-card-top">
-                    <span class="wf-instance-card-title">${inst.driverValor !== null ? UI.escapeHtml(inst.driverValor) : "Instancia única"}</span>
-                    <span class="table-tag">${estadoInfo.label}</span>
+                    <span class="wf-instance-card-title" data-inst-title="${inst.id}">${title}${label ? ` <span class="wf-instance-card-title-sub">— ${UI.escapeHtml(label)}</span>` : ""}</span>
+                    ${showStatusLabel
+                        ? `<span class="table-tag ${estadoInfo.cls}">${estadoInfo.label}</span>`
+                        : this.instControlsHtml(inst, controlsDisabled)}
                 </div>
                 ${inst.fechaProgramada ? `<span class="table-tag" style="margin-bottom:8px;">Programado: ${UI.escapeHtml(inst.fechaProgramada)}</span>` : ""}
-                <div class="form-group">
-                    <label>Asignado a</label>
-                    ${this.assigneeFieldHtml(inst)}
-                </div>
+                ${this.assigneeBlockHtml(step, inst)}
                 ${visibleVars.length ? `
                     <div class="form-group">
                         ${visibleVars.map(v => `
@@ -768,24 +816,72 @@ const WorkflowRuns = {
                             <input type="text" value="${UI.escapeHtml(inst.variables[v.name] || "")}" data-inst-var="${inst.id}:${UI.escapeHtml(v.name)}" ${inst.estado === "COMPLETADO" ? "disabled" : ""} style="margin-bottom:6px;">
                         `).join("")}
                     </div>` : ""}
-                <div class="row-actions" style="justify-content:flex-start; gap:8px;">${actions}</div>
+                ${actions ? `<div class="row-actions" style="justify-content:flex-start; gap:8px;">${actions}</div>` : ""}
             </div>`;
     },
 
-    // Campo "Asignado a": si el proveedor activo soporta buscador de
-    // usuarios (por ahora solo BigQuery, ver Provider.canSearchUsers),
-    // se muestra como un buscador con sugerencias; si no, un campo de
-    // texto libre igual que antes.
-    assigneeFieldHtml(inst) {
-        const disabled = inst.estado === "COMPLETADO";
-        if (!Provider.canSearchUsers()) {
-            return `<input type="text" placeholder="Persona o grupo..." value="${UI.escapeHtml(inst.asignado)}" data-inst-assignee="${inst.id}" ${disabled ? "disabled" : ""}>`;
-        }
+    // Botones Play / Stop / Restablecer: fijan directamente el estado de
+    // la instancia a En curso / Suspendido / Pendiente. El botón activo
+    // (el que coincide con el estado actual) queda resaltado.
+    instControlsHtml(inst, disabled) {
+        const mk = (estado, icon, title) => `
+            <button type="button" class="wf-inst-ctrl-btn ${inst.estado === estado ? "is-active is-active--" + estado.toLowerCase() : ""}"
+                    data-inst-set="${estado}:${inst.id}" title="${title}" ${disabled ? "disabled" : ""}>${icon}</button>`;
+        return `<div class="wf-inst-controls">
+            ${mk("EN_CURSO", "▶", "Poner en curso")}
+            ${mk("SUSPENDIDO", "⏸", "Suspender")}
+            ${mk("PENDIENTE", "↺", "Restablecer a pendiente")}
+        </div>`;
+    },
+
+    // Bloque "Asignado a": si el paso tiene revisión, se muestran dos
+    // pestañas (Responsable / Revisor), cada una con su propio selector
+    // múltiple de personas/grupos; si no tiene revisión, solo Responsable
+    // sin pestañas.
+    assigneeBlockHtml(step, inst) {
+        const tab = step.revision ? (this._assigneeTab[inst.id] || "asignado") : "asignado";
+        const tabs = step.revision ? `
+            <div class="wf-assignee-tabs" data-assignee-tabs="${inst.id}">
+                <button type="button" class="wf-assignee-tab ${tab === "asignado" ? "is-active" : ""}" data-assignee-tab="asignado:${inst.id}">Responsable</button>
+                <button type="button" class="wf-assignee-tab ${tab === "revisor" ? "is-active" : ""}" data-assignee-tab="revisor:${inst.id}">Revisor</button>
+            </div>` : "";
+
         return `
-            <div class="user-search" data-user-search="${inst.id}">
-                <input type="text" class="user-search-input" placeholder="Buscar por email..." autocomplete="off"
-                       value="${UI.escapeHtml(inst.asignado)}" data-inst-assignee="${inst.id}" data-user-search-input ${disabled ? "disabled" : ""}>
-                <div class="user-search-results" data-user-search-results style="display:none;"></div>
+            <div class="form-group">
+                ${step.revision ? "" : "<label>Asignado a</label>"}
+                ${tabs}
+                <div data-assignee-panel="${inst.id}">${this.multiAssigneeFieldHtml(inst, tab)}</div>
+            </div>`;
+    },
+
+    // Selector múltiple de personas/grupos para el campo indicado
+    // ("asignado" o "revisor"). Los valores se guardan en la misma
+    // columna (ASIGNADO/REVISOR) como texto separado por comas. Si el
+    // proveedor soporta buscador de usuarios se ofrece autocompletado;
+    // si no (o para grupos, que no están en el directorio de usuarios),
+    // se puede escribir libremente y pulsar Enter para añadir el chip.
+    multiAssigneeFieldHtml(inst, field) {
+        const disabled = inst.estado === "COMPLETADO";
+        const raw = field === "revisor" ? (inst.revisor || "") : (inst.asignado || "");
+        const values = raw.split(",").map(v => v.trim()).filter(Boolean);
+        const chips = values.map(v => {
+            const isGroup = !v.includes("@");
+            return `<span class="wf-assignee-chip ${isGroup ? "wf-assignee-chip--group" : ""}">
+                        <span class="wf-assignee-chip-icon">${isGroup ? "👥" : "👤"}</span>${UI.escapeHtml(v)}
+                        ${disabled ? "" : `<button type="button" class="wf-assignee-chip-remove" data-assignee-remove="${field}:${inst.id}:${UI.escapeHtml(v)}">×</button>`}
+                    </span>`;
+        }).join("");
+
+        const canSearch = Provider.canSearchUsers();
+        return `
+            <div class="wf-assignee-multi" data-assignee-multi="${field}:${inst.id}">
+                <div class="wf-assignee-chip-row">${chips}</div>
+                ${disabled ? "" : `
+                    <div class="user-search" data-user-search="${field}:${inst.id}">
+                        <input type="text" class="user-search-input" placeholder="${canSearch ? "Buscar por email o escribe un grupo…" : "Persona o grupo…"}" autocomplete="off"
+                               data-assignee-input="${field}:${inst.id}" data-user-search-input>
+                        <div class="user-search-results" data-user-search-results style="display:none;"></div>
+                    </div>`}
             </div>`;
     },
 
@@ -793,10 +889,20 @@ const WorkflowRuns = {
         scope.querySelectorAll("[data-open-flow]").forEach(btn => {
             btn.addEventListener("click", () => window.open(`flow_run.html?flujo_id=${encodeURIComponent(btn.dataset.openFlow)}`, "_blank"));
         });
-        scope.querySelectorAll("[data-inst-assignee]").forEach(input => {
-            input.addEventListener("change", () => this.updateAssignee(input.dataset.instAssignee, input.value));
-        });
         scope.querySelectorAll("[data-user-search]").forEach(wrap => this.bindUserSearch(wrap));
+        scope.querySelectorAll("[data-assignee-remove]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const [field, instId, value] = btn.dataset.assigneeRemove.split(":");
+                this.removeAssignee(instId, field, value);
+            });
+        });
+        scope.querySelectorAll("[data-assignee-tab]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const [field, instId] = btn.dataset.assigneeTab.split(":");
+                this._assigneeTab[instId] = field;
+                this.renderRunStepBody();
+            });
+        });
         scope.querySelectorAll("[data-inst-var]").forEach(input => {
             input.addEventListener("change", () => {
                 const [instId, varName] = input.dataset.instVar.split(":");
@@ -809,15 +915,36 @@ const WorkflowRuns = {
                 this.transition(instId, action);
             });
         });
+        scope.querySelectorAll("[data-inst-set]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                const [estado, instId] = btn.dataset.instSet.split(":");
+                this.setInstanceEstado(instId, estado);
+            });
+        });
     },
 
-    // Buscador de usuarios del campo "Asignado a": consulta
-    // Provider.searchUsers() con un pequeño debounce y muestra un
-    // desplegable con los emails que coinciden.
+    // Buscador de usuarios del campo de asignación (Responsable/Revisor):
+    // consulta Provider.searchUsers() con un pequeño debounce y muestra un
+    // desplegable con los emails que coinciden. Como es un selector
+    // MÚLTIPLE, elegir un resultado (o pulsar Enter con lo escrito) AÑADE
+    // un chip nuevo en vez de sustituir el valor. Lo escrito que no
+    // coincide con ningún email del directorio se puede añadir igualmente
+    // como grupo (el directorio de usuarios de Provider.searchUsers no
+    // conoce grupos, así que un grupo siempre se añade escribiendo su
+    // nombre y pulsando Enter o el botón "Añadir").
     bindUserSearch(wrap) {
         const input = wrap.querySelector("[data-user-search-input]");
         const results = wrap.querySelector("[data-user-search-results]");
         if (!input || !results) return;
+        const [field, instId] = input.dataset.assigneeInput.split(":");
+
+        const addValue = (value) => {
+            value = value.trim();
+            if (!value) return;
+            results.style.display = "none";
+            input.value = "";
+            this.addAssignee(instId, field, value);
+        };
 
         let debounceTimer = null;
         const runSearch = async () => {
@@ -830,15 +957,13 @@ const WorkflowRuns = {
             }
             if (!users.length) { results.style.display = "none"; results.innerHTML = ""; return; }
             results.innerHTML = users.map(email =>
-                `<div class="user-search-item" data-user-email="${UI.escapeHtml(email)}">${UI.escapeHtml(email)}</div>`).join("");
+                `<div class="user-search-item" data-user-email="${UI.escapeHtml(email)}">👤 ${UI.escapeHtml(email)}</div>`).join("");
             results.style.display = "block";
             results.querySelectorAll("[data-user-email]").forEach(item => {
                 // mousedown (no click) para que se dispare ANTES del blur del input y no se pierda la selección
                 item.addEventListener("mousedown", (e) => {
                     e.preventDefault();
-                    input.value = item.dataset.userEmail;
-                    results.style.display = "none";
-                    this.updateAssignee(input.dataset.instAssignee, input.value);
+                    addValue(item.dataset.userEmail);
                 });
             });
         };
@@ -847,19 +972,56 @@ const WorkflowRuns = {
             clearTimeout(debounceTimer);
             debounceTimer = setTimeout(runSearch, 250);
         });
-        input.addEventListener("focus", () => runSearch());
+        input.addEventListener("focus", () => { if (input.value) runSearch(); });
+        input.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); addValue(input.value); }
+        });
         input.addEventListener("blur", () => { setTimeout(() => { results.style.display = "none"; }, 150); });
     },
 
-    async updateAssignee(instId, value) {
+    async saveAssigneeField(instId, field, values) {
+        const value = values.join(",");
+        const column = field === "revisor" ? "REVISOR" : "ASIGNADO";
         try {
             await Provider.runQuery(`UPDATE ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
-                SET ASIGNADO = '${Provider.esc(value)}' WHERE INSTANCIA_ID = '${Provider.esc(instId)}'`);
+                SET ${column} = '${Provider.esc(value)}' WHERE INSTANCIA_ID = '${Provider.esc(instId)}'`);
             const inst = this.currentRun.instancias.find(i => i.id === instId);
-            if (inst) inst.asignado = value;
+            if (inst) inst[field] = value;
             this.renderRunChain();
+            this.renderRunStepBody();
         } catch (err) {
-            UI.toast("Error al guardar el responsable: " + err.message, "error");
+            UI.toast("Error al guardar el " + (field === "revisor" ? "revisor" : "responsable") + ": " + err.message, "error");
+        }
+    },
+
+    addAssignee(instId, field, value) {
+        const inst = this.currentRun.instancias.find(i => i.id === instId);
+        if (!inst) return;
+        const current = (inst[field] || "").split(",").map(v => v.trim()).filter(Boolean);
+        if (current.includes(value)) return;
+        current.push(value);
+        this.saveAssigneeField(instId, field, current);
+    },
+
+    removeAssignee(instId, field, value) {
+        const inst = this.currentRun.instancias.find(i => i.id === instId);
+        if (!inst) return;
+        const current = (inst[field] || "").split(",").map(v => v.trim()).filter(Boolean).filter(v => v !== value);
+        this.saveAssigneeField(instId, field, current);
+    },
+
+    async setInstanceEstado(instId, nuevoEstado) {
+        const inst = this.currentRun.instancias.find(i => i.id === instId);
+        if (!inst || inst.estado === nuevoEstado) return;
+        try {
+            await Provider.runQuery(`UPDATE ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
+                SET ESTADO = '${Provider.esc(nuevoEstado)}'${nuevoEstado === "EN_CURSO" ? ", FECHA_INICIO = CURRENT_TIMESTAMP()" : ""}
+                WHERE INSTANCIA_ID = '${Provider.esc(instId)}'`);
+            inst.estado = nuevoEstado;
+            this.renderRunChain();
+            this.renderRunStepBody();
+        } catch (err) {
+            UI.toast("Error al actualizar el estado: " + err.message, "error");
         }
     },
 
@@ -881,14 +1043,14 @@ const WorkflowRuns = {
         const inst = this.currentRun.instancias.find(i => i.id === instId);
         if (!inst) return;
 
-        const map = { start: "EN_CURSO", review: "EN_REVISION", approve: "COMPLETADO", reject: "EN_CURSO", complete: "COMPLETADO" };
+        const map = { review: "EN_REVISION", approve: "COMPLETADO", reject: "EN_CURSO", complete: "COMPLETADO" };
         const nuevoEstado = map[action];
         if (!nuevoEstado) return;
 
         const isFinal = nuevoEstado === "COMPLETADO";
         try {
             await Provider.runQuery(`UPDATE ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
-                SET ESTADO = '${Provider.esc(nuevoEstado)}'${isFinal ? ", FECHA_FIN = CURRENT_TIMESTAMP()" : ""}${action === "start" ? ", FECHA_INICIO = CURRENT_TIMESTAMP()" : ""}
+                SET ESTADO = '${Provider.esc(nuevoEstado)}'${isFinal ? ", FECHA_FIN = CURRENT_TIMESTAMP()" : ""}
                 WHERE INSTANCIA_ID = '${Provider.esc(instId)}'`);
             inst.estado = nuevoEstado;
 

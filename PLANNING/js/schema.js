@@ -276,6 +276,7 @@ const DracoSchema = {
                     ORDEN INTEGER,
                     DRIVER_VALOR STRING,
                     ASIGNADO STRING,
+                    REVISOR STRING,
                     ESTADO STRING NOT NULL,
                     FECHA_PROGRAMADA STRING,
                     FECHA_INICIO TIMESTAMP,
@@ -376,10 +377,12 @@ const DracoSchema = {
         onProgress("Verificando columnas del modelo semántico...");
         const cubos = Provider.qualifyControl("CUBOS");
         const workflowsRuns = Provider.qualifyControl("WORKFLOWS_RUNS");
+        const workflowsRunsInstancias = Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS");
         await Promise.all([
             Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING`),
             Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP`),
-            Provider.runQuery(`ALTER TABLE ${workflowsRuns} ADD COLUMN IF NOT EXISTS DESCRIPCION STRING`)
+            Provider.runQuery(`ALTER TABLE ${workflowsRuns} ADD COLUMN IF NOT EXISTS DESCRIPCION STRING`),
+            Provider.runQuery(`ALTER TABLE ${workflowsRunsInstancias} ADD COLUMN IF NOT EXISTS REVISOR STRING`)
         ]);
     },
 
