@@ -558,7 +558,25 @@
     color: var(--text-secondary);
 }
 
-/* ---------- Ejecuciones: bloque de fechas del paso (antes de las tareas) ---------- */
+/* ---------- Ejecuciones: bloque de fechas del paso (tarjeta independiente,
+   antes de las instancias) ---------- */
+.wf-step-dates-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-left: 3px solid var(--brand-primary, #4f46e5);
+    border-radius: var(--radius-md);
+}
+
+.wf-step-dates-card-title {
+    font-weight: 700;
+    font-size: var(--fs-base);
+}
+
 .wf-step-dates-row {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(180px, 220px));
@@ -613,6 +631,12 @@
 
 .wf-instance-card .form-group {
     margin: 0;
+}
+
+.wf-instance-card-badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
 }
 
 .wf-instance-card label {
