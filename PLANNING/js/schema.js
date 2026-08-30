@@ -241,6 +241,7 @@ const DracoSchema = {
                     TAREA_ID STRING NOT NULL,
                     TIPO STRING NOT NULL,
                     NOMBRE STRING,
+                    DESCRIPCION STRING,
                     REF_ID STRING,
                     REF_NOMBRE STRING,
                     ORDEN INTEGER

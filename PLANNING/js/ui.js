@@ -1352,6 +1352,146 @@ const UI = {
      * usarlo como tarea de un paso de Workflow. Devuelve Promise<object|null>
      * con el flujo elegido (de la lista `flows` recibida).
      */
+    /**
+     * Modal "Nueva tarea" (y edición): nombre + descripción + selector de
+     * tipo con tarjetas (mismo patrón visual que "Nueva interfaz" en
+     * Interfaces: .origin-type-grid / .origin-type-card).
+     * `types`: [{key,label,icon}]. `locked`: en edición no se puede cambiar
+     * el tipo de una tarea ya creada (se ve la tarjeta activa pero deshabilitada).
+     * Devuelve Promise<{name, description, tipo}|null>.
+     */
+    openTaskFormModal({ title, name = "", description = "", tipo = "", types = [], locked = false }) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("wfTaskFormModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "wfTaskFormModal";
+                document.body.appendChild(overlay);
+            }
+
+            let selected = tipo || (types[0] && types[0].key) || "";
+
+            overlay.innerHTML = `
+                <div class="modal-box modal-wide">
+                    <div class="modal-header">
+                        <h3>${UI.escapeHtml(title)}</h3>
+                        <button class="modal-close" id="wfTaskFormClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label>Nombre de la tarea</label>
+                            <input type="text" id="wfTaskFormName" placeholder="Ej. Actualizar tipos de cambio">
+                        </div>
+                        <div class="form-group">
+                            <label>Descripción</label>
+                            <textarea id="wfTaskFormDesc" rows="2" placeholder="Opcional"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>Tipo de tarea</label>
+                            <div class="origin-type-grid origin-type-grid--wf" id="wfTaskFormTypes">
+                                ${types.map(t => `
+                                    <button type="button" class="origin-type-card ${locked && t.key !== selected ? "is-disabled" : ""} ${t.key === selected ? "active" : ""}"
+                                            data-type="${t.key}" ${locked && t.key !== selected ? "disabled" : ""}>
+                                        <span class="origin-type-card-icon">${t.icon || "•"}</span>
+                                        <span class="origin-type-card-label">${UI.escapeHtml(t.label)}</span>
+                                    </button>`).join("")}
+                            </div>
+                            ${locked ? `<p class="form-hint">El tipo de una tarea no se puede cambiar una vez creada. Elimínala y crea una nueva si necesitas otro tipo.</p>` : ""}
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn btn-secondary" id="wfTaskFormCancel">Cancelar</button>
+                        <button class="btn btn-primary" id="wfTaskFormNext">Continuar</button>
+                    </div>
+                </div>`;
+
+            overlay.querySelectorAll("#wfTaskFormTypes [data-type]:not(:disabled)").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    selected = btn.dataset.type;
+                    overlay.querySelectorAll("#wfTaskFormTypes [data-type]").forEach(b => b.classList.toggle("active", b === btn));
+                });
+            });
+
+            const nameInput = overlay.querySelector("#wfTaskFormName");
+            nameInput.value = name;
+            overlay.querySelector("#wfTaskFormDesc").value = description;
+
+            overlay.classList.add("visible");
+            setTimeout(() => { nameInput.focus(); nameInput.select(); }, 50);
+
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+            overlay.querySelector("#wfTaskFormClose").onclick = () => cleanup(null);
+            overlay.querySelector("#wfTaskFormCancel").onclick = () => cleanup(null);
+            overlay.querySelector("#wfTaskFormNext").onclick = () => {
+                const nameVal = nameInput.value.trim();
+                if (!nameVal) { UI.toast("Indica un nombre para la tarea.", "error"); return; }
+                if (!selected) { UI.toast("Selecciona un tipo de tarea.", "error"); return; }
+                cleanup({ name: nameVal, description: overlay.querySelector("#wfTaskFormDesc").value.trim(), tipo: selected });
+            };
+        });
+    },
+
+    /**
+     * Selector de una "Actualización de tablas" existente del proyecto
+     * (catálogo de js/table-updates.js), para usarla como referencia de una
+     * tarea de Workflow. Devuelve Promise<{id,name}|null>.
+     */
+    openActualizacionPickerModal({ items = [] } = {}) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("wfActPickerModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "wfActPickerModal";
+                document.body.appendChild(overlay);
+            }
+            overlay.innerHTML = `
+                <div class="modal-box modal-wide">
+                    <div class="modal-header">
+                        <h3>Seleccionar actualización de tablas</h3>
+                        <button class="modal-close" id="wfActPickerClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <input type="text" id="wfActPickerSearch" class="dim-picker-search" placeholder="Buscar por nombre...">
+                        <div class="dim-picker-table-wrap">
+                            <table class="dim-picker-table">
+                                <thead><tr><th>Actualización</th><th>Tabla</th></tr></thead>
+                                <tbody id="wfActPickerRows"></tbody>
+                            </table>
+                        </div>
+                        ${!items.length ? `<p class="form-hint">Todavía no hay ninguna "Actualización de tablas" definida en este proyecto. Créala primero en Administración → Actualización de tablas.</p>` : ""}
+                    </div>
+                </div>`;
+
+            const searchInput = overlay.querySelector("#wfActPickerSearch");
+            const rowsEl = overlay.querySelector("#wfActPickerRows");
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+
+            const renderRows = (filterText = "") => {
+                const f = filterText.trim().toLowerCase();
+                const filtered = !f ? items : items.filter(i => (i.name || "").toLowerCase().includes(f));
+                rowsEl.innerHTML = filtered.length
+                    ? filtered.map((i, idx) => `
+                        <tr data-pick="${idx}">
+                            <td><strong>${UI.escapeHtml(i.name)}</strong></td>
+                            <td><span class="table-tag">${UI.escapeHtml(i.tabla || "—")}</span></td>
+                        </tr>`).join("")
+                    : `<tr><td colspan="2" class="dim-picker-empty">${items.length ? "Sin resultados." : "No hay actualizaciones de tablas."}</td></tr>`;
+                rowsEl.querySelectorAll("[data-pick]").forEach(tr => {
+                    tr.addEventListener("click", () => cleanup(filtered[parseInt(tr.dataset.pick, 10)]));
+                });
+            };
+
+            searchInput.value = "";
+            searchInput.oninput = () => renderRows(searchInput.value);
+            renderRows();
+            overlay.classList.add("visible");
+            setTimeout(() => searchInput.focus(), 50);
+            overlay.querySelector("#wfActPickerClose").onclick = () => cleanup(null);
+        });
+    },
+
     openFlowManualPickerModal({ flows = [] } = {}) {
         return new Promise((resolve) => {
             let overlay = document.getElementById("wfFlowPickerModal");

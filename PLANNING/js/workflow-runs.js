@@ -493,7 +493,8 @@ const WorkflowRuns = {
         const runLink = t.tipo === "FLUJO_MANUAL" && t.refId
             ? `<button type="button" class="btn btn-secondary btn-sm" data-open-flow="${t.refId}">▶ Ejecutar</button>`
             : "";
-        return `<div class="flow-target-row"><span class="flow-target-label">${typeInfo.icon} ${UI.escapeHtml(typeInfo.label)} — ${UI.escapeHtml(t.refNombre || t.nombre)}</span>${runLink}</div>`;
+        const showRef = t.refNombre && t.refNombre !== t.nombre;
+        return `<div class="flow-target-row" title="${UI.escapeHtml(t.descripcion || "")}"><span class="flow-target-label">${typeInfo.icon} ${UI.escapeHtml(t.nombre || typeInfo.label)}${showRef ? " — " + UI.escapeHtml(t.refNombre) : ""}</span>${runLink}</div>`;
     },
 
     instanceCardHtml(step, inst) {

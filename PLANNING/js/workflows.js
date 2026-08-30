@@ -26,11 +26,16 @@
  *   - Tareas del paso: organizadas en bloques — un menú lateral
  *     (igual que Dimensiones/Cubos/Interfaces) donde "+ Añadir bloque"
  *     crea uno nuevo y se reordenan arrastrando; a la derecha, las
- *     tareas del bloque seleccionado. Cada tarea es de tipo flujo
- *     manual, plantilla, función, actualización de tabla de
- *     parametrización o página HTML, y puede completar sus propias
- *     variables por constante o por una variable del workflow (Paso 0),
- *     con opción de ocultarlas en la pantalla de ejecución.
+ *     tareas del bloque seleccionado. Al añadir una tarea se pide
+ *     nombre + descripción y se elige su tipo con tarjetas (igual que el
+ *     selector de origen de datos en "Nueva interfaz"): Actualización de
+ *     tablas, Flujos de carga, Plantillas Excel, Plantillas Web, Funciones
+ *     o Páginas HTML. "Actualización de tablas" y "Flujos de carga" se
+ *     eligen de su catálogo real (ACTUALIZACIONES / FLUJOS tipo MANUAL);
+ *     el resto son referencia libre por ahora. Cada tarea puede completar
+ *     sus propias variables por constante o por una variable del workflow
+ *     (Paso 0), con opción de ocultarlas en la pantalla de ejecución, y se
+ *     puede editar (✎) o eliminar (✕) en cualquier momento.
  *
  * Persistencia en DRACO_CONTROL:
  *   - WORKFLOWS                        cabecera (nombre, descripción)
@@ -50,16 +55,33 @@ const Workflows = {
     NAME_COL: "WORKFLOW",
 
     TASK_TYPES: {
-        FLUJO_MANUAL: { label: "Flujo manual", icon: "☺" },
-        PLANTILLA: { label: "Plantilla", icon: "▤" },
-        FUNCION: { label: "Función", icon: "ƒ" },
-        PARAMETRIZACION: { label: "Actualizar tabla de parametrización", icon: "◆" },
-        HTML: { label: "Página HTML", icon: "⌗" }
+        // "catalog" marca los tipos cuya referencia se elige de un listado
+        // real (en vez de texto libre): PARAMETRIZACION -> Actualizaciones,
+        // FLUJO_MANUAL -> Flujos de carga de tipo manual.
+        PARAMETRIZACION: { label: "Actualización de tablas", icon: "🗄", catalog: "ACTUALIZACION" },
+        FLUJO_MANUAL: { label: "Flujos de carga", icon: "☺", catalog: "FLUJO" },
+        PLANTILLA_EXCEL: { label: "Plantillas Excel", icon: "📊" },
+        PLANTILLA_WEB: { label: "Plantillas Web", icon: "🌐" },
+        FUNCION: { label: "Funciones", icon: "ƒ" },
+        HTML: { label: "Páginas HTML", icon: "⌗" },
+        // Legado: tareas creadas antes de este cambio con el tipo genérico
+        // "Plantilla" (sin distinguir Excel/Web). Ya no se ofrece en "+ Tarea"
+        // pero se sigue mostrando correctamente si ya existía.
+        PLANTILLA: { label: "Plantilla", icon: "▤", legacy: true }
+    },
+
+    // Orden y contenido del selector de tipo al crear una tarea nueva
+    // (excluye los tipos "legacy").
+    taskTypeChoices() {
+        return Object.entries(this.TASK_TYPES)
+            .filter(([, t]) => !t.legacy)
+            .map(([key, t]) => ({ key, label: t.label, icon: t.icon }));
     },
 
     list: [],
     dimensions: [],
     manualFlows: [],
+    actualizaciones: [],
     editing: null,
     editingIsNew: true,
     selectedStepId: null,
@@ -218,6 +240,19 @@ const Workflows = {
         } catch (e) { this.manualFlows = []; }
     },
 
+    // Catálogo de "Actualización de tablas" (ver js/table-updates.js) para
+    // usarlas como referencia de una tarea de tipo PARAMETRIZACION.
+    async loadActualizaciones() {
+        try {
+            const rows = await Provider.runQuery(`
+                SELECT ACTUALIZACION_ID, NOMBRE, TABLA
+                FROM ${Provider.qualifyControl("ACTUALIZACIONES")}
+                WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                ORDER BY NOMBRE`);
+            this.actualizaciones = rows.map(r => ({ id: r.ACTUALIZACION_ID, name: r.NOMBRE, tabla: r.TABLA }));
+        } catch (e) { this.actualizaciones = []; }
+    },
+
     async flowScreenVariables(flujoId) {
         try {
             const rows = await Provider.runQuery(`
@@ -226,6 +261,16 @@ const Workflows = {
                 WHERE FLUJO_ID = '${Provider.esc(flujoId)}' ORDER BY ORDEN`);
             return rows;
         } catch (e) { return []; }
+    },
+
+    // Auto-reparación: añade la columna DESCRIPCION a WORKFLOWS_PASOS_TAREAS si
+    // la tabla se creó antes de que existiera este campo (ver schema.js).
+    async ensureTareaDescripcionColumn() {
+        try {
+            await Provider.runQuery(`ALTER TABLE ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")} ADD COLUMN IF NOT EXISTS DESCRIPCION STRING`);
+        } catch (err) {
+            console.error("No se pudo comprobar/añadir la columna DESCRIPCION en WORKFLOWS_PASOS_TAREAS:", err);
+        }
     },
 
     dimensionById(id) {
@@ -292,7 +337,7 @@ const Workflows = {
             SELECT PASO_ID, BLOQUE_ID, TITULO, ORDEN FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_BLOQUES")}
             WHERE PASO_ID IN (${inClause}) ORDER BY ORDEN`) : [];
         const tareaRows = pasoIds.length ? await Provider.runQuery(`
-            SELECT PASO_ID, BLOQUE_ID, TAREA_ID, TIPO, NOMBRE, REF_ID, REF_NOMBRE, ORDEN FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")}
+            SELECT PASO_ID, BLOQUE_ID, TAREA_ID, TIPO, NOMBRE, DESCRIPCION, REF_ID, REF_NOMBRE, ORDEN FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")}
             WHERE PASO_ID IN (${inClause}) ORDER BY ORDEN`) : [];
         const tareaIds = tareaRows.map(t => t.TAREA_ID);
         const tareaValRows = tareaIds.length ? await Provider.runQuery(`
@@ -317,7 +362,7 @@ const Workflows = {
         const tareasByBloque = {};
         tareaRows.forEach(t => {
             (tareasByBloque[t.BLOQUE_ID] = tareasByBloque[t.BLOQUE_ID] || []).push({
-                id: t.TAREA_ID, tipo: t.TIPO, nombre: t.NOMBRE || "",
+                id: t.TAREA_ID, tipo: t.TIPO, nombre: t.NOMBRE || "", descripcion: t.DESCRIPCION || "",
                 refId: t.REF_ID || null, refNombre: t.REF_NOMBRE || "",
                 valores: valsByTarea[t.TAREA_ID] || []
             });
@@ -360,6 +405,8 @@ const Workflows = {
 
         await this.loadDimensions();
         await this.loadManualFlows();
+        await this.loadActualizaciones();
+        await this.ensureTareaDescripcionColumn();
 
         if (editId) {
             const draft = await this.loadDetail(editId);
@@ -932,15 +979,21 @@ const Workflows = {
 
     taskHtml(block, task, tIdx) {
         const typeInfo = this.TASK_TYPES[task.tipo] || { label: task.tipo, icon: "•" };
-        const canAddCustomVar = task.tipo === "PLANTILLA" || task.tipo === "FUNCION" || task.tipo === "HTML";
+        const canAddCustomVar = task.tipo === "PLANTILLA_EXCEL" || task.tipo === "PLANTILLA_WEB" || task.tipo === "PLANTILLA" || task.tipo === "FUNCION" || task.tipo === "HTML";
+        const showRef = task.refNombre && task.refNombre !== task.nombre;
         return `
             <div class="flow-screen-block" data-task-idx="${tIdx}" style="margin-bottom:8px;">
                 <div class="flow-frame-header">
-                    <span>${typeInfo.icon} <strong>${UI.escapeHtml(typeInfo.label)}</strong> — ${UI.escapeHtml(task.refNombre || task.nombre || "(sin referencia)")}</span>
+                    <span>${typeInfo.icon} <strong>${UI.escapeHtml(task.nombre || typeInfo.label)}</strong>
+                        <span class="table-tag">${UI.escapeHtml(typeInfo.label)}</span>
+                        ${showRef ? `<span class="col-type"> · ${UI.escapeHtml(task.refNombre)}</span>` : ""}
+                    </span>
                     <span class="load-fn-toolbar-spacer"></span>
                     ${canAddCustomVar ? `<button type="button" class="btn btn-secondary btn-sm" data-add-taskvar="${tIdx}">+ Variable</button>` : ""}
+                    <button type="button" class="flow-chain-card-remove" data-edit-task="${tIdx}" title="Editar tarea">✎</button>
                     <button type="button" class="flow-chain-card-remove" data-remove-task="${tIdx}" title="Eliminar tarea">✕</button>
                 </div>
+                ${task.descripcion ? `<p class="form-hint" style="margin:4px 0 0;">${UI.escapeHtml(task.descripcion)}</p>` : ""}
                 ${task.valores.length ? `
                     <div class="flow-mapping-vars-list">
                         ${task.valores.map((v, vIdx) => `
@@ -961,6 +1014,10 @@ const Workflows = {
                 this.renderTareasTab(document.getElementById("wfStepTabBody"), step);
                 this.renderStepsPart();
             });
+        });
+
+        detail.querySelectorAll("[data-edit-task]").forEach(btn => {
+            btn.addEventListener("click", () => this.editTask(step, block, parseInt(btn.dataset.editTask, 10)));
         });
 
         detail.querySelectorAll("[data-add-taskvar]").forEach(btn => {
@@ -995,39 +1052,75 @@ const Workflows = {
     },
 
     async addTask(step, block) {
-        const choice = await UI.choiceModal("Nueva tarea", "¿Qué tipo de tarea quieres añadir a este bloque?", [
-            { key: "FLUJO_MANUAL", label: "Flujo manual" },
-            { key: "PLANTILLA", label: "Plantilla" },
-            { key: "FUNCION", label: "Función" },
-            { key: "PARAMETRIZACION", label: "Actualizar tabla de parametrización" },
-            { key: "HTML", label: "Página HTML", style: "primary" }
-        ]);
-        if (!choice) return;
+        const basics = await UI.openTaskFormModal({
+            title: "Nueva tarea",
+            types: this.taskTypeChoices()
+        });
+        if (!basics) return;
+        const { name, description, tipo } = basics;
+        const typeInfo = this.TASK_TYPES[tipo] || {};
 
-        if (choice === "FLUJO_MANUAL") {
+        if (typeInfo.catalog === "FLUJO") {
             const flow = await UI.openFlowManualPickerModal({ flows: this.manualFlows });
             if (!flow) return;
             const screenVars = await this.flowScreenVariables(flow.id);
             block.tareas.push({
-                id: Provider.newId(), tipo: "FLUJO_MANUAL", nombre: flow.name, refId: flow.id, refNombre: flow.name,
+                id: Provider.newId(), tipo, nombre: name, descripcion: description, refId: flow.id, refNombre: flow.name,
                 valores: screenVars.map(v => ({ clave: v.NOMBRE, etiqueta: v.ETIQUETA || v.NOMBRE, tipo: "constante", valor: "", ocultar: false }))
             });
             return;
         }
 
-        if (choice === "PARAMETRIZACION") {
-            const dimId = await UI.openDimensionPickerModal({ dimensionsList: this.dimensions });
-            if (!dimId) return;
-            const dim = this.dimensionById(dimId);
-            block.tareas.push({ id: Provider.newId(), tipo: "PARAMETRIZACION", nombre: dim.DIMENSION, refId: dim.DIMENSION_ID, refNombre: dim.DIMENSION, valores: [] });
+        if (typeInfo.catalog === "ACTUALIZACION") {
+            await this.loadActualizaciones();
+            const picked = await UI.openActualizacionPickerModal({ items: this.actualizaciones });
+            if (!picked) return;
+            block.tareas.push({ id: Provider.newId(), tipo, nombre: name, descripcion: description, refId: picked.id, refNombre: picked.name, valores: [] });
             return;
         }
 
-        // PLANTILLA / FUNCION / HTML — todavía sin catálogo propio: referencia libre
-        const labels = { PLANTILLA: "la plantilla", FUNCION: "la función", HTML: "la página HTML" };
-        const name = await UI.openTextPromptModal({ title: "Nueva tarea", label: `Nombre de ${labels[choice]}`, placeholder: "Ej. " + (this.TASK_TYPES[choice] || {}).label });
-        if (!name || !name.trim()) return;
-        block.tareas.push({ id: Provider.newId(), tipo: choice, nombre: name.trim(), refId: null, refNombre: name.trim(), valores: [] });
+        // Plantillas Excel/Web, Funciones, Páginas HTML: todavía sin catálogo
+        // propio — la referencia es el nombre que se acaba de escribir arriba.
+        block.tareas.push({ id: Provider.newId(), tipo, nombre: name, descripcion: description, refId: null, refNombre: name, valores: [] });
+    },
+
+    /** Edita nombre/descripción de una tarea ya creada y, si es de tipo con catálogo, permite cambiar su referencia. */
+    async editTask(step, block, tIdx) {
+        const task = block.tareas[tIdx];
+        const typeInfo = this.TASK_TYPES[task.tipo] || {};
+
+        const basics = await UI.openTaskFormModal({
+            title: "Editar tarea",
+            name: task.nombre,
+            description: task.descripcion || "",
+            tipo: task.tipo,
+            types: [{ key: task.tipo, label: typeInfo.label || task.tipo, icon: typeInfo.icon }],
+            locked: true
+        });
+        if (!basics) return;
+        task.nombre = basics.name;
+        task.descripcion = basics.description;
+
+        if (typeInfo.catalog === "FLUJO") {
+            const changeRef = await UI.confirm("Cambiar flujo de carga", `Referencia actual: <strong>${UI.escapeHtml(task.refNombre || "—")}</strong>.<br>¿Quieres elegir otro flujo manual?`);
+            if (changeRef) {
+                const flow = await UI.openFlowManualPickerModal({ flows: this.manualFlows });
+                if (flow) { task.refId = flow.id; task.refNombre = flow.name; }
+            }
+        } else if (typeInfo.catalog === "ACTUALIZACION") {
+            const changeRef = await UI.confirm("Cambiar actualización de tablas", `Referencia actual: <strong>${UI.escapeHtml(task.refNombre || "—")}</strong>.<br>¿Quieres elegir otra actualización?`);
+            if (changeRef) {
+                await this.loadActualizaciones();
+                const picked = await UI.openActualizacionPickerModal({ items: this.actualizaciones });
+                if (picked) { task.refId = picked.id; task.refNombre = picked.name; }
+            }
+        } else {
+            // Tipos sin catálogo: la "referencia" es simplemente el nombre.
+            task.refNombre = task.nombre;
+        }
+
+        this.renderTareasTab(document.getElementById("wfStepTabBody"), step);
+        this.renderStepsPart();
     },
 
     // ------------------------------------------------------------
@@ -1128,7 +1221,7 @@ const Workflows = {
             (s.bloques || []).forEach((b, bIdx) => {
                 bloqueVals.push(`('${Provider.esc(pid)}', '${Provider.esc(s.id)}', '${Provider.esc(b.id)}', '${Provider.esc(b.titulo)}', ${bIdx})`);
                 (b.tareas || []).forEach((t, tIdx) => {
-                    tareaVals.push(`('${Provider.esc(pid)}', '${Provider.esc(s.id)}', '${Provider.esc(b.id)}', '${Provider.esc(t.id)}', '${Provider.esc(t.tipo)}', '${Provider.esc(t.nombre || "")}', ${t.refId ? `'${Provider.esc(t.refId)}'` : "NULL"}, '${Provider.esc(t.refNombre || "")}', ${tIdx})`);
+                    tareaVals.push(`('${Provider.esc(pid)}', '${Provider.esc(s.id)}', '${Provider.esc(b.id)}', '${Provider.esc(t.id)}', '${Provider.esc(t.tipo)}', '${Provider.esc(t.nombre || "")}', '${Provider.esc(t.descripcion || "")}', ${t.refId ? `'${Provider.esc(t.refId)}'` : "NULL"}, '${Provider.esc(t.refNombre || "")}', ${tIdx})`);
                     (t.valores || []).forEach(v => {
                         tareaValVals.push(`('${Provider.esc(pid)}', '${Provider.esc(t.id)}', '${Provider.esc(v.clave)}', '${Provider.esc(v.etiqueta || v.clave)}', '${Provider.esc(v.tipo === "variable" ? "VARIABLE" : "CONSTANTE")}', '${Provider.esc(v.valor || "")}', ${v.ocultar ? "TRUE" : "FALSE"})`);
                     });
@@ -1139,7 +1232,7 @@ const Workflows = {
             await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_BLOQUES")} (PROYECTO_ID, PASO_ID, BLOQUE_ID, TITULO, ORDEN) VALUES ${bloqueVals.join(",\n")}`);
         }
         if (tareaVals.length) {
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")} (PROYECTO_ID, PASO_ID, BLOQUE_ID, TAREA_ID, TIPO, NOMBRE, REF_ID, REF_NOMBRE, ORDEN) VALUES ${tareaVals.join(",\n")}`);
+            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")} (PROYECTO_ID, PASO_ID, BLOQUE_ID, TAREA_ID, TIPO, NOMBRE, DESCRIPCION, REF_ID, REF_NOMBRE, ORDEN) VALUES ${tareaVals.join(",\n")}`);
         }
         if (tareaValVals.length) {
             await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS_VALORES")} (PROYECTO_ID, TAREA_ID, CLAVE, ETIQUETA, TIPO, VALOR, OCULTAR) VALUES ${tareaValVals.join(",\n")}`);
