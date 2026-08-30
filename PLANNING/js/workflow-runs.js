@@ -43,6 +43,16 @@ const WorkflowRuns = {
         COMPLETADO: { label: "Completado", cls: "flow-run-step--ok" }
     },
 
+    // Estados de la CABECERA de una ejecución (WORKFLOWS_RUNS.ESTADO), usados
+    // en el listado. Independientes de this.ESTADOS, que son los de cada
+    // instancia de paso dentro del detalle.
+    RUN_ESTADOS: {
+        PENDIENTE: { label: "Pendiente", cls: "run-status-pendiente" },
+        EN_CURSO: { label: "En curso", cls: "run-status-en_curso" },
+        SUSPENDIDO: { label: "Suspendido", cls: "run-status-suspendido" },
+        COMPLETADO: { label: "Completada", cls: "run-status-completado" }
+    },
+
     project: null,
     workflow: null,          // definición completa (Workflows.loadDetail)
     runs: [],
@@ -119,6 +129,24 @@ const WorkflowRuns = {
                 FROM ${Provider.qualifyControl("WORKFLOWS_RUNS")}
                 WHERE WORKFLOW_ID = '${Provider.esc(this.workflow.id)}'
                 ORDER BY FECHA_CREACION DESC`);
+
+            // Variables globales (Paso 0) de cada ejecución, para mostrarlas
+            // en el listado en lugar de la fecha de creación. Se cargan en
+            // una segunda consulta y se agrupan aquí en JS (evita depender
+            // de funciones de agregación de strings distintas entre
+            // BigQuery/Snowflake).
+            if (this.runs.length) {
+                const varRows = await Provider.runQuery(`
+                    SELECT RUN_ID, NOMBRE, VALOR
+                    FROM ${Provider.qualifyControl("WORKFLOWS_RUNS_VARIABLES")}
+                    WHERE RUN_ID = INSTANCIA_ID
+                      AND RUN_ID IN (${this.runs.map(r => `'${Provider.esc(r.RUN_ID)}'`).join(",")})`);
+                const varsByRun = {};
+                varRows.forEach(v => {
+                    (varsByRun[v.RUN_ID] = varsByRun[v.RUN_ID] || []).push(`${v.NOMBRE}=${v.VALOR}`);
+                });
+                this.runs.forEach(r => { r.VARIABLES_TXT = (varsByRun[r.RUN_ID] || []).join(", "); });
+            }
         } catch (err) {
             this.runs = [];
             UI.toast("Error al cargar las ejecuciones: " + err.message, "error");
@@ -145,20 +173,28 @@ const WorkflowRuns = {
                 ${this.runs.length ? `
                     <div class="data-list">
                         <table>
-                            <thead><tr><th>Ejecución</th><th>Estado</th><th>Creada</th><th></th></tr></thead>
+                            <thead><tr><th>Ejecución</th><th>Estado</th><th>Variables</th><th></th></tr></thead>
                             <tbody>
-                                ${this.runs.map(r => `
+                                ${this.runs.map(r => {
+                                    const estadoInfo = this.RUN_ESTADOS[r.ESTADO] || { label: r.ESTADO, cls: "" };
+                                    const isCompletado = r.ESTADO === "COMPLETADO";
+                                    return `
                                     <tr>
                                         <td><strong>${UI.escapeHtml(r.NOMBRE)}</strong></td>
-                                        <td><span class="table-tag ${r.ESTADO === 'COMPLETADO' ? 'flow-status-ok' : ''}">${r.ESTADO === "COMPLETADO" ? "Completada" : "En curso"}</span></td>
-                                        <td>${UI.escapeHtml(String(r.FECHA_CREACION || "").substring(0, 19).replace("T", " "))}</td>
+                                        <td><span class="table-tag ${estadoInfo.cls}">${UI.escapeHtml(estadoInfo.label)}</span></td>
+                                        <td>${r.VARIABLES_TXT
+                                            ? `<span class="run-vars-summary" title="${UI.escapeHtml(r.VARIABLES_TXT)}">${UI.escapeHtml(r.VARIABLES_TXT)}</span>`
+                                            : `<span class="run-vars-empty">—</span>`}</td>
                                         <td>
                                             <div class="row-actions">
-                                                <button data-open-run="${r.RUN_ID}" title="Abrir">▶</button>
+                                                <button data-mod-run="${r.RUN_ID}" title="Modificar">✎</button>
+                                                <button data-exec-run="${r.RUN_ID}" title="Ejecutar" ${r.ESTADO === "EN_CURSO" || isCompletado ? "disabled" : ""}>▶</button>
+                                                <button data-susp-run="${r.RUN_ID}" title="Suspender" ${r.ESTADO === "SUSPENDIDO" || isCompletado ? "disabled" : ""}>⏸</button>
                                                 <button data-del-run="${r.RUN_ID}" class="danger" title="Eliminar">🗑</button>
                                             </div>
                                         </td>
-                                    </tr>`).join("")}
+                                    </tr>`;
+                                }).join("")}
                             </tbody>
                         </table>
                     </div>` : ""}
@@ -166,10 +202,39 @@ const WorkflowRuns = {
 
         const newBtn = document.getElementById("btnNewRun");
         if (newBtn) newBtn.addEventListener("click", () => this.createRun());
-        body.querySelectorAll("[data-open-run]").forEach(btn =>
-            btn.addEventListener("click", () => this.openRun(btn.dataset.openRun)));
+        body.querySelectorAll("[data-mod-run]").forEach(btn =>
+            btn.addEventListener("click", () => this.openRun(btn.dataset.modRun)));
+        body.querySelectorAll("[data-exec-run]").forEach(btn =>
+            btn.addEventListener("click", () => this.setRunEstado(btn.dataset.execRun, "EN_CURSO")));
+        body.querySelectorAll("[data-susp-run]").forEach(btn =>
+            btn.addEventListener("click", () => this.setRunEstado(btn.dataset.suspRun, "SUSPENDIDO")));
         body.querySelectorAll("[data-del-run]").forEach(btn =>
             btn.addEventListener("click", () => this.removeRun(btn.dataset.delRun)));
+    },
+
+    // ------------------------------------------------------------
+    // Ejecutar / Suspender desde el listado: cambia el estado de la
+    // CABECERA de la ejecución y lo persiste, para que se recupere tal
+    // cual la próxima vez que se abra el listado.
+    // ------------------------------------------------------------
+    async setRunEstado(runId, estado) {
+        const run = this.runs.find(r => r.RUN_ID === runId);
+        if (!run) return;
+        const estadoAnterior = run.ESTADO;
+        run.ESTADO = estado; // optimista, para que la tabla reaccione al instante
+        this.showRunsList();
+        try {
+            await Provider.runQuery(`
+                UPDATE ${Provider.qualifyControl("WORKFLOWS_RUNS")}
+                SET ESTADO = '${Provider.esc(estado)}'
+                WHERE RUN_ID = '${Provider.esc(runId)}'`);
+            const label = (this.RUN_ESTADOS[estado] || {}).label || estado;
+            UI.toast(`Ejecución "${run.NOMBRE}" → ${label}.`, "success");
+        } catch (err) {
+            run.ESTADO = estadoAnterior;
+            this.showRunsList();
+            UI.toast("Error al actualizar el estado de la ejecución: " + err.message, "error");
+        }
     },
 
     async removeRun(runId) {
@@ -178,9 +243,11 @@ const WorkflowRuns = {
         const ok = await UI.confirm("Eliminar ejecución", `Se eliminará la ejecución <strong>${UI.escapeHtml(run.NOMBRE)}</strong> y todo su progreso.`);
         if (!ok) return;
         try {
-            await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("WORKFLOWS_RUNS_VARIABLES")} WHERE RUN_ID = '${Provider.esc(runId)}'`);
-            await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")} WHERE RUN_ID = '${Provider.esc(runId)}'`);
-            await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("WORKFLOWS_RUNS")} WHERE RUN_ID = '${Provider.esc(runId)}'`);
+            await Promise.all([
+                Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("WORKFLOWS_RUNS_VARIABLES")} WHERE RUN_ID = '${Provider.esc(runId)}'`),
+                Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")} WHERE RUN_ID = '${Provider.esc(runId)}'`),
+                Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("WORKFLOWS_RUNS")} WHERE RUN_ID = '${Provider.esc(runId)}'`)
+            ]);
             await this.loadRuns();
             this.showRunsList();
             UI.toast(`Ejecución "${run.NOMBRE}" eliminada.`, "success");
@@ -237,10 +304,15 @@ const WorkflowRuns = {
                 });
             }
 
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_RUNS")}
-                (RUN_ID, WORKFLOW_ID, PROYECTO_ID, NOMBRE, ESTADO, USUARIO, FECHA_CREACION, FECHA_FIN)
-                VALUES ('${Provider.esc(runId)}', '${Provider.esc(this.workflow.id)}', '${Provider.esc(pid)}', '${Provider.esc(result.name)}', 'EN_CURSO',
-                        ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), NULL)`);
+            // Las 3 tablas (cabecera, instancias, variables globales) son
+            // inserts independientes con los VALUES ya construidos en
+            // memoria: se lanzan a la vez en vez de uno detrás de otro.
+            const runInserts = [
+                Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_RUNS")}
+                    (RUN_ID, WORKFLOW_ID, PROYECTO_ID, NOMBRE, ESTADO, USUARIO, FECHA_CREACION, FECHA_FIN)
+                    VALUES ('${Provider.esc(runId)}', '${Provider.esc(this.workflow.id)}', '${Provider.esc(pid)}', '${Provider.esc(result.name)}', 'EN_CURSO',
+                            ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), NULL)`)
+            ];
 
             if (instancias.length) {
                 const vals = instancias.map(i => `(
@@ -248,18 +320,20 @@ const WorkflowRuns = {
                     ${i.driverValor !== null ? `'${Provider.esc(i.driverValor)}'` : "NULL"},
                     '${Provider.esc(i.asignado)}', '${Provider.esc(i.estado)}', '${Provider.esc(i.fechaProgramada)}', NULL, NULL
                 )`).join(",\n");
-                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
+                runInserts.push(Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
                     (RUN_ID, PASO_ID, INSTANCIA_ID, ORDEN, DRIVER_VALOR, ASIGNADO, ESTADO, FECHA_PROGRAMADA, FECHA_INICIO, FECHA_FIN)
-                    VALUES ${vals}`);
+                    VALUES ${vals}`));
             }
 
             const globalVarEntries = Object.entries(result.variables || {});
             if (globalVarEntries.length) {
                 const varVals = globalVarEntries.map(([name, value]) =>
                     `('${Provider.esc(runId)}', '${Provider.esc(runId)}', '${Provider.esc(name)}', '${Provider.esc(value)}')`);
-                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_RUNS_VARIABLES")}
-                    (RUN_ID, INSTANCIA_ID, NOMBRE, VALOR) VALUES ${varVals.join(",\n")}`);
+                runInserts.push(Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_RUNS_VARIABLES")}
+                    (RUN_ID, INSTANCIA_ID, NOMBRE, VALOR) VALUES ${varVals.join(",\n")}`));
             }
+
+            await Promise.all(runInserts);
 
             await this.loadRuns();
             await this.openRun(runId);
@@ -339,16 +413,17 @@ const WorkflowRuns = {
         const body = document.getElementById("wfRunsModalBody");
         body.innerHTML = `<span class="spinner"></span>`;
         try {
-            const headRows = await Provider.runQuery(`SELECT * FROM ${Provider.qualifyControl("WORKFLOWS_RUNS")} WHERE RUN_ID = '${Provider.esc(runId)}'`);
+            const [headRows, instRows, varRows] = await Promise.all([
+                Provider.runQuery(`SELECT * FROM ${Provider.qualifyControl("WORKFLOWS_RUNS")} WHERE RUN_ID = '${Provider.esc(runId)}'`),
+                Provider.runQuery(`
+                    SELECT * FROM ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
+                    WHERE RUN_ID = '${Provider.esc(runId)}' ORDER BY ORDEN`),
+                Provider.runQuery(`
+                    SELECT INSTANCIA_ID, NOMBRE, VALOR FROM ${Provider.qualifyControl("WORKFLOWS_RUNS_VARIABLES")}
+                    WHERE RUN_ID = '${Provider.esc(runId)}'`)
+            ]);
             const head = headRows[0];
             if (!head) { UI.toast("No se ha encontrado la ejecución.", "error"); this.showRunsList(); return; }
-
-            const instRows = await Provider.runQuery(`
-                SELECT * FROM ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
-                WHERE RUN_ID = '${Provider.esc(runId)}' ORDER BY ORDEN`);
-            const varRows = await Provider.runQuery(`
-                SELECT INSTANCIA_ID, NOMBRE, VALOR FROM ${Provider.qualifyControl("WORKFLOWS_RUNS_VARIABLES")}
-                WHERE RUN_ID = '${Provider.esc(runId)}'`);
 
             const varsByInst = {};
             const globalVars = {};

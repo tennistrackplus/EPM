@@ -116,21 +116,25 @@ const Workflows = {
     // ------------------------------------------------------------
     async loadList() {
         try {
-            const rows = await Provider.runQuery(`
-                SELECT ${this.ID_COL}, ${this.NAME_COL}, DESCRIPCION
-                FROM ${Provider.qualifyControl(this.TABLE)}
-                WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
-                ORDER BY ${this.NAME_COL}`);
-
-            let stepCounts = {};
-            if (rows.length) {
-                const steps = await Provider.runQuery(`
+            // Las 2 consultas filtran por PROYECTO_ID directamente (la de
+            // pasos no depende de los WORKFLOW_ID obtenidos en la primera),
+            // así que se piden a la vez en vez de esperar a la primera para
+            // lanzar la segunda.
+            const [rows, steps] = await Promise.all([
+                Provider.runQuery(`
+                    SELECT ${this.ID_COL}, ${this.NAME_COL}, DESCRIPCION
+                    FROM ${Provider.qualifyControl(this.TABLE)}
+                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                    ORDER BY ${this.NAME_COL}`),
+                Provider.runQuery(`
                     SELECT WORKFLOW_ID, COUNT(*) AS N
                     FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")}
                     WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}' AND (ES_PASO0 IS NULL OR ES_PASO0 = FALSE)
-                    GROUP BY WORKFLOW_ID`);
-                steps.forEach(s => { stepCounts[s.WORKFLOW_ID] = parseInt(s.N || "0", 10); });
-            }
+                    GROUP BY WORKFLOW_ID`)
+            ]);
+
+            const stepCounts = {};
+            steps.forEach(s => { stepCounts[s.WORKFLOW_ID] = parseInt(s.N || "0", 10); });
 
             this.list = rows.map(r => ({
                 id: r[this.ID_COL],
@@ -189,22 +193,22 @@ const Workflows = {
         const ok = await UI.confirm("Eliminar workflow", `Se eliminará el workflow <strong>${UI.escapeHtml(wf.name)}</strong> y todos sus pasos, variables y tareas.`);
         if (!ok) return;
         try {
-            const pasoIds = (await Provider.runQuery(
-                `SELECT PASO_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}'`
-            )).map(r => r.PASO_ID);
+            // Mismo criterio que en persist(): TAREAS_VALORES depende de que
+            // TAREAS todavía exista (subconsulta anidada, sin ir primero a
+            // buscar PASO_ID/TAREA_ID por separado); el resto de tablas que
+            // cuelgan de PASO_ID son independientes entre sí y se borran en
+            // paralelo; WORKFLOWS_PASOS y la cabecera van al final.
+            await Provider.runQuery(`
+                DELETE FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS_VALORES")}
+                WHERE TAREA_ID IN (
+                    SELECT TAREA_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")}
+                    WHERE PASO_ID IN (SELECT PASO_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}')
+                )`);
 
-            for (const table of ["WORKFLOWS_PASOS_DRIVER_VALORES", "WORKFLOWS_PASOS_VARIABLES", "WORKFLOWS_PASOS_BLOQUES"]) {
-                await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl(table)} WHERE PASO_ID IN (SELECT PASO_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}')`);
-            }
-            if (pasoIds.length) {
-                const tareaIds = (await Provider.runQuery(
-                    `SELECT TAREA_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")} WHERE PASO_ID IN (${pasoIds.map(p => `'${Provider.esc(p)}'`).join(",")})`
-                )).map(r => r.TAREA_ID);
-                if (tareaIds.length) {
-                    await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS_VALORES")} WHERE TAREA_ID IN (${tareaIds.map(t => `'${Provider.esc(t)}'`).join(",")})`);
-                }
-                await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")} WHERE PASO_ID IN (${pasoIds.map(p => `'${Provider.esc(p)}'`).join(",")})`);
-            }
+            await Promise.all(["WORKFLOWS_PASOS_TAREAS", "WORKFLOWS_PASOS_DRIVER_VALORES", "WORKFLOWS_PASOS_VARIABLES", "WORKFLOWS_PASOS_BLOQUES"].map(table =>
+                Provider.runQuery(`DELETE FROM ${Provider.qualifyControl(table)} WHERE PASO_ID IN (SELECT PASO_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}')`)
+            ));
+
             await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}'`);
             await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl(this.TABLE)} WHERE ${this.ID_COL} = '${Provider.esc(id)}'`);
 
@@ -316,33 +320,30 @@ const Workflows = {
     // Carga completa de un workflow existente
     // ------------------------------------------------------------
     async loadDetail(id) {
-        const rows = await Provider.runQuery(`SELECT * FROM ${Provider.qualifyControl(this.TABLE)} WHERE ${this.ID_COL} = '${Provider.esc(id)}'`);
-        const row = rows[0];
+        // Igual que en persist(): antes esto encadenaba 7 idas y vueltas
+        // secuenciales (cabecera → pasos → [driver, variables, bloques,
+        // tareas] → valores de tareas), porque cada una esperaba a la
+        // anterior para sacar en JS la lista de PASO_ID/TAREA_ID por la que
+        // filtrar. En realidad todas dependen solo del WORKFLOW_ID, no del
+        // resultado de las demás — basta con expresar el filtro como una
+        // subconsulta anidada (WORKFLOW_ID → PASO_ID → TAREA_ID) en vez de
+        // un "IN (lista calculada en JS)", y así las 7 se pueden lanzar
+        // todas a la vez con Promise.all en lugar de una detrás de otra.
+        const pasosOfWorkflow = `SELECT PASO_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}'`;
+        const tareasOfWorkflow = `SELECT TAREA_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")} WHERE PASO_ID IN (${pasosOfWorkflow})`;
+
+        const [headerRows, pasoRows, driverValRows, varRows, bloqueRows, tareaRows, tareaValRows] = await Promise.all([
+            Provider.runQuery(`SELECT * FROM ${Provider.qualifyControl(this.TABLE)} WHERE ${this.ID_COL} = '${Provider.esc(id)}'`),
+            Provider.runQuery(`SELECT * FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}' ORDER BY ORDEN`),
+            Provider.runQuery(`SELECT PASO_ID, VALOR FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_DRIVER_VALORES")} WHERE PASO_ID IN (${pasosOfWorkflow})`),
+            Provider.runQuery(`SELECT PASO_ID, VARIABLE_ID, NOMBRE, ETIQUETA, TIPO, ORDEN FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_VARIABLES")} WHERE PASO_ID IN (${pasosOfWorkflow}) ORDER BY ORDEN`),
+            Provider.runQuery(`SELECT PASO_ID, BLOQUE_ID, TITULO, ORDEN FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_BLOQUES")} WHERE PASO_ID IN (${pasosOfWorkflow}) ORDER BY ORDEN`),
+            Provider.runQuery(`SELECT PASO_ID, BLOQUE_ID, TAREA_ID, TIPO, NOMBRE, DESCRIPCION, REF_ID, REF_NOMBRE, ORDEN FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")} WHERE PASO_ID IN (${pasosOfWorkflow}) ORDER BY ORDEN`),
+            Provider.runQuery(`SELECT TAREA_ID, CLAVE, ETIQUETA, TIPO, VALOR, OCULTAR FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS_VALORES")} WHERE TAREA_ID IN (${tareasOfWorkflow})`)
+        ]);
+
+        const row = headerRows[0];
         if (!row) return null;
-
-        const pasoRows = await Provider.runQuery(`
-            SELECT * FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")}
-            WHERE WORKFLOW_ID = '${Provider.esc(id)}' ORDER BY ORDEN`);
-
-        const pasoIds = pasoRows.map(p => p.PASO_ID);
-        const inClause = pasoIds.length ? pasoIds.map(p => `'${Provider.esc(p)}'`).join(",") : "''";
-
-        const driverValRows = pasoIds.length ? await Provider.runQuery(`
-            SELECT PASO_ID, VALOR FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_DRIVER_VALORES")}
-            WHERE PASO_ID IN (${inClause})`) : [];
-        const varRows = pasoIds.length ? await Provider.runQuery(`
-            SELECT PASO_ID, VARIABLE_ID, NOMBRE, ETIQUETA, TIPO, ORDEN FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_VARIABLES")}
-            WHERE PASO_ID IN (${inClause}) ORDER BY ORDEN`) : [];
-        const bloqueRows = pasoIds.length ? await Provider.runQuery(`
-            SELECT PASO_ID, BLOQUE_ID, TITULO, ORDEN FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_BLOQUES")}
-            WHERE PASO_ID IN (${inClause}) ORDER BY ORDEN`) : [];
-        const tareaRows = pasoIds.length ? await Provider.runQuery(`
-            SELECT PASO_ID, BLOQUE_ID, TAREA_ID, TIPO, NOMBRE, DESCRIPCION, REF_ID, REF_NOMBRE, ORDEN FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")}
-            WHERE PASO_ID IN (${inClause}) ORDER BY ORDEN`) : [];
-        const tareaIds = tareaRows.map(t => t.TAREA_ID);
-        const tareaValRows = tareaIds.length ? await Provider.runQuery(`
-            SELECT TAREA_ID, CLAVE, ETIQUETA, TIPO, VALOR, OCULTAR FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS_VALORES")}
-            WHERE TAREA_ID IN (${tareaIds.map(t => `'${Provider.esc(t)}'`).join(",")})`) : [];
 
         const driverValsByPaso = {};
         driverValRows.forEach(d => { (driverValsByPaso[d.PASO_ID] = driverValsByPaso[d.PASO_ID] || []).push(d.VALOR); });
@@ -403,13 +404,20 @@ const Workflows = {
         this.selectedBlockId = null;
         this.activeTab = "propiedades";
 
-        await this.loadDimensions();
-        await this.loadManualFlows();
-        await this.loadActualizaciones();
-        await this.ensureTareaDescripcionColumn();
+        // Los 4 catálogos auxiliares (dimensiones, flujos manuales,
+        // actualizaciones, auto-reparación de columna) no dependen entre sí
+        // ni de loadDetail — se piden todos a la vez, junto con el propio
+        // workflow si se está editando uno existente, en vez de uno detrás
+        // de otro.
+        const [, , , , draft] = await Promise.all([
+            this.loadDimensions(),
+            this.loadManualFlows(),
+            this.loadActualizaciones(),
+            this.ensureTareaDescripcionColumn(),
+            editId ? this.loadDetail(editId) : Promise.resolve(null)
+        ]);
 
         if (editId) {
-            const draft = await this.loadDetail(editId);
             if (!draft) { UI.toast("No se ha podido cargar el workflow.", "error"); return; }
             this.editing = draft;
             this.selectedStepId = draft.steps[0].id;
@@ -417,12 +425,12 @@ const Workflows = {
             return;
         }
 
-        const draft = this.blankWorkflow();
-        const basics = await this.openBasicsModal(draft, true);
+        const blank = this.blankWorkflow();
+        const basics = await this.openBasicsModal(blank, true);
         if (!basics) return;
-        Object.assign(draft, basics);
-        this.editing = draft;
-        this.selectedStepId = draft.steps[0].id;
+        Object.assign(blank, basics);
+        this.editing = blank;
+        this.selectedStepId = blank.steps[0].id;
         this.openMainModal();
     },
 
@@ -1175,20 +1183,30 @@ const Workflows = {
         }
 
         // 2) Limpieza total de la configuración anterior de pasos -------
-        const oldPasoIds = (await Provider.runQuery(
-            `SELECT PASO_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}'`
-        )).map(r => r.PASO_ID);
-        if (oldPasoIds.length) {
-            const oldTareaIds = (await Provider.runQuery(
-                `SELECT TAREA_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")} WHERE PASO_ID IN (${oldPasoIds.map(p => `'${Provider.esc(p)}'`).join(",")})`
-            )).map(r => r.TAREA_ID);
-            if (oldTareaIds.length) {
-                await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS_VALORES")} WHERE TAREA_ID IN (${oldTareaIds.map(t => `'${Provider.esc(t)}'`).join(",")})`);
-            }
-        }
-        for (const table of ["WORKFLOWS_PASOS_TAREAS", "WORKFLOWS_PASOS_BLOQUES", "WORKFLOWS_PASOS_VARIABLES", "WORKFLOWS_PASOS_DRIVER_VALORES"]) {
-            await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl(table)} WHERE PASO_ID IN (SELECT PASO_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}')`);
-        }
+        // Antes esto eran hasta 7-8 idas y vueltas SECUENCIALES (2 SELECT
+        // para sacar ids + 4 DELETE en un bucle uno detrás de otro + el
+        // DELETE final de PASOS). Cada ida y vuelta a BigQuery/Snowflake
+        // tiene su propio overhead de arranque de job, así que esto es lo
+        // que hacía lento el guardado. Ahora:
+        //   a) TAREAS_VALORES se borra con una única subconsulta anidada
+        //      (sin ir primero a buscar los PASO_ID y luego los TAREA_ID).
+        //      Va sola porque su subconsulta necesita que WORKFLOWS_PASOS_TAREAS
+        //      todavía exista (se borra en el paso siguiente).
+        //   b) El resto de tablas que cuelgan de PASO_ID no dependen entre
+        //      sí, así que se borran en paralelo con Promise.all.
+        //   c) WORKFLOWS_PASOS se borra el último, porque las subconsultas
+        //      de (a) y (b) necesitan que sus filas sigan existiendo.
+        await Provider.runQuery(`
+            DELETE FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS_VALORES")}
+            WHERE TAREA_ID IN (
+                SELECT TAREA_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")}
+                WHERE PASO_ID IN (SELECT PASO_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}')
+            )`);
+
+        await Promise.all(["WORKFLOWS_PASOS_TAREAS", "WORKFLOWS_PASOS_BLOQUES", "WORKFLOWS_PASOS_VARIABLES", "WORKFLOWS_PASOS_DRIVER_VALORES"].map(table =>
+            Provider.runQuery(`DELETE FROM ${Provider.qualifyControl(table)} WHERE PASO_ID IN (SELECT PASO_ID FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}')`)
+        ));
+
         await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("WORKFLOWS_PASOS")} WHERE WORKFLOW_ID = '${Provider.esc(id)}'`);
 
         if (!wf.steps.length) return;
@@ -1202,24 +1220,15 @@ const Workflows = {
             ${s.driver.dimensionId ? `'${Provider.esc(s.driver.dimensionId)}'` : "NULL"},
             '${s.driver.dimensionId ? (s.driver.valores.length ? "VALORES" : "TODOS") : "NINGUNO"}'
         )`).join(",\n");
-        await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS")}
-            (PASO_ID, WORKFLOW_ID, PROYECTO_ID, PASO, ORDEN, ES_PASO0, INICIO_TIPO, INICIO_FECHA, REVISION, FIN_TIPO, FIN_FECHA, DRIVER_DIMENSION_ID, DRIVER_MODO)
-            VALUES ${pasoVals}`);
 
         // 4) Valores del driver -------------------------------------------
         const driverVals = [];
         wf.steps.forEach(s => (s.driver.valores || []).forEach(v => driverVals.push(`('${Provider.esc(pid)}', '${Provider.esc(s.id)}', '${Provider.esc(v)}')`)));
-        if (driverVals.length) {
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_DRIVER_VALORES")} (PROYECTO_ID, PASO_ID, VALOR) VALUES ${driverVals.join(",\n")}`);
-        }
 
         // 5) Variables (viven en el Paso 0) ---------------------------------------------
         const varVals = [];
         wf.steps.forEach(s => (s.variables || []).forEach((v, idx) =>
             varVals.push(`('${Provider.esc(pid)}', '${Provider.esc(s.id)}', '${Provider.esc(v.id || Provider.newId())}', '${Provider.esc(v.name)}', '${Provider.esc(v.label)}', '${Provider.esc(v.type)}', ${idx})`)));
-        if (varVals.length) {
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_VARIABLES")} (PROYECTO_ID, PASO_ID, VARIABLE_ID, NOMBRE, ETIQUETA, TIPO, ORDEN) VALUES ${varVals.join(",\n")}`);
-        }
 
         // 6) Bloques + tareas + valores de tareas ---------------------------
         const bloqueVals = [], tareaVals = [], tareaValVals = [];
@@ -1234,14 +1243,31 @@ const Workflows = {
                 });
             });
         });
+
+        // Los 6 INSERT de aquí abajo son independientes entre sí (ninguno
+        // necesita leer lo que acaba de grabar otro: los VALUES ya vienen
+        // completos desde el estado en memoria), así que se lanzan todos a
+        // la vez con Promise.all en vez de uno detrás de otro.
+        const inserts = [
+            Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS")}
+                (PASO_ID, WORKFLOW_ID, PROYECTO_ID, PASO, ORDEN, ES_PASO0, INICIO_TIPO, INICIO_FECHA, REVISION, FIN_TIPO, FIN_FECHA, DRIVER_DIMENSION_ID, DRIVER_MODO)
+                VALUES ${pasoVals}`)
+        ];
+        if (driverVals.length) {
+            inserts.push(Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_DRIVER_VALORES")} (PROYECTO_ID, PASO_ID, VALOR) VALUES ${driverVals.join(",\n")}`));
+        }
+        if (varVals.length) {
+            inserts.push(Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_VARIABLES")} (PROYECTO_ID, PASO_ID, VARIABLE_ID, NOMBRE, ETIQUETA, TIPO, ORDEN) VALUES ${varVals.join(",\n")}`));
+        }
         if (bloqueVals.length) {
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_BLOQUES")} (PROYECTO_ID, PASO_ID, BLOQUE_ID, TITULO, ORDEN) VALUES ${bloqueVals.join(",\n")}`);
+            inserts.push(Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_BLOQUES")} (PROYECTO_ID, PASO_ID, BLOQUE_ID, TITULO, ORDEN) VALUES ${bloqueVals.join(",\n")}`));
         }
         if (tareaVals.length) {
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")} (PROYECTO_ID, PASO_ID, BLOQUE_ID, TAREA_ID, TIPO, NOMBRE, DESCRIPCION, REF_ID, REF_NOMBRE, ORDEN) VALUES ${tareaVals.join(",\n")}`);
+            inserts.push(Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS")} (PROYECTO_ID, PASO_ID, BLOQUE_ID, TAREA_ID, TIPO, NOMBRE, DESCRIPCION, REF_ID, REF_NOMBRE, ORDEN) VALUES ${tareaVals.join(",\n")}`));
         }
         if (tareaValVals.length) {
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS_VALORES")} (PROYECTO_ID, TAREA_ID, CLAVE, ETIQUETA, TIPO, VALOR, OCULTAR) VALUES ${tareaValVals.join(",\n")}`);
+            inserts.push(Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("WORKFLOWS_PASOS_TAREAS_VALORES")} (PROYECTO_ID, TAREA_ID, CLAVE, ETIQUETA, TIPO, VALOR, OCULTAR) VALUES ${tareaValVals.join(",\n")}`));
         }
+        await Promise.all(inserts);
     }
 };
