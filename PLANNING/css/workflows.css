@@ -213,6 +213,112 @@
     margin-bottom: 12px;
 }
 
+/* ---------- Tareas del paso: tarjeta de cada tarea ---------- */
+.wf-task-card {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 10px 12px;
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    margin-bottom: 8px;
+}
+
+.wf-task-card-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+}
+
+.wf-task-icon {
+    font-size: 15px;
+    line-height: 1.5;
+    flex-shrink: 0;
+}
+
+.wf-task-title-wrap {
+    flex: 1;
+    min-width: 0;
+}
+
+.wf-task-name {
+    font-weight: 700;
+    font-size: var(--fs-base);
+    color: var(--text-primary);
+    line-height: 1.4;
+}
+
+.wf-task-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 1px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.wf-task-meta-ref {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wf-task-desc {
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    margin: 2px 0 0;
+    padding-left: 23px;
+}
+
+.wf-task-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+
+.wf-task-action-btn {
+    width: 26px;
+    height: 26px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.wf-task-action-btn:hover {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+
+.wf-task-action-btn--danger:hover {
+    background: var(--color-danger-light, #fdecec);
+    color: var(--color-danger, #d64545);
+}
+
+.wf-task-vars {
+    margin-top: 4px;
+    padding-left: 23px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.wf-task-vars-empty {
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    font-style: italic;
+    margin: 2px 0 0;
+    padding-left: 23px;
+}
+
 /* ---------- Ejecuciones: cadena de pasos con badge de asignación ---------- */
 .wf-run-chain-badge {
     display: inline-flex;
