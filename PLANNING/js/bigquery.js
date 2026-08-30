@@ -194,5 +194,62 @@ const BQ = {
             .replace(/[^A-Z0-9_]+/g, "_")
             .replace(/^_+|_+$/g, "")
             .replace(/^(\d)/, "N$1"); // los identificadores no pueden empezar por número
+    },
+
+    // ---------------------------------------------------------
+    // Buscador de usuarios (para asignar ejecuciones de Workflows)
+    // ---------------------------------------------------------
+    // No hay ningún directorio de usuarios propio: se reutiliza la
+    // política IAM del proyecto GCP activo (Resource Manager) como
+    // "directorio" — cualquier persona con algún rol en el proyecto es
+    // candidata a que se le asigne una instancia. Requiere el scope
+    // "cloud-platform" (ya solicitado en el login) y permiso de lectura
+    // de IAM sobre el proyecto; si el usuario no tiene ese permiso, la
+    // búsqueda simplemente no devuelve resultados y se puede seguir
+    // escribiendo el nombre a mano.
+    _iamMembersCache: { projectId: null, promise: null },
+
+    async fetchProjectIamMembers(projectId) {
+        const token = this.getToken();
+        if (!token) {
+            const err = new Error("Sesión de BigQuery no válida o expirada.");
+            err.code = "NO_AUTH";
+            throw err;
+        }
+        const res = await fetch(`https://cloudresourcemanager.googleapis.com/v1/projects/${encodeURIComponent(projectId)}:getIamPolicy`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({})
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.error) {
+            const msg = (data.error && data.error.message) || `HTTP ${res.status}`;
+            throw new Error(`No se pudo leer los miembros del proyecto: ${msg}`);
+        }
+        const emails = new Set();
+        (data.bindings || []).forEach(b => {
+            (b.members || []).forEach(m => {
+                const match = /^(?:user|group):(.+)$/.exec(m);
+                if (match) emails.add(match[1]);
+            });
+        });
+        return Array.from(emails).sort((a, b) => a.localeCompare(b));
+    },
+
+    /** Miembros IAM del proyecto activo, cacheados en memoria (una sola llamada por proyecto/sesión) */
+    getProjectUsersCached() {
+        const projectId = this.getGcpProject();
+        const cache = this._iamMembersCache;
+        if (cache.projectId !== projectId) {
+            cache.projectId = projectId;
+            cache.promise = null;
+        }
+        if (!cache.promise) {
+            cache.promise = this.fetchProjectIamMembers(projectId).catch(err => {
+                cache.promise = null; // reintentar en la siguiente búsqueda
+                throw err;
+            });
+        }
+        return cache.promise;
     }
 };

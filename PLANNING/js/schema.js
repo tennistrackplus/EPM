@@ -262,6 +262,7 @@ const DracoSchema = {
                     WORKFLOW_ID STRING NOT NULL,
                     PROYECTO_ID STRING NOT NULL,
                     NOMBRE STRING NOT NULL,
+                    DESCRIPCION STRING,
                     ESTADO STRING NOT NULL,
                     USUARIO STRING,
                     FECHA_CREACION TIMESTAMP,
@@ -374,9 +375,11 @@ const DracoSchema = {
     async evolve(onProgress = () => {}) {
         onProgress("Verificando columnas del modelo semántico...");
         const cubos = Provider.qualifyControl("CUBOS");
+        const workflowsRuns = Provider.qualifyControl("WORKFLOWS_RUNS");
         await Promise.all([
             Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING`),
-            Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP`)
+            Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP`),
+            Provider.runQuery(`ALTER TABLE ${workflowsRuns} ADD COLUMN IF NOT EXISTS DESCRIPCION STRING`)
         ]);
     },
 

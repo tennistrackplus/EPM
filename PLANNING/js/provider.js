@@ -72,6 +72,23 @@ const Provider = {
         return (crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     },
 
+    // ---------------------------------------------------------
+    // Buscador de usuarios (asignación de ejecuciones de Workflows)
+    // ---------------------------------------------------------
+    /** Por ahora solo disponible sobre BigQuery (usa la política IAM del proyecto GCP como directorio) */
+    canSearchUsers() {
+        return this.key() === "bigquery";
+    },
+
+    /** Devuelve como mucho 20 emails que contengan `query` (o los primeros 20 si `query` está vacío) */
+    async searchUsers(query) {
+        if (!this.canSearchUsers()) return [];
+        const all = await BQ.getProjectUsersCached();
+        const q = String(query || "").trim().toLowerCase();
+        const filtered = q ? all.filter(email => email.toLowerCase().includes(q)) : all;
+        return filtered.slice(0, 20);
+    },
+
     /** Traduce un tipo de campo "canónico" al tipo físico del motor activo */
     mapFieldType(type) {
         if (this.key() === "bigquery" && type === "FLOAT") return "FLOAT64";
