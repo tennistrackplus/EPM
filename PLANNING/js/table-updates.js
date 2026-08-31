@@ -463,7 +463,7 @@ const TableUpdates = {
         document.getElementById("actUpdScreenTitle").addEventListener("input", (e) => { screen.title = e.target.value; });
 
         document.getElementById("actUpdAddVar").addEventListener("click", async () => {
-            const v = await UI.openScreenVariableModal({});
+            const v = await UI.openScreenVariableModal({ dimensions: this.dimensionsCache });
             if (!v) return;
             screen.blocks.push({ id: Provider.newId(), kind: "variable", variable: { id: Provider.newId(), ...v } });
             this.screenCollapsed = false;
@@ -587,7 +587,7 @@ const TableUpdates = {
 
         wrap.querySelectorAll("[data-add-frame-var]").forEach(btn => btn.addEventListener("click", async () => {
             const idx = parseInt(btn.dataset.addFrameVar, 10);
-            const v = await UI.openScreenVariableModal({});
+            const v = await UI.openScreenVariableModal({ dimensions: this.dimensionsCache });
             if (!v) return;
             screen.blocks[idx].variables.push({ id: Provider.newId(), ...v });
             this.renderScreenBlocksList();
@@ -619,7 +619,7 @@ const TableUpdates = {
             e.stopPropagation();
             const idx = parseInt(el.dataset.editVar, 10);
             const current = screen.blocks[idx].variable;
-            const v = await UI.openScreenVariableModal({ current });
+            const v = await UI.openScreenVariableModal({ current, dimensions: this.dimensionsCache });
             if (!v) return;
             screen.blocks[idx].variable = { ...current, ...v };
             this.renderScreenBlocksList();
@@ -629,7 +629,7 @@ const TableUpdates = {
             e.stopPropagation();
             const [bIdx, vIdx] = el.dataset.editFrameVar.split(":").map(Number);
             const current = screen.blocks[bIdx].variables[vIdx];
-            const v = await UI.openScreenVariableModal({ current });
+            const v = await UI.openScreenVariableModal({ current, dimensions: this.dimensionsCache });
             if (!v) return;
             screen.blocks[bIdx].variables[vIdx] = { ...current, ...v };
             this.renderScreenBlocksList();

@@ -1709,10 +1709,14 @@ const UI = {
     },
 
     /**
-     * Alta/edición de una variable de pantalla (nombre técnico, etiqueta y
-     * tipo). Devuelve Promise<{name,label,type}|null>.
+     * Alta/edición de una variable de pantalla (nombre técnico, etiqueta,
+     * tipo y validación). Devuelve Promise<{name,label,type,selectMode,validation}|null>.
+     *
+     * `dimensions` (opcional): lista de dimensiones del proyecto ([{DIMENSION_ID,DIMENSION,...}])
+     * para poblar el selector de "Valores de dimensión" / "Valores de jerarquía"
+     * de la validación. Si no se pasa, esos selectores aparecen vacíos.
      */
-    openScreenVariableModal({ current = null } = {}) {
+    openScreenVariableModal({ current = null, dimensions = [] } = {}) {
         return new Promise((resolve) => {
             let overlay = document.getElementById("screenVarModal");
             if (!overlay) {
@@ -1723,6 +1727,12 @@ const UI = {
             }
 
             const v = Object.assign({ name: "", label: "", type: "STRING", selectMode: "unico" }, current || {});
+            const validation = Object.assign({
+                type: "NONE", constants: [], dimensionId: "", dimensionName: "",
+                hierarchyName: "", level: 1, node: "", allowEmpty: false, showText: true, searchHelp: "LISTBOX"
+            }, v.validation || {});
+
+            const dimOptions = dimensions.map(d => `<option value="${d.DIMENSION_ID}" ${validation.dimensionId === d.DIMENSION_ID ? "selected" : ""}>${UI.escapeHtml(d.DIMENSION)}</option>`).join("");
 
             overlay.innerHTML = `
                 <div class="modal-box">
@@ -1756,6 +1766,66 @@ const UI = {
                             </select>
                             <p class="form-hint">Si eliges rango, varios valores o cualquiera, en la pantalla de ejecución aparecerá una tabla de valores (incluir/excluir + operador) al estilo select-options de SAP; el código Python recibirá esa tabla (JSON) en lugar de un valor único.</p>
                         </div>
+
+                        <hr>
+                        <div class="form-group">
+                            <label>Validación</label>
+                            <label><input type="radio" name="svValidType" value="NONE" ${validation.type === "NONE" ? "checked" : ""}> Ninguna</label>
+                            <label><input type="radio" name="svValidType" value="CONST" ${validation.type === "CONST" ? "checked" : ""}> Constante</label>
+                            <label><input type="radio" name="svValidType" value="DIM" ${validation.type === "DIM" ? "checked" : ""}> Valores de dimensión</label>
+                            <label><input type="radio" name="svValidType" value="HIER" ${validation.type === "HIER" ? "checked" : ""}> Valores de jerarquía</label>
+                        </div>
+
+                        <div id="svValidConst" style="display:${validation.type === "CONST" ? "block" : "none"}">
+                            <table class="const-table">
+                                <thead><tr><th>ID</th><th>Descripción</th><th></th></tr></thead>
+                                <tbody id="svConstRows"></tbody>
+                            </table>
+                            <button class="btn btn-secondary btn-sm" id="svAddConst">+ Añadir valor</button>
+                        </div>
+
+                        <div id="svValidDim" style="display:${validation.type === "DIM" ? "block" : "none"}">
+                            <div class="form-group">
+                                <label>Dimensión</label>
+                                <select id="svDimSelect"><option value="">Selecciona...</option>${dimOptions}</select>
+                            </div>
+                        </div>
+
+                        <div id="svValidHier" style="display:${validation.type === "HIER" ? "block" : "none"}">
+                            <div class="form-group">
+                                <label>Dimensión</label>
+                                <select id="svHierDimSelect"><option value="">Selecciona...</option>${dimOptions}</select>
+                            </div>
+                            <div class="form-group">
+                                <label>Jerarquía</label>
+                                <select id="svHierSelect"><option value="">Selecciona una dimensión primero</option></select>
+                            </div>
+                            <div class="form-group">
+                                <label>Nivel</label>
+                                <select id="svHierLevelSelect"><option value="">—</option></select>
+                            </div>
+                            <div class="form-group">
+                                <label>Valor del nodo (se traerán los valores por debajo de este nodo)</label>
+                                <input type="text" id="svHierNode" value="${UI.escapeHtml(validation.node || "")}">
+                            </div>
+                        </div>
+
+                        <div id="svValidCommon" style="display:${validation.type === "NONE" ? "none" : "block"}">
+                            <div class="form-group">
+                                <label><input type="checkbox" id="svAllowEmpty" ${validation.allowEmpty ? "checked" : ""}> Permite valor vacío</label>
+                            </div>
+                            <div class="form-group">
+                                <label><input type="checkbox" id="svShowText" ${validation.showText ? "checked" : ""}> Mostrar texto descriptivo junto al valor</label>
+                            </div>
+                            <div class="form-group">
+                                <label>Ayuda de búsqueda</label>
+                                <select id="svSearchHelp">
+                                    <option value="LISTBOX" ${validation.searchHelp === "LISTBOX" ? "selected" : ""}>Listbox (desplegable)</option>
+                                    <option value="SEARCH" ${validation.searchHelp === "SEARCH" ? "selected" : ""}>Buscador (estilo SAP, con caja de búsqueda)</option>
+                                    <option value="CHECKBOX" ${validation.searchHelp === "CHECKBOX" ? "selected" : ""}>Checkbox (solo si hay exactamente 2 valores posibles)</option>
+                                </select>
+                            </div>
+                        </div>
                     </div>
                     <div class="modal-footer">
                         <button class="btn btn-secondary" id="svCancel">Cancelar</button>
@@ -1767,6 +1837,69 @@ const UI = {
             const nameInput = overlay.querySelector("#svName");
             setTimeout(() => { nameInput.focus(); }, 50);
 
+            // -- validación: alternar bloques según el tipo elegido --
+            overlay.querySelectorAll('input[name="svValidType"]').forEach(radio => {
+                radio.addEventListener("change", () => {
+                    overlay.querySelector("#svValidConst").style.display = radio.value === "CONST" && radio.checked ? "block" : "none";
+                    overlay.querySelector("#svValidDim").style.display = radio.value === "DIM" && radio.checked ? "block" : "none";
+                    overlay.querySelector("#svValidHier").style.display = radio.value === "HIER" && radio.checked ? "block" : "none";
+                    overlay.querySelector("#svValidCommon").style.display = radio.value === "NONE" && radio.checked ? "none" : "block";
+                });
+            });
+
+            // -- constante: tabla ID/Descripción editable --
+            let constants = (validation.constants || []).slice();
+            const renderConstRows = () => {
+                const tbody = overlay.querySelector("#svConstRows");
+                tbody.innerHTML = constants.map((c, i) => `
+                    <tr>
+                        <td><input type="text" class="sv-const-id" data-i="${i}" value="${UI.escapeHtml(c.id)}"></td>
+                        <td><input type="text" class="sv-const-desc" data-i="${i}" value="${UI.escapeHtml(c.desc)}"></td>
+                        <td><button type="button" class="field-remove" data-rm="${i}">✕</button></td>
+                    </tr>`).join("");
+                tbody.querySelectorAll(".sv-const-id").forEach(inp => inp.addEventListener("input", e => constants[e.target.dataset.i].id = e.target.value));
+                tbody.querySelectorAll(".sv-const-desc").forEach(inp => inp.addEventListener("input", e => constants[e.target.dataset.i].desc = e.target.value));
+                tbody.querySelectorAll("[data-rm]").forEach(btn => btn.addEventListener("click", () => { constants.splice(parseInt(btn.dataset.rm, 10), 1); renderConstRows(); }));
+            };
+            renderConstRows();
+            overlay.querySelector("#svAddConst").addEventListener("click", () => { constants.push({ id: "", desc: "" }); renderConstRows(); });
+
+            // -- jerarquía: dependencias dimensión -> jerarquía -> nivel --
+            const hierDimSel = overlay.querySelector("#svHierDimSelect");
+            const hierSel = overlay.querySelector("#svHierSelect");
+            const hierLevelSel = overlay.querySelector("#svHierLevelSelect");
+            let hierLevelsCache = [];
+
+            const safeParseJson = (json, fallback) => {
+                try { const p = JSON.parse(json); return p == null ? fallback : p; } catch (e) { return fallback; }
+            };
+
+            const loadHierarchiesFor = async (dimId, preselectHier, preselectLevel) => {
+                hierSel.innerHTML = `<option value="">Cargando...</option>`;
+                try {
+                    const rows = await Provider.runQuery(`SELECT JERARQUIA, NIVELES_JSON FROM ${Provider.qualifyControl("JERARQUIAS")} WHERE DIMENSION_ID = '${Provider.esc(dimId)}' ORDER BY JERARQUIA`);
+                    if (!rows.length) { hierSel.innerHTML = `<option value="">Esta dimensión no tiene jerarquías</option>`; return; }
+                    hierSel.innerHTML = `<option value="">Selecciona...</option>` + rows.map(r => `<option value="${UI.escapeHtml(r.JERARQUIA)}" ${preselectHier === r.JERARQUIA ? "selected" : ""}>${UI.escapeHtml(r.JERARQUIA)}</option>`).join("");
+                    hierSel.dataset.rows = JSON.stringify(rows);
+                    if (preselectHier) fillLevels(preselectHier, preselectLevel);
+                } catch (err) {
+                    hierSel.innerHTML = `<option value="">Error al cargar jerarquías</option>`;
+                }
+            };
+
+            const fillLevels = (hierName, preselectLevel) => {
+                const rows = safeParseJson(hierSel.dataset.rows || "[]", []);
+                const row = rows.find(r => r.JERARQUIA === hierName);
+                hierLevelsCache = row ? safeParseJson(row.NIVELES_JSON, []) : [];
+                hierLevelSel.innerHTML = hierLevelsCache.map((colId, i) => `<option value="${i + 1}" ${preselectLevel == i + 1 ? "selected" : ""}>Nivel ${i + 1}: ${UI.escapeHtml(colId)}</option>`).join("") || `<option value="">—</option>`;
+            };
+
+            if (validation.type === "HIER" && validation.dimensionId) {
+                loadHierarchiesFor(validation.dimensionId, validation.hierarchyName, validation.level);
+            }
+            hierDimSel.addEventListener("change", () => loadHierarchiesFor(hierDimSel.value));
+            hierSel.addEventListener("change", () => fillLevels(hierSel.value));
+
             const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
             overlay.querySelector("#svClose").onclick = () => cleanup(null);
             overlay.querySelector("#svCancel").onclick = () => cleanup(null);
@@ -1776,7 +1909,24 @@ const UI = {
                 const type = overlay.querySelector("#svType").value;
                 const selectMode = overlay.querySelector("#svSelectMode").value;
                 if (!name) { UI.toast("Indica un nombre técnico para la variable.", "error"); return; }
-                cleanup({ name, label: label || name, type, selectMode });
+
+                const validType = overlay.querySelector('input[name="svValidType"]:checked').value;
+                const newValidation = {
+                    type: validType,
+                    constants: validType === "CONST" ? constants.filter(c => c.id) : [],
+                    dimensionId: validType === "DIM" ? overlay.querySelector("#svDimSelect").value : (validType === "HIER" ? hierDimSel.value : ""),
+                    dimensionName: validType === "DIM"
+                        ? (dimensions.find(d => d.DIMENSION_ID === overlay.querySelector("#svDimSelect").value) || {}).DIMENSION || ""
+                        : (validType === "HIER" ? (dimensions.find(d => d.DIMENSION_ID === hierDimSel.value) || {}).DIMENSION || "" : ""),
+                    hierarchyName: validType === "HIER" ? hierSel.value : "",
+                    level: validType === "HIER" ? parseInt(hierLevelSel.value || "1", 10) : 1,
+                    node: validType === "HIER" ? overlay.querySelector("#svHierNode").value.trim() : "",
+                    allowEmpty: overlay.querySelector("#svAllowEmpty").checked,
+                    showText: overlay.querySelector("#svShowText").checked,
+                    searchHelp: overlay.querySelector("#svSearchHelp").value
+                };
+
+                cleanup({ name, label: label || name, type, selectMode, validation: newValidation });
             };
         });
     },

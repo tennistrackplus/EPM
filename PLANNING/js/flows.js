@@ -38,6 +38,7 @@ const Flows = {
     list: [],
     interfaces: [],
     cubes: [],
+    dimensionsCache: [],
     editing: null,
     editingIsNew: true,
     collapsed: { automatico: false, manual: false },
@@ -66,8 +67,22 @@ const Flows = {
         document.getElementById("btnNewFlow").addEventListener("click", () => this.openForm());
 
         await this.loadInterfacesAndCubes();
+        await this.loadDimensions();
         await this.loadList();
         this.renderList();
+    },
+
+    /** Dimensiones del proyecto, para el selector de validación de las variables de pantalla. */
+    async loadDimensions() {
+        try {
+            this.dimensionsCache = await Provider.runQuery(`
+                SELECT DIMENSION_ID, DIMENSION, TABLA, CAMPOS_JSON
+                FROM ${Provider.qualifyControl("DIMENSIONES")}
+                WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                ORDER BY DIMENSION`);
+        } catch (err) {
+            this.dimensionsCache = [];
+        }
     },
 
     // ------------------------------------------------------------
@@ -712,7 +727,7 @@ const Flows = {
         document.getElementById("screenTitle").addEventListener("input", (e) => { f.screen.title = e.target.value; });
 
         document.getElementById("btnAddScreenVar").addEventListener("click", async () => {
-            const v = await UI.openScreenVariableModal({});
+            const v = await UI.openScreenVariableModal({ dimensions: this.dimensionsCache });
             if (!v) return;
             f.screen.blocks.push({ id: Provider.newId(), kind: "variable", variable: { id: Provider.newId(), ...v } });
             this.renderScreenBlocksList();
@@ -841,7 +856,7 @@ const Flows = {
 
         wrap.querySelectorAll("[data-add-frame-var]").forEach(btn => btn.addEventListener("click", async () => {
             const idx = parseInt(btn.dataset.addFrameVar, 10);
-            const v = await UI.openScreenVariableModal({});
+            const v = await UI.openScreenVariableModal({ dimensions: this.dimensionsCache });
             if (!v) return;
             f.screen.blocks[idx].variables.push({ id: Provider.newId(), ...v });
             this.renderScreenBlocksList();
@@ -875,7 +890,7 @@ const Flows = {
             e.stopPropagation();
             const idx = parseInt(el.dataset.editVar, 10);
             const current = f.screen.blocks[idx].variable;
-            const v = await UI.openScreenVariableModal({ current });
+            const v = await UI.openScreenVariableModal({ current, dimensions: this.dimensionsCache });
             if (!v) return;
             f.screen.blocks[idx].variable = { ...current, ...v };
             this.renderScreenBlocksList();
@@ -886,7 +901,7 @@ const Flows = {
             e.stopPropagation();
             const [bIdx, vIdx] = el.dataset.editFrameVar.split(":").map(Number);
             const current = f.screen.blocks[bIdx].variables[vIdx];
-            const v = await UI.openScreenVariableModal({ current });
+            const v = await UI.openScreenVariableModal({ current, dimensions: this.dimensionsCache });
             if (!v) return;
             f.screen.blocks[bIdx].variables[vIdx] = { ...current, ...v };
             this.renderScreenBlocksList();
