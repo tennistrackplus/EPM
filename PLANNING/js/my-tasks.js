@@ -43,6 +43,7 @@ const MyTasks = {
 
     currentStepId: null,
     currentInstanceId: null,
+    currentBlockId: null,
 
     // Estado de una INSTANCIA — mismas 6 fases que en Administración
     // (workflow-runs.js: WorkflowRuns.ESTADOS), duplicado aquí para que
@@ -76,6 +77,7 @@ const MyTasks = {
         this.currentRunId = null;
         this.currentStepId = null;
         this.currentInstanceId = null;
+        this.currentBlockId = null;
         container.innerHTML = `<div class="module-empty"><span class="spinner"></span> Buscando tus tareas...</div>`;
 
         try {
@@ -130,8 +132,11 @@ const MyTasks = {
                         </button>`;
                 }).join("")}</div>`
                 : "";
+            // El workflow en sí nunca se pinta en azul — solo se resalta la
+            // ejecución seleccionada, que ya deja claro qué workflow está
+            // abierto (es el único con ejecuciones listadas debajo).
             return `
-                <button type="button" class="admin-menu-item ${active ? "active" : ""}" data-mt-workflow="${w.id}">
+                <button type="button" class="admin-menu-item" data-mt-workflow="${w.id}">
                     <span class="admin-menu-icon">⛓</span>${UI.escapeHtml(w.name)}
                 </button>
                 ${runsHtml}`;
@@ -231,6 +236,7 @@ const MyTasks = {
         this.currentRunId = null;
         this.currentStepId = null;
         this.currentInstanceId = null;
+        this.currentBlockId = null;
         this.runsForWorkflow = [];
 
         this.renderMenu();
@@ -271,6 +277,7 @@ const MyTasks = {
         this.currentRunId = id;
         this.currentStepId = null;
         this.currentInstanceId = null;
+        this.currentBlockId = null;
         this.runInstances = this.overviewRows.filter(r => r.runId === id);
         this.renderMenu();
         this.renderChain();
@@ -316,6 +323,7 @@ const MyTasks = {
             card.addEventListener("click", () => {
                 this.currentStepId = card.dataset.mtStep;
                 this.currentInstanceId = null;
+                this.currentBlockId = null;
                 this.renderChain();
             });
         });
@@ -340,6 +348,9 @@ const MyTasks = {
             this.currentInstanceId = (pending || instances[0]).id;
         }
 
+        // Mismo layout que "Tareas del paso" en el editor de Workflows:
+        // menú de bloques a la izquierda (.wf-block-menu) + tarjetas de
+        // tarea del bloque seleccionado a la derecha (.wf-block-detail).
         wrap.innerHTML = `
             <div class="flow-part-header mt-step-header">
                 <strong>Paso: ${UI.escapeHtml(step.name)}</strong>
@@ -347,7 +358,10 @@ const MyTasks = {
             </div>
             ${instances.length > 1 ? this.instanceSelectorHtml(instances) : ""}
             <div id="mtInstancePanel"></div>
-            <div id="mtTasksPanel"></div>`;
+            <div class="wf-blocks-layout">
+                <div class="wf-block-menu" id="mtBlockMenu"></div>
+                <div class="wf-block-detail" id="mtBlockDetail"></div>
+            </div>`;
 
         if (instances.length > 1) {
             wrap.querySelectorAll("#mtInstanceTabs [data-mt-inst]").forEach(btn => {
@@ -360,7 +374,7 @@ const MyTasks = {
 
         const inst = instances.find(i => i.id === this.currentInstanceId);
         this.renderInstancePanel(step, inst);
-        this.renderTasks(step, inst);
+        this.renderBlocks(step);
     },
 
     instanceSelectorHtml(instances) {
@@ -376,8 +390,9 @@ const MyTasks = {
     },
 
     // ------------------------------------------------------------
-    // Panel de la instancia seleccionada: estado + controles según mi
-    // rol en ella (responsable de ASIGNADO / revisor de REVISOR)
+    // Panel de la instancia seleccionada: solo estado + acción. Sin
+    // responsable/revisor/fechas — esto es la pantalla de la persona
+    // asignada, no necesita verse a sí misma en una ficha.
     // ------------------------------------------------------------
     renderInstancePanel(step, inst) {
         const panel = document.getElementById("mtInstancePanel");
@@ -410,12 +425,7 @@ const MyTasks = {
 
         panel.innerHTML = `
             <div class="mt-instance-panel">
-                <div class="mt-instance-panel-top">
-                    <span class="table-tag ${estadoInfo.cls}">${estadoInfo.label}</span>
-                    ${inst.asignado ? `<span class="mt-instance-meta">Responsable: ${UI.escapeHtml(inst.asignado)}</span>` : ""}
-                    ${inst.revisor ? `<span class="mt-instance-meta">Revisor: ${UI.escapeHtml(inst.revisor)}</span>` : ""}
-                    ${inst.fechaProgramada ? `<span class="mt-instance-meta">Programado: ${UI.escapeHtml(String(inst.fechaProgramada))}</span>` : ""}
-                </div>
+                <span class="table-tag ${estadoInfo.cls}">${estadoInfo.label}</span>
                 <div class="mt-instance-panel-controls">${controls}</div>
             </div>`;
 
@@ -497,39 +507,56 @@ const MyTasks = {
     },
 
     // ------------------------------------------------------------
-    // Tareas del paso (bloques + tareas), igual que se definen en el
-    // editor de Workflows
+    // Bloques + tareas del paso, con el mismo layout de menú lateral que
+    // "Tareas del paso" en el editor de Workflows (.wf-blocks-layout).
     // ------------------------------------------------------------
-    renderTasks(step) {
-        const wrap = document.getElementById("mtTasksPanel");
+    renderBlocks(step) {
+        const menu = document.getElementById("mtBlockMenu");
+        const detail = document.getElementById("mtBlockDetail");
         const bloques = step.bloques.filter(b => b.tareas.length);
+
         if (!bloques.length) {
-            wrap.innerHTML = `<div class="module-empty module-empty--inline">Este paso no tiene tareas definidas.</div>`;
+            menu.innerHTML = "";
+            detail.innerHTML = `<div class="module-empty module-empty--inline">Este paso no tiene tareas definidas.</div>`;
             return;
         }
 
-        wrap.innerHTML = `
-            <div class="mt-tasks-title">Tareas del paso</div>
-            ${bloques.map(b => `
-                <div class="mt-task-block">
-                    <div class="mt-task-block-title">${UI.escapeHtml(b.titulo)}</div>
-                    ${b.tareas.map(t => this.taskCardHtml(t)).join("")}
-                </div>`).join("")}`;
+        if (!this.currentBlockId || !bloques.some(b => b.id === this.currentBlockId)) {
+            this.currentBlockId = bloques[0].id;
+        }
 
-        wrap.querySelectorAll("[data-mt-task]").forEach(card => {
+        menu.innerHTML = bloques.map(b => `
+            <div class="wf-block-menu-item mt-block-menu-item ${b.id === this.currentBlockId ? "active" : ""}" data-mt-block="${b.id}">
+                <span class="wf-block-menu-item-name">${UI.escapeHtml(b.titulo)}</span>
+                <span class="wf-block-menu-item-count">${b.tareas.length}</span>
+            </div>`).join("");
+
+        menu.querySelectorAll("[data-mt-block]").forEach(item => {
+            item.addEventListener("click", () => {
+                this.currentBlockId = item.dataset.mtBlock;
+                this.renderBlocks(step);
+            });
+        });
+
+        this.renderBlockTasks(bloques.find(b => b.id === this.currentBlockId));
+    },
+
+    renderBlockTasks(block) {
+        const detail = document.getElementById("mtBlockDetail");
+        if (!block) { detail.innerHTML = ""; return; }
+
+        detail.innerHTML = `
+            <div class="wf-block-detail-header"><strong>${UI.escapeHtml(block.titulo)}</strong></div>
+            <div class="flow-frame-vars">
+                ${block.tareas.map(t => this.taskCardHtml(t)).join("")}
+            </div>`;
+
+        detail.querySelectorAll("[data-mt-task]").forEach(card => {
             card.addEventListener("click", () => {
-                const tarea = this.findTask(step, card.dataset.mtTask);
+                const tarea = block.tareas.find(t => t.id === card.dataset.mtTask);
                 if (tarea) this.launchTask(tarea);
             });
         });
-    },
-
-    findTask(step, taskId) {
-        for (const b of step.bloques) {
-            const t = b.tareas.find(t => t.id === taskId);
-            if (t) return t;
-        }
-        return null;
     },
 
     taskCardHtml(task) {
