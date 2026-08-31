@@ -1735,7 +1735,7 @@ const UI = {
             const dimOptions = dimensions.map(d => `<option value="${d.DIMENSION_ID}" ${validation.dimensionId === d.DIMENSION_ID ? "selected" : ""}>${UI.escapeHtml(d.DIMENSION)}</option>`).join("");
 
             overlay.innerHTML = `
-                <div class="modal-box modal-wide">
+                <div class="modal-box">
                     <div class="modal-header">
                         <h3>${current ? "Editar variable" : "Nueva variable"}</h3>
                         <button class="modal-close" id="svClose">&times;</button>
@@ -1746,47 +1746,44 @@ const UI = {
                             <button type="button" class="segmented-btn" data-tab="validacion">Validación</button>
                         </div>
 
-                        <div class="sv-tab-pane" id="svTabPropiedades">
-                            <div class="sv-row">
-                                <div class="form-group">
-                                    <label>Nombre técnico</label>
-                                    <input type="text" id="svName" placeholder="ej. fecha_desde" value="${UI.escapeHtml(v.name)}">
-                                </div>
-                                <div class="form-group">
-                                    <label>Etiqueta en pantalla</label>
-                                    <input type="text" id="svLabel" placeholder="ej. Fecha desde" value="${UI.escapeHtml(v.label)}">
-                                </div>
+                        <div id="svTabProps">
+                            <div class="form-group">
+                                <label>Nombre técnico</label>
+                                <input type="text" id="svName" placeholder="ej. fecha_desde" value="${UI.escapeHtml(v.name)}">
                             </div>
-                            <div class="sv-row">
-                                <div class="form-group">
-                                    <label>Tipo</label>
-                                    <select id="svType">
-                                        ${UI.SCREEN_VARIABLE_TYPES.map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>Modo de selección</label>
-                                    <select id="svSelectMode">
-                                        <option value="unico" ${v.selectMode === "unico" ? "selected" : ""}>Valor único</option>
-                                        <option value="rango" ${v.selectMode === "rango" ? "selected" : ""}>Rango (desde – hasta)</option>
-                                        <option value="multiple" ${v.selectMode === "multiple" ? "selected" : ""}>Varios valores</option>
-                                        <option value="cualquiera" ${v.selectMode === "cualquiera" ? "selected" : ""}>Cualquiera (select-options)</option>
-                                    </select>
-                                </div>
+                            <div class="form-group">
+                                <label>Etiqueta en pantalla</label>
+                                <input type="text" id="svLabel" placeholder="ej. Fecha desde" value="${UI.escapeHtml(v.label)}">
                             </div>
-                            <p class="form-hint" id="svTypeHint" style="display:${v.type === "FILE" ? "block" : "none"}">FILE: en la pantalla de ejecución del flujo se pedirá un fichero; su valor resuelto será la ruta de storage tras subirlo.</p>
-                            <p class="form-hint" id="svModeHint" style="display:${v.selectMode === "unico" ? "none" : "block"}">Si eliges rango, varios valores o cualquiera, en la pantalla de ejecución aparecerá una tabla de valores (incluir/excluir + operador) al estilo select-options de SAP; el código Python recibirá esa tabla (JSON) en lugar de un valor único.</p>
+                            <div class="form-group">
+                                <label>Tipo</label>
+                                <select id="svType">
+                                    ${UI.SCREEN_VARIABLE_TYPES.map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
+                                </select>
+                                <p class="form-hint">FILE: en la pantalla de ejecución del flujo se pedirá un fichero; su valor resuelto será la ruta de storage tras subirlo.</p>
+                            </div>
+                            <div class="form-group">
+                                <label>Modo de selección</label>
+                                <select id="svSelectMode">
+                                    <option value="unico" ${v.selectMode === "unico" ? "selected" : ""}>Valor único</option>
+                                    <option value="rango" ${v.selectMode === "rango" ? "selected" : ""}>Rango (desde – hasta)</option>
+                                    <option value="multiple" ${v.selectMode === "multiple" ? "selected" : ""}>Varios valores</option>
+                                    <option value="cualquiera" ${v.selectMode === "cualquiera" ? "selected" : ""}>Cualquiera (select-options)</option>
+                                </select>
+                                <p class="form-hint">Si eliges rango, varios valores o cualquiera, en la pantalla de ejecución aparecerá una tabla de valores (incluir/excluir + operador) al estilo select-options de SAP; el código Python recibirá esa tabla (JSON) en lugar de un valor único.</p>
+                            </div>
                         </div>
 
-                        <div class="sv-tab-pane" id="svTabValidacion" style="display:none">
-                            <div class="sv-seg" id="svValidSeg">
-                                <label><input type="radio" name="svValidType" value="NONE" ${validation.type === "NONE" ? "checked" : ""}><span>Ninguna</span></label>
-                                <label><input type="radio" name="svValidType" value="CONST" ${validation.type === "CONST" ? "checked" : ""}><span>Constante</span></label>
-                                <label><input type="radio" name="svValidType" value="DIM" ${validation.type === "DIM" ? "checked" : ""}><span>Valores de dimensión</span></label>
-                                <label><input type="radio" name="svValidType" value="HIER" ${validation.type === "HIER" ? "checked" : ""}><span>Valores de jerarquía</span></label>
+                        <div id="svTabValid" style="display:none">
+                            <div class="form-group">
+                                <label>Validación</label>
+                                <label><input type="radio" name="svValidType" value="NONE" ${validation.type === "NONE" ? "checked" : ""}> Ninguna</label>
+                                <label><input type="radio" name="svValidType" value="CONST" ${validation.type === "CONST" ? "checked" : ""}> Constante</label>
+                                <label><input type="radio" name="svValidType" value="DIM" ${validation.type === "DIM" ? "checked" : ""}> Valores de dimensión</label>
+                                <label><input type="radio" name="svValidType" value="HIER" ${validation.type === "HIER" ? "checked" : ""}> Valores de jerarquía</label>
                             </div>
 
-                            <div class="sv-subpanel" id="svValidConst" style="display:${validation.type === "CONST" ? "flex" : "none"}">
+                            <div id="svValidConst" style="display:${validation.type === "CONST" ? "block" : "none"}">
                                 <table class="const-table">
                                     <thead><tr><th>ID</th><th>Descripción</th><th></th></tr></thead>
                                     <tbody id="svConstRows"></tbody>
@@ -1794,39 +1791,37 @@ const UI = {
                                 <button class="btn btn-secondary btn-sm" id="svAddConst">+ Añadir valor</button>
                             </div>
 
-                            <div class="sv-subpanel" id="svValidDim" style="display:${validation.type === "DIM" ? "flex" : "none"}">
+                            <div id="svValidDim" style="display:${validation.type === "DIM" ? "block" : "none"}">
                                 <div class="form-group">
                                     <label>Dimensión</label>
                                     <select id="svDimSelect"><option value="">Selecciona...</option>${dimOptions}</select>
                                 </div>
                             </div>
 
-                            <div class="sv-subpanel" id="svValidHier" style="display:${validation.type === "HIER" ? "flex" : "none"}">
-                                <div class="sv-row">
-                                    <div class="form-group">
-                                        <label>Dimensión</label>
-                                        <select id="svHierDimSelect"><option value="">Selecciona...</option>${dimOptions}</select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Jerarquía</label>
-                                        <select id="svHierSelect"><option value="">Selecciona una dimensión primero</option></select>
-                                    </div>
+                            <div id="svValidHier" style="display:${validation.type === "HIER" ? "block" : "none"}">
+                                <div class="form-group">
+                                    <label>Dimensión</label>
+                                    <select id="svHierDimSelect"><option value="">Selecciona...</option>${dimOptions}</select>
                                 </div>
-                                <div class="sv-row">
-                                    <div class="form-group">
-                                        <label>Nivel</label>
-                                        <select id="svHierLevelSelect"><option value="">—</option></select>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Valor del nodo</label>
-                                        <input type="text" id="svHierNode" placeholder="se traerán los valores por debajo de este nodo" value="${UI.escapeHtml(validation.node || "")}">
-                                    </div>
+                                <div class="form-group">
+                                    <label>Jerarquía</label>
+                                    <select id="svHierSelect"><option value="">Selecciona una dimensión primero</option></select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Nivel</label>
+                                    <select id="svHierLevelSelect"><option value="">—</option></select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Valor del nodo (se traerán los valores por debajo de este nodo)</label>
+                                    <input type="text" id="svHierNode" value="${UI.escapeHtml(validation.node || "")}">
                                 </div>
                             </div>
 
-                            <div class="sv-subpanel" id="svValidCommon" style="display:${validation.type === "NONE" ? "none" : "flex"}">
-                                <div class="sv-check-row">
+                            <div id="svValidCommon" style="display:${validation.type === "NONE" ? "none" : "block"}">
+                                <div class="form-group">
                                     <label><input type="checkbox" id="svAllowEmpty" ${validation.allowEmpty ? "checked" : ""}> Permite valor vacío</label>
+                                </div>
+                                <div class="form-group">
                                     <label><input type="checkbox" id="svShowText" ${validation.showText ? "checked" : ""}> Mostrar texto descriptivo junto al valor</label>
                                 </div>
                                 <div class="form-group">
@@ -1850,33 +1845,26 @@ const UI = {
             const nameInput = overlay.querySelector("#svName");
             setTimeout(() => { nameInput.focus(); }, 50);
 
-            // -- pestañas Propiedades | Validación --
-            const svPaneProp = overlay.querySelector("#svTabPropiedades");
-            const svPaneValid = overlay.querySelector("#svTabValidacion");
+            // -- pestañas: Propiedades | Validación --
+            const tabProps = overlay.querySelector("#svTabProps");
+            const tabValid = overlay.querySelector("#svTabValid");
             overlay.querySelectorAll("#svTabs [data-tab]").forEach(btn => {
                 btn.addEventListener("click", () => {
-                    overlay.querySelectorAll("#svTabs [data-tab]").forEach(b => b.classList.toggle("active", b === btn));
-                    const isProp = btn.dataset.tab === "propiedades";
-                    svPaneProp.style.display = isProp ? "flex" : "none";
-                    svPaneValid.style.display = isProp ? "none" : "flex";
+                    overlay.querySelectorAll("#svTabs [data-tab]").forEach(b => b.classList.remove("active"));
+                    btn.classList.add("active");
+                    const isProps = btn.dataset.tab === "propiedades";
+                    tabProps.style.display = isProps ? "block" : "none";
+                    tabValid.style.display = isProps ? "none" : "block";
                 });
-            });
-
-            // -- hints contextuales de Tipo / Modo de selección --
-            overlay.querySelector("#svType").addEventListener("change", (e) => {
-                overlay.querySelector("#svTypeHint").style.display = e.target.value === "FILE" ? "block" : "none";
-            });
-            overlay.querySelector("#svSelectMode").addEventListener("change", (e) => {
-                overlay.querySelector("#svModeHint").style.display = e.target.value === "unico" ? "none" : "block";
             });
 
             // -- validación: alternar bloques según el tipo elegido --
             overlay.querySelectorAll('input[name="svValidType"]').forEach(radio => {
                 radio.addEventListener("change", () => {
-                    overlay.querySelector("#svValidConst").style.display = radio.value === "CONST" && radio.checked ? "flex" : "none";
-                    overlay.querySelector("#svValidDim").style.display = radio.value === "DIM" && radio.checked ? "flex" : "none";
-                    overlay.querySelector("#svValidHier").style.display = radio.value === "HIER" && radio.checked ? "flex" : "none";
-                    overlay.querySelector("#svValidCommon").style.display = radio.value === "NONE" && radio.checked ? "none" : "flex";
+                    overlay.querySelector("#svValidConst").style.display = radio.value === "CONST" && radio.checked ? "block" : "none";
+                    overlay.querySelector("#svValidDim").style.display = radio.value === "DIM" && radio.checked ? "block" : "none";
+                    overlay.querySelector("#svValidHier").style.display = radio.value === "HIER" && radio.checked ? "block" : "none";
+                    overlay.querySelector("#svValidCommon").style.display = radio.value === "NONE" && radio.checked ? "none" : "block";
                 });
             });
 
