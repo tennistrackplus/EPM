@@ -101,59 +101,66 @@
 
 .mt-step-header {
     margin-top: 20px;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* Título del paso (izquierda) y acciones (derecha), como dos grupos
+   dentro de .flow-part-header (que ya es flex + space-between). */
+.mt-step-header-title {
     display: flex;
     align-items: center;
     gap: 10px;
-    justify-content: flex-start;
 }
 
-/* ---------- Pestañas de instancia (una por valor de driver) ---------- */
-.mt-instance-tabs {
+.mt-step-header-actions {
     display: flex;
+    align-items: center;
     gap: 8px;
     flex-wrap: wrap;
+    flex-shrink: 0;
+    /* .flow-part-header pone mayúsculas/11px para la etiqueta del paso;
+       aquí van botones y texto normal, así que se resetea. */
+    text-transform: none;
+    font-size: var(--fs-sm, 13px);
+    font-weight: 400;
+    letter-spacing: normal;
+}
+
+.mt-step-done {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--color-success);
+}
+
+/* ---------- Selector de instancia: desplegable (una por valor de
+   driver), con el nombre de la dimensión como etiqueta ---------- */
+.mt-instance-select-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     margin-bottom: 14px;
 }
 
-.mt-instance-tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    border: 1px solid var(--border-subtle);
-    border-radius: 999px;
-    background: var(--surface-card);
+.mt-instance-select-label {
     font-size: 12.5px;
     font-weight: 600;
     color: var(--text-secondary);
-    cursor: pointer;
-    transition: border-color 0.15s ease, color 0.15s ease;
+    white-space: nowrap;
 }
 
-.mt-instance-tab:hover {
-    border-color: var(--border-strong, var(--border-subtle));
-}
-
-.mt-instance-tab.is-selected {
-    border-color: var(--color-info);
+.mt-instance-select {
+    flex: 1;
+    max-width: 420px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--surface-card);
+    font-size: 12.5px;
+    font-weight: 500;
     color: var(--text-primary);
-    background: var(--color-info-light);
 }
-
-.mt-instance-tab-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: var(--gray-300, #c7ccd6);
-    flex-shrink: 0;
-}
-
-.mt-instance-tab--bloqueado .mt-instance-tab-dot { background: var(--border-default, var(--border-subtle)); }
-.mt-instance-tab--pendiente .mt-instance-tab-dot { background: var(--gray-300, #c7ccd6); }
-.mt-instance-tab--en_curso .mt-instance-tab-dot { background: var(--color-info); }
-.mt-instance-tab--suspendido .mt-instance-tab-dot { background: var(--color-warning); }
-.mt-instance-tab--en_revision .mt-instance-tab-dot { background: var(--color-info); }
-.mt-instance-tab--completado .mt-instance-tab-dot { background: var(--color-success); }
 
 /* ---------- Colores de estado que faltaban sobre .table-tag (en
    workflows.css solo están resueltos bloqueado/en_revision/completado,
@@ -168,27 +175,6 @@
    editor, .wf-block-menu-item, pero clicables en lugar de arrastrables) ---------- */
 .mt-block-menu-item {
     cursor: pointer;
-}
-
-/* ---------- Panel de estado + acción de la instancia seleccionada ---------- */
-.mt-instance-panel {
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    flex-wrap: wrap;
-    gap: 12px;
-    padding: 12px 14px;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-md);
-    background: var(--surface-card);
-    margin-bottom: 16px;
-}
-
-.mt-instance-panel-controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
 }
 
 /* ---------- Tarjeta de tarea (dentro de .wf-block-detail) ---------- */
