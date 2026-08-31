@@ -1,0 +1,164 @@
+/**
+ * Estilos propios de "Mis tareas" (task.html). La cadena de pasos y las
+ * tarjetas de tarea reutilizan las clases .wf-run-steps / .wf-run-step-tab
+ * / .wf-task-card ya definidas en workflows.css — aquí solo se añade lo
+ * que no existía: selectores de workflow/ejecución, pestañas de instancia
+ * y el panel de estado/tareas del paso.
+ */
+
+.mt-selectors {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+}
+
+.mt-selectors .form-group {
+    flex: 1;
+    min-width: 220px;
+    margin-bottom: 0;
+}
+
+.mt-step-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 18px 0 10px;
+}
+
+.mt-step-title h3 {
+    margin: 0;
+    font-size: 15px;
+}
+
+/* ---------- Pestañas de instancia (una por valor de driver) ---------- */
+.mt-instance-tabs {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+}
+
+.mt-instance-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    background: var(--surface-card);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease;
+}
+
+.mt-instance-tab:hover {
+    border-color: var(--border-strong, var(--border-subtle));
+}
+
+.mt-instance-tab.is-selected {
+    border-color: var(--color-info);
+    color: var(--text-primary);
+    background: var(--color-info-light);
+}
+
+.mt-instance-tab-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--gray-300, #c7ccd6);
+    flex-shrink: 0;
+}
+
+.mt-instance-tab--bloqueado .mt-instance-tab-dot { background: var(--border-default, var(--border-subtle)); }
+.mt-instance-tab--pendiente .mt-instance-tab-dot { background: var(--gray-300, #c7ccd6); }
+.mt-instance-tab--en_curso .mt-instance-tab-dot { background: var(--color-info); }
+.mt-instance-tab--suspendido .mt-instance-tab-dot { background: var(--color-warning); }
+.mt-instance-tab--en_revision .mt-instance-tab-dot { background: var(--color-info); }
+.mt-instance-tab--completado .mt-instance-tab-dot { background: var(--color-success); }
+
+/* ---------- Colores de estado que faltaban sobre .table-tag (en
+   workflows.css solo están resueltos bloqueado/en_revision/completado,
+   porque son los únicos que se ven en el modo "solo etiqueta" de
+   Administración; aquí Pendiente/En curso/Suspendido también se muestran
+   como tag) ---------- */
+.table-tag.wf-inst-status--pendiente { background: var(--gray-100); color: var(--text-secondary); }
+.table-tag.wf-inst-status--en_curso { background: var(--color-info-light); color: var(--color-info); }
+.table-tag.wf-inst-status--suspendido { background: var(--color-warning-light); color: var(--color-warning); }
+
+/* ---------- Panel de estado + controles de la instancia seleccionada ---------- */
+.mt-instance-panel {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-card);
+    margin-bottom: 18px;
+}
+
+.mt-instance-panel-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.mt-instance-meta {
+    font-size: 12.5px;
+    color: var(--text-secondary);
+}
+
+.mt-instance-panel-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* ---------- Tareas del paso ---------- */
+.mt-tasks-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+
+.mt-task-block {
+    margin-bottom: 16px;
+}
+
+.mt-task-block-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 6px;
+}
+
+.mt-task-card {
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.mt-task-card:hover {
+    border-color: var(--color-info);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.mt-task-play {
+    flex-shrink: 0;
+    font-size: 14px;
+    color: var(--color-info);
+    padding: 2px 4px;
+}
+
+.module-empty--inline {
+    padding: 14px;
+}
