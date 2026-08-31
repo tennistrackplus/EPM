@@ -1,34 +1,110 @@
 /**
- * Estilos propios de "Mis tareas" (task.html). La cadena de pasos y las
- * tarjetas de tarea reutilizan las clases .wf-run-steps / .wf-run-step-tab
- * / .wf-task-card ya definidas en workflows.css — aquí solo se añade lo
- * que no existía: selectores de workflow/ejecución, pestañas de instancia
- * y el panel de estado/tareas del paso.
+ * Estilos propios de "Mis tareas" (task.html). El objetivo es que se vea
+ * como el bloque de Administración: menú lateral (.admin-menu) + panel de
+ * contenido (.admin-content), y la cadena de pasos con las mismas tarjetas
+ * que el editor de Workflows (.flow-chain-*), sin badges ni controles de
+ * play/pausa/restablecer — esta pantalla es de ejecución, no de edición.
  */
 
-.mt-selectors {
+/* ---------- Layout: menú lateral + contenido, igual que Administración ---------- */
+#myTasksRoot {
     display: flex;
-    gap: 16px;
-    margin-bottom: 18px;
-    flex-wrap: wrap;
-}
-
-.mt-selectors .form-group {
     flex: 1;
-    min-width: 220px;
-    margin-bottom: 0;
+    min-height: 0;
+    width: 100%;
 }
 
-.mt-step-title {
+.mt-content {
+    display: block;
+}
+
+/* ---------- Menú lateral: mis workflows (negrita) y, bajo el
+   seleccionado, sus ejecuciones indentadas y sin negrita ---------- */
+.mt-run-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    margin: 2px 0 6px;
+}
+
+.mt-run-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 10px 7px 30px;
+    border-radius: var(--radius-sm);
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.mt-run-item:hover {
+    background: var(--gray-100);
+    color: var(--text-primary);
+}
+
+.mt-run-item.is-active {
+    background: var(--brand-primary-light);
+    color: var(--brand-primary-hover);
+    font-weight: 600;
+}
+
+.mt-run-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.mt-run-badge {
+    flex-shrink: 0;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--color-info-light);
+    color: var(--color-info);
+    font-size: 10.5px;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mt-run-item.is-active .mt-run-badge {
+    background: var(--brand-primary);
+    color: var(--text-inverse);
+}
+
+/* ---------- Cadena de pasos: reutiliza .flow-chain-card, solo con el
+   nombre (sin meta/badge) y sin el botón de eliminar ---------- */
+.mt-step-card {
+    cursor: pointer;
+}
+
+.mt-step-card .flow-chain-card-name {
+    padding-right: 0;
+}
+
+.mt-step-card.is-done:not(.is-selected) {
+    border-color: var(--color-success);
+}
+
+.mt-step-card.is-done:not(.is-selected) .flow-chain-card-name {
+    color: var(--color-success);
+}
+
+.mt-step-header {
+    margin-top: 20px;
     display: flex;
     align-items: center;
     gap: 10px;
-    margin: 18px 0 10px;
-}
-
-.mt-step-title h3 {
-    margin: 0;
-    font-size: 15px;
+    justify-content: flex-start;
 }
 
 /* ---------- Pestañas de instancia (una por valor de driver) ---------- */
@@ -88,7 +164,7 @@
 .table-tag.wf-inst-status--en_curso { background: var(--color-info-light); color: var(--color-info); }
 .table-tag.wf-inst-status--suspendido { background: var(--color-warning-light); color: var(--color-warning); }
 
-/* ---------- Panel de estado + controles de la instancia seleccionada ---------- */
+/* ---------- Panel de estado + acción de la instancia seleccionada ---------- */
 .mt-instance-panel {
     display: flex;
     align-items: center;
