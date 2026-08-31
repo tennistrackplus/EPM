@@ -559,12 +559,24 @@ table.values-grid tr.duplicate-row td input {
 .btn-danger:hover:not(:disabled) { background-color: #b82920; }
 
 .values-col-check {
-    width: 30px;
+    width: 26px;
     text-align: center;
     padding: 4px !important;
 }
 
 .values-col-check input[type="checkbox"] { cursor: pointer; }
+
+/* La regla genérica de abajo (table.values-grid td input) pone
+   width:100% + min-width:110px pensando en los inputs de texto de las
+   celdas de datos; sin excluir aquí la casilla, ese min-width obligaba
+   a toda la columna de selección a ensancharse y la casilla quedaba
+   pegada a la izquierda de ese hueco en vez de centrada. */
+table.values-grid td.values-col-check input[type="checkbox"] {
+    width: auto;
+    min-width: 0;
+    display: block;
+    margin: 0 auto;
+}
 
 table.values-grid th.values-col-sortable {
     cursor: pointer;
