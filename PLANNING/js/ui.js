@@ -1741,38 +1741,44 @@ const UI = {
                         <button class="modal-close" id="svClose">&times;</button>
                     </div>
                     <div class="modal-body">
-                        <div class="sv-row">
-                            <div class="form-group">
-                                <label>Nombre técnico</label>
-                                <input type="text" id="svName" placeholder="ej. fecha_desde" value="${UI.escapeHtml(v.name)}">
-                            </div>
-                            <div class="form-group">
-                                <label>Etiqueta en pantalla</label>
-                                <input type="text" id="svLabel" placeholder="ej. Fecha desde" value="${UI.escapeHtml(v.label)}">
-                            </div>
+                        <div class="segmented" id="svTabs">
+                            <button type="button" class="segmented-btn active" data-tab="propiedades">Propiedades</button>
+                            <button type="button" class="segmented-btn" data-tab="validacion">Validación</button>
                         </div>
-                        <div class="sv-row">
-                            <div class="form-group">
-                                <label>Tipo</label>
-                                <select id="svType">
-                                    ${UI.SCREEN_VARIABLE_TYPES.map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label>Modo de selección</label>
-                                <select id="svSelectMode">
-                                    <option value="unico" ${v.selectMode === "unico" ? "selected" : ""}>Valor único</option>
-                                    <option value="rango" ${v.selectMode === "rango" ? "selected" : ""}>Rango (desde – hasta)</option>
-                                    <option value="multiple" ${v.selectMode === "multiple" ? "selected" : ""}>Varios valores</option>
-                                    <option value="cualquiera" ${v.selectMode === "cualquiera" ? "selected" : ""}>Cualquiera (select-options)</option>
-                                </select>
-                            </div>
-                        </div>
-                        <p class="form-hint" id="svTypeHint" style="display:${v.type === "FILE" ? "block" : "none"}">FILE: en la pantalla de ejecución del flujo se pedirá un fichero; su valor resuelto será la ruta de storage tras subirlo.</p>
-                        <p class="form-hint" id="svModeHint" style="display:${v.selectMode === "unico" ? "none" : "block"}">Si eliges rango, varios valores o cualquiera, en la pantalla de ejecución aparecerá una tabla de valores (incluir/excluir + operador) al estilo select-options de SAP; el código Python recibirá esa tabla (JSON) en lugar de un valor único.</p>
 
-                        <div class="sv-section">
-                            <div class="sv-section-label">Validación</div>
+                        <div class="sv-tab-pane" id="svTabPropiedades">
+                            <div class="sv-row">
+                                <div class="form-group">
+                                    <label>Nombre técnico</label>
+                                    <input type="text" id="svName" placeholder="ej. fecha_desde" value="${UI.escapeHtml(v.name)}">
+                                </div>
+                                <div class="form-group">
+                                    <label>Etiqueta en pantalla</label>
+                                    <input type="text" id="svLabel" placeholder="ej. Fecha desde" value="${UI.escapeHtml(v.label)}">
+                                </div>
+                            </div>
+                            <div class="sv-row">
+                                <div class="form-group">
+                                    <label>Tipo</label>
+                                    <select id="svType">
+                                        ${UI.SCREEN_VARIABLE_TYPES.map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Modo de selección</label>
+                                    <select id="svSelectMode">
+                                        <option value="unico" ${v.selectMode === "unico" ? "selected" : ""}>Valor único</option>
+                                        <option value="rango" ${v.selectMode === "rango" ? "selected" : ""}>Rango (desde – hasta)</option>
+                                        <option value="multiple" ${v.selectMode === "multiple" ? "selected" : ""}>Varios valores</option>
+                                        <option value="cualquiera" ${v.selectMode === "cualquiera" ? "selected" : ""}>Cualquiera (select-options)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <p class="form-hint" id="svTypeHint" style="display:${v.type === "FILE" ? "block" : "none"}">FILE: en la pantalla de ejecución del flujo se pedirá un fichero; su valor resuelto será la ruta de storage tras subirlo.</p>
+                            <p class="form-hint" id="svModeHint" style="display:${v.selectMode === "unico" ? "none" : "block"}">Si eliges rango, varios valores o cualquiera, en la pantalla de ejecución aparecerá una tabla de valores (incluir/excluir + operador) al estilo select-options de SAP; el código Python recibirá esa tabla (JSON) en lugar de un valor único.</p>
+                        </div>
+
+                        <div class="sv-tab-pane" id="svTabValidacion" style="display:none">
                             <div class="sv-seg" id="svValidSeg">
                                 <label><input type="radio" name="svValidType" value="NONE" ${validation.type === "NONE" ? "checked" : ""}><span>Ninguna</span></label>
                                 <label><input type="radio" name="svValidType" value="CONST" ${validation.type === "CONST" ? "checked" : ""}><span>Constante</span></label>
@@ -1843,6 +1849,18 @@ const UI = {
             overlay.classList.add("visible");
             const nameInput = overlay.querySelector("#svName");
             setTimeout(() => { nameInput.focus(); }, 50);
+
+            // -- pestañas Propiedades | Validación --
+            const svPaneProp = overlay.querySelector("#svTabPropiedades");
+            const svPaneValid = overlay.querySelector("#svTabValidacion");
+            overlay.querySelectorAll("#svTabs [data-tab]").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    overlay.querySelectorAll("#svTabs [data-tab]").forEach(b => b.classList.toggle("active", b === btn));
+                    const isProp = btn.dataset.tab === "propiedades";
+                    svPaneProp.style.display = isProp ? "flex" : "none";
+                    svPaneValid.style.display = isProp ? "none" : "flex";
+                });
+            });
 
             // -- hints contextuales de Tipo / Modo de selección --
             overlay.querySelector("#svType").addEventListener("change", (e) => {
