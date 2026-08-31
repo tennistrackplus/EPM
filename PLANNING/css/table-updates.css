@@ -170,7 +170,7 @@ table.actupd-values-grid th {
 }
 /* Casilla de selección y botón ✕: ancho fijo, no forman parte del resize. */
 col.actupd-col-fixed {
-    width: 32px;
+    width: 26px;
 }
 .actupd-filter-th {
     padding: 2px 4px !important;
@@ -255,13 +255,22 @@ table.actupd-values-grid th.values-row-select,
 table.actupd-values-grid td.values-row-select,
 table.actupd-values-grid th.values-row-remove,
 table.actupd-values-grid td.values-row-remove {
-    width: 32px;
-    min-width: 32px;
-    max-width: 32px;
+    width: 26px;
+    min-width: 26px;
+    max-width: 26px;
     box-sizing: border-box;
     text-align: center;
     padding: 4px;
     white-space: nowrap;
+}
+/* Mismo ajuste que en Mantenimiento de dimensiones: la casilla, al ser un
+   <input>, hereda por defecto reglas de ancho pensadas para inputs de
+   texto; se fuerza aquí a que ocupe su tamaño natural y quede centrada
+   en vez de pegada a la izquierda de la celda. */
+table.actupd-values-grid td.values-row-select input[type="checkbox"] {
+    width: auto;
+    display: block;
+    margin: 0 auto;
 }
 /* Resaltado de fila seleccionada: bien visible (no el azul casi blanco de
    --brand-primary-light) y con una franja de color a la izquierda, como en
