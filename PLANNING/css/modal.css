@@ -199,6 +199,29 @@
     font-weight: 600;
 }
 
+/* Modal "Nueva/Editar variable" (pantalla compartida de Flujos de carga y
+   Actualización de tablas): tamaño fijo para que no salte al cambiar de
+   pestaña o de opción de validación; cada pestaña recupera el mismo
+   interlineado que tenía el modal-body original. */
+#screenVarModal .modal-box {
+    height: 600px;
+}
+
+#screenVarModal .modal-body {
+    overflow-y: hidden;
+}
+
+#svTabProps,
+#svTabValid {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
 /* Aviso de "clave heredada de Parametrización" en el diseñador de Actualización de tablas */
 .actupd-param-hint {
     border-style: solid;
