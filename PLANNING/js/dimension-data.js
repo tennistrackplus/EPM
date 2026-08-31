@@ -12,7 +12,7 @@
  *    siempre (se asume cabecera) pero su contenido no se usa para
  *    decidir qué columna va a qué campo.
  *  - Selección múltiple de filas (individual / todas las visibles)
- *    para borrado masivo, buscador que filtra por cualquier columna
+ *    para borrado masivo, filtro por columna (bajo cada cabecera)
  *    y orden ascendente/descendente pulsando en la cabecera.
  *  - "Guardar" vuelca la rejilla completa a la tabla física
  *    (TRUNCATE + INSERT). Es decir: lo que ves es lo que se guarda.
@@ -27,9 +27,11 @@ const DimensionData = {
         this.fullTable = Provider.qualify(project.DATASET, dim.TABLA);
         this.rows = []; // array de objetos { __uid, COLID: valor, ... }
         this.selected = new Set();  // __uid de las filas seleccionadas
-        this.searchText = "";
+        this.colFilters = {};       // colId -> término de filtro (filtro por columna, bajo la cabecera)
         this.sortCol = null;
         this.sortDir = "asc";
+        this.colWidths = {};        // colId -> ancho en px (ajustable arrastrando la cabecera)
+        this.lastClickedUid = null; // para el Mayús+clic (selección de rango)
         this._uidSeq = 0;
 
         let overlay = document.getElementById("valuesModal");
@@ -58,11 +60,9 @@ const DimensionData = {
                         <input type="file" id="importFileInput" accept=".csv,.xlsx,.xls" style="display:none;">
                         <button class="btn btn-danger btn-sm" id="btnDeleteSelected" disabled>Eliminar seleccionadas</button>
                         <span class="values-toolbar-spacer"></span>
-                        <input type="search" id="valuesSearchInput" class="values-search-input" placeholder="Buscar...">
                         <span class="values-row-count" id="valuesRowCount"></span>
                         <button class="btn btn-primary btn-sm" id="btnSaveValues">Guardar cambios</button>
                     </div>
-                    <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). Al importar un archivo, el orden de las columnas del fichero debe coincidir con el de esta rejilla (la cabecera del archivo se descarta y no se usa para el mapeo). Marca filas con la casilla para borrarlas en bloque, usa el buscador para filtrar y pulsa una cabecera de columna para ordenar. "Guardar" sustituye por completo el contenido de la tabla con lo que ves aquí. La clave debe ser única: las filas con clave repetida se marcan en rojo y bloquean el guardado.</p>
                     <div class="values-grid-wrap values-grid-wrap--modal" id="valuesGridWrap"><span class="spinner"></span></div>
                 </div>
             </div>`;
@@ -75,11 +75,6 @@ const DimensionData = {
         document.getElementById("importFileInput").addEventListener("change", (e) => this.handleImportFile(e));
         document.getElementById("btnDeleteSelected").addEventListener("click", () => this.deleteSelected());
         document.getElementById("btnSaveValues").addEventListener("click", () => this.save());
-        document.getElementById("valuesSearchInput").addEventListener("input", (e) => {
-            this.syncRowsFromDom();
-            this.searchText = e.target.value.trim();
-            this.renderGrid();
-        });
 
         overlay.classList.add("visible");
         await this.loadData();
@@ -122,9 +117,9 @@ const DimensionData = {
     getVisibleRows() {
         let rows = this.rows;
 
-        if (this.searchText) {
-            const q = this.searchText.toLowerCase();
-            rows = rows.filter(r => this.fields.some(f => String(r[f.colId] ?? "").toLowerCase().includes(q)));
+        const activeFilters = Object.entries(this.colFilters).filter(([, v]) => v);
+        if (activeFilters.length) {
+            rows = rows.filter(r => activeFilters.every(([col, term]) => String(r[col] ?? "").toLowerCase().includes(term)));
         }
 
         if (this.sortCol) {
@@ -158,20 +153,36 @@ const DimensionData = {
         if (!this.rows.length) this.addEmptyRow();
 
         const visibleRows = this.getVisibleRows();
-        document.getElementById("valuesRowCount").textContent = this.searchText
+        const hasActiveFilters = Object.values(this.colFilters).some(v => v);
+        document.getElementById("valuesRowCount").textContent = hasActiveFilters
             ? `${visibleRows.length} de ${this.rows.length} fila(s)`
             : `${this.rows.length} fila(s)`;
 
         const allVisibleSelected = visibleRows.length > 0 && visibleRows.every(r => this.selected.has(r.__uid));
         const sortArrow = (colId) => this.sortCol === colId ? (this.sortDir === "asc" ? " ▲" : " ▼") : "";
 
+        // Anchos de columna: fijos para casilla/✕ (no se pueden arrastrar) y
+        // ajustables (tirador en el borde derecho) para el resto — se
+        // recuerdan en this.colWidths entre renders.
+        const DEFAULT_COL_W = 160;
+        const colsHtml = `<col class="values-col-fixed">` +
+            this.fields.map(f => `<col data-col="${UI.escapeHtml(f.colId)}" style="width:${this.colWidths[f.colId] || DEFAULT_COL_W}px">`).join("") +
+            `<col class="values-col-fixed">`;
+
         const header = `
             <th class="values-col-check"><input type="checkbox" id="valuesSelectAll" ${allVisibleSelected ? "checked" : ""} title="Seleccionar todas"></th>
             ${this.fields.map(f => `
                 <th class="values-col-sortable" data-sort-col="${f.colId}" title="Ordenar por ${UI.escapeHtml(f.name)}">
                     ${UI.escapeHtml(f.name)}${f.key ? ' <span class="key-dot" title="Clave">🔑</span>' : ""}<span class="sort-arrow">${sortArrow(f.colId)}</span><br><span class="col-type">${f.type}</span>
+                    <span class="values-col-resize" data-col="${UI.escapeHtml(f.colId)}" title="Arrastra para ajustar el ancho"></span>
                 </th>`).join("")}
-            <th></th>`;
+            <th class="values-row-remove"></th>`;
+
+        const filterRow = `
+            <th class="values-col-check"></th>
+            ${this.fields.map(f => `
+                <th class="actupd-filter-th"><input type="text" class="actupd-col-filter" data-col="${UI.escapeHtml(f.colId)}" placeholder="Filtrar..." value="${UI.escapeHtml(this.colFilters[f.colId] || "")}"></th>`).join("")}
+            <th class="values-row-remove"></th>`;
 
         const bodyRows = visibleRows.length
             ? visibleRows.map(row => `
@@ -183,11 +194,12 @@ const DimensionData = {
                     <td class="values-row-remove"><button type="button" data-remove-uid="${row.__uid}" title="Eliminar fila">✕</button></td>
                 </tr>
             `).join("")
-            : `<tr><td colspan="${this.fields.length + 2}" class="values-empty">No hay filas que coincidan con la búsqueda.</td></tr>`;
+            : `<tr><td colspan="${this.fields.length + 2}" class="values-empty">No hay filas que coincidan con el filtro.</td></tr>`;
 
         wrap.innerHTML = `
             <table class="values-grid">
-                <thead><tr>${header}</tr></thead>
+                <colgroup>${colsHtml}</colgroup>
+                <thead><tr>${header}</tr><tr>${filterRow}</tr></thead>
                 <tbody id="valuesGridBody">${bodyRows}</tbody>
             </table>`;
 
@@ -211,15 +223,32 @@ const DimensionData = {
             });
         });
 
+        // Casilla por fila: clic normal marca/desmarca solo esa fila; con
+        // Mayús pulsado, marca (o desmarca, según el estado de partida) el
+        // rango completo entre la última fila tocada y esta, igual que en
+        // un ALV o en Excel.
         tbody.querySelectorAll(".row-select").forEach(cb => {
-            cb.addEventListener("change", () => {
+            cb.addEventListener("click", (e) => {
                 this.syncRowsFromDom();
-                if (cb.checked) this.selected.add(cb.dataset.uid);
-                else this.selected.delete(cb.dataset.uid);
-                cb.closest("tr").classList.toggle("row-selected", cb.checked);
-                const selectAll = document.getElementById("valuesSelectAll");
-                if (selectAll) selectAll.checked = this.getVisibleRows().every(r => this.selected.has(r.__uid));
-                this.updateDeleteSelectedBtn();
+                const uid = cb.dataset.uid;
+                if (e.shiftKey && this.lastClickedUid) {
+                    const ids = visibleRows.map(r => r.__uid);
+                    const from = ids.indexOf(this.lastClickedUid);
+                    const to = ids.indexOf(uid);
+                    if (from !== -1 && to !== -1) {
+                        const [start, end] = from < to ? [from, to] : [to, from];
+                        const makeChecked = cb.checked;
+                        for (let i = start; i <= end; i++) {
+                            if (makeChecked) this.selected.add(ids[i]);
+                            else this.selected.delete(ids[i]);
+                        }
+                    }
+                } else {
+                    if (cb.checked) this.selected.add(uid);
+                    else this.selected.delete(uid);
+                }
+                this.lastClickedUid = uid;
+                this.renderGrid();
             });
         });
 
@@ -234,7 +263,8 @@ const DimensionData = {
         }
 
         wrap.querySelectorAll("[data-sort-col]").forEach(th => {
-            th.addEventListener("click", () => {
+            th.addEventListener("click", (e) => {
+                if (e.target.closest(".values-col-resize")) return; // el tirador no ordena
                 this.syncRowsFromDom();
                 const col = th.dataset.sortCol;
                 if (this.sortCol === col) this.sortDir = this.sortDir === "asc" ? "desc" : "asc";
@@ -243,7 +273,44 @@ const DimensionData = {
             });
         });
 
+        // Tirador de ancho de columna: arrastrar el borde derecho de una
+        // cabecera ajusta el <col> correspondiente en vivo y se recuerda en
+        // this.colWidths para los próximos renders.
+        wrap.querySelectorAll(".values-col-resize").forEach(handle => {
+            handle.addEventListener("click", (e) => e.stopPropagation());
+            handle.addEventListener("mousedown", (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                const colId = handle.dataset.col;
+                const colEl = wrap.querySelector(`col[data-col="${CSS.escape(colId)}"]`);
+                if (!colEl) return;
+                const startX = e.clientX;
+                const startWidth = this.colWidths[colId] || DEFAULT_COL_W;
+                const onMove = (ev) => {
+                    colEl.style.width = `${Math.max(60, startWidth + (ev.clientX - startX))}px`;
+                };
+                const onUp = (ev) => {
+                    this.colWidths[colId] = Math.max(60, startWidth + (ev.clientX - startX));
+                    document.removeEventListener("mousemove", onMove);
+                    document.removeEventListener("mouseup", onUp);
+                };
+                document.addEventListener("mousemove", onMove);
+                document.addEventListener("mouseup", onUp);
+            });
+        });
+
         tbody.addEventListener("paste", (e) => this.handlePaste(e));
+
+        wrap.querySelectorAll(".actupd-col-filter").forEach(inp => {
+            inp.addEventListener("click", (e) => e.stopPropagation());
+            inp.addEventListener("input", (e) => {
+                this.syncRowsFromDom();
+                this.colFilters[e.target.dataset.col] = e.target.value.toLowerCase();
+                this.renderGrid();
+                const again = wrap.querySelector(`.actupd-col-filter[data-col="${CSS.escape(e.target.dataset.col)}"]`);
+                if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+            });
+        });
 
         this.updateDeleteSelectedBtn();
     },
@@ -288,11 +355,11 @@ const DimensionData = {
         const startUid = target.closest("tr").dataset.uid;
         const startColIdx = parseInt(target.dataset.colIdx, 10);
 
-        // Si hay un filtro de búsqueda u orden activo, la posición visible de
+        // Si hay un filtro de columna u orden activo, la posición visible de
         // las filas no coincide con this.rows, así que no se pueden crear
         // filas nuevas "al final" de forma fiable: el pegado solo sobrescribe
         // filas ya visibles.
-        const filtering = !!this.searchText || !!this.sortCol;
+        const filtering = Object.values(this.colFilters).some(v => v) || !!this.sortCol;
         const visibleRows = this.getVisibleRows();
         const startVisibleIdx = visibleRows.findIndex(r => r.__uid === startUid);
         if (startVisibleIdx === -1) return;
@@ -319,7 +386,7 @@ const DimensionData = {
         });
 
         if (clipped) {
-            UI.toast('Quita el buscador/orden para poder pegar filas nuevas al final de la rejilla.', "info");
+            UI.toast('Quita el filtro/orden para poder pegar filas nuevas al final de la rejilla.', "info");
         }
 
         this.renderGrid();
@@ -403,10 +470,8 @@ const DimensionData = {
 
             this.syncRowsFromDom();
             this.selected.clear();
-            this.searchText = "";
+            this.colFilters = {};
             this.sortCol = null;
-            const searchInput = document.getElementById("valuesSearchInput");
-            if (searchInput) searchInput.value = "";
 
             if (choice === "replace") {
                 this.rows = importedObjs;
@@ -581,12 +646,10 @@ const DimensionData = {
         });
 
         if (dupSignatures.size) {
-            // Quita cualquier filtro de búsqueda para que las filas duplicadas
+            // Quita cualquier filtro de columna para que las filas duplicadas
             // (que se van a marcar en rojo) sean visibles siempre.
-            if (this.searchText) {
-                this.searchText = "";
-                const searchInput = document.getElementById("valuesSearchInput");
-                if (searchInput) searchInput.value = "";
+            if (Object.values(this.colFilters).some(v => v)) {
+                this.colFilters = {};
             }
             this.renderGrid();
             this.highlightDuplicateRows(validRows, sigOf, dupSignatures);

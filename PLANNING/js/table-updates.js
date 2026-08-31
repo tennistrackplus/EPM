@@ -1454,7 +1454,6 @@ const TableUpdates = {
                 <span class="values-row-count" id="actUpdGridCount"></span>
                 <button class="btn btn-primary btn-sm" id="actUpdGridSave">Grabar</button>
             </div>
-            <p class="form-hint">Pega bloques de celdas directamente desde Excel (Ctrl+V sobre una celda). Filtra escribiendo bajo el nombre de cada columna. Marca la casilla de varias filas (Mayús+clic para seleccionar un rango) y usa "🗑 Eliminar seleccionadas" para borrarlas de golpe. "Grabar" sustituye estas filas en la tabla; la clave (${UI.escapeHtml(this.getKeyColumns(state).join(" + "))}) debe ser única.</p>
             <div class="values-grid-wrap values-grid-wrap--modal" id="actUpdGridWrap"><span class="spinner"></span></div>`;
 
         document.getElementById("actUpdGridAddRow").addEventListener("click", () => {
