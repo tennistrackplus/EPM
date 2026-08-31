@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Draco Planning — Tareas</title>
+    <link rel="stylesheet" href="css/theme.css?v=20260830c">
+    <link rel="stylesheet" href="css/modal.css?v=20260830c">
+    <link rel="stylesheet" href="css/app.css?v=20260830c">
+    <link rel="stylesheet" href="css/workflows.css?v=20260830c">
+    <link rel="stylesheet" href="css/table-updates.css?v=20260830c">
+    <link rel="stylesheet" href="css/flow-run.css?v=20260830c">
+    <link rel="stylesheet" href="css/my-tasks.css?v=20260830c">
+</head>
+<body>
+
+    <!-- ===================== TOPBAR ===================== -->
+    <header class="app-topbar">
+        <div class="app-topbar-brand">
+            <div class="app-logo">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2L3 7v10l9 5 9-5V7l-9-5z" stroke="white" stroke-width="1.8" stroke-linejoin="round"/>
+                    <path d="M3 7l9 5 9-5M12 12v10" stroke="white" stroke-width="1.8" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="app-topbar-titles">
+                <span class="app-topbar-title">Draco Planning · Tareas</span>
+                <span class="app-topbar-subtitle" id="gcpProjectLabel">Conectando...</span>
+            </div>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+            <span class="app-topbar-status is-live" id="connStatus"><span class="dot"></span>BigQuery</span>
+            <a class="app-topbar-action" href="app.html" title="Ir a Administración" style="text-decoration:none;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21V9l8-6 8 6v12h-5v-7H9v7H4z"/></svg>
+            </a>
+            <button class="app-topbar-action" id="btnLogout" title="Cerrar sesión">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/>
+                    <path d="M16 17l5-5-5-5"/>
+                    <path d="M21 12H9"/>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- ===================== BARRA DE PROYECTO (solo selección) ===================== -->
+    <div class="project-bar">
+        <label for="projectSelect">Proyecto</label>
+        <select id="projectSelect">
+            <option value="">Cargando proyectos...</option>
+        </select>
+        <div class="project-bar-desc" id="projectDescription"></div>
+    </div>
+
+    <!-- ===================== MIS TAREAS ===================== -->
+    <main class="blocks-grid" style="grid-template-columns: 1fr;">
+        <section class="block" id="blockMyTasks" style="grid-column: 1 / -1;">
+            <div class="block-header">
+                <h2>Mis tareas</h2>
+            </div>
+            <div class="block-body">
+                <div id="myTasksRoot">
+                    <div class="module-empty">Selecciona un proyecto en la barra superior para ver tus tareas.</div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="js/config.js?v=20260830c"></script>
+    <script src="js/bigquery.js?v=20260830c"></script>
+    <script src="js/snowflake.js?v=20260830c"></script>
+    <script src="js/provider.js?v=20260830c"></script>
+    <script src="js/schema.js?v=20260830c"></script>
+    <script src="js/storage.js?v=20260830c"></script>
+    <script src="js/ui.js?v=20260830c"></script>
+    <script src="js/table-updates.js?v=20260830c"></script>
+    <script src="js/workflows.js?v=20260830c"></script>
+    <script src="js/my-tasks.js?v=20260830c"></script>
+    <script src="js/task-app.js?v=20260830c"></script>
+</body>
+</html>
