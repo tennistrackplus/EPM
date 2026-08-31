@@ -1853,8 +1853,8 @@ const UI = {
                     overlay.querySelectorAll("#svTabs [data-tab]").forEach(b => b.classList.remove("active"));
                     btn.classList.add("active");
                     const isProps = btn.dataset.tab === "propiedades";
-                    tabProps.style.display = isProps ? "block" : "none";
-                    tabValid.style.display = isProps ? "none" : "block";
+                    tabProps.style.display = isProps ? "flex" : "none";
+                    tabValid.style.display = isProps ? "none" : "flex";
                 });
             });
 
