@@ -353,23 +353,26 @@ const MyTasks = {
         // tarea del bloque seleccionado a la derecha (.wf-block-detail).
         wrap.innerHTML = `
             <div class="flow-part-header mt-step-header">
-                <strong>Paso: ${UI.escapeHtml(step.name)}</strong>
-                ${step.revision ? `<span class="table-tag">Con revisión</span>` : ""}
+                <div class="mt-step-header-title">
+                    <strong>Paso: ${UI.escapeHtml(step.name)}</strong>
+                    ${step.revision ? `<span class="table-tag">Con revisión</span>` : ""}
+                </div>
+                <div class="mt-step-header-actions" id="mtInstancePanel"></div>
             </div>
-            ${instances.length > 1 ? this.instanceSelectorHtml(instances) : ""}
-            <div id="mtInstancePanel"></div>
+            ${instances.length > 1 ? this.instanceSelectorHtml(step, instances) : ""}
             <div class="wf-blocks-layout">
                 <div class="wf-block-menu" id="mtBlockMenu"></div>
                 <div class="wf-block-detail" id="mtBlockDetail"></div>
             </div>`;
 
         if (instances.length > 1) {
-            wrap.querySelectorAll("#mtInstanceTabs [data-mt-inst]").forEach(btn => {
-                btn.addEventListener("click", () => {
-                    this.currentInstanceId = btn.dataset.mtInst;
+            const sel = wrap.querySelector("#mtInstanceSelect");
+            if (sel) {
+                sel.addEventListener("change", () => {
+                    this.currentInstanceId = sel.value;
                     this.renderStepBody();
                 });
-            });
+            }
         }
 
         const inst = instances.find(i => i.id === this.currentInstanceId);
@@ -377,28 +380,89 @@ const MyTasks = {
         this.renderBlocks(step);
     },
 
-    instanceSelectorHtml(instances) {
-        return `<div class="mt-instance-tabs" id="mtInstanceTabs">
-            ${instances.map(i => {
-                const label = (i.driverValor !== null && i.driverValor !== undefined && i.driverValor !== "") ? i.driverValor : "Instancia única";
-                const selected = i.id === this.currentInstanceId;
-                return `<button type="button" class="mt-instance-tab mt-instance-tab--${i.estado.toLowerCase()} ${selected ? "is-selected" : ""}" data-mt-inst="${i.id}">
-                            <span class="mt-instance-tab-dot"></span>${UI.escapeHtml(String(label))}
-                        </button>`;
-            }).join("")}
+    // ------------------------------------------------------------
+    // Selector de instancia: si el paso tiene driver, un desplegable con
+    // el nombre de la dimensión como etiqueta y, en cada opción, el
+    // valor junto con su descripción (se cargan aparte de forma
+    // asíncrona y se rellenan cuando llegan, ver loadDriverValueLabels).
+    // ------------------------------------------------------------
+    instanceSelectorHtml(step, instances) {
+        const dim = step.driver && step.driver.dimensionId ? Workflows.dimensionById(step.driver.dimensionId) : null;
+        const label = dim ? (dim.DIMENSION || "Valor") : "Instancia";
+
+        const optionHtml = (i) => {
+            const raw = (i.driverValor !== null && i.driverValor !== undefined && i.driverValor !== "") ? String(i.driverValor) : "Instancia única";
+            const selected = i.id === this.currentInstanceId ? "selected" : "";
+            const prefix = i.estado === "COMPLETADO" ? "✓ " : "";
+            return `<option value="${i.id}" data-mt-raw="${UI.escapeHtml(raw)}" ${selected}>${prefix}${UI.escapeHtml(raw)}</option>`;
+        };
+
+        const html = `<div class="mt-instance-select-wrap">
+            <label class="mt-instance-select-label" for="mtInstanceSelect">${UI.escapeHtml(label)}:</label>
+            <select class="mt-instance-select" id="mtInstanceSelect">
+                ${instances.map(optionHtml).join("")}
+            </select>
         </div>`;
+
+        if (dim) this.loadDriverValueLabels(dim); // async, actualiza las opciones cuando llegan
+        return html;
+    },
+
+    // Descripciones de los valores del driver: busca en la definición de
+    // la dimensión un campo de tipo "descripción" (no la propia clave) y,
+    // si existe, consulta su tabla física para poder mostrar "VALOR —
+    // descripción" en el desplegable. Se cachea por dimensión.
+    driverValueLabelsCache: {},
+
+    async loadDriverValueLabels(dim) {
+        if (this.driverValueLabelsCache[dim.DIMENSION_ID]) {
+            this.applyDriverValueLabels(dim.DIMENSION_ID);
+            return;
+        }
+        try {
+            const rows = await Provider.runQuery(`
+                SELECT CAMPOS_JSON FROM ${Provider.qualifyControl("DIMENSIONES")}
+                WHERE DIMENSION_ID = '${Provider.esc(dim.DIMENSION_ID)}'`);
+            const fields = rows.length ? JSON.parse(rows[0].CAMPOS_JSON || "[]") : [];
+            const keyCol = Provider.toIdentifier(dim.DIMENSION);
+            const descField = fields.find(f => Provider.toIdentifier(f.name) !== keyCol && /desc/i.test(f.name));
+            if (!descField) return; // sin campo de descripción: se deja solo el valor
+
+            const descCol = Provider.toIdentifier(descField.name);
+            const fullTable = Provider.qualify(this.project.DATASET, dim.TABLA);
+            const valRows = await Provider.runQuery(`SELECT DISTINCT ${keyCol} AS V, ${descCol} AS D FROM ${fullTable}`);
+            const map = {};
+            valRows.forEach(r => { map[String(r.V)] = r.D || ""; });
+            this.driverValueLabelsCache[dim.DIMENSION_ID] = map;
+            this.applyDriverValueLabels(dim.DIMENSION_ID);
+        } catch (err) {
+            console.error("No se pudieron cargar las descripciones del driver:", err);
+        }
+    },
+
+    applyDriverValueLabels(dimensionId) {
+        const map = this.driverValueLabelsCache[dimensionId];
+        const select = document.getElementById("mtInstanceSelect");
+        if (!map || !select) return;
+        select.querySelectorAll("option[data-mt-raw]").forEach(opt => {
+            const raw = opt.dataset.mtRaw;
+            const desc = map[raw];
+            const prefix = opt.textContent.startsWith("✓") ? "✓ " : "";
+            opt.textContent = desc ? `${prefix}${raw} — ${desc}` : `${prefix}${raw}`;
+        });
     },
 
     // ------------------------------------------------------------
-    // Panel de la instancia seleccionada: solo estado + acción. Sin
-    // responsable/revisor/fechas — esto es la pantalla de la persona
+    // Acciones de la instancia seleccionada, a la altura del título del
+    // paso (a la derecha), sin caja aparte ni badge de estado — el
+    // check ✓ en la cadena de pasos ya indica lo que está completado.
+    // Sin responsable/revisor/fechas: esto es la pantalla de la persona
     // asignada, no necesita verse a sí misma en una ficha.
     // ------------------------------------------------------------
     renderInstancePanel(step, inst) {
         const panel = document.getElementById("mtInstancePanel");
         if (!inst) { panel.innerHTML = ""; return; }
 
-        const estadoInfo = this.ESTADOS[inst.estado] || this.ESTADOS.PENDIENTE;
         const isResponsible = this.emailInList(inst.asignado, this.myEmail);
         const isReviewer = this.emailInList(inst.revisor, this.myEmail);
 
@@ -406,7 +470,7 @@ const MyTasks = {
         if (inst.estado === "BLOQUEADO") {
             controls = `<span class="form-hint">Se desbloqueará al completarse el paso anterior.</span>`;
         } else if (inst.estado === "COMPLETADO") {
-            controls = `<span class="form-hint">Instancia completada.</span>`;
+            controls = `<span class="mt-step-done">✓ Completado</span>`;
         } else if (inst.estado === "EN_REVISION") {
             controls = isReviewer
                 ? `<button type="button" class="btn btn-primary btn-sm" data-mt-action="approve">Aprobar</button>
@@ -423,11 +487,7 @@ const MyTasks = {
             controls = `<span class="form-hint">Sin acciones disponibles: no eres el responsable de esta instancia.</span>`;
         }
 
-        panel.innerHTML = `
-            <div class="mt-instance-panel">
-                <span class="table-tag ${estadoInfo.cls}">${estadoInfo.label}</span>
-                <div class="mt-instance-panel-controls">${controls}</div>
-            </div>`;
+        panel.innerHTML = controls;
 
         panel.querySelectorAll("[data-mt-action]").forEach(btn => {
             btn.addEventListener("click", () => this.transition(inst, step, btn.dataset.mtAction));
@@ -545,8 +605,9 @@ const MyTasks = {
         const detail = document.getElementById("mtBlockDetail");
         if (!block) { detail.innerHTML = ""; return; }
 
+        // Sin cabecera con el nombre del bloque: ya se ve seleccionado en
+        // el menú de bloques de la izquierda, repetirlo aquí es redundante.
         detail.innerHTML = `
-            <div class="wf-block-detail-header"><strong>${UI.escapeHtml(block.titulo)}</strong></div>
             <div class="flow-frame-vars">
                 ${block.tareas.map(t => this.taskCardHtml(t)).join("")}
             </div>`;
