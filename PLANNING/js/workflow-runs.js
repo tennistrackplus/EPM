@@ -886,11 +886,16 @@ const WorkflowRuns = {
     },
 
     // Botones Play / Stop / Restablecer: fijan directamente el estado de
-    // la instancia a En curso / Suspendido / Pendiente. El botón activo
-    // (el que coincide con el estado actual) queda resaltado.
+    // la instancia a En curso / Suspendido / Pendiente. Play y Stop
+    // representan un estado persistente, así que el botón que coincide
+    // con el estado actual queda resaltado. Restablecer es una ACCIÓN
+    // puntual (vuelve a Pendiente), no un estado que se deba mostrar
+    // marcado, así que nunca se resalta a sí mismo: al pulsarlo los 3
+    // botones quedan sin marcar.
     instControlsHtml(inst, disabled) {
+        const HIGHLIGHTABLE = ["EN_CURSO", "SUSPENDIDO"];
         const mk = (estado, icon, title) => `
-            <button type="button" class="wf-inst-ctrl-btn ${inst.estado === estado ? "is-active is-active--" + estado.toLowerCase() : ""}"
+            <button type="button" class="wf-inst-ctrl-btn ${HIGHLIGHTABLE.includes(estado) && inst.estado === estado ? "is-active is-active--" + estado.toLowerCase() : ""}"
                     data-inst-set="${estado}:${inst.id}" title="${title}" ${disabled ? "disabled" : ""}>${icon}</button>`;
         return `<div class="wf-inst-controls">
             ${mk("EN_CURSO", "▶", "Poner en curso")}
