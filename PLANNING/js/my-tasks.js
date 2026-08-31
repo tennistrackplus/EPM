@@ -97,28 +97,56 @@ const MyTasks = {
         }
 
         container.innerHTML = `
-            <div class="mt-selectors">
-                <div class="form-group">
-                    <label>Workflow</label>
-                    <select id="mtWorkflowSelect"></select>
-                </div>
-                <div class="form-group">
-                    <label>Ejecución</label>
-                    <select id="mtRunSelect"></select>
-                </div>
-            </div>
-            <div class="wf-run-steps" id="mtChainWrap"></div>
-            <div id="mtStepBody"></div>`;
-
-        document.getElementById("mtWorkflowSelect").innerHTML = this.workflowsOverview.map(w => `
-            <option value="${w.id}">${UI.escapeHtml(w.name)}${w.pending ? ` — ${w.pending} pendiente${w.pending === 1 ? "" : "s"}` : " — al día"}</option>
-        `).join("");
-        document.getElementById("mtWorkflowSelect").addEventListener("change", (e) => this.selectWorkflow(e.target.value));
-        document.getElementById("mtRunSelect").addEventListener("change", (e) => this.selectRun(e.target.value));
+            <nav class="admin-menu mt-menu" id="mtMenu"></nav>
+            <div class="admin-content mt-content">
+                <div class="flow-part-header"><strong>Pasos del workflow</strong></div>
+                <div class="flow-chain-wrap" id="mtChainWrap"></div>
+                <div id="mtStepBody"></div>
+            </div>`;
 
         const firstWithPending = this.workflowsOverview.find(w => w.pending > 0) || this.workflowsOverview[0];
-        document.getElementById("mtWorkflowSelect").value = firstWithPending.id;
         await this.selectWorkflow(firstWithPending.id);
+    },
+
+    // ------------------------------------------------------------
+    // Menú lateral (mismo look que el menú de Administración): lista de
+    // mis workflows y, bajo el que está seleccionado, sus ejecuciones
+    // indentadas. Sin estado "en curso"/"pendiente" en texto — solo un
+    // circulito con el nº de tareas pendientes cuando hay alguna.
+    // ------------------------------------------------------------
+    renderMenu() {
+        const menu = document.getElementById("mtMenu");
+        if (!menu) return;
+
+        menu.innerHTML = this.workflowsOverview.map(w => {
+            const active = w.id === this.currentWorkflowId;
+            const runsHtml = (active && this.runsForWorkflow && this.runsForWorkflow.length)
+                ? `<div class="mt-run-list">${this.runsForWorkflow.map(r => {
+                    const runActive = r.id === this.currentRunId;
+                    return `
+                        <button type="button" class="mt-run-item ${runActive ? "is-active" : ""}" data-mt-run="${r.id}">
+                            <span class="mt-run-name">${UI.escapeHtml(r.name)}</span>
+                            ${r.pending ? `<span class="mt-run-badge">${r.pending}</span>` : ""}
+                        </button>`;
+                }).join("")}</div>`
+                : "";
+            return `
+                <button type="button" class="admin-menu-item ${active ? "active" : ""}" data-mt-workflow="${w.id}">
+                    <span class="admin-menu-icon">⛓</span>${UI.escapeHtml(w.name)}
+                </button>
+                ${runsHtml}`;
+        }).join("");
+
+        menu.querySelectorAll("[data-mt-workflow]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                if (btn.dataset.mtWorkflow !== this.currentWorkflowId) this.selectWorkflow(btn.dataset.mtWorkflow);
+            });
+        });
+        menu.querySelectorAll("[data-mt-run]").forEach(btn => {
+            btn.addEventListener("click", () => {
+                if (btn.dataset.mtRun !== this.currentRunId) this.selectRun(btn.dataset.mtRun);
+            });
+        });
     },
 
     async loadMyEmail() {
@@ -203,12 +231,12 @@ const MyTasks = {
         this.currentRunId = null;
         this.currentStepId = null;
         this.currentInstanceId = null;
+        this.runsForWorkflow = [];
 
-        const runSelect = document.getElementById("mtRunSelect");
+        this.renderMenu();
         document.getElementById("mtChainWrap").innerHTML = "";
         const stepBody = document.getElementById("mtStepBody");
         stepBody.innerHTML = `<div class="module-empty"><span class="spinner"></span> Cargando workflow...</div>`;
-        runSelect.innerHTML = "";
 
         try {
             this.workflowDetail = await Workflows.loadDetail(id);
@@ -222,9 +250,7 @@ const MyTasks = {
         }
 
         this.runsForWorkflow = this.groupRuns(id);
-        runSelect.innerHTML = this.runsForWorkflow.map(r => `
-            <option value="${r.id}">${UI.escapeHtml(r.name)} — ${UI.escapeHtml(this.RUN_ESTADOS[r.estado] || r.estado)}${r.pending ? ` (${r.pending} pendiente${r.pending === 1 ? "" : "s"})` : " (al día)"}</option>
-        `).join("");
+        this.renderMenu();
 
         if (!this.runsForWorkflow.length) {
             stepBody.innerHTML = `<div class="module-empty">No tienes tareas asignadas en ninguna ejecución de este workflow.</div>`;
@@ -234,7 +260,6 @@ const MyTasks = {
         const pick = this.runsForWorkflow.find(r => r.estado === "EN_CURSO" && r.pending > 0)
             || this.runsForWorkflow.find(r => r.pending > 0)
             || this.runsForWorkflow[0];
-        runSelect.value = pick.id;
         this.selectRun(pick.id);
     },
 
@@ -247,14 +272,15 @@ const MyTasks = {
         this.currentStepId = null;
         this.currentInstanceId = null;
         this.runInstances = this.overviewRows.filter(r => r.runId === id);
+        this.renderMenu();
         this.renderChain();
     },
 
     // ------------------------------------------------------------
-    // Cadena de pasos (mismo aspecto visual que en Administración,
-    // wf-run-steps/wf-run-step-tab) pero solo con los pasos donde tengo
-    // al menos una instancia asignada, numerados según su posición REAL
-    // en el workflow para no perder el contexto.
+    // Cadena de pasos (mismas tarjetas .flow-chain-card que el editor de
+    // Workflows, solo con el nombre — sin meta ni badges) pero limitada a
+    // los pasos donde tengo al menos una instancia asignada, numerados
+    // según su posición REAL en el workflow para no perder el contexto.
     // ------------------------------------------------------------
     renderChain() {
         const wrap = document.getElementById("mtChainWrap");
@@ -276,21 +302,14 @@ const MyTasks = {
 
         wrap.innerHTML = relevant.map(({ step, idx }, i) => {
             const mine = this.runInstances.filter(inst => inst.pasoId === step.id);
-            const done = mine.filter(inst => inst.estado === "COMPLETADO").length;
-            const allDone = mine.length > 0 && done === mine.length;
+            const allDone = mine.length > 0 && mine.every(inst => inst.estado === "COMPLETADO");
             const selected = step.id === this.currentStepId;
             const card = `
-                <div class="wf-run-step-tab ${selected ? "is-selected" : ""} ${allDone ? "is-done" : ""}" data-mt-step="${step.id}">
-                    <span class="wf-run-step-num">${allDone ? "✓" : (idx + 1) + "."}</span>
-                    <div class="wf-run-step-info">
-                        <span class="wf-run-step-name">${UI.escapeHtml(step.name)}</span>
-                        <span class="wf-run-chain-badge ${allDone ? "wf-run-chain-badge--assigned" : "wf-run-chain-badge--unassigned"}">
-                            <span class="wf-run-chain-badge-dot"></span>${done}/${mine.length} completada${mine.length === 1 ? "" : "s"}
-                        </span>
-                    </div>
+                <div class="flow-chain-card mt-step-card ${selected ? "is-selected" : ""} ${allDone ? "is-done" : ""}" data-mt-step="${step.id}" title="${UI.escapeHtml(step.name)}">
+                    <div class="flow-chain-card-name">${allDone ? "✓" : (idx + 1) + "."} ${UI.escapeHtml(step.name)}</div>
                 </div>`;
-            const connector = i < relevant.length - 1 ? `<div class="wf-run-step-connector"></div>` : "";
-            return card + connector;
+            const arrow = i < relevant.length - 1 ? `<div class="flow-chain-arrow">→</div>` : "";
+            return card + arrow;
         }).join("");
 
         wrap.querySelectorAll("[data-mt-step]").forEach(card => {
@@ -322,8 +341,8 @@ const MyTasks = {
         }
 
         wrap.innerHTML = `
-            <div class="mt-step-title">
-                <h3>${UI.escapeHtml(step.name)}</h3>
+            <div class="flow-part-header mt-step-header">
+                <strong>Paso: ${UI.escapeHtml(step.name)}</strong>
                 ${step.revision ? `<span class="table-tag">Con revisión</span>` : ""}
             </div>
             ${instances.length > 1 ? this.instanceSelectorHtml(instances) : ""}
@@ -379,7 +398,12 @@ const MyTasks = {
                    <button type="button" class="btn btn-secondary btn-sm" data-mt-action="reject">Rechazar</button>`
                 : `<span class="form-hint">Pendiente de revisión.</span>`;
         } else if (isResponsible) {
-            controls = this.instControlsHtml(inst) + this.instTransitionHtml(step, inst);
+            // Un único botón de cierre — sin play/pausa/restablecer: esta
+            // pantalla es de ejecución para la persona asignada, no de
+            // administración del workflow.
+            controls = step.revision
+                ? `<button type="button" class="btn btn-primary btn-sm" data-mt-action="review">Enviar a revisión</button>`
+                : `<button type="button" class="btn btn-primary btn-sm" data-mt-action="complete">✓ Completar</button>`;
         } else {
             controls = `<span class="form-hint">Sin acciones disponibles: no eres el responsable de esta instancia.</span>`;
         }
@@ -395,54 +419,9 @@ const MyTasks = {
                 <div class="mt-instance-panel-controls">${controls}</div>
             </div>`;
 
-        panel.querySelectorAll("[data-mt-set]").forEach(btn => {
-            btn.addEventListener("click", () => this.setInstanceEstado(inst.id, btn.dataset.mtSet));
-        });
         panel.querySelectorAll("[data-mt-action]").forEach(btn => {
             btn.addEventListener("click", () => this.transition(inst, step, btn.dataset.mtAction));
         });
-    },
-
-    // Play / Stop / Restablecer — misma regla que en Administración
-    // (workflow-runs.js): Restablecer es una ACCIÓN puntual (vuelve a
-    // Pendiente), nunca se resalta a sí mismo.
-    instControlsHtml(inst) {
-        const HIGHLIGHTABLE = ["EN_CURSO", "SUSPENDIDO"];
-        const mk = (estado, icon, title) => `
-            <button type="button" class="wf-inst-ctrl-btn ${HIGHLIGHTABLE.includes(estado) && inst.estado === estado ? "is-active is-active--" + estado.toLowerCase() : ""}"
-                    data-mt-set="${estado}" title="${title}">${icon}</button>`;
-        return `<div class="wf-inst-controls">
-            ${mk("EN_CURSO", "▶", "Poner en curso")}
-            ${mk("SUSPENDIDO", "⏸", "Suspender")}
-            ${mk("PENDIENTE", "↺", "Restablecer a pendiente")}
-        </div>`;
-    },
-
-    // Cómo se completa la instancia una vez en curso: si el paso pide
-    // revisión, se envía a revisión; si no, se marca completada
-    // directamente (en Administración este botón de cierre sin revisión
-    // todavía no existe — aquí sí hace falta porque esta es la pantalla
-    // real de ejecución).
-    instTransitionHtml(step, inst) {
-        if (inst.estado !== "EN_CURSO") return "";
-        return step.revision
-            ? `<button type="button" class="btn btn-primary btn-sm" data-mt-action="review">Enviar a revisión</button>`
-            : `<button type="button" class="btn btn-primary btn-sm" data-mt-action="complete">✓ Marcar como completada</button>`;
-    },
-
-    async setInstanceEstado(instId, nuevoEstado) {
-        const inst = this.runInstances.find(i => i.id === instId);
-        if (!inst || inst.estado === nuevoEstado) return;
-        try {
-            await Provider.runQuery(`
-                UPDATE ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
-                SET ESTADO = '${Provider.esc(nuevoEstado)}'${nuevoEstado === "EN_CURSO" ? ", FECHA_INICIO = CURRENT_TIMESTAMP()" : ""}
-                WHERE INSTANCIA_ID = '${Provider.esc(instId)}'`);
-            inst.estado = nuevoEstado;
-            this.renderChain();
-        } catch (err) {
-            UI.toast("Error al actualizar el estado: " + err.message, "error");
-        }
     },
 
     async transition(inst, step, action) {
@@ -450,16 +429,23 @@ const MyTasks = {
         const nuevoEstado = map[action];
         if (!nuevoEstado) return;
         const isFinal = nuevoEstado === "COMPLETADO";
+        // La instancia puede venir de PENDIENTE directamente (ya no hay
+        // paso intermedio "en curso" en esta pantalla), así que si todavía
+        // no tenía FECHA_INICIO se registra en el mismo movimiento.
+        const setsInicio = inst.estado === "PENDIENTE";
         try {
             await Provider.runQuery(`
                 UPDATE ${Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS")}
-                SET ESTADO = '${Provider.esc(nuevoEstado)}'${isFinal ? ", FECHA_FIN = CURRENT_TIMESTAMP()" : ""}
+                SET ESTADO = '${Provider.esc(nuevoEstado)}'${setsInicio ? ", FECHA_INICIO = CURRENT_TIMESTAMP()" : ""}${isFinal ? ", FECHA_FIN = CURRENT_TIMESTAMP()" : ""}
                 WHERE INSTANCIA_ID = '${Provider.esc(inst.id)}'`);
             inst.estado = nuevoEstado;
             if (isFinal) {
                 await this.cascadeUnblock(inst.runId, step.id);
                 await this.maybeCompleteRun(inst.runId);
             }
+            this.workflowsOverview = this.groupWorkflows();
+            this.runsForWorkflow = this.groupRuns(this.currentWorkflowId);
+            this.renderMenu();
             this.renderChain();
         } catch (err) {
             UI.toast("Error al actualizar el estado: " + err.message, "error");
