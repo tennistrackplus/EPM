@@ -164,30 +164,24 @@
 .table-tag.wf-inst-status--en_curso { background: var(--color-info-light); color: var(--color-info); }
 .table-tag.wf-inst-status--suspendido { background: var(--color-warning-light); color: var(--color-warning); }
 
+/* ---------- Menú de bloques dentro del paso (mismas clases que el
+   editor, .wf-block-menu-item, pero clicables en lugar de arrastrables) ---------- */
+.mt-block-menu-item {
+    cursor: pointer;
+}
+
 /* ---------- Panel de estado + acción de la instancia seleccionada ---------- */
 .mt-instance-panel {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     flex-wrap: wrap;
     gap: 12px;
     padding: 12px 14px;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     background: var(--surface-card);
-    margin-bottom: 18px;
-}
-
-.mt-instance-panel-top {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-
-.mt-instance-meta {
-    font-size: 12.5px;
-    color: var(--text-secondary);
+    margin-bottom: 16px;
 }
 
 .mt-instance-panel-controls {
@@ -197,27 +191,7 @@
     flex-wrap: wrap;
 }
 
-/* ---------- Tareas del paso ---------- */
-.mt-tasks-title {
-    font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: var(--text-secondary);
-    margin-bottom: 8px;
-}
-
-.mt-task-block {
-    margin-bottom: 16px;
-}
-
-.mt-task-block-title {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin-bottom: 6px;
-}
-
+/* ---------- Tarjeta de tarea (dentro de .wf-block-detail) ---------- */
 .mt-task-card {
     cursor: pointer;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
