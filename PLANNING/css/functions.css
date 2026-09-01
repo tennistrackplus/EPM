@@ -1,0 +1,130 @@
+/* ============================================================
+   FUNCIONES (Copy / Delete / Move / Revalue / Distribution)
+   ============================================================ */
+
+.func-filter-block,
+.func-measures-block,
+.func-revalue-block {
+    padding: 0 16px 16px;
+}
+
+.func-filter-table {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.func-filter-row {
+    display: grid;
+    grid-template-columns: 200px 220px 1fr;
+    gap: 10px;
+    align-items: center;
+    padding: 8px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background-color: var(--surface-card);
+}
+
+.func-filter-dim {
+    font-weight: 600;
+    font-size: var(--fs-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.func-filter-mode {
+    padding: 6px 8px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background-color: var(--surface-card);
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+}
+
+.func-filter-detail {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.func-filter-summary {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.func-filter-detail select {
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background-color: var(--surface-card);
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+}
+
+/* Medidas: chips de checkbox, igual espíritu que los selectores de la app. */
+.func-measure-all {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+
+.func-measures-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.func-measure-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    background-color: var(--surface-card);
+    font-size: var(--fs-sm);
+    cursor: pointer;
+}
+
+.func-measure-chip:has(input:checked) {
+    border-color: var(--brand-primary);
+    background: var(--brand-primary-light);
+    color: var(--brand-primary-hover);
+}
+
+/* Incremento de Revalue */
+.func-revalue-row {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    max-width: 560px;
+}
+
+.func-revalue-row select,
+.func-revalue-row input {
+    padding: 6px 8px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background-color: var(--surface-card);
+    color: var(--text-primary);
+    font-size: var(--fs-sm);
+}
+
+.func-revalue-row input[type="number"] {
+    flex: 1;
+    min-width: 0;
+}
+
+.func-revalue-row select {
+    flex: 0 0 auto;
+}

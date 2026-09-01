@@ -269,6 +269,21 @@
     padding-bottom: 10px;
 }
 
+/* Título de la pantalla (editable in situ, como el título de un modal) en
+   lugar del antiguo <input> + texto descriptivo debajo. */
+.flow-part-header--screen .modal-title-editable--inline {
+    flex: 1;
+    min-width: 0;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .flow-part-toggle {
     display: flex;
     align-items: center;
@@ -282,6 +297,31 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-secondary);
+}
+
+/* Botón "quitar" de un bloque de pantalla (variable/texto/espacio/línea/frame):
+   antes era un <button class="field-remove"> sin estilo propio fuera de un
+   .field-row (fields-builder), así que salía como un botón de navegador. */
+.flow-block-remove {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 26px;
+    height: 26px;
+    border: none;
+    background: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 15px;
+    line-height: 1;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.flow-block-remove:hover {
+    background-color: var(--color-danger-light);
+    color: var(--color-danger);
 }
 
 .flow-screen-toolbar-mini {
@@ -443,17 +483,15 @@
 }
 
 .flow-var-mode-badge {
-    display: inline-block;
-    padding: 1px 6px;
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-    color: var(--brand-primary-hover);
-    background-color: var(--brand-primary-light);
-    border-radius: var(--radius-pill);
+    /* deprecated: la previsualización de una variable ya no se resume en un
+       badge de modo — se pinta el widget real (screenVarFieldHtml). */
+    display: none;
 }
 
-.flow-field-preview input {
+.flow-field-preview input[type="text"],
+.flow-field-preview input[type="number"],
+.flow-field-preview input[type="date"],
+.flow-field-preview input[type="datetime-local"] {
     width: 100%;
     padding: 6px 8px;
     border: 1px solid var(--border-default);
@@ -461,6 +499,7 @@
     background-color: var(--surface-card);
     color: var(--text-muted);
     font-size: var(--fs-sm);
+    box-sizing: border-box;
 }
 
 .flow-screen-var-chip {

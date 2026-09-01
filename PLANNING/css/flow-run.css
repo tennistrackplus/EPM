@@ -5,7 +5,7 @@
 .flow-run-wrap {
     flex: 1;
     width: 100%;
-    max-width: 960px;
+    max-width: 1400px;
     margin: 0 auto;
     padding: var(--space-6) var(--space-6) 48px;
     box-sizing: border-box;
@@ -59,16 +59,35 @@
 .flow-screen-blocks--run {
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     gap: var(--space-4);
-    max-width: 520px;
-    margin: 0 auto var(--space-6);
+    width: 100%;
+    margin: 0 0 var(--space-6);
 }
 
 .flow-screen-block--static {
+    width: 100%;
+    max-width: 420px;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: none;
+}
+
+/* Un Frame sigue agrupando visualmente sus variables (es un elemento que el
+   diseñador ha añadido a propósito); lo que se quita es el recuadro gris que
+   salía en TODAS las variables sueltas, no el del frame en sí. */
+.flow-screen-block--frame.flow-screen-block--static {
+    max-width: 560px;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
     padding: var(--space-4);
     background: var(--surface-sunken);
+}
+
+.flow-screen-block--frame.flow-screen-block--static .flow-frame-vars {
+    gap: var(--space-4);
+    margin-top: var(--space-3);
 }
 
 .flow-screen-block--text.flow-screen-block--static {
@@ -88,6 +107,8 @@
     border: none;
     background: none;
     padding: var(--space-2) 0;
+    width: 100%;
+    max-width: 560px;
 }
 
 .flow-screen-block--line.flow-screen-block--static hr {
@@ -108,11 +129,12 @@
 .flow-field-preview input[type="date"],
 .flow-field-preview input[type="datetime-local"] {
     width: 100%;
-    padding: var(--space-3);
+    padding: 6px 8px;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
-    font-size: 14px;
+    font-size: var(--fs-sm);
     background-color: var(--surface-card);
+    box-sizing: border-box;
 }
 
 .flow-field-preview select {
@@ -123,6 +145,8 @@
     background-color: var(--surface-card);
     color: var(--text-primary);
     font-size: var(--fs-sm);
+    box-sizing: border-box;
+    height: 33px;
 }
 
 .flow-field-preview--checkbox {
@@ -228,23 +252,40 @@
 }
 
 .flow-search-input {
-    display: flex;
-    align-items: center;
-    gap: 4px;
+    position: relative;
+    display: block;
     flex: 1;
     min-width: 0;
 }
 
 .flow-search-input input {
-    flex: 1;
-    min-width: 0;
+    width: 100%;
+    padding-right: 30px;
+    box-sizing: border-box;
 }
 
 .flow-search-trigger {
+    position: absolute;
+    top: 50%;
+    right: 4px;
+    transform: translateY(-50%);
     border: none;
     background: none;
     cursor: pointer;
-    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    font-size: 13px;
+    color: var(--text-muted);
+    border-radius: var(--radius-sm);
+}
+
+.flow-search-trigger:hover {
+    color: var(--brand-primary);
+    background-color: var(--brand-primary-light);
 }
 
 /* --- Editor de select-options (rango / varios valores / cualquiera) -- */
