@@ -57,17 +57,40 @@ const DracoConfig = {
     // Alternativa para BigQuery (sin stored procs Python nativos): endpoint
     // HTTP propio (Cloud Run / Cloud Function) que envuelva flow_runner.py.
     // Recibe POST { flujo_id, variables, run_id } y devuelve el mismo JSON
-    // que flow_runner.run_flow(). Déjalo vacío si usas Snowflake.
+    // que flow_runner.run_flow(). Ver python/cloud_run_main.py (ya viene
+    // listo para desplegar) y el paso a paso en README.md, sección
+    // "Interfaces de fichero en BigQuery". Déjalo vacío si usas Snowflake.
+    // Ejemplo tras desplegar en Cloud Run:
+    //   flowRunnerHttpEndpoint: "https://draco-flow-runner-xxxxx-ew.a.run.app",
     flowRunnerHttpEndpoint: "",
 
-    // Sube un fichero local (objeto File del navegador) a la ruta de storage
-    // indicada. SOLO se usa cuando Provider.key() !== "snowflake" (BigQuery
-    // u otros): debes adaptarlo a tu backend, URL firmada de GCS/S3, un
-    // proxy propio (como proxy/cloudflare-worker.js), etc. Recibe
-    // (storagePath, file) y debe devolver la URL a la que hacer PUT del
-    // contenido del fichero. Para Snowflake NO hace falta configurar esto:
-    // ver el bloque de abajo.
-    storageUploadUrlBuilder: null, // (storagePath, file) => "https://..."
+    // ---------------------------------------------------------
+    // Subida de ficheros a BigQuery (bucket de Google Cloud Storage)
+    // ---------------------------------------------------------
+    // Nombre del bucket de GCS donde js/storage.js sube el fichero
+    // DIRECTAMENTE desde el navegador (ver Storage.uploadToGcsBucket en
+    // js/storage.js), reutilizando el mismo token OAuth ya obtenido para
+    // BigQuery (scope "cloud-platform"): no hace falta URL firmada ni
+    // backend intermedio. Solo hay que: 1) crear el bucket, 2) darle al
+    // usuario (o grupo) que usa Planning el rol "Storage Object Creator"
+    // (o superior) sobre ese bucket, y 3) que python/cloud_run_main.py
+    // tenga la variable de entorno UPLOAD_BUCKET con el MISMO nombre, para
+    // que el flujo pueda luego leer el fichero desde ahí. Paso a paso
+    // completo en README.md, sección "Interfaces de fichero en BigQuery".
+    // Déjalo vacío si usas Snowflake, o si prefieres tu propio esquema de
+    // subida (ver storageUploadUrlBuilder más abajo).
+    bigqueryUploadBucket: "", // p.ej. "draco-landing-mi-proyecto"
+
+    // Alternativa a bigqueryUploadBucket: función que TÚ implementas para
+    // subir el fichero a tu propio backend (URL firmada de GCS/S3, un
+    // proxy propio como proxy/cloudflare-worker.js, etc.). SOLO se usa
+    // cuando Provider.key() !== "snowflake" y bigqueryUploadBucket está
+    // vacío. Recibe (storagePath, file) y debe devolver, o bien un string
+    // con la URL a la que hacer PUT del contenido del fichero, o bien un
+    // objeto { url, headers } si necesitas cabeceras extra (p.ej.
+    // Authorization). Para Snowflake NO hace falta configurar nada de
+    // esto: ver el bloque de abajo.
+    storageUploadUrlBuilder: null, // (storagePath, file) => "https://..." | { url, headers }
 
     // ---------------------------------------------------------
     // Subida de ficheros a Snowflake (js/storage.js + SP_FINALIZE_FILE_UPLOAD)

@@ -322,6 +322,40 @@ const DracoSchema = {
                     USUARIO STRING,
                     FECHA_CREACION TIMESTAMP,
                     FECHA_MODIFICACION TIMESTAMP
+                )`,
+            // Funciones: operaciones predefinidas (Copy/Delete/Move/Revalue/
+            // Distribution) sobre un cubo del proyecto. Igual que
+            // ACTUALIZACIONES, el diseño (pantalla de variables + filtros de
+            // origen/destino + medidas) se guarda como JSON en una única fila
+            // de control. Ver js/functions.js.
+            FUNCIONES: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    FUNCION_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    NOMBRE STRING NOT NULL,
+                    DESCRIPCION STRING,
+                    TIPO STRING NOT NULL,        -- COPY | DELETE | MOVE | REVALUE | DISTRIBUTION
+                    CUBO_ID STRING NOT NULL,
+                    CUBO_NOMBRE STRING,
+                    CUBO_TABLA STRING NOT NULL,
+                    VARIABLES_JSON STRING,       -- pantalla de variables (mismo formato que ACTUALIZACIONES)
+                    CONFIG_JSON STRING,          -- {origin, dest, measures, revalue} según TIPO
+                    USUARIO STRING,
+                    FECHA_CREACION TIMESTAMP,
+                    FECHA_MODIFICACION TIMESTAMP
+                )`,
+            FUNCIONES_RUNS: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    RUN_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    FUNCION_ID STRING NOT NULL,
+                    ESTADO STRING NOT NULL,      -- EN_CURSO | OK | ERROR
+                    SQL_TEXT STRING,
+                    VARIABLES_JSON STRING,
+                    MENSAJE STRING,
+                    USUARIO STRING,
+                    FECHA_INICIO TIMESTAMP,
+                    FECHA_FIN TIMESTAMP
                 )`
         };
         return ddl[table];
@@ -334,7 +368,7 @@ const DracoSchema = {
              "WORKFLOWS", "WORKFLOWS_PASOS", "WORKFLOWS_PASOS_DRIVER_VALORES", "WORKFLOWS_PASOS_VARIABLES",
              "WORKFLOWS_PASOS_BLOQUES", "WORKFLOWS_PASOS_TAREAS", "WORKFLOWS_PASOS_TAREAS_VALORES",
              "WORKFLOWS_RUNS", "WORKFLOWS_RUNS_INSTANCIAS", "WORKFLOWS_RUNS_VARIABLES",
-             "ACTUALIZACIONES"],
+             "ACTUALIZACIONES", "FUNCIONES", "FUNCIONES_RUNS"],
 
     /**
      * Comprobación ligera para la puerta de instalación (usada hoy solo

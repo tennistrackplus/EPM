@@ -223,12 +223,12 @@ const Draco = {
             actualizaciones: () => TableUpdates.render(container, this.currentProject),
             cargas: () => Loads.render(container, this.currentProject),
             "flujos-carga": () => Flows.render(container, this.currentProject),
+            funciones: () => Functions.render(container, this.currentProject),
             workflows: () => Workflows.render(container, this.currentProject),
             widgets: () => Widgets.render(container, this.currentProject),
         };
 
         const labels = {
-            funciones: ["Funciones", "ƒ"],
             "flujos-proceso": ["Flujos de proceso", "⟲"],
             roles: ["Roles", "☺"]
         };

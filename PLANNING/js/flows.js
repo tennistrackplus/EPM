@@ -39,6 +39,7 @@ const Flows = {
     interfaces: [],
     cubes: [],
     dimensionsCache: [],
+    previewVarOptions: {},
     editing: null,
     editingIsNew: true,
     collapsed: { automatico: false, manual: false },
@@ -177,7 +178,13 @@ const Flows = {
             if (b.TIPO === "ULINE") {
                 return { id: b.BLOQUE_ID, kind: "line" };
             }
-            return { id: b.BLOQUE_ID, kind: "frame", title: b.TITULO || "Frame", variables: varsByBloque[b.BLOQUE_ID] || [] };
+            // FRAME: sus bloques internos (variable/texto/espacio/línea) van
+            // serializados en JSON en su propio CONTENIDO. Si viene vacío
+            // (frames guardados con el formato antiguo, solo variables sueltas
+            // vía FLUJOS_SCREEN_VARIABLES), se reconstruye desde ahí.
+            const innerBlocks = this.safeParse(b.CONTENIDO, null)
+                || (varsByBloque[b.BLOQUE_ID] || []).map(v => ({ id: Provider.newId(), kind: "variable", variable: v }));
+            return { id: b.BLOQUE_ID, kind: "frame", title: b.TITULO || "Frame", blocks: innerBlocks };
         });
 
         let schedule = null;
@@ -533,6 +540,7 @@ const Flows = {
         this.renderScreenBlock();
         this.renderChainBlock();
         this.renderMappingBlock();
+        this.resolvePreviewVarOptions().then(() => this.renderScreenBlocksList());
     },
 
     updateModalHeader() {
@@ -703,8 +711,8 @@ const Flows = {
             <div class="flow-part-header flow-part-header--screen">
                 <button type="button" class="flow-part-toggle" id="btnToggleScreen">
                     <span class="flow-group-caret ${this.screenCollapsed ? "is-collapsed" : ""}">▾</span>
-                    <span>Pantalla de entrada de variables</span>
                 </button>
+                <h4 id="screenTitle" class="modal-title-editable modal-title-editable--inline" contenteditable="true" spellcheck="false" title="Clic para renombrar">${UI.escapeHtml(f.screen.title || "Pantalla de entrada de variables")}</h4>
                 <div class="flow-screen-toolbar-mini">
                     <button type="button" class="flow-mini-btn" id="btnAddScreenVar" title="Añadir variable">+ Var</button>
                     <button type="button" class="flow-mini-btn" id="btnAddScreenFrame" title="Añadir frame">+ Frame</button>
@@ -714,10 +722,6 @@ const Flows = {
                 </div>
             </div>
             <div class="flow-screen-box ${this.screenCollapsed ? "is-collapsed" : ""}" id="flowScreenBox">
-                <div class="form-group">
-                    <label>Título de la pantalla</label>
-                    <input type="text" id="screenTitle" placeholder="Ej. Parámetros de carga mensual" value="${UI.escapeHtml(f.screen.title || "")}">
-                </div>
                 <div class="flow-screen-blocks" id="flowScreenBlocks"></div>
             </div>`;
 
@@ -728,17 +732,19 @@ const Flows = {
             part.querySelector(".flow-group-caret").classList.toggle("is-collapsed", this.screenCollapsed);
         });
 
-        document.getElementById("screenTitle").addEventListener("input", (e) => { f.screen.title = e.target.value; });
+        document.getElementById("screenTitle").addEventListener("input", (e) => { f.screen.title = e.target.textContent.trim(); });
 
         document.getElementById("btnAddScreenVar").addEventListener("click", async () => {
             const v = await UI.openScreenVariableModal({ dimensions: this.dimensionsCache });
             if (!v) return;
-            f.screen.blocks.push({ id: Provider.newId(), kind: "variable", variable: { id: Provider.newId(), ...v } });
+            const newVar = { id: Provider.newId(), ...v };
+            f.screen.blocks.push({ id: Provider.newId(), kind: "variable", variable: newVar });
+            await this.resolvePreviewVarOptions(newVar);
             this.renderScreenBlocksList();
             this.renderMappingBlock();
         });
         document.getElementById("btnAddScreenFrame").addEventListener("click", () => {
-            f.screen.blocks.push({ id: Provider.newId(), kind: "frame", title: "Nuevo frame", variables: [] });
+            f.screen.blocks.push({ id: Provider.newId(), kind: "frame", title: "Nuevo frame", blocks: [] });
             this.renderScreenBlocksList();
         });
         document.getElementById("btnAddScreenText").addEventListener("click", async () => {
@@ -781,7 +787,7 @@ const Flows = {
                     <div class="flow-field-preview-click" data-edit-var="${idx}" title="Clic para configurar la variable">
                         ${this.fieldPreviewHtml(b.variable)}
                     </div>
-                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                    <button type="button" class="flow-block-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
                 </div>`;
         }
         if (b.kind === "text") {
@@ -789,7 +795,7 @@ const Flows = {
                 <div class="flow-screen-block flow-screen-block--text" draggable="true" data-block-idx="${idx}">
                     <span class="load-drag-handle">⠿</span>
                     <div class="flow-screen-text-content" data-edit-text="${idx}" title="Clic para editar">${UI.renderFormattedText(b.text)}</div>
-                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                    <button type="button" class="flow-block-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
                 </div>`;
         }
         if (b.kind === "skip") {
@@ -797,7 +803,7 @@ const Flows = {
                 <div class="flow-screen-block flow-screen-block--skip" draggable="true" data-block-idx="${idx}">
                     <span class="load-drag-handle">⠿</span>
                     <div class="flow-screen-skip-marker">· · · espacio en blanco · · ·</div>
-                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                    <button type="button" class="flow-block-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
                 </div>`;
         }
         if (b.kind === "line") {
@@ -805,41 +811,93 @@ const Flows = {
                 <div class="flow-screen-block flow-screen-block--line" draggable="true" data-block-idx="${idx}">
                     <span class="load-drag-handle">⠿</span>
                     <div class="flow-screen-line-marker"><hr></div>
-                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
+                    <button type="button" class="flow-block-remove" data-remove-block="${idx}" title="Eliminar">✕</button>
                 </div>`;
         }
-        // frame
+        // frame: puede contener variable / texto / espacio / línea (no frames anidados)
+        const inner = b.blocks || [];
         return `
             <div class="flow-screen-block flow-screen-block--frame" draggable="true" data-block-idx="${idx}">
                 <div class="flow-frame-header">
                     <span class="load-drag-handle">⠿</span>
                     <strong data-edit-frame-title="${idx}" title="Clic para renombrar">${UI.escapeHtml(b.title || "Frame")}</strong>
                     <span class="load-fn-toolbar-spacer"></span>
-                    <button type="button" class="flow-mini-btn" data-add-frame-var="${idx}">+ Var</button>
-                    <button type="button" class="field-remove" data-remove-block="${idx}" title="Eliminar frame">✕</button>
+                    <button type="button" class="flow-mini-btn" data-add-frame-var="${idx}" title="Añadir variable">+ Var</button>
+                    <button type="button" class="flow-mini-btn" data-add-frame-text="${idx}" title="Añadir texto">+ Texto</button>
+                    <button type="button" class="flow-mini-btn" data-add-frame-skip="${idx}" title="Añadir espacio en blanco">+ Espacio</button>
+                    <button type="button" class="flow-mini-btn" data-add-frame-line="${idx}" title="Añadir línea separadora">+ Línea</button>
+                    <button type="button" class="flow-block-remove" data-remove-block="${idx}" title="Eliminar frame">✕</button>
                 </div>
                 <div class="flow-frame-vars" data-frame-idx="${idx}">
-                    ${b.variables.length ? b.variables.map((v, vi) => `
-                        <div class="flow-frame-var-row" draggable="true" data-frame-idx="${idx}" data-var-idx="${vi}">
-                            <span class="load-drag-handle">⠿</span>
-                            <div class="flow-field-preview-click" data-edit-frame-var="${idx}:${vi}" title="Clic para configurar la variable">
-                                ${this.fieldPreviewHtml(v)}
-                            </div>
-                            <button type="button" class="field-remove" data-remove-frame-var="${idx}:${vi}" title="Eliminar">✕</button>
-                        </div>`).join("") : `<div class="hierarchy-pool-empty">Sin variables en este frame.</div>`}
+                    ${inner.length ? inner.map((fb, vi) => this.frameSubBlockHtml(fb, idx, vi)).join("") : `<div class="hierarchy-pool-empty">Sin contenido en este frame.</div>`}
                 </div>
             </div>`;
     },
 
-    /** Previsualización de una variable de pantalla tal y como se vería de verdad: etiqueta + input real, sin recuadro alrededor. */
-    fieldPreviewHtml(v) {
-        const modeLabels = { rango: "Rango", multiple: "Varios valores", cualquiera: "Select-options" };
-        const modeBadge = v.selectMode && modeLabels[v.selectMode] ? `<span class="flow-var-mode-badge">${modeLabels[v.selectMode]}</span>` : "";
+    /** Bloque dentro de un frame: variable / texto / espacio / línea. */
+    frameSubBlockHtml(fb, frameIdx, subIdx) {
+        if (fb.kind === "text") {
+            return `
+                <div class="flow-frame-var-row" draggable="true" data-frame-idx="${frameIdx}" data-sub-idx="${subIdx}">
+                    <span class="load-drag-handle">⠿</span>
+                    <div class="flow-screen-text-content" data-edit-frame-text="${frameIdx}:${subIdx}" title="Clic para editar">${UI.renderFormattedText(fb.text)}</div>
+                    <button type="button" class="flow-block-remove" data-remove-frame-block="${frameIdx}:${subIdx}" title="Eliminar">✕</button>
+                </div>`;
+        }
+        if (fb.kind === "skip") {
+            return `
+                <div class="flow-frame-var-row" draggable="true" data-frame-idx="${frameIdx}" data-sub-idx="${subIdx}">
+                    <span class="load-drag-handle">⠿</span>
+                    <div class="flow-screen-skip-marker">· · · espacio en blanco · · ·</div>
+                    <button type="button" class="flow-block-remove" data-remove-frame-block="${frameIdx}:${subIdx}" title="Eliminar">✕</button>
+                </div>`;
+        }
+        if (fb.kind === "line") {
+            return `
+                <div class="flow-frame-var-row" draggable="true" data-frame-idx="${frameIdx}" data-sub-idx="${subIdx}">
+                    <span class="load-drag-handle">⠿</span>
+                    <div class="flow-screen-line-marker"><hr></div>
+                    <button type="button" class="flow-block-remove" data-remove-frame-block="${frameIdx}:${subIdx}" title="Eliminar">✕</button>
+                </div>`;
+        }
+        // variable
         return `
-            <div class="flow-field-preview">
-                <label>${UI.escapeHtml(v.label || v.name)}${modeBadge}</label>
-                <input type="text" disabled placeholder="${UI.escapeHtml(v.name)}">
+            <div class="flow-frame-var-row" draggable="true" data-frame-idx="${frameIdx}" data-sub-idx="${subIdx}">
+                <span class="load-drag-handle">⠿</span>
+                <div class="flow-field-preview-click" data-edit-frame-var="${frameIdx}:${subIdx}" title="Clic para configurar la variable">
+                    ${this.fieldPreviewHtml(fb.variable)}
+                </div>
+                <button type="button" class="flow-block-remove" data-remove-frame-block="${frameIdx}:${subIdx}" title="Eliminar">✕</button>
             </div>`;
+    },
+
+    /** Previsualización de una variable de pantalla tal y como se vería de verdad en ejecución
+     *  (widget real, inerte): etiqueta + caja(s) según Propiedades + Validación. */
+    fieldPreviewHtml(v) {
+        return UI.screenVarFieldHtml(v, this.previewVarOptions[v.id] || [], { disabled: true, idPrefix: "svprev_" });
+    },
+
+    /** Resuelve (o refresca) las opciones de validación usadas en la previsualización
+     *  del diseñador. Se puede pasar una variable concreta para no relanzar todo. */
+    async resolvePreviewVarOptions(onlyVariable) {
+        const targets = onlyVariable ? [onlyVariable] : this.flatScreenVars(this.editing.screen);
+        const jobs = targets.map(v => {
+            const validation = v.validation || { type: "NONE" };
+            if (validation.type === "NONE") { delete this.previewVarOptions[v.id]; return null; }
+            return UI.resolveValidationOptions(validation, { dimensionsCache: this.dimensionsCache, project: this.project })
+                .then(opts => { this.previewVarOptions[v.id] = opts; });
+        }).filter(Boolean);
+        await Promise.all(jobs);
+    },
+
+    /** Todas las variables de una pantalla (sueltas + dentro de frames), aplanadas. */
+    flatScreenVars(screen) {
+        const out = [];
+        (screen.blocks || []).forEach(b => {
+            if (b.kind === "variable" && b.variable) out.push(b.variable);
+            else if (b.kind === "frame") (b.blocks || []).forEach(fb => { if (fb.kind === "variable" && fb.variable) out.push(fb.variable); });
+        });
+        return out;
     },
 
     /** Chip compacto (con tipo) para la paleta de variables arrastrables del bloque de mapeo. */
@@ -862,14 +920,36 @@ const Flows = {
             const idx = parseInt(btn.dataset.addFrameVar, 10);
             const v = await UI.openScreenVariableModal({ dimensions: this.dimensionsCache });
             if (!v) return;
-            f.screen.blocks[idx].variables.push({ id: Provider.newId(), ...v });
+            const newVar = { id: Provider.newId(), ...v };
+            f.screen.blocks[idx].blocks.push({ id: Provider.newId(), kind: "variable", variable: newVar });
+            await this.resolvePreviewVarOptions(newVar);
             this.renderScreenBlocksList();
             this.renderMappingBlock();
         }));
 
-        wrap.querySelectorAll("[data-remove-frame-var]").forEach(btn => btn.addEventListener("click", () => {
-            const [bIdx, vIdx] = btn.dataset.removeFrameVar.split(":").map(Number);
-            f.screen.blocks[bIdx].variables.splice(vIdx, 1);
+        wrap.querySelectorAll("[data-add-frame-text]").forEach(btn => btn.addEventListener("click", async () => {
+            const idx = parseInt(btn.dataset.addFrameText, 10);
+            const text = await UI.openScreenTextModal({ current: "" });
+            if (text === null) return;
+            f.screen.blocks[idx].blocks.push({ id: Provider.newId(), kind: "text", text });
+            this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll("[data-add-frame-skip]").forEach(btn => btn.addEventListener("click", () => {
+            const idx = parseInt(btn.dataset.addFrameSkip, 10);
+            f.screen.blocks[idx].blocks.push({ id: Provider.newId(), kind: "skip" });
+            this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll("[data-add-frame-line]").forEach(btn => btn.addEventListener("click", () => {
+            const idx = parseInt(btn.dataset.addFrameLine, 10);
+            f.screen.blocks[idx].blocks.push({ id: Provider.newId(), kind: "line" });
+            this.renderScreenBlocksList();
+        }));
+
+        wrap.querySelectorAll("[data-remove-frame-block]").forEach(btn => btn.addEventListener("click", () => {
+            const [bIdx, subIdx] = btn.dataset.removeFrameBlock.split(":").map(Number);
+            f.screen.blocks[bIdx].blocks.splice(subIdx, 1);
             this.renderScreenBlocksList();
             this.renderMappingBlock();
         }));
@@ -890,24 +970,38 @@ const Flows = {
             this.renderScreenBlocksList();
         }));
 
+        wrap.querySelectorAll("[data-edit-frame-text]").forEach(el => el.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const [bIdx, subIdx] = el.dataset.editFrameText.split(":").map(Number);
+            const current = f.screen.blocks[bIdx].blocks[subIdx];
+            const val = await UI.openScreenTextModal({ current: current.text || "" });
+            if (val === null) return;
+            current.text = val;
+            this.renderScreenBlocksList();
+        }));
+
         wrap.querySelectorAll("[data-edit-var]").forEach(el => el.addEventListener("click", async (e) => {
             e.stopPropagation();
             const idx = parseInt(el.dataset.editVar, 10);
             const current = f.screen.blocks[idx].variable;
             const v = await UI.openScreenVariableModal({ current, dimensions: this.dimensionsCache });
             if (!v) return;
-            f.screen.blocks[idx].variable = { ...current, ...v };
+            const updated = { ...current, ...v };
+            f.screen.blocks[idx].variable = updated;
+            await this.resolvePreviewVarOptions(updated);
             this.renderScreenBlocksList();
             this.renderMappingBlock();
         }));
 
         wrap.querySelectorAll("[data-edit-frame-var]").forEach(el => el.addEventListener("click", async (e) => {
             e.stopPropagation();
-            const [bIdx, vIdx] = el.dataset.editFrameVar.split(":").map(Number);
-            const current = f.screen.blocks[bIdx].variables[vIdx];
+            const [bIdx, subIdx] = el.dataset.editFrameVar.split(":").map(Number);
+            const current = f.screen.blocks[bIdx].blocks[subIdx].variable;
             const v = await UI.openScreenVariableModal({ current, dimensions: this.dimensionsCache });
             if (!v) return;
-            f.screen.blocks[bIdx].variables[vIdx] = { ...current, ...v };
+            const updated = { ...current, ...v };
+            f.screen.blocks[bIdx].blocks[subIdx].variable = updated;
+            await this.resolvePreviewVarOptions(updated);
             this.renderScreenBlocksList();
             this.renderMappingBlock();
         }));
@@ -933,11 +1027,11 @@ const Flows = {
             });
         });
 
-        // Reordenar variables dentro de un mismo frame arrastrando.
+        // Reordenar bloques (variable/texto/espacio/línea) dentro de un mismo frame arrastrando.
         wrap.querySelectorAll(".flow-frame-var-row").forEach(row => {
             row.addEventListener("dragstart", (e) => {
                 e.stopPropagation();
-                this.dragFrameVar = { frameIdx: parseInt(row.dataset.frameIdx, 10), varIdx: parseInt(row.dataset.varIdx, 10) };
+                this.dragFrameVar = { frameIdx: parseInt(row.dataset.frameIdx, 10), subIdx: parseInt(row.dataset.subIdx, 10) };
                 row.classList.add("dragging");
             });
             row.addEventListener("dragend", () => row.classList.remove("dragging"));
@@ -947,11 +1041,11 @@ const Flows = {
                 e.stopPropagation();
                 if (!this.dragFrameVar) return;
                 const frameIdx = parseInt(row.dataset.frameIdx, 10);
-                const targetVarIdx = parseInt(row.dataset.varIdx, 10);
+                const targetSubIdx = parseInt(row.dataset.subIdx, 10);
                 if (this.dragFrameVar.frameIdx !== frameIdx) { this.dragFrameVar = null; return; }
-                const vars = f.screen.blocks[frameIdx].variables;
-                const [moved] = vars.splice(this.dragFrameVar.varIdx, 1);
-                vars.splice(targetVarIdx, 0, moved);
+                const blocks = f.screen.blocks[frameIdx].blocks;
+                const [moved] = blocks.splice(this.dragFrameVar.subIdx, 1);
+                blocks.splice(targetSubIdx, 0, moved);
                 this.dragFrameVar = null;
                 this.renderScreenBlocksList();
             });
@@ -962,12 +1056,7 @@ const Flows = {
     flatScreenVariables() {
         const f = this.editing;
         if (f.type !== "manual") return [];
-        const out = [];
-        f.screen.blocks.forEach(b => {
-            if (b.kind === "variable") out.push(b.variable);
-            else if (b.kind === "frame") out.push(...b.variables);
-        });
-        return out;
+        return this.flatScreenVars(f.screen);
     },
 
     // ------------------------------------------------------------
@@ -1214,19 +1303,18 @@ const Flows = {
             const blockVals = f.screen.blocks.map((b, idx) => {
                 const tipoB = tipoBMap[b.kind] || "FRAME";
                 const titulo = b.kind === "frame" ? (b.title || "") : "";
-                const contenido = b.kind === "text" ? (b.text || "") : "";
+                const contenido = b.kind === "text" ? (b.text || "") : (b.kind === "frame" ? JSON.stringify(b.blocks || []) : "");
                 return `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(b.id)}', '${Provider.esc(tipoB)}', ${idx}, '${Provider.esc(titulo)}', '${Provider.esc(contenido)}')`;
             }).join(",\n");
             await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")} (PROYECTO_ID, FLUJO_ID, BLOQUE_ID, TIPO, ORDEN, TITULO, CONTENIDO) VALUES ${blockVals}`);
 
+            // Solo las variables SUELTAS (fuera de un frame) se guardan en
+            // FLUJOS_SCREEN_VARIABLES; las que están dentro de un frame van
+            // ya serializadas junto al resto de bloques del frame (arriba).
             const varRows = [];
             f.screen.blocks.forEach(b => {
                 if (b.kind === "variable" && b.variable) {
                     varRows.push([b.variable.id || Provider.newId(), b.id, b.variable.name, b.variable.label, b.variable.type, b.variable.selectMode || "unico", b.variable.validation, 0]);
-                } else if (b.kind === "frame") {
-                    (b.variables || []).forEach((v, vi) => {
-                        varRows.push([v.id || Provider.newId(), b.id, v.name, v.label, v.type, v.selectMode || "unico", v.validation, vi]);
-                    });
                 }
             });
             if (varRows.length) {

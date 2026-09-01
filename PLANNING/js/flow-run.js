@@ -139,7 +139,12 @@ const FlowRun = {
             if (b.TIPO === "TEXTO") return { id: b.BLOQUE_ID, kind: "text", text: b.CONTENIDO || "" };
             if (b.TIPO === "SKIP") return { id: b.BLOQUE_ID, kind: "skip" };
             if (b.TIPO === "ULINE") return { id: b.BLOQUE_ID, kind: "line" };
-            return { id: b.BLOQUE_ID, kind: "frame", title: b.TITULO || "Frame", variables: varsByBloque[b.BLOQUE_ID] || [] };
+            // FRAME: sus bloques internos van serializados en JSON en CONTENIDO;
+            // si viene vacío (formato antiguo, solo variables sueltas), se
+            // reconstruye desde FLUJOS_SCREEN_VARIABLES.
+            const innerBlocks = this.safeParse(b.CONTENIDO, null)
+                || (varsByBloque[b.BLOQUE_ID] || []).map(v => ({ id: Provider.newId(), kind: "variable", variable: v }));
+            return { id: b.BLOQUE_ID, kind: "frame", title: b.TITULO || "Frame", blocks: innerBlocks };
         });
 
         this.flow = {
@@ -265,7 +270,7 @@ const FlowRun = {
             <div class="flow-screen-block flow-screen-block--frame flow-screen-block--static">
                 <div class="flow-frame-header"><strong>${UI.escapeHtml(b.title || "Frame")}</strong></div>
                 <div class="flow-frame-vars">
-                    ${(b.variables || []).map(v => `<div class="flow-frame-var-row flow-frame-var-row--static">${this.inputHtml(v)}</div>`).join("")}
+                    ${(b.blocks || []).map(fb => this.blockHtml(fb)).join("")}
                 </div>
             </div>`;
     },
@@ -406,7 +411,7 @@ const FlowRun = {
     forEachScreenVariable(fn) {
         this.flow.screen.blocks.forEach(b => {
             if (b.kind === "variable") fn(b.variable);
-            if (b.kind === "frame") (b.variables || []).forEach(fn);
+            if (b.kind === "frame") (b.blocks || []).forEach(fb => { if (fb.kind === "variable") fn(fb.variable); });
         });
     },
 

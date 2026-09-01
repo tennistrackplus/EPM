@@ -542,6 +542,7 @@ const UI = {
                 overlay.id = "choiceModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
             overlay.innerHTML = `
                 <div class="modal-box">
                     <div class="modal-header">
@@ -582,6 +583,7 @@ const UI = {
                 overlay.id = "dimPickerModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
 
             const available = dimensionsList.filter(d => !excludeIds.includes(d.DIMENSION_ID));
 
@@ -652,6 +654,7 @@ const UI = {
                 overlay.id = "textPromptModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
             overlay.innerHTML = `
                 <div class="modal-box">
                     <div class="modal-header">
@@ -696,6 +699,7 @@ const UI = {
                 overlay.id = "filterFieldModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
 
             let type = current && current.type ? current.type : "constante";
             let value = current && current.type === "constante" ? (current.value || "") : "";
@@ -783,6 +787,7 @@ const UI = {
                 overlay.id = "codeEditorModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
             const defaultCode = code || `def transformar(df):\n    # df: pandas.DataFrame de entrada\n    # ... tu lógica aquí ...\n    return df\n`;
             overlay.innerHTML = `
                 <div class="modal-box modal-wide">
@@ -829,6 +834,7 @@ const UI = {
                 overlay.id = "formulaEditorModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
             overlay.innerHTML = `
                 <div class="modal-box modal-wide">
                     <div class="modal-header">
@@ -904,6 +910,7 @@ const UI = {
                 overlay.id = "tablePickerModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
 
             overlay.innerHTML = `
                 <div class="modal-box modal-wide">
@@ -972,6 +979,7 @@ const UI = {
                 overlay.id = "scheduleModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
 
             const s = Object.assign({
                 startDate: "", startTime: "06:00", repeat: "ninguna",
@@ -1107,6 +1115,7 @@ const UI = {
                 overlay.id = "interfacePickerModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
 
             overlay.innerHTML = `
                 <div class="modal-box modal-wide">
@@ -1172,6 +1181,7 @@ const UI = {
                 overlay.id = "flowTargetModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
 
             const hasVars = screenVariables.length > 0;
             let type = current && current.type === "variable" && hasVars ? "variable" : "constante";
@@ -1270,6 +1280,7 @@ const UI = {
                 overlay.id = "dimValuesPickerModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
 
             const picked = new Set(selected);
             let allValues = [];
@@ -1369,6 +1380,7 @@ const UI = {
                 overlay.id = "wfTaskFormModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
 
             let selected = tipo || (types[0] && types[0].key) || "";
 
@@ -1446,6 +1458,7 @@ const UI = {
                 overlay.id = "wfActPickerModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
             overlay.innerHTML = `
                 <div class="modal-box modal-wide">
                     <div class="modal-header">
@@ -1501,6 +1514,7 @@ const UI = {
                 overlay.id = "wfFlowPickerModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
             overlay.innerHTML = `
                 <div class="modal-box modal-wide">
                     <div class="modal-header">
@@ -1557,6 +1571,7 @@ const UI = {
                 overlay.id = "wfVarModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
             const v = Object.assign({ name: "", label: "", type: "STRING" }, current || {});
             overlay.innerHTML = `
                 <div class="modal-box">
@@ -1618,6 +1633,7 @@ const UI = {
                 overlay.id = "wfValueModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
 
             const hasVars = stepVariables.length > 0;
             let type = current && current.type === "variable" && hasVars ? "variable" : "constante";
@@ -1725,6 +1741,7 @@ const UI = {
                 overlay.id = "screenVarModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
 
             const v = Object.assign({ name: "", label: "", type: "STRING", selectMode: "unico" }, current || {});
             const validation = Object.assign({
@@ -1977,6 +1994,7 @@ const UI = {
                 overlay.id = "screenTextModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
 
             overlay.innerHTML = `
                 <div class="modal-box modal-wide">
@@ -2104,43 +2122,46 @@ const UI = {
     },
 
     /** Caja única de una variable, con o sin validación (listbox/buscador/checkbox). */
-    screenVarBoxHtml({ id, varId, name, dataType, htmlType, value, validation, options }) {
+    screenVarBoxHtml({ id, varId, name, dataType, htmlType, value, validation, options, disabled }) {
         const v = UI.escapeHtml(value || "");
+        const dis = disabled ? " disabled" : "";
         if (!validation || validation.type === "NONE" || !options || !options.length) {
-            return `<input type="${htmlType}" id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}" value="${v}">`;
+            return `<input type="${htmlType}" id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}" value="${v}"${dis}>`;
         }
         if (validation.searchHelp === "CHECKBOX" && options.length === 2) {
             const checked = String(value) === String(options[1].id);
-            return `<input type="checkbox" id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}" data-off="${UI.escapeHtml(options[0].id)}" data-on="${UI.escapeHtml(options[1].id)}" ${checked ? "checked" : ""}>`;
+            return `<input type="checkbox" id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}" data-off="${UI.escapeHtml(options[0].id)}" data-on="${UI.escapeHtml(options[1].id)}" ${checked ? "checked" : ""}${dis}>`;
         }
         if (validation.searchHelp === "SEARCH") {
             return `<span class="flow-search-input">
-                <input type="text" id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}" value="${v}">
-                <button type="button" class="flow-search-trigger" data-search-target="${id}" title="Buscar">🔍</button>
+                <input type="text" id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}" value="${v}"${dis}>
+                <button type="button" class="flow-search-trigger" data-search-target="${id}" title="Buscar"${dis}>🔍</button>
             </span>`;
         }
         // Listbox (desplegable): concatena "id — descripción" en el propio
         // desplegable, pero el valor que se guarda es siempre solo el id.
-        return `<select id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}">
+        return `<select id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}"${dis}>
             <option value="">${validation.allowEmpty ? "(vacío)" : "— selecciona —"}</option>
             ${options.map(o => `<option value="${UI.escapeHtml(o.id)}" ${String(value) === String(o.id) ? "selected" : ""}>${UI.escapeHtml(o.id)}${o.desc ? " — " + UI.escapeHtml(o.desc) : ""}</option>`).join("")}
         </select>`;
     },
 
     /** Campo completo (etiqueta + caja(s)) para una variable en modo "unico" o "rango".
-     *  "multiple"/"cualquiera" siguen usando el editor de select-options propio de cada pantalla. */
-    screenVarFieldHtml(v, options = []) {
+     *  "multiple"/"cualquiera" siguen usando el editor de select-options propio de cada pantalla.
+     *  opts.disabled=true pinta el widget real pero inerte (previsualización en el diseñador). */
+    screenVarFieldHtml(v, options = [], opts = {}) {
+        const { disabled = false, idPrefix = "svr_" } = opts;
         const validation = Object.assign({ type: "NONE", allowEmpty: true, showText: false, searchHelp: "LISTBOX" }, v.validation || {});
-        const id = `svr_${v.id}`;
+        const id = `${idPrefix}${v.id}`;
         const required = validation.type !== "NONE" && validation.allowEmpty === false;
         const labelHtml = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}${required ? ' <span class="flow-field-required" title="Obligatorio">*</span>' : ""}</label>`;
         const htmlType = UI.SCREEN_VAR_HTML_TYPE[v.type] || "text";
         const dataType = UI.escapeHtml(v.type || "STRING");
         const name = UI.escapeHtml(v.name);
-        const showText = validation.type !== "NONE" && validation.showText;
+        const showText = validation.type !== "NONE" && validation.showText && validation.searchHelp !== "LISTBOX";
 
         const boxRow = (boxId, nameSuffix) => {
-            const box = UI.screenVarBoxHtml({ id: boxId, varId: v.id, name: nameSuffix ? `${name}${nameSuffix}` : name, dataType, htmlType, value: "", validation, options });
+            const box = UI.screenVarBoxHtml({ id: boxId, varId: v.id, name: nameSuffix ? `${name}${nameSuffix}` : name, dataType, htmlType, value: "", validation, options, disabled });
             return `<span class="flow-field-box-row">${box}${showText ? `<span class="flow-field-desc"></span>` : ""}</span>`;
         };
 
@@ -2198,6 +2219,7 @@ const UI = {
                 overlay.id = "optionsPickerModal";
                 document.body.appendChild(overlay);
             }
+            document.body.appendChild(overlay); // reordena al final: siempre por encima de overlays ya existentes
             overlay.innerHTML = `
                 <div class="modal-box">
                     <div class="modal-header"><h3>${UI.escapeHtml(title)}</h3><button class="modal-close" id="opClose">&times;</button></div>
