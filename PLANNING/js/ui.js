@@ -1716,7 +1716,7 @@ const UI = {
      * para poblar el selector de "Valores de dimensión" / "Valores de jerarquía"
      * de la validación. Si no se pasa, esos selectores aparecen vacíos.
      */
-    openScreenVariableModal({ current = null, dimensions = [] } = {}) {
+    openScreenVariableModal({ current = null, dimensions = [], excludeTypes = [] } = {}) {
         return new Promise((resolve) => {
             let overlay = document.getElementById("screenVarModal");
             if (!overlay) {
@@ -1733,6 +1733,7 @@ const UI = {
             }, v.validation || {});
 
             const dimOptions = dimensions.map(d => `<option value="${d.DIMENSION_ID}" ${validation.dimensionId === d.DIMENSION_ID ? "selected" : ""}>${UI.escapeHtml(d.DIMENSION)}</option>`).join("");
+            const availableTypes = UI.SCREEN_VARIABLE_TYPES.filter(t => !excludeTypes.includes(t));
 
             overlay.innerHTML = `
                 <div class="modal-box">
@@ -1758,9 +1759,9 @@ const UI = {
                             <div class="form-group">
                                 <label>Tipo</label>
                                 <select id="svType">
-                                    ${UI.SCREEN_VARIABLE_TYPES.map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
+                                    ${availableTypes.map(t => `<option value="${t}" ${t === v.type ? "selected" : ""}>${t}</option>`).join("")}
                                 </select>
-                                <p class="form-hint">FILE: en la pantalla de ejecución del flujo se pedirá un fichero; su valor resuelto será la ruta de storage tras subirlo.</p>
+                                ${availableTypes.includes("FILE") ? `<p class="form-hint" id="svFileHint">FILE: en la pantalla de ejecución del flujo se pedirá un fichero; su valor resuelto será la ruta de storage tras subirlo. Solo admite modo de selección "Valor único".</p>` : ""}
                             </div>
                             <div class="form-group">
                                 <label>Modo de selección</label>
@@ -1770,7 +1771,6 @@ const UI = {
                                     <option value="multiple" ${v.selectMode === "multiple" ? "selected" : ""}>Varios valores</option>
                                     <option value="cualquiera" ${v.selectMode === "cualquiera" ? "selected" : ""}>Cualquiera (select-options)</option>
                                 </select>
-                                <p class="form-hint">Si eliges rango, varios valores o cualquiera, en la pantalla de ejecución aparecerá una tabla de valores (incluir/excluir + operador) al estilo select-options de SAP; el código Python recibirá esa tabla (JSON) en lugar de un valor único.</p>
                             </div>
                         </div>
 
@@ -1798,7 +1798,7 @@ const UI = {
                                 </div>
                             </div>
 
-                            <div id="svValidHier" style="display:${validation.type === "HIER" ? "block" : "none"}">
+                            <div id="svValidHier" style="display:${validation.type === "HIER" ? "flex" : "none"}">
                                 <div class="form-group">
                                     <label>Dimensión</label>
                                     <select id="svHierDimSelect"><option value="">Selecciona...</option>${dimOptions}</select>
@@ -1817,7 +1817,7 @@ const UI = {
                                 </div>
                             </div>
 
-                            <div id="svValidCommon" style="display:${validation.type === "NONE" ? "none" : "block"}">
+                            <div id="svValidCommon" style="display:${validation.type === "NONE" ? "none" : "flex"}">
                                 <div class="form-group">
                                     <label><input type="checkbox" id="svAllowEmpty" ${validation.allowEmpty ? "checked" : ""}> Permite valor vacío</label>
                                 </div>
@@ -1858,13 +1858,25 @@ const UI = {
                 });
             });
 
+            // -- tipo FILE: solo admite modo de selección "Valor único" --
+            const typeSelect = overlay.querySelector("#svType");
+            const selectModeSelect = overlay.querySelector("#svSelectMode");
+            const applyFileLock = () => {
+                const isFile = typeSelect.value === "FILE";
+                if (isFile) selectModeSelect.value = "unico";
+                selectModeSelect.disabled = isFile;
+                selectModeSelect.title = isFile ? "Las variables de tipo FILE solo admiten valor único." : "";
+            };
+            typeSelect.addEventListener("change", applyFileLock);
+            applyFileLock();
+
             // -- validación: alternar bloques según el tipo elegido --
             overlay.querySelectorAll('input[name="svValidType"]').forEach(radio => {
                 radio.addEventListener("change", () => {
                     overlay.querySelector("#svValidConst").style.display = radio.value === "CONST" && radio.checked ? "block" : "none";
                     overlay.querySelector("#svValidDim").style.display = radio.value === "DIM" && radio.checked ? "block" : "none";
-                    overlay.querySelector("#svValidHier").style.display = radio.value === "HIER" && radio.checked ? "block" : "none";
-                    overlay.querySelector("#svValidCommon").style.display = radio.value === "NONE" && radio.checked ? "none" : "block";
+                    overlay.querySelector("#svValidHier").style.display = radio.value === "HIER" && radio.checked ? "flex" : "none";
+                    overlay.querySelector("#svValidCommon").style.display = radio.value === "NONE" && radio.checked ? "none" : "flex";
                 });
             });
 
@@ -2038,6 +2050,180 @@ const UI = {
                     collapseBtn.style.transform = block.classList.contains("collapsed") ? "rotate(-90deg)" : "";
                 });
             }
+        });
+    },
+
+    // ================================================================
+    // RENDERIZADO DE VARIABLES DE PANTALLA EN EJECUCIÓN (flow_run.js y
+    // la pestaña "Pantalla de variables" de Actualización de tablas):
+    // pinta cada variable según sus Propiedades + Validación, en vez de
+    // un simple <input> de texto. Compartido para no duplicar lógica.
+    // ================================================================
+    SCREEN_VAR_HTML_TYPE: { INTEGER: "number", FLOAT: "number", NUMERIC: "number", DATE: "date", DATETIME: "datetime-local", TIMESTAMP: "datetime-local" },
+
+    /** Resuelve la lista de opciones {id, desc} para una validación (constante/dimensión/jerarquía).
+     *  ctx: { dimensionsCache: [...DIMENSIONES], project: {DATASET} } */
+    async resolveValidationOptions(validation, ctx = {}) {
+        const { dimensionsCache = [], project } = ctx;
+        const safeParse = (json, fallback) => { try { return json ? JSON.parse(json) : fallback; } catch (e) { return fallback; } };
+        try {
+            if (validation.type === "CONST") {
+                return (validation.constants || []).map(c => ({ id: c.id, desc: c.desc }));
+            }
+            if (validation.type === "DIM" || validation.type === "HIER") {
+                const dim = dimensionsCache.find(d => d.DIMENSION_ID === validation.dimensionId);
+                if (!dim || !project) return [];
+                const dimFields = safeParse(dim.CAMPOS_JSON, []);
+                const key = dimFields.find(f => f.__isPrimaryName) || dimFields[0];
+                const descAttr = dimFields.find(f => f.isDescription);
+                const keyCol = Provider.toIdentifier(key ? key.name : dim.DIMENSION);
+                const descCol = descAttr ? Provider.toIdentifier(descAttr.name) : null;
+                const table = Provider.qualify(project.DATASET, dim.TABLA);
+
+                let whereClause = "";
+                if (validation.type === "HIER") {
+                    if (!validation.hierarchyName) return [];
+                    const hierRows = await Provider.runQuery(`SELECT NIVELES_JSON FROM ${Provider.qualifyControl("JERARQUIAS")} WHERE DIMENSION_ID='${Provider.esc(validation.dimensionId)}' AND JERARQUIA='${Provider.esc(validation.hierarchyName)}'`);
+                    if (!hierRows.length) return [];
+                    const niveles = safeParse(hierRows[0].NIVELES_JSON, []);
+                    const levelCol = niveles[(validation.level || 1) - 1];
+                    if (!levelCol) return [];
+                    whereClause = ` WHERE ${levelCol} = '${Provider.esc(validation.node)}'`;
+                }
+
+                const sql = descCol
+                    ? `SELECT DISTINCT ${keyCol} AS ID, ${descCol} AS DESC_ FROM ${table}${whereClause} ORDER BY ${keyCol}`
+                    : `SELECT DISTINCT ${keyCol} AS ID FROM ${table}${whereClause} ORDER BY ${keyCol}`;
+                const rows = await Provider.runQuery(sql);
+                return rows.map(r => ({ id: r.ID, desc: r.DESC_ || "" }));
+            }
+        } catch (err) {
+            console.error("Error resolviendo opciones de validación:", err);
+        }
+        return [];
+    },
+
+    /** Caja única de una variable, con o sin validación (listbox/buscador/checkbox). */
+    screenVarBoxHtml({ id, varId, name, dataType, htmlType, value, validation, options }) {
+        const v = UI.escapeHtml(value || "");
+        if (!validation || validation.type === "NONE" || !options || !options.length) {
+            return `<input type="${htmlType}" id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}" value="${v}">`;
+        }
+        if (validation.searchHelp === "CHECKBOX" && options.length === 2) {
+            const checked = String(value) === String(options[1].id);
+            return `<input type="checkbox" id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}" data-off="${UI.escapeHtml(options[0].id)}" data-on="${UI.escapeHtml(options[1].id)}" ${checked ? "checked" : ""}>`;
+        }
+        if (validation.searchHelp === "SEARCH") {
+            return `<span class="flow-search-input">
+                <input type="text" id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}" value="${v}">
+                <button type="button" class="flow-search-trigger" data-search-target="${id}" title="Buscar">🔍</button>
+            </span>`;
+        }
+        // Listbox (desplegable): concatena "id — descripción" en el propio
+        // desplegable, pero el valor que se guarda es siempre solo el id.
+        return `<select id="${id}" data-var-id="${varId}" data-var-name="${name}" data-var-type="${dataType}">
+            <option value="">${validation.allowEmpty ? "(vacío)" : "— selecciona —"}</option>
+            ${options.map(o => `<option value="${UI.escapeHtml(o.id)}" ${String(value) === String(o.id) ? "selected" : ""}>${UI.escapeHtml(o.id)}${o.desc ? " — " + UI.escapeHtml(o.desc) : ""}</option>`).join("")}
+        </select>`;
+    },
+
+    /** Campo completo (etiqueta + caja(s)) para una variable en modo "unico" o "rango".
+     *  "multiple"/"cualquiera" siguen usando el editor de select-options propio de cada pantalla. */
+    screenVarFieldHtml(v, options = []) {
+        const validation = Object.assign({ type: "NONE", allowEmpty: true, showText: false, searchHelp: "LISTBOX" }, v.validation || {});
+        const id = `svr_${v.id}`;
+        const required = validation.type !== "NONE" && validation.allowEmpty === false;
+        const labelHtml = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}${required ? ' <span class="flow-field-required" title="Obligatorio">*</span>' : ""}</label>`;
+        const htmlType = UI.SCREEN_VAR_HTML_TYPE[v.type] || "text";
+        const dataType = UI.escapeHtml(v.type || "STRING");
+        const name = UI.escapeHtml(v.name);
+        const showText = validation.type !== "NONE" && validation.showText;
+
+        const boxRow = (boxId, nameSuffix) => {
+            const box = UI.screenVarBoxHtml({ id: boxId, varId: v.id, name: nameSuffix ? `${name}${nameSuffix}` : name, dataType, htmlType, value: "", validation, options });
+            return `<span class="flow-field-box-row">${box}${showText ? `<span class="flow-field-desc"></span>` : ""}</span>`;
+        };
+
+        if (v.selectMode === "rango") {
+            return `<div class="flow-field-preview flow-field-preview--range">
+                ${labelHtml}
+                <div class="flow-field-range-row">
+                    ${boxRow(`${id}_low`, "__low")}
+                    <span class="flow-field-range-sep">–</span>
+                    ${boxRow(`${id}_high`, "__high")}
+                </div>
+            </div>`;
+        }
+
+        return `<div class="flow-field-preview">${labelHtml}${boxRow(id, "")}</div>`;
+    },
+
+    /** Delegación de eventos (una sola vez por contenedor) para los campos
+     *  pintados con screenVarFieldHtml: actualiza la descripción a la derecha
+     *  cuando cambia el valor, y abre el buscador para las cajas tipo SEARCH.
+     *  getOptions(varId) debe devolver la lista de opciones ya resuelta. */
+    bindScreenVarFieldEvents(container, getOptions) {
+        container.addEventListener("change", (e) => {
+            const el = e.target.closest("[data-var-id]");
+            if (!el) return;
+            const row = el.closest(".flow-field-box-row");
+            const descEl = row ? row.querySelector(".flow-field-desc") : null;
+            if (!descEl) return;
+            const options = getOptions(el.dataset.varId) || [];
+            const val = el.type === "checkbox" ? (el.checked ? el.dataset.on : el.dataset.off) : el.value;
+            const opt = options.find(o => String(o.id) === String(val));
+            descEl.textContent = opt ? opt.desc : "";
+        });
+        container.addEventListener("click", async (e) => {
+            const btn = e.target.closest(".flow-search-trigger");
+            if (!btn) return;
+            const input = container.querySelector(`#${CSS.escape(btn.dataset.searchTarget)}`);
+            if (!input) return;
+            const options = getOptions(input.dataset.varId) || [];
+            const picked = await UI.openOptionsPickerModal({ title: "Buscar valor", options });
+            if (picked === null) return;
+            input.value = picked;
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+    },
+
+    /** Popup genérico de búsqueda/selección de un valor {id, desc} entre una
+     *  lista de opciones. Devuelve Promise<string|null>. */
+    openOptionsPickerModal({ title = "Buscar valor", options = [] } = {}) {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("optionsPickerModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "optionsPickerModal";
+                document.body.appendChild(overlay);
+            }
+            overlay.innerHTML = `
+                <div class="modal-box">
+                    <div class="modal-header"><h3>${UI.escapeHtml(title)}</h3><button class="modal-close" id="opClose">&times;</button></div>
+                    <div class="modal-body">
+                        <input type="text" id="opSearch" placeholder="Buscar por ID o descripción...">
+                        <div id="opResults" class="options-picker-results"></div>
+                    </div>
+                </div>`;
+            overlay.classList.add("visible");
+            const cleanup = (result) => { overlay.classList.remove("visible"); resolve(result); };
+            overlay.querySelector("#opClose").onclick = () => cleanup(null);
+
+            const renderResults = (term) => {
+                const t = (term || "").toLowerCase();
+                const filtered = options.filter(o => !t || String(o.id).toLowerCase().includes(t) || (o.desc || "").toLowerCase().includes(t));
+                overlay.querySelector("#opResults").innerHTML = filtered.slice(0, 200).map(o =>
+                    `<div class="options-picker-item" data-id="${UI.escapeHtml(o.id)}">${UI.escapeHtml(o.id)}${o.desc ? " — " + UI.escapeHtml(o.desc) : ""}</div>`
+                ).join("") || `<div class="hierarchy-levels-empty">Sin resultados.</div>`;
+                overlay.querySelectorAll("#opResults .options-picker-item").forEach(item => {
+                    item.addEventListener("click", () => cleanup(item.dataset.id));
+                });
+            };
+            renderResults("");
+            const searchInput = overlay.querySelector("#opSearch");
+            searchInput.addEventListener("input", (e) => renderResults(e.target.value));
+            setTimeout(() => searchInput.focus(), 50);
         });
     }
 };

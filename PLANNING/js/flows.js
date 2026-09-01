@@ -49,6 +49,10 @@ const Flows = {
     dragFrameVar: null,
     dragScreenVar: null,
 
+    safeParse(json, fallback) {
+        try { return json ? JSON.parse(json) : fallback; } catch (e) { return fallback; }
+    },
+
     async render(container, project) {
         this.container = container;
         this.project = project;
@@ -151,17 +155,17 @@ const Flows = {
             SELECT BLOQUE_ID, TIPO, ORDEN, TITULO, CONTENIDO FROM ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")}
             WHERE FLUJO_ID = '${Provider.esc(id)}' ORDER BY ORDEN`);
         const varRows = await Provider.runQuery(`
-            SELECT VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, SELECT_MODE, ORDEN FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")}
+            SELECT VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, SELECT_MODE, VALIDACION_JSON, ORDEN FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")}
             WHERE FLUJO_ID = '${Provider.esc(id)}' ORDER BY ORDEN`);
         const varsByBloque = {};
         varRows.forEach(v => {
             (varsByBloque[v.BLOQUE_ID] = varsByBloque[v.BLOQUE_ID] || [])
-                .push({ id: v.VARIABLE_ID, name: v.NOMBRE, label: v.ETIQUETA || v.NOMBRE, type: v.TIPO || "STRING", selectMode: v.SELECT_MODE || "unico" });
+                .push({ id: v.VARIABLE_ID, name: v.NOMBRE, label: v.ETIQUETA || v.NOMBRE, type: v.TIPO || "STRING", selectMode: v.SELECT_MODE || "unico", validation: this.safeParse(v.VALIDACION_JSON, { type: "NONE", allowEmpty: true, showText: false, searchHelp: "LISTBOX" }) });
         });
 
         const blocks = blockRows.map(b => {
             if (b.TIPO === "VARIABLE") {
-                const v = (varsByBloque[b.BLOQUE_ID] || [])[0] || { id: Provider.newId(), name: "", label: "", type: "STRING", selectMode: "unico" };
+                const v = (varsByBloque[b.BLOQUE_ID] || [])[0] || { id: Provider.newId(), name: "", label: "", type: "STRING", selectMode: "unico", validation: { type: "NONE", allowEmpty: true, showText: false, searchHelp: "LISTBOX" } };
                 return { id: b.BLOQUE_ID, kind: "variable", variable: v };
             }
             if (b.TIPO === "TEXTO") {
@@ -1218,17 +1222,17 @@ const Flows = {
             const varRows = [];
             f.screen.blocks.forEach(b => {
                 if (b.kind === "variable" && b.variable) {
-                    varRows.push([b.variable.id || Provider.newId(), b.id, b.variable.name, b.variable.label, b.variable.type, b.variable.selectMode || "unico", 0]);
+                    varRows.push([b.variable.id || Provider.newId(), b.id, b.variable.name, b.variable.label, b.variable.type, b.variable.selectMode || "unico", b.variable.validation, 0]);
                 } else if (b.kind === "frame") {
                     (b.variables || []).forEach((v, vi) => {
-                        varRows.push([v.id || Provider.newId(), b.id, v.name, v.label, v.type, v.selectMode || "unico", vi]);
+                        varRows.push([v.id || Provider.newId(), b.id, v.name, v.label, v.type, v.selectMode || "unico", v.validation, vi]);
                     });
                 }
             });
             if (varRows.length) {
-                const vals = varRows.map(([varId, bloqueId, nombre, etiqueta, tipoV, selectMode, orden]) =>
-                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(varId)}', '${Provider.esc(bloqueId)}', '${Provider.esc(nombre)}', '${Provider.esc(etiqueta)}', '${Provider.esc(tipoV)}', '${Provider.esc(selectMode)}', ${orden})`).join(",\n");
-                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")} (PROYECTO_ID, FLUJO_ID, VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, SELECT_MODE, ORDEN) VALUES ${vals}`);
+                const vals = varRows.map(([varId, bloqueId, nombre, etiqueta, tipoV, selectMode, validation, orden]) =>
+                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(varId)}', '${Provider.esc(bloqueId)}', '${Provider.esc(nombre)}', '${Provider.esc(etiqueta)}', '${Provider.esc(tipoV)}', '${Provider.esc(selectMode)}', '${Provider.esc(JSON.stringify(validation || { type: "NONE", allowEmpty: true, showText: false, searchHelp: "LISTBOX" }))}', ${orden})`).join(",\n");
+                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")} (PROYECTO_ID, FLUJO_ID, VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, SELECT_MODE, VALIDACION_JSON, ORDEN) VALUES ${vals}`);
             }
         }
     }

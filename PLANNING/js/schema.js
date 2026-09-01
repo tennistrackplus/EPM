@@ -157,6 +157,8 @@ const DracoSchema = {
                     NOMBRE STRING NOT NULL,
                     ETIQUETA STRING,
                     TIPO STRING,
+                    SELECT_MODE STRING,
+                    VALIDACION_JSON STRING,
                     ORDEN INTEGER
                 )`,
             FLUJOS_RUNS: `

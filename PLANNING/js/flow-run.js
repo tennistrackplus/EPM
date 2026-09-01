@@ -25,8 +25,11 @@ const FlowRun = {
     view: "screen",       // 'screen' | 'monitor'
     lastRunId: null,
     pollHandle: null,
+    project: null,        // fila de PROYECTOS (para resolver validaciones DIM/HIER)
+    dimensionsCache: [],
+    varOptions: {},        // { VARIABLE_ID: [{id, desc}, ...] } — opciones ya resueltas por validación
 
-    // Estado en memoria de las tablas select-options (rango / varios valores /
+    // Estado en memoria de las tablas select-options (varios valores /
     // cualquiera) por VARIABLE_ID: [{sign:'I'|'E', option:'EQ'|..., low, high}, ...]
     selOptState: {},
     _selOptDelegationBound: false,
@@ -77,6 +80,7 @@ const FlowRun = {
 
         try {
             await this.load();
+            await this.resolveScreenVarOptions();
         } catch (err) {
             this.renderFatal(`Error al cargar el flujo: ${UI.escapeHtml(err.message)}`);
             return;
@@ -100,6 +104,14 @@ const FlowRun = {
         const row = rows[0];
         if (!row) throw new Error(`No existe el flujo ${this.flujoId}`);
 
+        const projectRows = await Provider.runQuery(`SELECT * FROM ${Provider.qualifyControl("PROYECTOS")} WHERE PROYECTO_ID = '${Provider.esc(row.PROYECTO_ID)}'`);
+        this.project = projectRows[0] || null;
+        try {
+            this.dimensionsCache = await Provider.runQuery(`SELECT * FROM ${Provider.qualifyControl("DIMENSIONES")} WHERE PROYECTO_ID = '${Provider.esc(row.PROYECTO_ID)}'`);
+        } catch (e) {
+            this.dimensionsCache = [];
+        }
+
         const chainRows = await Provider.runQuery(`
             SELECT PASO_ID, INTERFAZ_ID, ORDEN FROM ${Provider.qualifyControl("FLUJOS_INTERFACES")}
             WHERE FLUJO_ID = '${Provider.esc(this.flujoId)}' ORDER BY ORDEN`);
@@ -109,16 +121,19 @@ const FlowRun = {
             SELECT BLOQUE_ID, TIPO, ORDEN, TITULO, CONTENIDO FROM ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")}
             WHERE FLUJO_ID = '${Provider.esc(this.flujoId)}' ORDER BY ORDEN`);
         const varRows = await Provider.runQuery(`
-            SELECT VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, SELECT_MODE, ORDEN FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")}
+            SELECT VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, SELECT_MODE, VALIDACION_JSON, ORDEN FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")}
             WHERE FLUJO_ID = '${Provider.esc(this.flujoId)}' ORDER BY ORDEN`);
         const varsByBloque = {};
         varRows.forEach(v => {
             (varsByBloque[v.BLOQUE_ID] = varsByBloque[v.BLOQUE_ID] || [])
-                .push({ id: v.VARIABLE_ID, name: v.NOMBRE, label: v.ETIQUETA || v.NOMBRE, type: v.TIPO || "STRING", selectMode: v.SELECT_MODE || "unico" });
+                .push({
+                    id: v.VARIABLE_ID, name: v.NOMBRE, label: v.ETIQUETA || v.NOMBRE, type: v.TIPO || "STRING", selectMode: v.SELECT_MODE || "unico",
+                    validation: this.safeParse(v.VALIDACION_JSON, { type: "NONE", allowEmpty: true, showText: false, searchHelp: "LISTBOX" })
+                });
         });
         const blocks = blockRows.map(b => {
             if (b.TIPO === "VARIABLE") {
-                const v = (varsByBloque[b.BLOQUE_ID] || [])[0] || { id: Provider.newId(), name: "", label: "", type: "STRING", selectMode: "unico" };
+                const v = (varsByBloque[b.BLOQUE_ID] || [])[0] || { id: Provider.newId(), name: "", label: "", type: "STRING", selectMode: "unico", validation: { type: "NONE", allowEmpty: true, showText: false, searchHelp: "LISTBOX" } };
                 return { id: b.BLOQUE_ID, kind: "variable", variable: v };
             }
             if (b.TIPO === "TEXTO") return { id: b.BLOQUE_ID, kind: "text", text: b.CONTENIDO || "" };
@@ -148,6 +163,28 @@ const FlowRun = {
 
     interfaceById(id) {
         return this.interfaces.find(i => i.id === id);
+    },
+
+    safeParse(json, fallback) {
+        try { return json ? JSON.parse(json) : fallback; } catch (e) { return fallback; }
+    },
+
+    /** Resuelve, una sola vez, las opciones (constante/dimensión/jerarquía) de
+     *  cada variable con validación en modo "unico" o "rango". */
+    async resolveScreenVarOptions() {
+        this.varOptions = {};
+        const jobs = [];
+        this.forEachScreenVariable(v => {
+            const validation = v.validation || { type: "NONE" };
+            const mode = v.selectMode || "unico";
+            if (validation.type !== "NONE" && (mode === "unico" || mode === "rango")) {
+                jobs.push(
+                    UI.resolveValidationOptions(validation, { dimensionsCache: this.dimensionsCache, project: this.project })
+                        .then(opts => { this.varOptions[v.id] = opts; })
+                );
+            }
+        });
+        await Promise.all(jobs);
     },
 
     // ------------------------------------------------------------
@@ -204,6 +241,10 @@ const FlowRun = {
         });
 
         this.bindSelOptDelegation(body);
+        if (!this._screenVarEventsBound) {
+            this._screenVarEventsBound = true;
+            UI.bindScreenVarFieldEvents(body, (varId) => this.varOptions[varId]);
+        }
     },
 
     blockHtml(b) {
@@ -231,15 +272,15 @@ const FlowRun = {
 
     /** Input real (no deshabilitado) para una variable de pantalla, según su tipo. */
     inputHtml(v) {
-        // Rango / varios valores / cualquiera: editor de select-options en vez
-        // de un único input — el valor recogido es una TABLA de filas, no un escalar.
-        if (v.selectMode && v.selectMode !== "unico") {
+        // Varios valores / cualquiera: editor de select-options — el valor
+        // recogido es una TABLA de filas, no un escalar.
+        if (v.selectMode === "multiple" || v.selectMode === "cualquiera") {
             return this.selOptHtml(v);
         }
 
-        const id = `runvar_${v.id}`;
-        const label = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}</label>`;
         if (v.type === "FILE") {
+            const id = `runvar_${v.id}`;
+            const label = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}</label>`;
             return `
                 <div class="flow-field-preview flow-field-preview--file">
                     ${label}
@@ -251,10 +292,14 @@ const FlowRun = {
                 </div>`;
         }
         if (v.type === "BOOLEAN") {
+            const id = `runvar_${v.id}`;
+            const label = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}</label>`;
             return `<div class="flow-field-preview flow-field-preview--checkbox"><input type="checkbox" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="BOOLEAN">${label}</div>`;
         }
-        const htmlType = { INTEGER: "number", FLOAT: "number", NUMERIC: "number", DATE: "date", DATETIME: "datetime-local", TIMESTAMP: "datetime-local" }[v.type] || "text";
-        return `<div class="flow-field-preview">${label}<input type="${htmlType}" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="${UI.escapeHtml(v.type || "STRING")}"></div>`;
+
+        // Único / rango: caja(s) pintadas según Propiedades + Validación
+        // (listbox/buscador/checkbox si hay validación, obligatorio marcado).
+        return UI.screenVarFieldHtml(v, this.varOptions[v.id] || []);
     },
 
     // ------------------------------------------------------------
@@ -372,7 +417,7 @@ const FlowRun = {
     },
 
     /** Recoge del DOM {nombre: valor} + {nombre: File} para las de tipo FILE.
-     *  Las variables en modo rango/varios/cualquiera devuelven en su lugar la
+     *  "rango" devuelve {low, high}; "multiple"/"cualquiera" devuelven la
      *  tabla de select-options: [{sign, option, low, high}, ...]. */
     collectScreenValues() {
         const values = {};
@@ -380,6 +425,9 @@ const FlowRun = {
         document.querySelectorAll("#flowRunBody [data-var-name]").forEach(el => {
             const name = el.dataset.varName;
             const type = el.dataset.varType;
+            // Las cajas "desde"/"hasta" de un rango llevan el nombre de la
+            // variable con sufijo __low/__high: se combinan aparte, más abajo.
+            if (name.endsWith("__low") || name.endsWith("__high")) return;
             if (type === "FILE") {
                 if (el.files && el.files[0]) files[name] = el.files[0];
             } else if (type === "BOOLEAN") {
@@ -389,8 +437,13 @@ const FlowRun = {
             }
         });
 
+        const readBoxValue = (el) => {
+            if (!el) return "";
+            return el.type === "checkbox" ? (el.checked ? el.dataset.on : el.dataset.off) : el.value;
+        };
+
         this.forEachScreenVariable(v => {
-            if (v.selectMode && v.selectMode !== "unico") {
+            if (v.selectMode === "multiple" || v.selectMode === "cualquiera") {
                 const rows = (this.selOptState[v.id] || []).filter(r => (r.low || "").toString().trim() !== "");
                 values[v.name] = rows.map(r => ({
                     sign: r.sign === "E" ? "E" : "I",
@@ -398,6 +451,11 @@ const FlowRun = {
                     low: r.low || "",
                     high: this.selOptNeedsHigh(r.option) ? (r.high || "") : ""
                 }));
+            } else if (v.selectMode === "rango") {
+                const escName = CSS.escape(v.name);
+                const lowEl = document.querySelector(`#flowRunBody [data-var-name="${escName}__low"]`);
+                const highEl = document.querySelector(`#flowRunBody [data-var-name="${escName}__high"]`);
+                values[v.name] = { low: readBoxValue(lowEl), high: readBoxValue(highEl) };
             }
         });
 

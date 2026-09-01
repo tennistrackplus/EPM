@@ -463,7 +463,7 @@ const TableUpdates = {
         document.getElementById("actUpdScreenTitle").addEventListener("input", (e) => { screen.title = e.target.value; });
 
         document.getElementById("actUpdAddVar").addEventListener("click", async () => {
-            const v = await UI.openScreenVariableModal({ dimensions: this.dimensionsCache });
+            const v = await UI.openScreenVariableModal({ dimensions: this.dimensionsCache, excludeTypes: ["FILE"] });
             if (!v) return;
             screen.blocks.push({ id: Provider.newId(), kind: "variable", variable: { id: Provider.newId(), ...v } });
             this.screenCollapsed = false;
@@ -587,7 +587,7 @@ const TableUpdates = {
 
         wrap.querySelectorAll("[data-add-frame-var]").forEach(btn => btn.addEventListener("click", async () => {
             const idx = parseInt(btn.dataset.addFrameVar, 10);
-            const v = await UI.openScreenVariableModal({ dimensions: this.dimensionsCache });
+            const v = await UI.openScreenVariableModal({ dimensions: this.dimensionsCache, excludeTypes: ["FILE"] });
             if (!v) return;
             screen.blocks[idx].variables.push({ id: Provider.newId(), ...v });
             this.renderScreenBlocksList();
@@ -619,7 +619,7 @@ const TableUpdates = {
             e.stopPropagation();
             const idx = parseInt(el.dataset.editVar, 10);
             const current = screen.blocks[idx].variable;
-            const v = await UI.openScreenVariableModal({ current, dimensions: this.dimensionsCache });
+            const v = await UI.openScreenVariableModal({ current, dimensions: this.dimensionsCache, excludeTypes: ["FILE"] });
             if (!v) return;
             screen.blocks[idx].variable = { ...current, ...v };
             this.renderScreenBlocksList();
@@ -629,7 +629,7 @@ const TableUpdates = {
             e.stopPropagation();
             const [bIdx, vIdx] = el.dataset.editFrameVar.split(":").map(Number);
             const current = screen.blocks[bIdx].variables[vIdx];
-            const v = await UI.openScreenVariableModal({ current, dimensions: this.dimensionsCache });
+            const v = await UI.openScreenVariableModal({ current, dimensions: this.dimensionsCache, excludeTypes: ["FILE"] });
             if (!v) return;
             screen.blocks[bIdx].variables[vIdx] = { ...current, ...v };
             this.renderScreenBlocksList();
@@ -1035,6 +1035,11 @@ const TableUpdates = {
         this.applyParamKeys(this.runFields, paramKeys);
         this.gridState = null;
         this.selOptState = {};
+        // El modal de ejecución se recrea por completo en cada startRun() (nuevo
+        // #actUpdRunBody), así que las delegaciones de eventos hay que
+        // rehacerlas también en cada sesión, no solo la primera vez.
+        this._selOptDelegationBound = false;
+        this._runVarFieldEventsBound = false;
         // Al ejecutar directamente desde el listado (sin pasar por "Editar")
         // this.dimensionsCache nunca se ha cargado, así que las validaciones de
         // tipo dimensión/jerarquía no encontraban nada. Se asegura aquí, igual
@@ -1046,6 +1051,7 @@ const TableUpdates = {
         // carga directamente al abrir. OJO: blocks.length no vale por sí solo,
         // puede haber frames/textos/saltos de línea sin ninguna variable real.
         this.hasScreenVars = this.flatVars(this.runScreen).length > 0;
+        await this.resolveRunVarOptions();
 
         let overlay = document.getElementById("actUpdRunModal");
         if (!overlay) {
@@ -1129,6 +1135,10 @@ const TableUpdates = {
 
         document.getElementById("actUpdRunExecute").addEventListener("click", () => this.executeRun());
         this.bindSelOptDelegation(body);
+        if (!this._runVarFieldEventsBound) {
+            this._runVarFieldEventsBound = true;
+            UI.bindScreenVarFieldEvents(body, (varId) => this.runVarOptions[varId]);
+        }
     },
 
     runBlockHtml(b) {
@@ -1156,13 +1166,15 @@ const TableUpdates = {
 
     /** Input real para una variable de pantalla en ejecución, según su tipo. */
     runInputHtml(v) {
-        if (v.selectMode && v.selectMode !== "unico") return this.selOptHtml(v);
+        if (v.selectMode === "multiple" || v.selectMode === "cualquiera") return this.selOptHtml(v);
 
-        const id = `actupdrunvar_${v.id}`;
-        const label = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}</label>`;
         if (v.type === "FILE") {
             // Sin orquestador de storage en Actualización de tablas: se recoge
             // el nombre del fichero como valor de texto, sin subirlo.
+            // (Ya no se pueden crear variables FILE aquí, pero se sigue
+            // soportando la lectura de definiciones antiguas guardadas.)
+            const id = `actupdrunvar_${v.id}`;
+            const label = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}</label>`;
             return `
                 <div class="flow-field-preview flow-field-preview--file">
                     ${label}
@@ -1174,10 +1186,13 @@ const TableUpdates = {
                 </div>`;
         }
         if (v.type === "BOOLEAN") {
+            const id = `actupdrunvar_${v.id}`;
+            const label = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}</label>`;
             return `<div class="flow-field-preview flow-field-preview--checkbox"><input type="checkbox" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="BOOLEAN">${label}</div>`;
         }
-        const htmlType = { INTEGER: "number", FLOAT: "number", NUMERIC: "number", DATE: "date", DATETIME: "datetime-local", TIMESTAMP: "datetime-local" }[v.type] || "text";
-        return `<div class="flow-field-preview">${label}<input type="${htmlType}" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="${UI.escapeHtml(v.type || "STRING")}"></div>`;
+
+        // Único / rango: caja(s) pintadas según Propiedades + Validación.
+        return UI.screenVarFieldHtml(v, this.runVarOptions[v.id] || []);
     },
 
     // ---- editor de select-options (rango / varios valores / cualquiera), igual que en flow_run.js ----
@@ -1293,14 +1308,29 @@ const TableUpdates = {
         return this.flatVars(this.runScreen).find(v => v.id === varId) || null;
     },
 
+    /** Resuelve, una sola vez, las opciones (constante/dimensión/jerarquía) de
+     *  cada variable de la pantalla de ejecución en modo "unico" o "rango". */
+    async resolveRunVarOptions() {
+        this.runVarOptions = {};
+        const jobs = this.flatVars(this.runScreen).map(v => {
+            const validation = v.validation || { type: "NONE" };
+            const mode = v.selectMode || "unico";
+            if (validation.type === "NONE" || (mode !== "unico" && mode !== "rango")) return null;
+            return UI.resolveValidationOptions(validation, { dimensionsCache: this.dimensionsCache, project: this.project })
+                .then(opts => { this.runVarOptions[v.id] = opts; });
+        }).filter(Boolean);
+        await Promise.all(jobs);
+    },
+
     /** Recoge del DOM {nombre: valor} para las variables de la pantalla de ejecución.
-     *  Las variables en modo rango/varios/cualquiera devuelven la tabla de
-     *  select-options: [{sign, option, low, high}, ...]. */
+     *  "rango" devuelve {low, high}; "multiple"/"cualquiera" devuelven la tabla
+     *  de select-options: [{sign, option, low, high}, ...]. */
     collectRunScreenValues() {
         const values = {};
         document.querySelectorAll("#actUpdRunBody [data-var-name]").forEach(el => {
             const name = el.dataset.varName;
             const type = el.dataset.varType;
+            if (name.endsWith("__low") || name.endsWith("__high")) return;
             if (type === "FILE_NAME_ONLY") {
                 values[name] = (el.files && el.files[0]) ? el.files[0].name : "";
             } else if (type === "BOOLEAN") {
@@ -1310,8 +1340,13 @@ const TableUpdates = {
             }
         });
 
+        const readBoxValue = (el) => {
+            if (!el) return "";
+            return el.type === "checkbox" ? (el.checked ? el.dataset.on : el.dataset.off) : el.value;
+        };
+
         this.flatVars(this.runScreen).forEach(v => {
-            if (v.selectMode && v.selectMode !== "unico") {
+            if (v.selectMode === "multiple" || v.selectMode === "cualquiera") {
                 const rows = (this.selOptState[v.id] || []).filter(r => (r.low || "").toString().trim() !== "");
                 values[v.name] = rows.map(r => ({
                     sign: r.sign === "E" ? "E" : "I",
@@ -1319,6 +1354,11 @@ const TableUpdates = {
                     low: r.low || "",
                     high: this.selOptNeedsHigh(r.option) ? (r.high || "") : ""
                 }));
+            } else if (v.selectMode === "rango") {
+                const escName = CSS.escape(v.name);
+                const lowEl = document.querySelector(`#actUpdRunBody [data-var-name="${escName}__low"]`);
+                const highEl = document.querySelector(`#actUpdRunBody [data-var-name="${escName}__high"]`);
+                values[v.name] = { low: readBoxValue(lowEl), high: readBoxValue(highEl) };
             }
         });
 
@@ -1370,6 +1410,13 @@ const TableUpdates = {
                 if (Array.isArray(val)) {
                     const sql = this.selOptTableSql(f.name, val);
                     if (sql) clauses.push(sql);
+                } else if (val && typeof val === "object" && ("low" in val || "high" in val)) {
+                    // Rango simple {low, high} (variable en modo "rango").
+                    const low = (val.low || "").toString().trim();
+                    const high = (val.high || "").toString().trim();
+                    if (low !== "" && high !== "") clauses.push(`${f.name} BETWEEN '${Provider.esc(low)}' AND '${Provider.esc(high)}'`);
+                    else if (low !== "") clauses.push(`${f.name} >= '${Provider.esc(low)}'`);
+                    else if (high !== "") clauses.push(`${f.name} <= '${Provider.esc(high)}'`);
                 } else if (val !== null && val !== undefined && val !== "") {
                     clauses.push(`${f.name} = '${Provider.esc(val)}'`);
                 }
