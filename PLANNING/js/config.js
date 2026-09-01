@@ -62,7 +62,7 @@ const DracoConfig = {
     // "Interfaces de fichero en BigQuery". Déjalo vacío si usas Snowflake.
     // Ejemplo tras desplegar en Cloud Run:
     //   flowRunnerHttpEndpoint: "https://draco-flow-runner-xxxxx-ew.a.run.app",
-    flowRunnerHttpEndpoint: "",
+    flowRunnerHttpEndpoint: "https://draco-flow-runner-569601069650.europe-west1.run.app",
 
     // ---------------------------------------------------------
     // Subida de ficheros a BigQuery (bucket de Google Cloud Storage)
@@ -79,7 +79,7 @@ const DracoConfig = {
     // completo en README.md, sección "Interfaces de fichero en BigQuery".
     // Déjalo vacío si usas Snowflake, o si prefieres tu propio esquema de
     // subida (ver storageUploadUrlBuilder más abajo).
-    bigqueryUploadBucket: "", // p.ej. "draco-landing-mi-proyecto"
+    bigqueryUploadBucket: "draco-landing", // p.ej. "draco-landing-mi-proyecto"
 
     // Alternativa a bigqueryUploadBucket: función que TÚ implementas para
     // subir el fichero a tu propio backend (URL firmada de GCS/S3, un
@@ -128,4 +128,3 @@ const DracoConfig = {
         token: ""
     }
 };
-
