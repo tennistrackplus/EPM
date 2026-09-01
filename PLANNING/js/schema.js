@@ -425,7 +425,8 @@ const DracoSchema = {
             Provider.runQuery(`ALTER TABLE ${workflowsRunsInstancias} ADD COLUMN IF NOT EXISTS REVISOR STRING`),
             Provider.runQuery(`ALTER TABLE ${workflowsRunsInstancias} ADD COLUMN IF NOT EXISTS FECHA_PROGRAMADA_FIN STRING`),
             Provider.runQuery(`ALTER TABLE ${workflowsPasos} ADD COLUMN IF NOT EXISTS NO_BLOQUEA_REVISION BOOLEAN`),
-            Provider.runQuery(`ALTER TABLE ${flujosScreenVariables} ADD COLUMN IF NOT EXISTS SELECT_MODE STRING`)
+            Provider.runQuery(`ALTER TABLE ${flujosScreenVariables} ADD COLUMN IF NOT EXISTS SELECT_MODE STRING`),
+            Provider.runQuery(`ALTER TABLE ${flujosScreenVariables} ADD COLUMN IF NOT EXISTS VALIDACION_JSON STRING`)
         ]);
     },
 

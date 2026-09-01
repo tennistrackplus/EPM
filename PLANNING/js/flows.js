@@ -1252,76 +1252,102 @@ const Flows = {
         const scheduleJson = (tipo === "AUTOMATICO" && f.schedule) ? Provider.esc(JSON.stringify(f.schedule)) : "";
         const screenTitle = tipo === "MANUAL" ? (f.screen.title || "") : "";
 
+        // Igual que en Interfaces: los 3 grupos (cabecera, cadena de
+        // interfaces, pantalla de variables) tocan tablas distintas e
+        // independientes entre sí, así que se lanzan en paralelo en vez
+        // de uno detrás de otro. Dentro de cada grupo el orden sí importa
+        // (DELETE antes que INSERT) y se respeta.
+
         // 1) Cabecera --------------------------------------------------
-        if (this.editingIsNew) {
-            const sql = `INSERT INTO ${Provider.qualifyControl("FLUJOS")}
-                (FLUJO_ID, PROYECTO_ID, FLUJO, TIPO, SCHEDULE_JSON, SCREEN_TITLE, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
-                VALUES ('${Provider.esc(id)}', '${Provider.esc(pid)}', '${Provider.esc(f.name)}', '${Provider.esc(tipo)}',
-                        '${scheduleJson}', '${Provider.esc(screenTitle)}', ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`;
-            await Provider.runQuery(sql);
-        } else {
-            const sql = `UPDATE ${Provider.qualifyControl("FLUJOS")}
-                SET FLUJO = '${Provider.esc(f.name)}',
-                    TIPO = '${Provider.esc(tipo)}',
-                    SCHEDULE_JSON = '${scheduleJson}',
-                    SCREEN_TITLE = '${Provider.esc(screenTitle)}',
-                    FECHA_MODIFICACION = CURRENT_TIMESTAMP()
-                WHERE FLUJO_ID = '${Provider.esc(id)}'`;
-            await Provider.runQuery(sql);
-        }
+        const persistHeader = async () => {
+            if (this.editingIsNew) {
+                const sql = `INSERT INTO ${Provider.qualifyControl("FLUJOS")}
+                    (FLUJO_ID, PROYECTO_ID, FLUJO, TIPO, SCHEDULE_JSON, SCREEN_TITLE, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
+                    VALUES ('${Provider.esc(id)}', '${Provider.esc(pid)}', '${Provider.esc(f.name)}', '${Provider.esc(tipo)}',
+                            '${scheduleJson}', '${Provider.esc(screenTitle)}', ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`;
+                await Provider.runQuery(sql);
+            } else {
+                const sql = `UPDATE ${Provider.qualifyControl("FLUJOS")}
+                    SET FLUJO = '${Provider.esc(f.name)}',
+                        TIPO = '${Provider.esc(tipo)}',
+                        SCHEDULE_JSON = '${scheduleJson}',
+                        SCREEN_TITLE = '${Provider.esc(screenTitle)}',
+                        FECHA_MODIFICACION = CURRENT_TIMESTAMP()
+                    WHERE FLUJO_ID = '${Provider.esc(id)}'`;
+                await Provider.runQuery(sql);
+            }
+        };
 
         // 2) Cadena de interfaces + variables asignadas por paso --------
-        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_INTERFACES")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
-        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_INTERFACES_TARGETS")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
-        if (f.chain.length) {
-            const chainVals = f.chain.map((s, idx) =>
-                `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(s.id)}', '${Provider.esc(s.interfaceId)}', ${idx})`).join(",\n");
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_INTERFACES")} (PROYECTO_ID, FLUJO_ID, PASO_ID, INTERFAZ_ID, ORDEN) VALUES ${chainVals}`);
+        const persistChain = async () => {
+            await Promise.all([
+                Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_INTERFACES")} WHERE FLUJO_ID = '${Provider.esc(id)}'`),
+                Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_INTERFACES_TARGETS")} WHERE FLUJO_ID = '${Provider.esc(id)}'`)
+            ]);
+            if (f.chain.length) {
+                const chainVals = f.chain.map((s, idx) =>
+                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(s.id)}', '${Provider.esc(s.interfaceId)}', ${idx})`).join(",\n");
 
-            const targetRows = [];
-            f.chain.forEach(s => {
-                const targets = s.targets || { file: {}, filter: {}, mapping: {} };
-                ["file", "filter", "mapping"].forEach(grupo => {
-                    Object.entries(targets[grupo] || {}).forEach(([clave, t]) => {
-                        if (!t || !t.type) return;
-                        targetRows.push([s.id, grupo.toUpperCase(), clave, t.type === "variable" ? "VARIABLE" : "CONSTANTE", t.value || ""]);
+                const targetRows = [];
+                f.chain.forEach(s => {
+                    const targets = s.targets || { file: {}, filter: {}, mapping: {} };
+                    ["file", "filter", "mapping"].forEach(grupo => {
+                        Object.entries(targets[grupo] || {}).forEach(([clave, t]) => {
+                            if (!t || !t.type) return;
+                            targetRows.push([s.id, grupo.toUpperCase(), clave, t.type === "variable" ? "VARIABLE" : "CONSTANTE", t.value || ""]);
+                        });
                     });
                 });
-            });
-            if (targetRows.length) {
-                const vals = targetRows.map(([pasoId, grupo, clave, tipoT, valor]) =>
-                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(pasoId)}', '${Provider.esc(grupo)}', '${Provider.esc(clave)}', '${Provider.esc(tipoT)}', '${Provider.esc(valor)}')`).join(",\n");
-                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_INTERFACES_TARGETS")} (PROYECTO_ID, FLUJO_ID, PASO_ID, GRUPO, CLAVE, TIPO, VALOR) VALUES ${vals}`);
+
+                const inserts = [
+                    Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_INTERFACES")} (PROYECTO_ID, FLUJO_ID, PASO_ID, INTERFAZ_ID, ORDEN) VALUES ${chainVals}`)
+                ];
+                if (targetRows.length) {
+                    const vals = targetRows.map(([pasoId, grupo, clave, tipoT, valor]) =>
+                        `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(pasoId)}', '${Provider.esc(grupo)}', '${Provider.esc(clave)}', '${Provider.esc(tipoT)}', '${Provider.esc(valor)}')`).join(",\n");
+                    inserts.push(Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_INTERFACES_TARGETS")} (PROYECTO_ID, FLUJO_ID, PASO_ID, GRUPO, CLAVE, TIPO, VALOR) VALUES ${vals}`));
+                }
+                await Promise.all(inserts);
             }
-        }
+        };
 
         // 3) Pantalla de variables (solo manual; se limpia siempre por si cambió de tipo)
-        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
-        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")} WHERE FLUJO_ID = '${Provider.esc(id)}'`);
-        if (tipo === "MANUAL" && f.screen.blocks.length) {
-            const tipoBMap = { variable: "VARIABLE", frame: "FRAME", text: "TEXTO", skip: "SKIP", line: "ULINE" };
-            const blockVals = f.screen.blocks.map((b, idx) => {
-                const tipoB = tipoBMap[b.kind] || "FRAME";
-                const titulo = b.kind === "frame" ? (b.title || "") : "";
-                const contenido = b.kind === "text" ? (b.text || "") : (b.kind === "frame" ? JSON.stringify(b.blocks || []) : "");
-                return `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(b.id)}', '${Provider.esc(tipoB)}', ${idx}, '${Provider.esc(titulo)}', '${Provider.esc(contenido)}')`;
-            }).join(",\n");
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")} (PROYECTO_ID, FLUJO_ID, BLOQUE_ID, TIPO, ORDEN, TITULO, CONTENIDO) VALUES ${blockVals}`);
+        const persistScreen = async () => {
+            await Promise.all([
+                Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")} WHERE FLUJO_ID = '${Provider.esc(id)}'`),
+                Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")} WHERE FLUJO_ID = '${Provider.esc(id)}'`)
+            ]);
+            if (tipo === "MANUAL" && f.screen.blocks.length) {
+                const tipoBMap = { variable: "VARIABLE", frame: "FRAME", text: "TEXTO", skip: "SKIP", line: "ULINE" };
+                const blockVals = f.screen.blocks.map((b, idx) => {
+                    const tipoB = tipoBMap[b.kind] || "FRAME";
+                    const titulo = b.kind === "frame" ? (b.title || "") : "";
+                    const contenido = b.kind === "text" ? (b.text || "") : (b.kind === "frame" ? JSON.stringify(b.blocks || []) : "");
+                    return `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(b.id)}', '${Provider.esc(tipoB)}', ${idx}, '${Provider.esc(titulo)}', '${Provider.esc(contenido)}')`;
+                }).join(",\n");
 
-            // Solo las variables SUELTAS (fuera de un frame) se guardan en
-            // FLUJOS_SCREEN_VARIABLES; las que están dentro de un frame van
-            // ya serializadas junto al resto de bloques del frame (arriba).
-            const varRows = [];
-            f.screen.blocks.forEach(b => {
-                if (b.kind === "variable" && b.variable) {
-                    varRows.push([b.variable.id || Provider.newId(), b.id, b.variable.name, b.variable.label, b.variable.type, b.variable.selectMode || "unico", b.variable.validation, 0]);
+                // Solo las variables SUELTAS (fuera de un frame) se guardan en
+                // FLUJOS_SCREEN_VARIABLES; las que están dentro de un frame van
+                // ya serializadas junto al resto de bloques del frame (arriba).
+                const varRows = [];
+                f.screen.blocks.forEach(b => {
+                    if (b.kind === "variable" && b.variable) {
+                        varRows.push([b.variable.id || Provider.newId(), b.id, b.variable.name, b.variable.label, b.variable.type, b.variable.selectMode || "unico", b.variable.validation, 0]);
+                    }
+                });
+
+                const inserts = [
+                    Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_SCREEN_BLOCKS")} (PROYECTO_ID, FLUJO_ID, BLOQUE_ID, TIPO, ORDEN, TITULO, CONTENIDO) VALUES ${blockVals}`)
+                ];
+                if (varRows.length) {
+                    const vals = varRows.map(([varId, bloqueId, nombre, etiqueta, tipoV, selectMode, validation, orden]) =>
+                        `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(varId)}', '${Provider.esc(bloqueId)}', '${Provider.esc(nombre)}', '${Provider.esc(etiqueta)}', '${Provider.esc(tipoV)}', '${Provider.esc(selectMode)}', '${Provider.esc(JSON.stringify(validation || { type: "NONE", allowEmpty: true, showText: false, searchHelp: "LISTBOX" }))}', ${orden})`).join(",\n");
+                    inserts.push(Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")} (PROYECTO_ID, FLUJO_ID, VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, SELECT_MODE, VALIDACION_JSON, ORDEN) VALUES ${vals}`));
                 }
-            });
-            if (varRows.length) {
-                const vals = varRows.map(([varId, bloqueId, nombre, etiqueta, tipoV, selectMode, validation, orden]) =>
-                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(varId)}', '${Provider.esc(bloqueId)}', '${Provider.esc(nombre)}', '${Provider.esc(etiqueta)}', '${Provider.esc(tipoV)}', '${Provider.esc(selectMode)}', '${Provider.esc(JSON.stringify(validation || { type: "NONE", allowEmpty: true, showText: false, searchHelp: "LISTBOX" }))}', ${orden})`).join(",\n");
-                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES")} (PROYECTO_ID, FLUJO_ID, VARIABLE_ID, BLOQUE_ID, NOMBRE, ETIQUETA, TIPO, SELECT_MODE, VALIDACION_JSON, ORDEN) VALUES ${vals}`);
+                await Promise.all(inserts);
             }
-        }
+        };
+
+        await Promise.all([persistHeader(), persistChain(), persistScreen()]);
     }
 };
