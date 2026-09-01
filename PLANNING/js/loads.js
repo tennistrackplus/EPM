@@ -556,13 +556,16 @@ const Loads = {
         this._onResize = () => this.scheduleConnectorRedraw();
         window.addEventListener("resize", this._onResize);
 
-        // Las columnas de Input/Output tienen su propio scroll interno
-        // (overflow-y: auto) — sin este listener, el usuario podía hacer
-        // scroll en cualquiera de las dos listas y las líneas del SVG se
-        // quedaban ancladas a la posición antigua de las filas.
+        // Los eventos "scroll" no burbujean, así que un listener puesto en
+        // loadInputFields/loadOutputFields solo se entera si scrollea ESE
+        // div en concreto. Si en realidad quien scrollea es un contenedor
+        // padre (p.ej. .modal-body, que también tiene overflow-y:auto), ese
+        // listener nunca se disparaba y las flechas se quedaban ancladas a
+        // la posición vieja. Usando la fase de "captura" (true) en el propio
+        // overlay SÍ se recibe el scroll de cualquier descendiente, sea cual
+        // sea el contenedor que realmente se mueve.
         this._onColScroll = () => this.scheduleConnectorRedraw();
-        document.getElementById("loadInputFields").addEventListener("scroll", this._onColScroll);
-        document.getElementById("loadOutputFields").addEventListener("scroll", this._onColScroll);
+        overlay.addEventListener("scroll", this._onColScroll, true);
 
         this.updateModalHeader();
         this.renderOriginPanel();
@@ -581,6 +584,7 @@ const Loads = {
     closeForm() {
         if (this.overlay) this.overlay.classList.remove("visible");
         if (this._onResize) { window.removeEventListener("resize", this._onResize); this._onResize = null; }
+        if (this.overlay && this._onColScroll) { this.overlay.removeEventListener("scroll", this._onColScroll, true); }
         this._onColScroll = null;
         this.editing = null;
     },

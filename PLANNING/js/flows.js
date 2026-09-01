@@ -71,8 +71,14 @@ const Flows = {
 
         document.getElementById("btnNewFlow").addEventListener("click", () => this.openForm());
 
-        await this.loadInterfacesAndCubes();
-        await this.loadDimensions();
+        // El listado (renderList) solo necesita this.list — interfaces,
+        // cubos y dimensiones solo hacen falta al ABRIR el editor de un
+        // flujo (openForm). Antes se esperaba a las 3 cargas antes de
+        // pintar nada, en serie, así que la lista tardaba en aparecer lo
+        // que tardaban TODAS juntas. Ahora se lanza la carga de referencia
+        // en paralelo y sin bloquear, y el listado se pinta en cuanto está
+        // listo; openForm() espera a _refDataReady si hace falta.
+        this._refDataReady = Promise.all([this.loadInterfacesAndCubes(), this.loadDimensions()]);
         await this.loadList();
         this.renderList();
     },
@@ -95,21 +101,23 @@ const Flows = {
     // ------------------------------------------------------------
     async loadList() {
         try {
-            const rows = await Provider.runQuery(`
-                SELECT FLUJO_ID, FLUJO, TIPO, SCHEDULE_JSON
-                FROM ${Provider.qualifyControl("FLUJOS")}
-                WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
-                ORDER BY FLUJO`);
-
-            let chainCounts = {};
-            if (rows.length) {
-                const chains = await Provider.runQuery(`
+            // Las dos consultas son independientes (una lista flujos, la
+            // otra cuenta pasos por flujo) — se lanzan a la vez.
+            const [rows, chains] = await Promise.all([
+                Provider.runQuery(`
+                    SELECT FLUJO_ID, FLUJO, TIPO, SCHEDULE_JSON
+                    FROM ${Provider.qualifyControl("FLUJOS")}
+                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
+                    ORDER BY FLUJO`),
+                Provider.runQuery(`
                     SELECT FLUJO_ID, COUNT(*) AS N
                     FROM ${Provider.qualifyControl("FLUJOS_INTERFACES")}
                     WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
-                    GROUP BY FLUJO_ID`);
-                chains.forEach(c => { chainCounts[c.FLUJO_ID] = parseInt(c.N || "0", 10); });
-            }
+                    GROUP BY FLUJO_ID`)
+            ]);
+
+            const chainCounts = {};
+            chains.forEach(c => { chainCounts[c.FLUJO_ID] = parseInt(c.N || "0", 10); });
 
             this.list = rows.map(r => {
                 let schedule = null;
@@ -202,43 +210,41 @@ const Flows = {
 
     /** Interfaces (cargas de datos) y cubos del proyecto, para poder listarlas, leer sus campos y mapear variables. */
     async loadInterfacesAndCubes() {
+        // Las 5 consultas (interfaces, sus inputs, sus filtros, su mapeo, y
+        // cubos) solo filtran por PROYECTO_ID — ninguna depende del
+        // resultado de otra — así que se lanzan todas a la vez en vez de
+        // una detrás de otra.
+        const pidCond = `PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'`;
+        const [rowsRes, inputsRes, filtersRes, mappingRes, cubesRes] = await Promise.allSettled([
+            Provider.runQuery(`SELECT INTERFAZ_ID, INTERFAZ, TIPO, CUBO_ID FROM ${Provider.qualifyControl("INTERFACES")} WHERE ${pidCond} ORDER BY INTERFAZ`),
+            Provider.runQuery(`SELECT INTERFAZ_ID, CAMPO, TIPO, ORDEN FROM ${Provider.qualifyControl("INTERFACES_INPUT")} WHERE ${pidCond} ORDER BY ORDEN`),
+            Provider.runQuery(`SELECT INTERFAZ_ID, CAMPO, TIPO, VALOR FROM ${Provider.qualifyControl("INTERFACES_INPUT_FILTERS")} WHERE ${pidCond}`),
+            Provider.runQuery(`SELECT INTERFAZ_ID, CAMPO_DESTINO, TIPO FROM ${Provider.qualifyControl("INTERFACES_MAPPING")} WHERE ${pidCond}`),
+            Provider.runQuery(`SELECT CUBO_ID, CUBOS, CAMPOS_JSON FROM ${Provider.qualifyControl("CUBOS")} WHERE ${pidCond} ORDER BY CUBOS`)
+        ]);
+
         try {
-            const rows = await Provider.runQuery(`
-                SELECT INTERFAZ_ID, INTERFAZ, TIPO, CUBO_ID
-                FROM ${Provider.qualifyControl("INTERFACES")}
-                WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
-                ORDER BY INTERFAZ`);
+            const rows = rowsRes.status === "fulfilled" ? rowsRes.value : [];
+            const inputs = inputsRes.status === "fulfilled" ? inputsRes.value : [];
+            const filters = filtersRes.status === "fulfilled" ? filtersRes.value : [];
+            const mapping = mappingRes.status === "fulfilled" ? mappingRes.value : [];
 
-            let fieldsByIface = {}, mappingByIface = {};
-            if (rows.length) {
-                const inputs = await Provider.runQuery(`
-                    SELECT INTERFAZ_ID, CAMPO, TIPO, ORDEN FROM ${Provider.qualifyControl("INTERFACES_INPUT")}
-                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}' ORDER BY ORDEN`);
-                inputs.forEach(i => {
-                    (fieldsByIface[i.INTERFAZ_ID] = fieldsByIface[i.INTERFAZ_ID] || []).push({ name: i.CAMPO, type: i.TIPO || "STRING" });
-                });
-
-                const filters = await Provider.runQuery(`
-                    SELECT INTERFAZ_ID, CAMPO, TIPO, VALOR FROM ${Provider.qualifyControl("INTERFACES_INPUT_FILTERS")}
-                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'`);
-                const filtersByIface = {};
-                filters.forEach(f => {
-                    filtersByIface[f.INTERFAZ_ID] = filtersByIface[f.INTERFAZ_ID] || {};
-                    filtersByIface[f.INTERFAZ_ID][f.CAMPO] = { type: f.TIPO === "VARIABLE" ? "variable" : "constante", value: f.VALOR || "" };
-                });
-                Object.keys(fieldsByIface).forEach(ifaceId => {
-                    fieldsByIface[ifaceId] = fieldsByIface[ifaceId].map(fl =>
-                        ({ ...fl, filter: (filtersByIface[ifaceId] || {})[fl.name] || null }));
-                });
-
-                const mapping = await Provider.runQuery(`
-                    SELECT INTERFAZ_ID, CAMPO_DESTINO, TIPO FROM ${Provider.qualifyControl("INTERFACES_MAPPING")}
-                    WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'`);
-                mapping.forEach(m => {
-                    mappingByIface[m.INTERFAZ_ID] = mappingByIface[m.INTERFAZ_ID] || {};
-                    mappingByIface[m.INTERFAZ_ID][m.CAMPO_DESTINO] = { type: (m.TIPO || "").toLowerCase() };
-                });
-            }
+            const fieldsByIface = {}, mappingByIface = {}, filtersByIface = {};
+            inputs.forEach(i => {
+                (fieldsByIface[i.INTERFAZ_ID] = fieldsByIface[i.INTERFAZ_ID] || []).push({ name: i.CAMPO, type: i.TIPO || "STRING" });
+            });
+            filters.forEach(f => {
+                filtersByIface[f.INTERFAZ_ID] = filtersByIface[f.INTERFAZ_ID] || {};
+                filtersByIface[f.INTERFAZ_ID][f.CAMPO] = { type: f.TIPO === "VARIABLE" ? "variable" : "constante", value: f.VALOR || "" };
+            });
+            Object.keys(fieldsByIface).forEach(ifaceId => {
+                fieldsByIface[ifaceId] = fieldsByIface[ifaceId].map(fl =>
+                    ({ ...fl, filter: (filtersByIface[ifaceId] || {})[fl.name] || null }));
+            });
+            mapping.forEach(m => {
+                mappingByIface[m.INTERFAZ_ID] = mappingByIface[m.INTERFAZ_ID] || {};
+                mappingByIface[m.INTERFAZ_ID][m.CAMPO_DESTINO] = { type: (m.TIPO || "").toLowerCase() };
+            });
 
             this.interfaces = rows.map(r => ({
                 id: r.INTERFAZ_ID,
@@ -252,15 +258,11 @@ const Flows = {
             this.interfaces = [];
         }
 
-        try {
-            const sql = `SELECT CUBO_ID, CUBOS, CAMPOS_JSON
-                         FROM ${Provider.qualifyControl("CUBOS")}
-                         WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
-                         ORDER BY CUBOS`;
-            this.cubes = await Provider.runQuery(sql);
-        } catch (err) {
+        if (cubesRes.status === "fulfilled") {
+            this.cubes = cubesRes.value;
+        } else {
             this.cubes = [];
-            UI.toast("Error al cargar los cubos: " + err.message, "error");
+            UI.toast("Error al cargar los cubos: " + cubesRes.reason.message, "error");
         }
     },
 
@@ -449,6 +451,11 @@ const Flows = {
     // Orquesta los 2 pasos de alta/edición
     // ------------------------------------------------------------
     async openForm(editId = null) {
+        // Los datos de referencia (interfaces/cubos/dimensiones) se cargan
+        // en paralelo al listado y puede que aún no hayan terminado si el
+        // usuario abre el editor muy rápido — se espera aquí antes de usarlos.
+        if (this._refDataReady) await this._refDataReady;
+
         this.editingIsNew = !editId;
         this.screenCollapsed = false;
         this.selectedStepId = null;
