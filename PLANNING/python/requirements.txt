@@ -1,0 +1,18 @@
+# Dependencias para desplegar python/ como Cloud Run / Cloud Functions Gen2
+# (ver python/cloud_run_main.py y README.md, seccion "Interfaces de
+# fichero en BigQuery"). No hacen falta si solo usas Snowflake.
+#
+# IMPORTANTE: el build (Buildpacks de Google Cloud) debe forzarse a
+# Python 3.13 con --set-build-env-vars GOOGLE_PYTHON_VERSION=3.13 (ya
+# incluido en deploy_cloud_run.sh) - a fecha de este comentario el
+# catalogo de runtimes del builder solo ofrece 3.13/3.14, y pyarrow no
+# tiene paquetes precompilados para 3.14 todavia. Las versiones minimas
+# de abajo son las primeras de cada libreria con paquete precompilado
+# para 3.13; no las bajes.
+functions-framework>=3.5
+flask>=3.0
+google-cloud-bigquery>=3.25
+google-cloud-storage>=2.18
+pandas>=2.2
+db-dtypes>=1.3
+pyarrow>=18.0.0

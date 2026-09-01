@@ -124,6 +124,52 @@ class SnowflakeStageStorage:
         self.session.file.put(local_path, stage_dir, auto_compress=False, overwrite=True)
 
 
+try:  # dependencia opcional: solo hace falta si usas GCSStorage
+    from google.cloud import storage as gcs
+except ImportError:  # pragma: no cover
+    gcs = None
+
+
+class GCSStorage:
+    """Adaptador de storage sobre un bucket de Google Cloud Storage.
+    Hermano de `SnowflakeStageStorage`: implementa el mismo contrato
+    `StorageAdapter` (download/upload) para que `flow_runner.py` funcione
+    SIN CAMBIOS cuando el motor es BigQuery. Pensado para instanciarse
+    DENTRO de la Cloud Function / Cloud Run que expone
+    `DracoConfig.flowRunnerHttpEndpoint` (ver python/cloud_run_main.py).
+
+    `storage_path` (el valor de la variable de pantalla tipo FILE) es
+    SIEMPRE una ruta relativa DENTRO del bucket (ej.
+    "flujo123__fichero__1700000000000_datos.csv" - ver
+    js/storage.js::buildPath), nunca incluye el nombre del bucket: este
+    adaptador es quien lo antepone. Debe ser el MISMO bucket al que sube
+    el navegador (DracoConfig.bigqueryUploadBucket en js/config.js).
+    """
+
+    def __init__(self, client: "gcs.Client", bucket_name: str, default_local_dir: str = "/tmp"):
+        if gcs is None:  # pragma: no cover
+            raise ImportError(
+                "Falta el paquete 'google-cloud-storage'. Instalalo con "
+                "`pip install google-cloud-storage` (ya viene incluido en "
+                "python/requirements.txt de la Cloud Function)."
+            )
+        self.bucket = client.bucket(bucket_name)
+        self.default_local_dir = default_local_dir
+
+    def download(self, storage_path: str, local_path: Optional[str] = None) -> str:
+        blob = self.bucket.blob(storage_path.lstrip("/"))
+        if not blob.exists():
+            raise FileNotFoundError(f"No existe el fichero en el bucket: {storage_path}")
+        dst = local_path or os.path.join(self.default_local_dir, os.path.basename(storage_path))
+        os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+        blob.download_to_filename(dst)
+        return dst
+
+    def upload(self, local_path: str, storage_path: str) -> None:
+        blob = self.bucket.blob(storage_path.lstrip("/"))
+        blob.upload_from_filename(local_path)
+
+
 # ============================================================
 # 2) CARACTERISTICAS DEL ORIGEN (INTERFACES_VALUES) Y LECTURA DEL FICHERO
 # ============================================================

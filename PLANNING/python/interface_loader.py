@@ -159,6 +159,79 @@ class SnowflakeEngine:
         sdf.write.mode(mode).save_as_table(table)
 
 
+try:  # dependencia opcional: solo hace falta si usas BigQueryEngine
+    from google.cloud import bigquery
+except ImportError:  # pragma: no cover
+    bigquery = None
+
+
+class BigQueryEngine:
+    """Adaptador de referencia para BigQuery, hermano de `SnowflakeEngine`:
+    implementa el mismo contrato `EngineAdapter` (4 metodos) usando
+    `google-cloud-bigquery`, para que `run_interface` / `flow_runner.run_flow`
+    funcionen SIN CAMBIOS - la logica de mapeo (`apply_mapping`) es
+    identica, solo cambia el motor que lee/escribe.
+
+    Pensado para instanciarse DENTRO de la Cloud Function / Cloud Run que
+    expone `DracoConfig.flowRunnerHttpEndpoint` (ver
+    python/cloud_run_main.py y la seccion "Interfaces de fichero en
+    BigQuery" del README).
+
+    Uso tipico:
+
+        from google.cloud import bigquery
+        from interface_loader import BigQueryEngine, run_interface
+
+        client = bigquery.Client(project="mi-proyecto-gcp")
+        engine = BigQueryEngine(client, control_dataset="DRACO_CONTROL")
+        n = run_interface(engine, interfaz_id, tabla_origen, tabla_variables, tabla_destino)
+    """
+
+    def __init__(self, client: "bigquery.Client", control_dataset: str = "DRACO_CONTROL",
+                 project: Optional[str] = None):
+        if bigquery is None:  # pragma: no cover
+            raise ImportError(
+                "Falta el paquete 'google-cloud-bigquery'. Instalalo con "
+                "`pip install google-cloud-bigquery db-dtypes pyarrow` "
+                "(ya viene incluido en python/requirements.txt de la Cloud Function)."
+            )
+        self.client = client
+        self.project = project or client.project
+        self.control_dataset = control_dataset
+
+    def qualify_control(self, table: str) -> str:
+        return f"`{self.project}.{self.control_dataset}.{table}`"
+
+    def esc(self, value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).replace("\\", "\\\\").replace("'", "\\'")
+
+    def run_control_query(self, sql: str) -> List[Dict[str, Any]]:
+        return [dict(row.items()) for row in self.client.query(sql).result()]
+
+    def read_table(self, table: str) -> pd.DataFrame:
+        # `table` puede llegar ya cualificada (proyecto.dataset.tabla, como
+        # devuelve CUBOS.TABLA) o solo con el nombre corto de una tabla de
+        # control: en ese segundo caso se completa con el dataset de control.
+        ref = table.strip("`")
+        if "." not in ref:
+            ref = f"{self.project}.{self.control_dataset}.{ref}"
+        return self.client.query(f"SELECT * FROM `{ref}`").result().to_dataframe()
+
+    def write_table(self, df: pd.DataFrame, table: str, mode: str = "append") -> None:
+        ref = table.strip("`")
+        if "." not in ref:
+            ref = f"{self.project}.{self.control_dataset}.{ref}"
+        disposition = (
+            bigquery.WriteDisposition.WRITE_TRUNCATE if mode == "overwrite"
+            else bigquery.WriteDisposition.WRITE_APPEND
+        )
+        job_config = bigquery.LoadJobConfig(write_disposition=disposition, autodetect=True)
+        job = self.client.load_table_from_dataframe(df, ref, job_config=job_config)
+        job.result()  # espera a que termine el load job y propaga errores
+
+
 # ============================================================
 # 3) CARGA DE LA CONFIGURACION DESDE LAS TABLAS DE CONTROL
 # ============================================================

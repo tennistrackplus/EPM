@@ -1,0 +1,1 @@
+web: functions-framework --target=main --source=cloud_run_main.py --port=$PORT
