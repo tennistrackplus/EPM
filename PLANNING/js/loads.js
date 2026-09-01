@@ -556,6 +556,14 @@ const Loads = {
         this._onResize = () => this.scheduleConnectorRedraw();
         window.addEventListener("resize", this._onResize);
 
+        // Las columnas de Input/Output tienen su propio scroll interno
+        // (overflow-y: auto) — sin este listener, el usuario podía hacer
+        // scroll en cualquiera de las dos listas y las líneas del SVG se
+        // quedaban ancladas a la posición antigua de las filas.
+        this._onColScroll = () => this.scheduleConnectorRedraw();
+        document.getElementById("loadInputFields").addEventListener("scroll", this._onColScroll);
+        document.getElementById("loadOutputFields").addEventListener("scroll", this._onColScroll);
+
         this.updateModalHeader();
         this.renderOriginPanel();
         this.renderInputFields();
@@ -573,6 +581,7 @@ const Loads = {
     closeForm() {
         if (this.overlay) this.overlay.classList.remove("visible");
         if (this._onResize) { window.removeEventListener("resize", this._onResize); this._onResize = null; }
+        this._onColScroll = null;
         this.editing = null;
     },
 
@@ -666,6 +675,11 @@ const Loads = {
             document.getElementById("btnToggleFileParams").addEventListener("click", () => {
                 this.fileParamsCollapsed = !this.fileParamsCollapsed;
                 this.renderOriginPanel();
+                // Ocultar/mostrar el formato de fichero cambia la altura del
+                // panel de origen y por tanto la posición de las filas de
+                // input/output — hay que recalcular los conectores o se
+                // quedan apuntando a donde estaban antes de colapsar.
+                this.scheduleConnectorRedraw();
             });
 
             if (!collapsed) {
@@ -1075,74 +1089,94 @@ const Loads = {
         const conector = e.originType === "tabla" ? e.origin.connector : "";
         const mappingMode = e.mappingMode === "code" ? "CODIGO" : "VISUAL";
 
+        // Cada uno de estos 5 grupos toca una tabla distinta y son
+        // independientes entre sí (solo el DELETE+INSERT *dentro* de un
+        // mismo grupo tiene que ir en orden). Antes se lanzaban los 9
+        // await uno detrás de otro, así que el guardado tardaba la SUMA
+        // de las 9 llamadas a BigQuery/Snowflake (~1-2s cada una). Al
+        // lanzar los grupos en paralelo con Promise.all, el tiempo total
+        // pasa a ser el del grupo más lento, no la suma de todos.
+
         // 1) Cabecera --------------------------------------------------
-        if (this.editingIsNew) {
-            const sql = `INSERT INTO ${Provider.qualifyControl("INTERFACES")}
-                (INTERFAZ_ID, PROYECTO_ID, INTERFAZ, TIPO, ORIGEN, CONECTOR, CUBO_ID, MAPPING_MODE, MAPPING_CODE, INPUT_TRANSFORM_CODE, OUTPUT_TRANSFORM_CODE, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
-                VALUES ('${Provider.esc(id)}', '${Provider.esc(pid)}', '${Provider.esc(e.name)}', '${Provider.esc(tipo)}',
-                        '${Provider.esc(origen)}', '${Provider.esc(conector)}', '${Provider.esc(e.cuboId)}', '${Provider.esc(mappingMode)}',
-                        '${Provider.esc(e.mappingCode)}', '${Provider.esc(e.inputTransformCode)}', '${Provider.esc(e.outputTransformCode)}',
-                        ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`;
-            await Provider.runQuery(sql);
-        } else {
-            const sql = `UPDATE ${Provider.qualifyControl("INTERFACES")}
-                SET INTERFAZ = '${Provider.esc(e.name)}',
-                    TIPO = '${Provider.esc(tipo)}',
-                    ORIGEN = '${Provider.esc(origen)}',
-                    CONECTOR = '${Provider.esc(conector)}',
-                    CUBO_ID = '${Provider.esc(e.cuboId)}',
-                    MAPPING_MODE = '${Provider.esc(mappingMode)}',
-                    MAPPING_CODE = '${Provider.esc(e.mappingCode)}',
-                    INPUT_TRANSFORM_CODE = '${Provider.esc(e.inputTransformCode)}',
-                    OUTPUT_TRANSFORM_CODE = '${Provider.esc(e.outputTransformCode)}',
-                    FECHA_MODIFICACION = CURRENT_TIMESTAMP()
-                WHERE INTERFAZ_ID = '${Provider.esc(id)}'`;
-            await Provider.runQuery(sql);
-        }
+        const persistHeader = async () => {
+            if (this.editingIsNew) {
+                const sql = `INSERT INTO ${Provider.qualifyControl("INTERFACES")}
+                    (INTERFAZ_ID, PROYECTO_ID, INTERFAZ, TIPO, ORIGEN, CONECTOR, CUBO_ID, MAPPING_MODE, MAPPING_CODE, INPUT_TRANSFORM_CODE, OUTPUT_TRANSFORM_CODE, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
+                    VALUES ('${Provider.esc(id)}', '${Provider.esc(pid)}', '${Provider.esc(e.name)}', '${Provider.esc(tipo)}',
+                            '${Provider.esc(origen)}', '${Provider.esc(conector)}', '${Provider.esc(e.cuboId)}', '${Provider.esc(mappingMode)}',
+                            '${Provider.esc(e.mappingCode)}', '${Provider.esc(e.inputTransformCode)}', '${Provider.esc(e.outputTransformCode)}',
+                            ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`;
+                await Provider.runQuery(sql);
+            } else {
+                const sql = `UPDATE ${Provider.qualifyControl("INTERFACES")}
+                    SET INTERFAZ = '${Provider.esc(e.name)}',
+                        TIPO = '${Provider.esc(tipo)}',
+                        ORIGEN = '${Provider.esc(origen)}',
+                        CONECTOR = '${Provider.esc(conector)}',
+                        CUBO_ID = '${Provider.esc(e.cuboId)}',
+                        MAPPING_MODE = '${Provider.esc(mappingMode)}',
+                        MAPPING_CODE = '${Provider.esc(e.mappingCode)}',
+                        INPUT_TRANSFORM_CODE = '${Provider.esc(e.inputTransformCode)}',
+                        OUTPUT_TRANSFORM_CODE = '${Provider.esc(e.outputTransformCode)}',
+                        FECHA_MODIFICACION = CURRENT_TIMESTAMP()
+                    WHERE INTERFAZ_ID = '${Provider.esc(id)}'`;
+                await Provider.runQuery(sql);
+            }
+        };
 
         // 2) Características del origen (INTERFACES_VALUES) ------------
-        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_VALUES")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
-        if (e.originType === "fichero") {
-            const valueRows = [
-                ["TIENE_CABECERA", e.origin.hasHeader ? "true" : "false"],
-                ["LINEAS_CABECERA", String(e.origin.headerLines)],
-                ["SEPARADOR_CAMPO", e.origin.fieldSeparator],
-                ["SEPARADOR_DECIMAL", e.origin.decimalSeparator],
-                ["CODIFICACION", e.origin.encoding]
-            ];
-            const vals = valueRows.map(([car, val]) =>
-                `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(car)}', '${Provider.esc(val)}')`).join(",\n");
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_VALUES")} (PROYECTO_ID, INTERFAZ_ID, CARACTERISTICA, VALOR) VALUES ${vals}`);
-        }
+        const persistValues = async () => {
+            await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_VALUES")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+            if (e.originType === "fichero") {
+                const valueRows = [
+                    ["TIENE_CABECERA", e.origin.hasHeader ? "true" : "false"],
+                    ["LINEAS_CABECERA", String(e.origin.headerLines)],
+                    ["SEPARADOR_CAMPO", e.origin.fieldSeparator],
+                    ["SEPARADOR_DECIMAL", e.origin.decimalSeparator],
+                    ["CODIFICACION", e.origin.encoding]
+                ];
+                const vals = valueRows.map(([car, val]) =>
+                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(car)}', '${Provider.esc(val)}')`).join(",\n");
+                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_VALUES")} (PROYECTO_ID, INTERFAZ_ID, CARACTERISTICA, VALOR) VALUES ${vals}`);
+            }
+        };
 
         // 3) Campos de entrada (INTERFACES_INPUT) -----------------------
-        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_INPUT")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
-        if (e.origin.fields.length) {
-            const vals = e.origin.fields.map((f, idx) =>
-                `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(f.name)}', '${Provider.esc(f.type)}', ${idx})`).join(",\n");
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_INPUT")} (PROYECTO_ID, INTERFAZ_ID, CAMPO, TIPO, ORDEN) VALUES ${vals}`);
-        }
+        const persistInput = async () => {
+            await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_INPUT")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+            if (e.origin.fields.length) {
+                const vals = e.origin.fields.map((f, idx) =>
+                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(f.name)}', '${Provider.esc(f.type)}', ${idx})`).join(",\n");
+                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_INPUT")} (PROYECTO_ID, INTERFAZ_ID, CAMPO, TIPO, ORDEN) VALUES ${vals}`);
+            }
+        };
 
         // 4) Filtros sobre los campos de entrada (INTERFACES_INPUT_FILTERS)
-        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_INPUT_FILTERS")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
-        const filterRows = e.origin.fields.filter(f => f.filter && f.filter.type);
-        if (filterRows.length) {
-            const vals = filterRows.map(f =>
-                `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(f.name)}', '${Provider.esc(f.filter.type === "variable" ? "VARIABLE" : "VALOR")}', '${Provider.esc(f.filter.value)}')`).join(",\n");
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_INPUT_FILTERS")} (PROYECTO_ID, INTERFAZ_ID, CAMPO, TIPO, VALOR) VALUES ${vals}`);
-        }
+        const persistFilters = async () => {
+            await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_INPUT_FILTERS")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+            const filterRows = e.origin.fields.filter(f => f.filter && f.filter.type);
+            if (filterRows.length) {
+                const vals = filterRows.map(f =>
+                    `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(f.name)}', '${Provider.esc(f.filter.type === "variable" ? "VARIABLE" : "VALOR")}', '${Provider.esc(f.filter.value)}')`).join(",\n");
+                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_INPUT_FILTERS")} (PROYECTO_ID, INTERFAZ_ID, CAMPO, TIPO, VALOR) VALUES ${vals}`);
+            }
+        };
 
         // 5) Mapeo campo a campo hacia el cubo (INTERFACES_MAPPING) -----
-        await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_MAPPING")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
-        const mapRows = Object.entries(e.outputMappings || {}).filter(([, m]) => m && m.type);
-        if (mapRows.length) {
-            const vals = mapRows.map(([campoDestino, m]) => {
-                const t = m.type.toUpperCase();
-                const valor = t === "FUNCION" ? "" : (m.value || "");
-                const codigo = t === "FUNCION" ? (m.value || "") : "";
-                return `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(campoDestino)}', '${Provider.esc(t)}', '${Provider.esc(valor)}', '${Provider.esc(codigo)}')`;
-            }).join(",\n");
-            await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_MAPPING")} (PROYECTO_ID, INTERFAZ_ID, CAMPO_DESTINO, TIPO, VALOR, CODIGO) VALUES ${vals}`);
-        }
+        const persistMapping = async () => {
+            await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl("INTERFACES_MAPPING")} WHERE INTERFAZ_ID = '${Provider.esc(id)}'`);
+            const mapRows = Object.entries(e.outputMappings || {}).filter(([, m]) => m && m.type);
+            if (mapRows.length) {
+                const vals = mapRows.map(([campoDestino, m]) => {
+                    const t = m.type.toUpperCase();
+                    const valor = t === "FUNCION" ? "" : (m.value || "");
+                    const codigo = t === "FUNCION" ? (m.value || "") : "";
+                    return `('${Provider.esc(pid)}', '${Provider.esc(id)}', '${Provider.esc(campoDestino)}', '${Provider.esc(t)}', '${Provider.esc(valor)}', '${Provider.esc(codigo)}')`;
+                }).join(",\n");
+                await Provider.runQuery(`INSERT INTO ${Provider.qualifyControl("INTERFACES_MAPPING")} (PROYECTO_ID, INTERFAZ_ID, CAMPO_DESTINO, TIPO, VALOR, CODIGO) VALUES ${vals}`);
+            }
+        };
+
+        await Promise.all([persistHeader(), persistValues(), persistInput(), persistFilters(), persistMapping()]);
     }
 };

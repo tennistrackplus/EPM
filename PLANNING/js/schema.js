@@ -417,13 +417,15 @@ const DracoSchema = {
         const workflowsRuns = Provider.qualifyControl("WORKFLOWS_RUNS");
         const workflowsRunsInstancias = Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS");
         const workflowsPasos = Provider.qualifyControl("WORKFLOWS_PASOS");
+        const flujosScreenVariables = Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES");
         await Promise.all([
             Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING`),
             Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP`),
             Provider.runQuery(`ALTER TABLE ${workflowsRuns} ADD COLUMN IF NOT EXISTS DESCRIPCION STRING`),
             Provider.runQuery(`ALTER TABLE ${workflowsRunsInstancias} ADD COLUMN IF NOT EXISTS REVISOR STRING`),
             Provider.runQuery(`ALTER TABLE ${workflowsRunsInstancias} ADD COLUMN IF NOT EXISTS FECHA_PROGRAMADA_FIN STRING`),
-            Provider.runQuery(`ALTER TABLE ${workflowsPasos} ADD COLUMN IF NOT EXISTS NO_BLOQUEA_REVISION BOOLEAN`)
+            Provider.runQuery(`ALTER TABLE ${workflowsPasos} ADD COLUMN IF NOT EXISTS NO_BLOQUEA_REVISION BOOLEAN`),
+            Provider.runQuery(`ALTER TABLE ${flujosScreenVariables} ADD COLUMN IF NOT EXISTS SELECT_MODE STRING`)
         ]);
     },
 
