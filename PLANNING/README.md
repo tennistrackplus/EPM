@@ -331,11 +331,11 @@ Los **Flujos de carga** ya se pueden ejecutar de verdad, no solo modelar:
   un nuevo tipo de variable, **FILE**, que muestra un selector de
   fichero) y dos botones:
   - **▶ Ejecutar**: sube cada fichero local seleccionado al storage
-    (`js/storage.js` — configura `DracoConfig.storageUploadUrlBuilder`
-    con tu backend/bucket) y a continuación lanza el orquestador
-    (`DracoConfig.flowRunnerProcedure` vía `CALL` en Snowflake, o
-    `DracoConfig.flowRunnerHttpEndpoint` si envuelves `flow_runner.py`
-    en un servicio HTTP propio, p.ej. para BigQuery).
+    (`js/storage.js` — en BigQuery basta con `DracoConfig.
+    bigqueryUploadBucket`, ver sección 7ter) y a continuación lanza el
+    orquestador (`DracoConfig.flowRunnerProcedure` vía `CALL` en
+    Snowflake, o `DracoConfig.flowRunnerHttpEndpoint` en BigQuery — ver
+    sección 7ter).
   - **🖥 Monitor**: repinta la cadena de interfaces del flujo (misma
     tarjeta que en el editor) coloreada según `FLUJOS_RUN_STEPS` de la
     última ejecución — gris = pendiente, azul pulsando = en ejecución,
@@ -343,6 +343,143 @@ Los **Flujos de carga** ya se pueden ejecutar de verdad, no solo modelar:
     siga en curso.
   - Desde el editor de flujos (`app.html`), el botón "▶ Ejecutar /
     Monitor" abre directamente esta pantalla para el flujo guardado.
+
+## 7ter. Interfaces de fichero en BigQuery — despliegue paso a paso
+
+Esta sección explica, para quien no ha tocado nunca Google Cloud, en qué
+se convierte todo lo de Snowflake (stage + stored procedure Python) para
+BigQuery, dónde queda guardado el fichero, cómo ver los procesos
+ejecutados y qué hay que configurar en BigQuery/GCS. Son 3 piezas:
+
+| Pieza                      | Snowflake                                   | BigQuery                                                        |
+|----------------------------|----------------------------------------------|-------------------------------------------------------------------|
+| Guardado del fichero       | Stage interno (`@DRACO_LANDING`)              | Bucket de **Google Cloud Storage** (GCS)                          |
+| El "Python que se programa"| Stored Procedure Python (`SP_RUN_FLUJO`)      | **Cloud Run** (o Cloud Functions Gen2) ejecutando `python/cloud_run_main.py` |
+| Cómo se lanza              | `CALL SP_RUN_FLUJO(...)` desde el navegador   | `POST` a la URL del servicio (`DracoConfig.flowRunnerHttpEndpoint`) |
+| Motor de lectura/escritura | `SnowflakeEngine` (`python/interface_loader.py`) | `BigQueryEngine` (mismo fichero, misma lógica de mapeo)         |
+| Monitorización             | Tablas `FLUJOS_RUNS`/`FLUJOS_RUN_STEPS` (igual en ambos) + logs de Snowflake | Las mismas tablas (ahora en BigQuery) + **Cloud Logging / Cloud Run** |
+
+En BigQuery no existen los "Python Stored Procedures" nativos de
+Snowflake, así que el mismo `python/flow_runner.py` se despliega como un
+pequeño servicio HTTP (Cloud Run) al que la app llama por `fetch()`.
+
+### Paso 1 — Crear el bucket donde se guardan los ficheros subidos
+
+1. Google Cloud Console → **Cloud Storage → Buckets → Crear**.
+2. Nombre único global, p.ej. `draco-landing-mi-proyecto`. Región: la
+   misma que uses para BigQuery/Cloud Run (p.ej. `europe-west1`), para
+   evitar costes de tráfico entre regiones. El resto de opciones
+   (clase de almacenamiento Standard, control de acceso uniforme) se
+   puede dejar por defecto.
+3. **Permisos**: pestaña "Permisos" del bucket → "Otorgar acceso" →
+   añade el usuario (o el grupo de Google) que va a usar Planning, rol
+   **"Storage Object Creator"** (`roles/storage.objectCreator`). Esto es
+   lo único que hace falta para que el navegador pueda subir el fichero
+   directamente al bucket usando su propia sesión de Google (el mismo
+   login que ya usa para BigQuery).
+4. En `js/config.js`, rellena `bigqueryUploadBucket` con ese nombre:
+   `bigqueryUploadBucket: "draco-landing-mi-proyecto"`.
+
+Con esto, cuando subes un fichero desde `flow_run.html`, el navegador lo
+manda con un `POST` directo a
+`https://storage.googleapis.com/upload/storage/v1/b/<bucket>/o` usando
+el mismo token OAuth de tu sesión de BigQuery — no hace falta URL
+firmada ni backend intermedio (ver `Storage.uploadToGcsBucket` en
+`js/storage.js`). El objeto queda guardado en el bucket con un nombre
+plano tipo `flujo123__fichero__1700000000000_datos.csv` (sin
+subcarpetas, ver `Storage.buildPath`).
+
+### Paso 2 — En qué se convierte el Python (Cloud Run)
+
+`python/interface_loader.py` y `python/storage_io.py` ya incluyen los
+adaptadores para BigQuery (`BigQueryEngine` y `GCSStorage`, hermanos de
+`SnowflakeEngine`/`SnowflakeStageStorage`): la lógica de mapeo
+(`apply_mapping`) es exactamente la misma, solo cambia de dónde se lee y
+dónde se escribe. El nuevo fichero `python/cloud_run_main.py` envuelve
+`flow_runner.run_flow()` en un endpoint HTTP.
+
+Desplegarlo (con `gcloud` ya instalado y autenticado — `gcloud init`):
+
+1. Habilita las APIs necesarias (una vez por proyecto):
+   ```
+   gcloud services enable run.googleapis.com bigquery.googleapis.com storage.googleapis.com
+   ```
+2. Desde la carpeta `python/` de este proyecto:
+   ```
+   gcloud run deploy draco-flow-runner \
+       --source . \
+       --region europe-west1 \
+       --allow-unauthenticated \
+       --set-env-vars GCP_PROJECT_ID=<tu-proyecto>,CONTROL_DATASET=DRACO_CONTROL,UPLOAD_BUCKET=draco-landing-mi-proyecto
+   ```
+   (usa la misma región que el bucket). El flag `--allow-unauthenticated`
+   hace pública la URL del servicio; si quieres una protección mínima
+   extra sin montar IAM, añade también
+   `--set-env-vars DRACO_SHARED_KEY=<una-clave-larga-aleatoria>` y
+   guarda esa misma clave en el `fetch` que hace `js/flow-run.js` (puedes
+   envolver `DracoConfig.flowRunnerHttpEndpoint` con tu propio wrapper si
+   necesitas mandar esa cabecera; por defecto la app no la manda).
+3. Al terminar, `gcloud` imprime una URL tipo
+   `https://draco-flow-runner-xxxxx-ew.a.run.app`. Cópiala en
+   `js/config.js` → `flowRunnerHttpEndpoint`.
+4. **Permisos que necesita el propio servicio** (su cuenta de servicio,
+   por defecto la "Compute Engine default service account" del
+   proyecto): en el dataset `DRACO_CONTROL` (y en cada dataset
+   `DRACO_<PROYECTO>` que uses como destino) rol **"BigQuery Data
+   Editor"**, y a nivel de proyecto **"BigQuery Job User"** (para poder
+   lanzar las queries/load jobs); en el bucket, rol **"Storage Object
+   Viewer"** como mínimo (para poder descargar los ficheros subidos).
+
+Alternativa: Cloud Functions Gen2 (mismo código, `requirements.txt`
+incluido) si prefieres no usar `gcloud run deploy --source` — en la
+consola: **Cloud Functions → Crear función → 2ª generación**, runtime
+Python 3.11, punto de entrada `main`, sube los ficheros de `python/`, y
+configura las mismas variables de entorno.
+
+### Paso 3 — Cómo se monitoriza desde Google Cloud
+
+Hay dos niveles de monitorización, iguales que en Snowflake:
+
+- **Dentro de la app**: `flow_run.html` (pestaña "🖥 Monitor") sondea las
+  tablas `FLUJOS_RUNS` / `FLUJOS_RUN_STEPS` cada 3s — esto funciona igual
+  en BigQuery que en Snowflake, sin nada que configurar.
+- **En Google Cloud Console** (para ver ejecuciones, errores de
+  arranque, tiempos, etc.):
+  - **Cloud Run → tu servicio (`draco-flow-runner`) → pestaña
+    "Registros" (Logs)**: aquí aparece cada petición HTTP recibida, con
+    su código de estado y cualquier `print`/excepción de
+    `flow_runner.py`. También puedes filtrar por severidad (ERROR) desde
+    el mismo panel.
+  - **Cloud Run → pestaña "Métricas"**: nº de peticiones, latencia,
+    instancias activas, uso de memoria/CPU — útil para ver si un flujo
+    se queda colgado o si necesitas subir la memoria asignada al
+    servicio (por defecto 512 MiB; para ficheros grandes puede hacer
+    falta más).
+  - **Cloud Logging** (`Logging → Explorador de registros`), filtrando
+    por `resource.type="cloud_run_revision"` y
+    `resource.labels.service_name="draco-flow-runner"`: el mismo log
+    que en la pestaña de Cloud Run, pero con más opciones de búsqueda y
+    creación de alertas (p.ej. avisarte por email si aparece un `ERROR`).
+  - **BigQuery → Historial de trabajos ("Job history")** o pestaña
+    "Personal history"/"Project history" del editor de BigQuery: cada
+    `load_table_from_dataframe` de `BigQueryEngine.write_table` aparece
+    aquí como un "load job", con filas cargadas, bytes procesados y
+    errores si los hay.
+
+### Resumen de lo que hay que configurar
+
+- ✅ Un bucket de GCS (Paso 1) con permiso "Storage Object Creator" para
+  quien use Planning.
+- ✅ El dataset `DRACO_CONTROL` en BigQuery (ya se crea solo la primera
+  vez que conectas, ver `js/schema.js` — no hace falta nada especial
+  para que funcione con ficheros).
+- ✅ Un servicio Cloud Run (o Cloud Function) con permisos de "BigQuery
+  Data Editor" + "BigQuery Job User" + "Storage Object Viewer" (Paso 2).
+- ✅ `js/config.js`: `bigqueryUploadBucket` y `flowRunnerHttpEndpoint`
+  rellenos.
+- ❌ No hace falta ninguna `SECURITY INTEGRATION`, `STAGE` ni
+  `FILE_UPLOAD_CHUNKS` — eso es solo la parte de Snowflake
+  (`sql/02_snowflake_file_upload.sql` no aplica aquí).
 
 ## 8. Modelo semántico (YAML)
 
