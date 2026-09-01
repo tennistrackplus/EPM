@@ -186,16 +186,19 @@ CREATE TABLE IF NOT EXISTS `{PROJECT}.DRACO_CONTROL.FLUJOS_SCREEN_BLOCKS` (
 );
 
 -- 15. Variables de la pantalla (sueltas o dentro de un frame) -----------------
+-- Si la tabla ya existía sin VALIDACION_JSON, añadirla a mano:
+-- ALTER TABLE `{PROJECT}.DRACO_CONTROL.FLUJOS_SCREEN_VARIABLES` ADD COLUMN IF NOT EXISTS VALIDACION_JSON STRING;
 CREATE TABLE IF NOT EXISTS `{PROJECT}.DRACO_CONTROL.FLUJOS_SCREEN_VARIABLES` (
-  PROYECTO_ID  STRING NOT NULL,
-  FLUJO_ID     STRING NOT NULL,
-  VARIABLE_ID  STRING NOT NULL,
-  BLOQUE_ID    STRING NOT NULL,   -- FK -> FLUJOS_SCREEN_BLOCKS.BLOQUE_ID (el bloque VARIABLE o el FRAME contenedor)
-  NOMBRE       STRING NOT NULL,   -- nombre técnico
-  ETIQUETA     STRING,
-  TIPO         STRING,
-  SELECT_MODE  STRING,            -- 'unico' | 'rango' | 'multiple' | 'cualquiera' (estilo select-options SAP; de momento solo informativo)
-  ORDEN        INTEGER
+  PROYECTO_ID     STRING NOT NULL,
+  FLUJO_ID        STRING NOT NULL,
+  VARIABLE_ID     STRING NOT NULL,
+  BLOQUE_ID       STRING NOT NULL,   -- FK -> FLUJOS_SCREEN_BLOCKS.BLOQUE_ID (el bloque VARIABLE o el FRAME contenedor)
+  NOMBRE          STRING NOT NULL,   -- nombre técnico
+  ETIQUETA        STRING,
+  TIPO            STRING,
+  SELECT_MODE     STRING,            -- 'unico' | 'rango' | 'multiple' | 'cualquiera' (estilo select-options SAP)
+  VALIDACION_JSON STRING,            -- {type:'NONE'|'CONST'|'DIM'|'HIER', constants, dimensionId, hierarchyName, level, node, allowEmpty, showText, searchHelp}
+  ORDEN           INTEGER
 );
 
 -- 16. Ejecuciones de flujo (cabecera) ------------------------------------------
