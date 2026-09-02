@@ -322,7 +322,12 @@
         report.design = {
             filters: (state.filters || []).map(f => ({
                 dimension: f.dimension, name: f.name, isHierarchy: f.isHierarchy,
-                realAttribute: f.realAttribute, value: f.value || ""
+                realAttribute: f.realAttribute,
+                // El filtro (multi-valor / rango / incluir-excluir) se guarda
+                // como JSON en la misma celda "Valor" que antes tenía un
+                // valor simple; commands.js (parseFilterValue) sabe leer
+                // ambos formatos.
+                value: f.filter ? JSON.stringify(f.filter) : ""
             })),
             rows: (state.rows || []).map(r => ({ dimension: r.dimension, name: r.name, isHierarchy: r.isHierarchy })),
             columns: (state.columns || []).map(c => ({ dimension: c.dimension, name: c.name, isHierarchy: c.isHierarchy })),

@@ -625,7 +625,10 @@ const TaskPaneApp = {
                 name: f.name,
                 isHierarchy: f.isHierarchy,
                 realAttribute: f.realAttribute,
-                value: f.value
+                // f.value es la cadena tal cual se guardó (JSON del filtro
+                // nuevo, o un valor simple si el informe es de antes de
+                // tener selección múltiple/rango/incluir-excluir).
+                filter: (typeof window.parseFilterValue === "function") ? window.parseFilterValue(f.value) : null
             }));
             this.state.rows = design.rows.map(r => ({ dimension: r.dimension, name: r.name, isHierarchy: r.isHierarchy }));
             this.state.columns = design.columns.map(c => ({ dimension: c.dimension, name: c.name, isHierarchy: c.isHierarchy }));
@@ -1043,7 +1046,7 @@ const TaskPaneApp = {
 
         if (zoneId === "filters") {
             entry.realAttribute = data.isHierarchy ? "" : data.name;
-            entry.value = "";
+            entry.filter = null; // sin selección todavía: doble clic para elegir
         }
 
         list.push(entry);
@@ -1088,10 +1091,14 @@ const TaskPaneApp = {
         tag.dataset.isHierarchy = entry.isHierarchy;
 
         // Filtro sin valor seleccionado todavía: se muestra vacío (no se
-        // añade al WHERE de la consulta hasta que el usuario elija un valor
-        // con doble clic).
+        // añade al WHERE de la consulta hasta que el usuario elija algo con
+        // doble clic). Si ya hay filtro, se resume (varios valores, rango,
+        // incluir/excluir…) con describeFilter().
+        const filterSummary = zoneId === "filters" && typeof window.describeFilter === "function"
+            ? window.describeFilter(entry.filter)
+            : "";
         const titleText = zoneId === "filters"
-            ? (entry.value ? `${entry.dimension}.${entry.name}: ${entry.value}` : `${entry.dimension}.${entry.name}: (vacío · doble clic para elegir)`)
+            ? (filterSummary ? `${entry.dimension}.${entry.name}: ${filterSummary}` : `${entry.dimension}.${entry.name}: (vacío · doble clic para elegir)`)
             : `${entry.dimension}.${entry.name}`;
 
         tag.innerHTML = `
@@ -1118,11 +1125,17 @@ const TaskPaneApp = {
             tag.addEventListener("dblclick", async () => {
                 if (typeof FilterModal === "undefined" || !FilterModal.open) return;
 
-                const result = await FilterModal.open({ dim: entry.dimension, name: entry.name, isHierarchy: entry.isHierarchy });
+                const result = await FilterModal.open({
+                    dim: entry.dimension,
+                    name: entry.name,
+                    isHierarchy: entry.isHierarchy,
+                    currentFilter: entry.filter
+                });
                 if (result) {
-                    entry.value = result.value;
-                    entry.realAttribute = result.attribute;
-                    tag.querySelector(".dropped-tag-title").innerText = `${entry.dimension}.${entry.name}: ${entry.value}`;
+                    entry.filter = result;
+                    if (!entry.isHierarchy) entry.realAttribute = result.attribute || entry.name;
+                    const summary = window.describeFilter ? window.describeFilter(result) : "";
+                    tag.querySelector(".dropped-tag-title").innerText = `${entry.dimension}.${entry.name}: ${summary}`;
                     this.scheduleAutoUpdate();
                 }
             });

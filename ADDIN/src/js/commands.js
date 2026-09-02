@@ -1274,6 +1274,93 @@ function buildSelect(measuresGrid, relGrid) {
  */
 const UNQUOTED_TYPES = ["INTEGER", "INT64", "FLOAT", "NUMERIC", "BIGNUMERIC"];
 
+/**
+ * Interpreta la cadena guardada en la columna "Valor" de un filtro.
+ * Formato nuevo: JSON { mode: "values"|"range", include, values|items|from/to }.
+ * Formato antiguo (informes previos a la selección múltiple): una cadena
+ * simple, que se trata como igualdad de un único valor. Misma lógica que
+ * parseFilterValue de filterModal.js, duplicada aquí a propósito para que
+ * commands.js no dependa de que filterModal.js se haya cargado antes.
+ */
+function parseStoredFilterValue(raw) {
+    const s = String(raw || "").trim();
+    if (s === "") return null;
+
+    if (s[0] === "{") {
+        try {
+            const parsed = JSON.parse(s);
+            if (parsed && typeof parsed === "object" && parsed.mode) return parsed;
+        } catch (e) {
+            // No era JSON: se trata como valor simple (ver abajo).
+        }
+    }
+
+    return { mode: "values", include: true, values: [s] };
+}
+
+function sqlLiteralForFilter(atributesGrid, dimension, attributeName, rawValue) {
+    const tipo = getAttributeType(atributesGrid, dimension, attributeName);
+    if (UNQUOTED_TYPES.includes(tipo)) return String(rawValue);
+    return "'" + String(rawValue).replace(/'/g, "''") + "'";
+}
+
+/**
+ * Condición para un filtro "simple": un único atributo real, con selección
+ * de varios valores (IN/NOT IN) o un rango (BETWEEN/NOT BETWEEN). Con un
+ * solo valor en modo "values" se genera "=" / "<>", igual que antes.
+ */
+function buildSimpleFilterCondition(atributesGrid, relGrid, dimension, attributeName, filter) {
+    const campo = getTableAlias(relGrid, dimension) + "." + attributeName;
+
+    if (filter.mode === "range") {
+        const desde = sqlLiteralForFilter(atributesGrid, dimension, attributeName, filter.from);
+        const hasta = sqlLiteralForFilter(atributesGrid, dimension, attributeName, filter.to);
+        const cond = campo + " BETWEEN " + desde + " AND " + hasta;
+        return filter.include ? cond : ("NOT (" + cond + ")");
+    }
+
+    const values = (filter.values || []).filter(v => String(v).trim() !== "");
+    if (values.length === 0) return "";
+
+    if (values.length === 1) {
+        const lit = sqlLiteralForFilter(atributesGrid, dimension, attributeName, values[0]);
+        return campo + (filter.include ? " = " : " <> ") + lit;
+    }
+
+    const lista = values.map(v => sqlLiteralForFilter(atributesGrid, dimension, attributeName, v)).join(", ");
+    return campo + (filter.include ? " IN (" : " NOT IN (") + lista + ")";
+}
+
+/**
+ * Condición para un filtro de JERARQUÍA con varios miembros seleccionados.
+ * Los miembros pueden pertenecer a niveles (atributos reales) distintos de
+ * la jerarquía, así que se agrupan por atributo y se unen con OR: "está en
+ * el continente Europa, o en el país España, o...". Con "Excluir" se niega
+ * el conjunto completo.
+ */
+function buildHierarchyFilterCondition(atributesGrid, relGrid, dimension, filter) {
+    const items = filter.items || [];
+    if (items.length === 0) return "";
+
+    const porAtributo = new Map();
+    for (const it of items) {
+        if (!porAtributo.has(it.attribute)) porAtributo.set(it.attribute, []);
+        porAtributo.get(it.attribute).push(it.value);
+    }
+
+    const partes = [];
+    for (const [attr, values] of porAtributo.entries()) {
+        const cond = buildSimpleFilterCondition(atributesGrid, relGrid, dimension, attr,
+            { mode: "values", include: true, values });
+        if (cond) partes.push(cond);
+    }
+
+    if (partes.length === 0) return "";
+
+    const combinado = partes.length === 1 ? partes[0] : ("(" + partes.join(CRLF + "   OR ") + ")");
+    return filter.include ? combinado : ("NOT " + combinado);
+}
+
 function buildWhere(atributesGrid, relGrid) {
     // Filtros "vacíos" (sin valor seleccionado en el taskpane) no deben
     // añadirse al WHERE: se ignoran por completo, como si no existieran.
@@ -1281,26 +1368,25 @@ function buildWhere(atributesGrid, relGrid) {
 
     if (activeFilters.length === 0) return "";
 
-    let sql = "WHERE" + CRLF;
+    const condiciones = [];
 
-    for (let i = 0; i < activeFilters.length; i++) {
-        const f = activeFilters[i];
-        const tipo = getAttributeType(atributesGrid, f.Dimension, f.AttributeName);
+    for (const f of activeFilters) {
+        const filter = parseStoredFilterValue(f.Value);
+        if (!filter) continue;
 
-        sql += getTableAlias(relGrid, f.Dimension) + "." + f.AttributeName + " = ";
+        // Un filtro de jerarquía con selección múltiple trae "items" (cada
+        // uno con su propio atributo real); todo lo demás (dimensión plana,
+        // o jerarquía "antigua" de un solo valor) usa f.AttributeName.
+        const cond = (filter.items && filter.items.length)
+            ? buildHierarchyFilterCondition(atributesGrid, relGrid, f.Dimension, filter)
+            : buildSimpleFilterCondition(atributesGrid, relGrid, f.Dimension, f.AttributeName, filter);
 
-        if (UNQUOTED_TYPES.includes(tipo)) {
-            sql += f.Value;
-        } else {
-            sql += "'" + String(f.Value).replace(/'/g, "''") + "'";
-        }
-
-        if (i < activeFilters.length - 1) {
-            sql += CRLF + "AND ";
-        }
+        if (cond) condiciones.push(cond);
     }
 
-    return sql;
+    if (condiciones.length === 0) return "";
+
+    return "WHERE" + CRLF + condiciones.join(CRLF + "AND ");
 }
 
 /**
