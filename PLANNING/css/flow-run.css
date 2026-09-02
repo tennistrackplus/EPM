@@ -72,6 +72,7 @@
     border: none;
     border-radius: 0;
     background: none;
+    cursor: default;
 }
 
 /* Un Frame sigue agrupando visualmente sus variables (es un elemento que el
@@ -104,6 +105,12 @@
 }
 
 .flow-screen-block--line.flow-screen-block--static {
+    /* .flow-screen-block (base) es display:flex, pensado para las filas con
+       tirador+contenido+botón del diseñador. Aquí el <hr> es el único hijo:
+       como flex item sin flex-grow se queda con ancho 0 (no se ve la línea).
+       Se fuerza a bloque para que el <hr> ocupe todo el ancho, igual que en
+       el diseñador. */
+    display: block;
     border: none;
     background: none;
     padding: var(--space-2) 0;
@@ -112,6 +119,8 @@
 }
 
 .flow-screen-block--line.flow-screen-block--static hr {
+    display: block;
+    width: 100%;
     border: none;
     border-top: 1px solid var(--border-default);
     margin: 0;
@@ -204,6 +213,35 @@
     gap: var(--space-4);
     max-width: 520px;
     margin: 0 auto;
+}
+
+/* --- Validación al ejecutar: banner de errores + cajas en rojo --- */
+
+.flow-screen-error-banner {
+    width: 100%;
+    max-width: 560px;
+    box-sizing: border-box;
+    background-color: var(--color-danger-light);
+    border: 1px solid var(--color-danger);
+    border-radius: var(--radius-md);
+    padding: var(--space-3) var(--space-4);
+    color: var(--color-danger);
+    font-size: var(--fs-sm);
+}
+
+.flow-screen-error-banner strong {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.flow-screen-error-banner ul {
+    margin: 0;
+    padding-left: 18px;
+}
+
+.flow-field-invalid {
+    border-color: var(--color-danger) !important;
+    background-color: var(--color-danger-light) !important;
 }
 
 /* --- Marca de obligatorio, caja + descripción a la derecha, rango de 2 cajas --- */
