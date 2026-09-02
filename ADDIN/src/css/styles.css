@@ -338,6 +338,13 @@ body {
     opacity: 0.5;
 }
 
+/* Medidas (pseudo-dimensión MEASURE): color distinto al del resto de
+   campos, para diferenciarlas de un vistazo de las dimensiones. */
+.dropped-tag.measure-tag {
+    background-color: var(--brand-accent);
+    background-image: linear-gradient(160deg, var(--brand-accent) 0%, #0E9C71 100%);
+}
+
 .dropped-tag-title {
     pointer-events: none;
     white-space: nowrap;
@@ -360,6 +367,46 @@ body {
 .dropped-tag-remove:hover {
     opacity: 1;
     background-color: rgba(255, 255, 255, 0.28);
+}
+
+/* Grupo de medidas dentro de Filas/Columnas: agrupa visualmente todas
+   las medidas del eje (fondo propio + título "Σ Medidas"), para poder
+   distinguirlas del resto de campos, quitarlas u ordenarlas entre sí
+   sin mezclarse con las dimensiones del mismo eje. */
+.measure-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 5px;
+    border: 1px dashed var(--brand-accent);
+    border-radius: var(--radius-sm);
+    background-color: var(--brand-accent-light);
+}
+
+.measure-group-title {
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+    color: var(--brand-accent);
+    padding: 0 2px;
+}
+
+.measure-group-content {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.measure-group-content:empty {
+    display: none;
+}
+
+/* Zona con drop rechazado (p.ej. intentar repartir medidas entre Filas
+   y Columnas): breve aviso visual en el borde de la zona. */
+.zone-card.zone-warning {
+    box-shadow: 0 0 0 2px var(--color-danger);
+    transition: box-shadow var(--transition-fast);
 }
 
 /* Estado vacío de una dropzone */
