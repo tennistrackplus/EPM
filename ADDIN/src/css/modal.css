@@ -192,7 +192,162 @@
     border-top: 1px solid var(--border-subtle);
     display: flex;
     justify-content: flex-end;
+    align-items: center;
     gap: 8px;
     background-color: var(--surface-sunken);
     flex-shrink: 0;
+}
+
+.filter-selection-count {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    margin-right: auto;
+}
+
+/* ==========================================================
+   MODAL DE FILTRO: multi-valor / rango / incluir-excluir
+   ========================================================== */
+
+.filter-modal-dialog {
+    width: 480px;
+}
+
+.filter-mode-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+/* Control segmentado reutilizable: pestañas Valores/Rango e Incluir/Excluir */
+.segmented-control {
+    display: inline-flex;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-pill);
+    padding: 2px;
+    gap: 2px;
+}
+
+.segmented-option {
+    border: none;
+    background: transparent;
+    padding: 5px 12px;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text-secondary);
+    border-radius: var(--radius-pill);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.segmented-option:hover {
+    color: var(--text-primary);
+}
+
+.segmented-option.active {
+    background: var(--brand-primary);
+    color: var(--text-inverse);
+}
+
+.include-toggle .exclude-option.active {
+    background: var(--color-danger);
+    color: var(--text-inverse);
+}
+
+.link-btn {
+    border: none;
+    background: none;
+    color: var(--brand-primary);
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    cursor: pointer;
+    padding: 4px 2px;
+    white-space: nowrap;
+}
+
+.link-btn:hover {
+    text-decoration: underline;
+}
+
+/* Chips con los valores ya elegidos */
+.filter-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 84px;
+    overflow-y: auto;
+    padding: 8px;
+    background: var(--surface-sunken);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+}
+
+.filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    background: var(--brand-primary-light);
+    color: var(--brand-primary);
+    border-radius: var(--radius-pill);
+    padding: 3px 6px 3px 10px;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    max-width: 100%;
+}
+
+.filter-chip span.chip-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 160px;
+}
+
+.filter-chip .chip-remove {
+    border: none;
+    background: rgba(42, 91, 215, 0.15);
+    color: var(--brand-primary);
+    width: 16px;
+    height: 16px;
+    line-height: 16px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+
+/* Excluir: chips en rojo para que el modo se reconozca de un vistazo */
+#filterIncludeToggle[data-current="false"] ~ #modalSelectedChips .filter-chip,
+.filter-chips.exclude-mode .filter-chip {
+    background: var(--color-danger-light);
+    color: var(--color-danger);
+}
+
+.filter-chips.exclude-mode .filter-chip .chip-remove {
+    background: rgba(216, 52, 42, 0.15);
+    color: var(--color-danger);
+}
+
+.filter-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+/* Checkbox de cada valor de la lista (antes solo texto seleccionable) */
+.modal-item-row {
+    cursor: pointer;
+}
+
+.modal-item-row input[type="checkbox"] {
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.filter-range-hint {
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    margin: 2px 0 0;
 }
