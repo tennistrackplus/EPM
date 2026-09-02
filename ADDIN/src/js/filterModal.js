@@ -1,14 +1,22 @@
 /* ==========================================================================
- * FilterModal — selector de valores para la zona "Filtros" del taskpane.
+ * FilterModal — puente hacia el diálogo independiente de Office
+ * "Filtrar campo" (filterDialog.html), usado desde la zona "Filtros" del
+ * taskpane.
  *
- * Soporta:
- *   - Selección MÚLTIPLE de valores (checkboxes), con buscador.
- *   - RANGO (Desde/Hasta) — solo tiene sentido en atributos planos, así que
- *     la pestaña "Rango" se oculta cuando el campo es una jerarquía.
- *   - INCLUIR / EXCLUIR — aplica tanto a "Valores" como a "Rango".
+ * Antes este fichero pintaba un overlay DENTRO de taskpane.html. Ahora el
+ * selector vive en su propia ventana (igual que memberPicker.html), lo que
+ * le da sitio para un panel auxiliar a la derecha; ver
+ * js/filterDialog.js + filterDialog.html para la UI real.
  *
- * El resultado que devuelve open() ya no es un único {value, attribute},
- * sino un objeto "filter" con esta forma:
+ * Un diálogo de Office no tiene acceso al modelo de objetos de Excel, así
+ * que aquí (en el taskpane, donde SÍ está disponible window.ExcelService)
+ * se resuelve primero la lista de valores y luego se abre el diálogo,
+ * enviándosela por mensaje en cuanto avisa que está listo — mismo patrón
+ * que openMemberRecognitionPicker en commands.js.
+ *
+ * El contrato hacia quien llama (taskpane.js) NO ha cambiado:
+ * FilterModal.open(fieldData) sigue devolviendo una Promise que resuelve a
+ * un objeto "filter" o a null si se cancela:
  *
  *   Dimensión plana, varios valores:
  *     { mode: "values", include: true|false, attribute: "PAIS", values: ["ES","FR"] }
@@ -19,10 +27,11 @@
  *   Jerarquía, varios miembros (posiblemente de niveles/atributos distintos):
  *     { mode: "values", include: true|false, items: [{attribute:"PAIS", value:"España"}, ...] }
  *
- * taskpane.js guarda ese objeto tal cual (como JSON) en entry.value, y
+ * taskpane.js guarda ese objeto tal cual (como JSON) en entry.filter, y
  * commands.js (buildWhere) lo interpreta para construir IN/NOT IN/BETWEEN.
  * Un valor de filtro "antiguo" (una simple cadena, sin JSON) se sigue
- * interpretando como igualdad simple, por compatibilidad.
+ * interpretando como igualdad simple, por compatibilidad — ver
+ * parseFilterValue más abajo.
  * ========================================================================== */
 
 /**
@@ -69,366 +78,12 @@ function loadJsonTree(json) {
     return items;
 }
 
-/** Clave única de un item del árbol (atributo + valor), usada para el Set de seleccionados. */
-function itemKey(item) {
-    return item.attribute + "||" + item.value;
-}
-
-const FilterModal = {
-    allItems: [],
-    fieldData: null,
-
-    mode: "values",          // "values" | "range"
-    include: true,           // true = incluir, false = excluir
-    selectedKeys: new Set(), // claves (itemKey) de los valores marcados
-    rangeFrom: "",
-    rangeTo: "",
-
-    resolveFn: null,
-
-    init() {
-        const closeBtn = document.getElementById("closeModalBtn");
-        const cancelBtn = document.getElementById("btnCancelModal");
-        const applyBtn = document.getElementById("btnApplyModal");
-        const searchInput = document.getElementById("modalSearchInput");
-        const selectAllBtn = document.getElementById("btnSelectAllVisible");
-        const clearBtn = document.getElementById("btnClearSelection");
-        const rangeFromInput = document.getElementById("modalRangeFrom");
-        const rangeToInput = document.getElementById("modalRangeTo");
-
-        if (closeBtn) closeBtn.addEventListener("click", () => this.cancel());
-        if (cancelBtn) cancelBtn.addEventListener("click", () => this.cancel());
-        if (applyBtn) applyBtn.addEventListener("click", () => this.apply());
-        if (searchInput) searchInput.addEventListener("input", (e) => this.search(e.target.value));
-
-        if (selectAllBtn) selectAllBtn.addEventListener("click", () => this.selectAllVisible());
-        if (clearBtn) clearBtn.addEventListener("click", () => this.clearSelection());
-
-        if (rangeFromInput) rangeFromInput.addEventListener("input", (e) => { this.rangeFrom = e.target.value; });
-        if (rangeToInput) rangeToInput.addEventListener("input", (e) => { this.rangeTo = e.target.value; });
-
-        document.querySelectorAll("#filterModeTabs .segmented-option").forEach(btn => {
-            btn.addEventListener("click", () => this.setMode(btn.dataset.mode));
-        });
-
-        document.querySelectorAll("#filterIncludeToggle .segmented-option").forEach(btn => {
-            btn.addEventListener("click", () => this.setInclude(btn.dataset.include === "true"));
-        });
-    },
-
-    /**
-     * Abre el modal para el campo indicado y devuelve una Promise que
-     * resuelve al objeto "filter" descrito arriba, o null si el usuario
-     * cancela.
-     *
-     * fieldData admite opcionalmente `currentFilter` (el filtro ya
-     * aplicado anteriormente sobre este campo) para precargar la
-     * selección al reabrir el modal.
-     */
-    open(fieldData) {
-        return new Promise(async (resolve) => {
-            this.resolveFn = resolve;
-            this.fieldData = fieldData;
-            this.allItems = [];
-            this.selectedKeys = new Set();
-            this.rangeFrom = "";
-            this.rangeTo = "";
-            this.include = true;
-            this.mode = "values";
-
-            this.preloadCurrentFilter(fieldData.currentFilter);
-
-            const titleEl = document.getElementById("modalTitle");
-            if (titleEl) titleEl.innerText = `Filtrar: ${fieldData.dim}.${fieldData.name}`;
-
-            // El rango no tiene sentido en jerarquías: se oculta la pestaña.
-            const rangeTab = document.querySelector('#filterModeTabs [data-mode="range"]');
-            if (rangeTab) rangeTab.style.display = fieldData.isHierarchy ? "none" : "";
-
-            const searchInput = document.getElementById("modalSearchInput");
-            if (searchInput) searchInput.value = fieldData.initialSearch || "";
-
-            document.getElementById("modalRangeFrom").value = this.rangeFrom;
-            document.getElementById("modalRangeTo").value = this.rangeTo;
-
-            this.renderModeUI();
-            this.updateIncludeUI();
-            this.updateSelectionCount();
-
-            const container = document.getElementById("modalItemsContainer");
-            container.innerHTML = "<div style='padding:10px;color:#605e5c;'>Cargando valores…</div>";
-
-            document.getElementById("filterModal").style.display = "flex";
-
-            try {
-                const sql = await window.ExcelService.buildFilterValuesSQL(fieldData.dim, fieldData.name);
-
-                if (!sql) {
-                    container.innerHTML = "<div style='padding:10px;color:#a80000;'>No se ha encontrado el atributo o jerarquía.</div>";
-                    return;
-                }
-
-                const json = await window.ExcelService.executeSQL(sql);
-                this.allItems = loadJsonTree(json);
-                this.search(fieldData.initialSearch || "");
-                this.renderChips();
-            } catch (err) {
-                console.error("Error cargando valores de filtro:", err);
-                container.innerHTML = `<div style='padding:10px;color:#a80000;'>Error: ${err.message || err}</div>`;
-            }
-        });
-    },
-
-    /** Reconstruye mode/include/selectedKeys/range a partir de un filtro ya aplicado antes. */
-    preloadCurrentFilter(currentFilter) {
-        if (!currentFilter || !currentFilter.mode) return;
-
-        this.mode = currentFilter.mode;
-        this.include = currentFilter.include !== false;
-
-        if (currentFilter.mode === "range") {
-            this.rangeFrom = currentFilter.from || "";
-            this.rangeTo = currentFilter.to || "";
-        } else if (currentFilter.items) {
-            currentFilter.items.forEach(it => this.selectedKeys.add(it.attribute + "||" + it.value));
-        } else if (currentFilter.values) {
-            // Formato antiguo (una cadena simple) no trae "attribute": se
-            // asume el atributo del propio campo que se está filtrando.
-            const attr = currentFilter.attribute || (this.fieldData && this.fieldData.name);
-            currentFilter.values.forEach(v => this.selectedKeys.add(attr + "||" + v));
-        }
-    },
-
-    /* -------------------------------------------------------------
-     * Cambios de modo (Valores/Rango) e Incluir/Excluir
-     * ----------------------------------------------------------- */
-
-    setMode(mode) {
-        if (mode === "range" && this.fieldData && this.fieldData.isHierarchy) return; // no aplica
-        this.mode = mode;
-        this.renderModeUI();
-    },
-
-    renderModeUI() {
-        document.querySelectorAll("#filterModeTabs .segmented-option").forEach(btn => {
-            btn.classList.toggle("active", btn.dataset.mode === this.mode);
-        });
-        document.getElementById("filterValuesPanel").style.display = this.mode === "values" ? "" : "none";
-        document.getElementById("filterRangePanel").style.display = this.mode === "range" ? "" : "none";
-
-        const chips = document.getElementById("modalSelectedChips");
-        if (chips) chips.style.display = this.mode === "values" ? "" : "none";
-    },
-
-    setInclude(include) {
-        this.include = include;
-        this.updateIncludeUI();
-    },
-
-    updateIncludeUI() {
-        document.querySelectorAll("#filterIncludeToggle .segmented-option").forEach(btn => {
-            btn.classList.toggle("active", (btn.dataset.include === "true") === this.include);
-        });
-        const chips = document.getElementById("modalSelectedChips");
-        if (chips) chips.classList.toggle("exclude-mode", !this.include);
-    },
-
-    /* -------------------------------------------------------------
-     * Lista de valores (checkboxes) + búsqueda
-     * ----------------------------------------------------------- */
-
-    render(items) {
-        const container = document.getElementById("modalItemsContainer");
-        container.innerHTML = "";
-
-        if (items.length === 0) {
-            container.innerHTML = "<div style='padding:10px;color:#605e5c;'>No hay valores para mostrar.</div>";
-            return;
-        }
-
-        items.forEach((item) => {
-            const key = itemKey(item);
-
-            const row = document.createElement("div");
-            row.className = "modal-item-row";
-            row.style.whiteSpace = "pre";
-
-            const checkbox = document.createElement("input");
-            checkbox.type = "checkbox";
-            checkbox.checked = this.selectedKeys.has(key);
-
-            const label = document.createElement("label");
-            label.textContent = item.text;
-            label.style.whiteSpace = "pre";
-
-            row.appendChild(checkbox);
-            row.appendChild(label);
-
-            const toggle = () => {
-                if (this.selectedKeys.has(key)) {
-                    this.selectedKeys.delete(key);
-                } else {
-                    this.selectedKeys.add(key);
-                }
-                checkbox.checked = this.selectedKeys.has(key);
-                row.classList.toggle("selected", checkbox.checked);
-                this.renderChips();
-                this.updateSelectionCount();
-            };
-
-            checkbox.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
-            row.addEventListener("click", toggle);
-
-            if (checkbox.checked) row.classList.add("selected");
-
-            container.appendChild(row);
-        });
-    },
-
-    search(query) {
-        const q = String(query).toLowerCase().trim();
-        const filtered = q === ""
-            ? this.allItems
-            : this.allItems.filter(it => it.text.toLowerCase().includes(q));
-        this.render(filtered);
-    },
-
-    selectAllVisible() {
-        const q = String(document.getElementById("modalSearchInput").value || "").toLowerCase().trim();
-        const visible = q === "" ? this.allItems : this.allItems.filter(it => it.text.toLowerCase().includes(q));
-        visible.forEach(it => this.selectedKeys.add(itemKey(it)));
-        this.search(document.getElementById("modalSearchInput").value);
-        this.renderChips();
-        this.updateSelectionCount();
-    },
-
-    clearSelection() {
-        this.selectedKeys.clear();
-        this.search(document.getElementById("modalSearchInput").value);
-        this.renderChips();
-        this.updateSelectionCount();
-    },
-
-    /* -------------------------------------------------------------
-     * Chips con la selección actual (feedback visual inmediato)
-     * ----------------------------------------------------------- */
-
-    renderChips() {
-        const container = document.getElementById("modalSelectedChips");
-        if (!container) return;
-
-        if (this.selectedKeys.size === 0) {
-            container.style.display = "none";
-            container.innerHTML = "";
-            return;
-        }
-
-        container.style.display = "flex";
-        container.classList.toggle("exclude-mode", !this.include);
-        container.innerHTML = "";
-
-        const byKey = new Map(this.allItems.map(it => [itemKey(it), it]));
-
-        this.selectedKeys.forEach(key => {
-            const item = byKey.get(key);
-            const label = item ? item.text.trim() : key.split("||")[1];
-
-            const chip = document.createElement("div");
-            chip.className = "filter-chip";
-            chip.innerHTML = `<span class="chip-label"></span><button type="button" class="chip-remove">&times;</button>`;
-            chip.querySelector(".chip-label").textContent = label;
-
-            chip.querySelector(".chip-remove").addEventListener("click", () => {
-                this.selectedKeys.delete(key);
-                this.renderChips();
-                this.search(document.getElementById("modalSearchInput").value);
-                this.updateSelectionCount();
-            });
-
-            container.appendChild(chip);
-        });
-    },
-
-    updateSelectionCount() {
-        const el = document.getElementById("modalSelectionCount");
-        if (!el) return;
-        if (this.mode !== "values" || this.selectedKeys.size === 0) {
-            el.textContent = "";
-            return;
-        }
-        el.textContent = this.selectedKeys.size === 1
-            ? "1 valor seleccionado"
-            : `${this.selectedKeys.size} valores seleccionados`;
-    },
-
-    /* -------------------------------------------------------------
-     * Aplicar / cancelar / cerrar
-     * ----------------------------------------------------------- */
-
-    apply() {
-        let result = null;
-
-        if (this.mode === "range") {
-            const from = String(this.rangeFrom || "").trim();
-            const to = String(this.rangeTo || "").trim();
-            if (from === "" && to === "") {
-                this.cancel();
-                return;
-            }
-            result = {
-                mode: "range",
-                include: this.include,
-                attribute: this.fieldData.name,
-                from,
-                to
-            };
-        } else {
-            if (this.selectedKeys.size === 0) {
-                this.cancel();
-                return;
-            }
-
-            const byKey = new Map(this.allItems.map(it => [itemKey(it), it]));
-            const chosen = [...this.selectedKeys].map(k => byKey.get(k)).filter(Boolean);
-
-            if (this.fieldData.isHierarchy) {
-                result = {
-                    mode: "values",
-                    include: this.include,
-                    items: chosen.map(it => ({ attribute: it.attribute, value: it.value }))
-                };
-            } else {
-                result = {
-                    mode: "values",
-                    include: this.include,
-                    attribute: this.fieldData.name,
-                    values: chosen.map(it => it.value)
-                };
-            }
-        }
-
-        const resolve = this.resolveFn;
-        this.close();
-        if (resolve) resolve(result);
-    },
-
-    cancel() {
-        const resolve = this.resolveFn;
-        this.close();
-        if (resolve) resolve(null);
-    },
-
-    close() {
-        document.getElementById("filterModal").style.display = "none";
-        this.resolveFn = null;
-    }
-};
-
 /**
- * Interpreta el valor bruto guardado para un filtro (columna "Valor").
- * Si es JSON con forma reconocible (mode: "values"|"range") lo usa tal
- * cual; si no, lo trata como el formato antiguo: una cadena simple que
- * equivale a una igualdad de un único valor.
+ * Interpreta la cadena guardada en la columna "Valor" de un filtro.
+ * Formato nuevo: JSON { mode: "values"|"range", include, values|items|from/to }.
+ * Formato antiguo (informes previos a la selección múltiple): una cadena
+ * simple, que se trata como igualdad de un único valor. Debe coincidir con
+ * parseStoredFilterValue de commands.js.
  */
 function parseFilterValue(raw) {
     const s = String(raw || "").trim();
@@ -469,6 +124,107 @@ function describeFilter(filter) {
     if (values.length <= 2) return prefix + values.join(", ");
     return prefix + `${values.slice(0, 2).join(", ")} (+${values.length - 2} más)`;
 }
+
+const FilterModal = {
+    // Ya no hay overlay en el DOM del taskpane que inicializar; se mantiene
+    // como no-op para no tener que tocar la llamada existente en
+    // taskpane.js (FilterModal.init() al arrancar).
+    init() {},
+
+    /**
+     * Abre el diálogo de filtro para el campo indicado y devuelve una
+     * Promise que resuelve al objeto "filter" (ver cabecera del fichero),
+     * o null si el usuario cancela o el diálogo no se puede abrir.
+     *
+     * fieldData admite opcionalmente `currentFilter` (el filtro ya
+     * aplicado anteriormente sobre este campo) para precargar la
+     * selección al reabrir el diálogo.
+     */
+    open(fieldData) {
+        return new Promise(async (resolve) => {
+            const container = null; // ya no hay contenedor propio: los mensajes de error van por consola.
+
+            let items = [];
+            try {
+                const sql = await window.ExcelService.buildFilterValuesSQL(fieldData.dim, fieldData.name);
+
+                if (!sql) {
+                    console.error("FilterModal: no se ha encontrado el atributo o jerarquía.", fieldData);
+                    resolve(null);
+                    return;
+                }
+
+                const json = await window.ExcelService.executeSQL(sql);
+                items = loadJsonTree(json);
+            } catch (err) {
+                console.error("Error cargando valores de filtro:", err);
+                resolve(null);
+                return;
+            }
+
+            const dialogUrl = new URL("filterDialog.html", window.location.href).href;
+
+            Office.context.ui.displayDialogAsync(
+                dialogUrl,
+                { height: 65, width: 48, displayInIframe: false },
+                (asyncResult) => {
+                    if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                        console.error(
+                            "FilterModal: displayDialogAsync ha fallado:",
+                            asyncResult.error && asyncResult.error.code,
+                            asyncResult.error && asyncResult.error.message
+                        );
+                        resolve(null);
+                        return;
+                    }
+
+                    const dialog = asyncResult.value;
+                    let settled = false;
+                    const closeDialog = () => { try { dialog.close(); } catch (e) { /* ya cerrado */ } };
+
+                    dialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+                        let payload;
+                        try {
+                            payload = JSON.parse(arg.message);
+                        } catch (err) {
+                            console.error("FilterModal: mensaje del diálogo no es JSON válido:", err);
+                            return;
+                        }
+
+                        if (payload.type === "ready") {
+                            dialog.messageChild(JSON.stringify({
+                                items,
+                                fieldData: { dim: fieldData.dim, name: fieldData.name, isHierarchy: fieldData.isHierarchy },
+                                currentFilter: fieldData.currentFilter || null,
+                                initialSearch: fieldData.initialSearch || ""
+                            }));
+                            return;
+                        }
+
+                        if (payload.type === "apply") {
+                            settled = true;
+                            closeDialog();
+                            resolve(payload.filter);
+                            return;
+                        }
+
+                        if (payload.type === "cancel") {
+                            settled = true;
+                            closeDialog();
+                            resolve(null);
+                        }
+                    });
+
+                    dialog.addEventHandler(Office.EventType.DialogEventReceived, () => {
+                        // El usuario ha cerrado la ventana con la X del sistema
+                        // operativo (no con nuestro botón, que ya manda "cancel").
+                        if (!settled) resolve(null);
+                    });
+                }
+            );
+        });
+    }
+};
 
 window.FilterModal = FilterModal;
 window.describeFilter = describeFilter;
