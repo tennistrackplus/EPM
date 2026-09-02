@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>Filtrar campo</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/modal.css">
+
+    <style>
+        /* Estructura propia de esta ventana (el diálogo NO tiene backdrop:
+           ya es su propia ventana, así que aquí no se reutiliza
+           .modal-backdrop/.modal-dialog, solo los controles internos de
+           modal.css: segmented-control, filter-chips, modal-items-list...). */
+        html, body {
+            margin: 0; padding: 0; height: 100%;
+            font-family: var(--font-family, 'Segoe UI', Arial, sans-serif);
+            background: var(--surface-card, #fff);
+            color: var(--text-primary, #1A2233);
+            display: flex; flex-direction: column;
+        }
+
+        .dialog-header {
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-subtle);
+            background: var(--surface-sunken);
+            display: flex; justify-content: space-between; align-items: center;
+            flex-shrink: 0;
+        }
+        .dialog-header h1 {
+            font-size: var(--fs-lg, 15px);
+            margin: 0;
+            font-weight: 700;
+        }
+        .dialog-close-btn {
+            background: none; border: none; font-size: 20px; line-height: 1;
+            color: var(--text-muted); cursor: pointer;
+            width: 28px; height: 28px; border-radius: var(--radius-sm);
+        }
+        .dialog-close-btn:hover { background: var(--gray-100); color: var(--text-primary); }
+
+        .dialog-body {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* Columna principal (izquierda): lista de valores o rango */
+        .dialog-main {
+            flex: 1 1 62%;
+            padding: 14px 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            border-right: 1px solid var(--border-subtle);
+        }
+
+        /* Panel auxiliar (derecha): modo, incluir/excluir, chips, resumen */
+        .dialog-side {
+            flex: 1 1 38%;
+            padding: 14px 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            background: var(--surface-sunken);
+        }
+
+        .side-section-title {
+            font-size: var(--fs-xs);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-muted);
+            margin: 0 0 6px;
+        }
+
+        .filter-chips { max-height: none; flex: 1; }
+
+        .dialog-footer {
+            padding: 12px 18px;
+            border-top: 1px solid var(--border-subtle);
+            background: var(--surface-sunken);
+            display: flex; justify-content: flex-end; align-items: center; gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .loading, .error { padding: 14px; color: var(--text-muted); }
+        .error { color: var(--color-danger); }
+    </style>
+</head>
+<body>
+    <div class="dialog-header">
+        <h1 id="dialogTitle">Filtrar campo</h1>
+        <button id="btnCloseDialog" class="dialog-close-btn" title="Cancelar">&times;</button>
+    </div>
+
+    <div class="dialog-body">
+        <!-- Columna principal: lista de valores (checkboxes) o rango -->
+        <div class="dialog-main">
+            <div id="filterValuesPanel" class="filter-panel">
+                <div class="modal-toolbar">
+                    <input type="text" id="modalSearchInput" placeholder="Buscar en la lista..." autocomplete="off">
+                    <button type="button" id="btnSelectAllVisible" class="link-btn">Todo</button>
+                    <button type="button" id="btnClearSelection" class="link-btn">Ninguno</button>
+                </div>
+                <div id="modalItemsContainer" class="modal-items-list">
+                    <div class="loading">Esperando datos…</div>
+                </div>
+            </div>
+
+            <div id="filterRangePanel" class="filter-panel range-selection-box" style="display:none;">
+                <span class="range-title">Rango de valores</span>
+                <div class="range-controls">
+                    <label>Desde
+                        <input type="text" id="modalRangeFrom" placeholder="mínimo">
+                    </label>
+                    <label>Hasta
+                        <input type="text" id="modalRangeTo" placeholder="máximo">
+                    </label>
+                </div>
+                <p class="filter-range-hint">Ambos límites incluidos. Con "Excluir" se descartan los valores del rango.</p>
+            </div>
+        </div>
+
+        <!-- Panel auxiliar de la derecha: modo, incluir/excluir, selección actual -->
+        <div class="dialog-side">
+            <div>
+                <p class="side-section-title">Modo</p>
+                <div id="filterModeTabs" class="segmented-control" role="tablist" style="width:100%;">
+                    <button type="button" class="segmented-option active" data-mode="values" style="flex:1;">☰ Valores</button>
+                    <button type="button" class="segmented-option" data-mode="range" style="flex:1;">↔ Rango</button>
+                </div>
+            </div>
+
+            <div>
+                <p class="side-section-title">Condición</p>
+                <div id="filterIncludeToggle" class="segmented-control include-toggle" role="tablist" style="width:100%;">
+                    <button type="button" class="segmented-option include-option active" data-include="true" style="flex:1;">✓ Incluir</button>
+                    <button type="button" class="segmented-option exclude-option" data-include="false" style="flex:1;">✕ Excluir</button>
+                </div>
+            </div>
+
+            <div style="display:flex; flex-direction:column; flex:1; min-height:0;">
+                <p class="side-section-title">Selección actual</p>
+                <div id="modalSelectedChips" class="filter-chips" style="display:none;"></div>
+            </div>
+
+            <span id="modalSelectionCount" class="filter-selection-count"></span>
+        </div>
+    </div>
+
+    <div class="dialog-footer">
+        <button id="btnCancelModal" class="btn-secondary">Cancelar</button>
+        <button id="btnApplyModal" class="btn-primary">Aceptar</button>
+    </div>
+
+    <script src="js/filterDialog.js"></script>
+</body>
+</html>

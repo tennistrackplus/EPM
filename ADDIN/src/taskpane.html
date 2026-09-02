@@ -189,63 +189,6 @@
         </div>
     </div>
 
-    <!-- Modal de Selección de Filtros (multi-valor, rango, incluir/excluir) -->
-    <div id="filterModal" class="modal-backdrop" style="display: none;">
-        <div class="modal-dialog filter-modal-dialog">
-            <div class="modal-header">
-                <h3 id="modalTitle">Filtrar Campo</h3>
-                <button id="closeModalBtn" class="modal-close-btn">&times;</button>
-            </div>
-            <div class="modal-body">
-
-                <!-- Fila de modo: Valores/Rango (rango oculto en jerarquías) +
-                     Incluir/Excluir (aplica a los dos modos). -->
-                <div class="filter-mode-row">
-                    <div id="filterModeTabs" class="segmented-control" role="tablist">
-                        <button type="button" class="segmented-option active" data-mode="values">☰ Valores</button>
-                        <button type="button" class="segmented-option" data-mode="range">↔ Rango</button>
-                    </div>
-                    <div id="filterIncludeToggle" class="segmented-control include-toggle" role="tablist">
-                        <button type="button" class="segmented-option include-option active" data-include="true">✓ Incluir</button>
-                        <button type="button" class="segmented-option exclude-option" data-include="false">✕ Excluir</button>
-                    </div>
-                </div>
-
-                <!-- Chips de valores ya elegidos: feedback inmediato de la selección. -->
-                <div id="modalSelectedChips" class="filter-chips" style="display:none;"></div>
-
-                <!-- Panel de selección múltiple de valores (checkboxes). -->
-                <div id="filterValuesPanel" class="filter-panel">
-                    <div class="modal-toolbar">
-                        <input type="text" id="modalSearchInput" placeholder="Buscar en la lista...">
-                        <button type="button" id="btnSelectAllVisible" class="link-btn">Todo</button>
-                        <button type="button" id="btnClearSelection" class="link-btn">Ninguno</button>
-                    </div>
-                    <div id="modalItemsContainer" class="modal-items-list"></div>
-                </div>
-
-                <!-- Panel de rango (solo dimensiones planas: no aplica a jerarquías). -->
-                <div id="filterRangePanel" class="filter-panel range-selection-box" style="display:none;">
-                    <span class="range-title">Rango de valores</span>
-                    <div class="range-controls">
-                        <label>Desde
-                            <input type="text" id="modalRangeFrom" placeholder="mínimo">
-                        </label>
-                        <label>Hasta
-                            <input type="text" id="modalRangeTo" placeholder="máximo">
-                        </label>
-                    </div>
-                    <p class="filter-range-hint">Ambos límites incluidos. Con "Excluir" se descartan los valores del rango.</p>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <span id="modalSelectionCount" class="filter-selection-count"></span>
-                <button id="btnCancelModal" class="btn-secondary">Cancelar</button>
-                <button id="btnApplyModal" class="btn-primary">Aceptar</button>
-            </div>
-        </div>
-    </div>
-
     <script src="js/config.js"></script>
     <script src="js/bigquery.js"></script>
     <script src="js/snowflake.js"></script>
