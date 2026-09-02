@@ -1305,30 +1305,57 @@ function sqlLiteralForFilter(atributesGrid, dimension, attributeName, rawValue) 
 }
 
 /**
+ * Condición para una lista de valores (IN/NOT IN, o "=" / "<>" si es uno
+ * solo), dado el campo SQL ya resuelto ("alias.ATRIBUTO").
+ */
+function buildValuesCondition(atributesGrid, dimension, attributeName, campo, values, include) {
+    const vals = (values || []).filter(v => String(v).trim() !== "");
+    if (vals.length === 0) return "";
+
+    if (vals.length === 1) {
+        const lit = sqlLiteralForFilter(atributesGrid, dimension, attributeName, vals[0]);
+        return campo + (include ? " = " : " <> ") + lit;
+    }
+
+    const lista = vals.map(v => sqlLiteralForFilter(atributesGrid, dimension, attributeName, v)).join(", ");
+    return campo + (include ? " IN (" : " NOT IN (") + lista + ")";
+}
+
+/**
+ * Condición para un rango (BETWEEN/NOT BETWEEN), dado el campo SQL ya
+ * resuelto ("alias.ATRIBUTO").
+ */
+function buildRangeCondition(atributesGrid, dimension, attributeName, campo, from, to, include) {
+    const desde = sqlLiteralForFilter(atributesGrid, dimension, attributeName, from);
+    const hasta = sqlLiteralForFilter(atributesGrid, dimension, attributeName, to);
+    const cond = campo + " BETWEEN " + desde + " AND " + hasta;
+    return include ? cond : ("NOT (" + cond + ")");
+}
+
+/**
  * Condición para un filtro "simple": un único atributo real, con selección
- * de varios valores (IN/NOT IN) o un rango (BETWEEN/NOT BETWEEN). Con un
- * solo valor en modo "values" se genera "=" / "<>", igual que antes.
+ * de varios valores (IN/NOT IN), un rango (BETWEEN/NOT BETWEEN), o ambos a
+ * la vez (modo "mixed": el campo cumple el filtro si cumple los valores O
+ * el rango, cada uno con su propio incluir/excluir). Con un solo valor en
+ * modo "values" se genera "=" / "<>", igual que antes.
  */
 function buildSimpleFilterCondition(atributesGrid, relGrid, dimension, attributeName, filter) {
     const campo = getTableAlias(relGrid, dimension) + "." + attributeName;
 
     if (filter.mode === "range") {
-        const desde = sqlLiteralForFilter(atributesGrid, dimension, attributeName, filter.from);
-        const hasta = sqlLiteralForFilter(atributesGrid, dimension, attributeName, filter.to);
-        const cond = campo + " BETWEEN " + desde + " AND " + hasta;
-        return filter.include ? cond : ("NOT (" + cond + ")");
+        return buildRangeCondition(atributesGrid, dimension, attributeName, campo, filter.from, filter.to, filter.include);
     }
 
-    const values = (filter.values || []).filter(v => String(v).trim() !== "");
-    if (values.length === 0) return "";
-
-    if (values.length === 1) {
-        const lit = sqlLiteralForFilter(atributesGrid, dimension, attributeName, values[0]);
-        return campo + (filter.include ? " = " : " <> ") + lit;
+    if (filter.mode === "mixed") {
+        const valuesCond = buildValuesCondition(atributesGrid, dimension, attributeName, campo, filter.values, filter.valuesInclude);
+        const rangeCond = buildRangeCondition(atributesGrid, dimension, attributeName, campo, filter.from, filter.to, filter.rangeInclude);
+        const partes = [valuesCond, rangeCond].filter(Boolean);
+        if (partes.length === 0) return "";
+        if (partes.length === 1) return partes[0];
+        return "(" + partes.join(CRLF + "   OR ") + ")";
     }
 
-    const lista = values.map(v => sqlLiteralForFilter(atributesGrid, dimension, attributeName, v)).join(", ");
-    return campo + (filter.include ? " IN (" : " NOT IN (") + lista + ")";
+    return buildValuesCondition(atributesGrid, dimension, attributeName, campo, filter.values, filter.include);
 }
 
 /**
