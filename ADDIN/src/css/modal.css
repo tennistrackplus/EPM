@@ -205,12 +205,10 @@
 }
 
 /* ==========================================================
-   MODAL DE FILTRO: multi-valor / rango / incluir-excluir
+   FILTRO: multi-valor / rango / incluir-excluir
+   Estos controles ahora se usan desde filterDialog.html (ventana de
+   diálogo independiente), que enlaza este mismo modal.css.
    ========================================================== */
-
-.filter-modal-dialog {
-    width: 480px;
-}
 
 .filter-mode-row {
     display: flex;
@@ -319,7 +317,6 @@
 }
 
 /* Excluir: chips en rojo para que el modo se reconozca de un vistazo */
-#filterIncludeToggle[data-current="false"] ~ #modalSelectedChips .filter-chip,
 .filter-chips.exclude-mode .filter-chip {
     background: var(--color-danger-light);
     color: var(--color-danger);
