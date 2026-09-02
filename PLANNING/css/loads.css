@@ -178,7 +178,7 @@
     cursor: not-allowed;
 }
 
-/* Variante con 6 tarjetas (tipos de tarea de Workflow): 3 columnas x 2 filas
+/* Variante con varias tarjetas (tipos de tarea de Workflow): 3 columnas
    en vez de 4 en línea, y sin la línea de descripción bajo la etiqueta. */
 .origin-type-grid--wf {
     grid-template-columns: repeat(3, 1fr);
