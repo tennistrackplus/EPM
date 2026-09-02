@@ -21,12 +21,16 @@
  *     el botón ▶ de Administración: TableUpdates.startRun(record).
  *   - FLUJO_MANUAL (Flujo de carga) -> se abre flow_run.html en una
  *     pestaña nueva (mismo patrón ya usado en el resto de la app).
+ *   - MANTENIMIENTO_DIMENSION -> se busca el registro real en DIMENSIONES
+ *     y se abre exactamente el mismo modal que el botón ▤ "Actualizar
+ *     valores" de Administración > Dimensiones: DimensionData.render(...).
  *   - El resto de tipos (Plantilla Excel/Web, Función, HTML) todavía no
  *     tienen ejecución automática en Draco Planning: se muestra un
  *     popup informativo con la referencia y se completan a mano.
  *
  * Dependencias de módulos ya cargados en task.html: Provider, UI,
- * Workflows (definición + TASK_TYPES) y TableUpdates (para el play).
+ * Workflows (definición + TASK_TYPES), TableUpdates (para el play) y
+ * Dimensions/DimensionData (para el mantenimiento de valores).
  */
 const MyTasks = {
     project: null,
@@ -622,7 +626,7 @@ const MyTasks = {
 
     taskCardHtml(task) {
         const typeInfo = Workflows.TASK_TYPES[task.tipo] || { label: task.tipo, icon: "•" };
-        const executable = task.tipo === "PARAMETRIZACION" || task.tipo === "FLUJO_MANUAL";
+        const executable = task.tipo === "PARAMETRIZACION" || task.tipo === "FLUJO_MANUAL" || task.tipo === "MANTENIMIENTO_DIMENSION";
         return `
             <div class="wf-task-card mt-task-card" data-mt-task="${task.id}">
                 <div class="wf-task-card-header">
@@ -666,6 +670,23 @@ const MyTasks = {
         if (task.tipo === "FLUJO_MANUAL") {
             if (!task.refId) { UI.toast("Esta tarea no tiene un flujo de carga asignado.", "error"); return; }
             window.open(`flow_run.html?flujo_id=${encodeURIComponent(task.refId)}`, "_blank");
+            return;
+        }
+
+        if (task.tipo === "MANTENIMIENTO_DIMENSION") {
+            if (!task.refId) { UI.toast("Esta tarea no tiene una dimensión asignada.", "error"); return; }
+            try {
+                const rows = await Provider.runQuery(`
+                    SELECT DIMENSION_ID, DIMENSION, DESCRIPCION, TABLA, CAMPOS_JSON
+                    FROM ${Provider.qualifyControl("DIMENSIONES")}
+                    WHERE DIMENSION_ID = '${Provider.esc(task.refId)}'`);
+                if (!rows.length) { UI.toast("No se ha encontrado la dimensión de referencia.", "error"); return; }
+                // Mismo modal que abre el botón ▤ "Actualizar valores" en
+                // Administración > Dimensiones.
+                await DimensionData.render(this.project, rows[0]);
+            } catch (err) {
+                UI.toast("Error al abrir el mantenimiento de la dimensión: " + err.message, "error");
+            }
             return;
         }
 

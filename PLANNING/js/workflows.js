@@ -29,10 +29,12 @@
  *     tareas del bloque seleccionado. Al añadir una tarea se pide
  *     nombre + descripción y se elige su tipo con tarjetas (igual que el
  *     selector de origen de datos en "Nueva interfaz"): Actualización de
- *     tablas, Flujos de carga, Plantillas Excel, Plantillas Web, Funciones
- *     o Páginas HTML. "Actualización de tablas" y "Flujos de carga" se
- *     eligen de su catálogo real (ACTUALIZACIONES / FLUJOS tipo MANUAL);
- *     el resto son referencia libre por ahora. Cada tarea puede completar
+ *     tablas, Flujos de carga, Mantenimiento de dimensiones, Plantillas
+ *     Excel, Plantillas Web, Funciones o Páginas HTML. "Actualización de
+ *     tablas", "Flujos de carga" y "Mantenimiento de dimensiones" se
+ *     eligen de su catálogo real (ACTUALIZACIONES / FLUJOS tipo MANUAL /
+ *     DIMENSIONES del proyecto); el resto son referencia libre por ahora.
+ *     Cada tarea puede completar
  *     sus propias variables por constante o por una variable del workflow
  *     (Paso 0), con opción de ocultarlas en la pantalla de ejecución, y se
  *     puede editar (✎) o eliminar (✕) en cualquier momento.
@@ -60,6 +62,7 @@ const Workflows = {
         // FLUJO_MANUAL -> Flujos de carga de tipo manual.
         PARAMETRIZACION: { label: "Actualización de tablas", icon: "🗄", catalog: "ACTUALIZACION" },
         FLUJO_MANUAL: { label: "Flujos de carga", icon: "☺", catalog: "FLUJO" },
+        MANTENIMIENTO_DIMENSION: { label: "Mantenimiento de dimensiones", icon: "🧩", catalog: "DIMENSION" },
         PLANTILLA_EXCEL: { label: "Plantillas Excel", icon: "📊" },
         PLANTILLA_WEB: { label: "Plantillas Web", icon: "🌐" },
         FUNCION: { label: "Funciones", icon: "ƒ" },
@@ -1097,6 +1100,15 @@ const Workflows = {
             return;
         }
 
+        if (typeInfo.catalog === "DIMENSION") {
+            await this.loadDimensions();
+            const dimId = await UI.openDimensionPickerModal({ dimensionsList: this.dimensions });
+            if (!dimId) return;
+            const dim = this.dimensionById(dimId);
+            block.tareas.push({ id: Provider.newId(), tipo, nombre: name, descripcion: description, refId: dimId, refNombre: dim ? dim.DIMENSION : "", valores: [] });
+            return;
+        }
+
         // Plantillas Excel/Web, Funciones, Páginas HTML: todavía sin catálogo
         // propio — la referencia es el nombre que se acaba de escribir arriba.
         block.tareas.push({ id: Provider.newId(), tipo, nombre: name, descripcion: description, refId: null, refNombre: name, valores: [] });
@@ -1131,6 +1143,16 @@ const Workflows = {
                 await this.loadActualizaciones();
                 const picked = await UI.openActualizacionPickerModal({ items: this.actualizaciones });
                 if (picked) { task.refId = picked.id; task.refNombre = picked.name; }
+            }
+        } else if (typeInfo.catalog === "DIMENSION") {
+            const changeRef = await UI.confirm("Cambiar dimensión", `Referencia actual: <strong>${UI.escapeHtml(task.refNombre || "—")}</strong>.<br>¿Quieres elegir otra dimensión?`);
+            if (changeRef) {
+                await this.loadDimensions();
+                const dimId = await UI.openDimensionPickerModal({ dimensionsList: this.dimensions });
+                if (dimId) {
+                    const dim = this.dimensionById(dimId);
+                    task.refId = dimId; task.refNombre = dim ? dim.DIMENSION : "";
+                }
             }
         } else {
             // Tipos sin catálogo: la "referencia" es simplemente el nombre.
