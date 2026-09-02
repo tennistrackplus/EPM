@@ -935,8 +935,15 @@ const TaskPaneApp = {
         // nuevo desde la lista de la izquierda.
         const dragged = this.draggedElementData;
         if (dragged && dragged.sourceTag && dragged.sourceZone === zoneId) {
-            const container = e.currentTarget.querySelector(".dropzone-content");
-            if (container) {
+            const dropzoneContent = e.currentTarget.querySelector(".dropzone-content");
+            if (dropzoneContent) {
+                // Una medida se reordena SOLO dentro de su propio grupo
+                // "Σ Medidas" (no se compara su posición con las tags de
+                // dimensiones sueltas del mismo eje); el resto de campos se
+                // reordena entre sí, directamente en la dropzone.
+                const container = this.isMeasureField(dragged.data)
+                    ? this.ensureMeasureGroup(dropzoneContent, zoneId)
+                    : dropzoneContent;
                 const afterElement = this.getDragAfterElement(container, e.clientY);
                 if (afterElement == null) {
                     container.appendChild(dragged.sourceTag);
@@ -949,9 +956,12 @@ const TaskPaneApp = {
 
     // Devuelve la tag después de la cual habría que insertar el elemento
     // arrastrado, según la posición vertical del cursor (algoritmo estándar
-    // de listas "sortable" con drag&drop nativo del navegador).
+    // de listas "sortable" con drag&drop nativo del navegador). Solo mira
+    // los ".dropped-tag" hijos DIRECTOS de "container" (con :scope), para no
+    // colarse dentro del grupo de medidas al reordenar dimensiones sueltas,
+    // ni al revés.
     getDragAfterElement(container, y) {
-        const elements = [...container.querySelectorAll(".dropped-tag:not(.dragging)")];
+        const elements = [...container.querySelectorAll(":scope > .dropped-tag:not(.dragging)")];
         return elements.reduce((closest, child) => {
             const box = child.getBoundingClientRect();
             const offset = y - box.top - box.height / 2;
@@ -960,6 +970,72 @@ const TaskPaneApp = {
             }
             return closest;
         }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+    },
+
+    // ¿Es "MEASURE" el campo que se está arrastrando/soltando? (data trae
+    // { dim, name, isHierarchy }, igual que las entradas de state.rows/cols).
+    isMeasureField(data) {
+        return !!(data && String(data.dim).toUpperCase() === "MEASURE");
+    },
+
+    // Busca (o crea) el contenedor ".measure-group-content" de una zona:
+    // caja propia, con su propio título "Σ Medidas", donde viven TODAS las
+    // medidas de ese eje, agrupadas y separadas del resto de campos, para
+    // poder quitarlas/ordenarlas entre sí de un vistazo.
+    ensureMeasureGroup(dropzoneContent, zoneId) {
+        let group = dropzoneContent.querySelector(":scope > .measure-group");
+        if (!group) {
+            group = document.createElement("div");
+            group.className = "measure-group";
+            group.dataset.zone = zoneId;
+            group.innerHTML = `<div class="measure-group-title">Σ Medidas</div><div class="measure-group-content"></div>`;
+            dropzoneContent.appendChild(group);
+        }
+        return group.querySelector(".measure-group-content");
+    },
+
+    // Quita el grupo "Σ Medidas" de una zona en cuanto se queda vacío (se
+    // quitó la última medida de ese eje).
+    cleanupMeasureGroup(dropzoneContent) {
+        const group = dropzoneContent.querySelector(":scope > .measure-group");
+        if (group && group.querySelector(".measure-group-content").children.length === 0) {
+            group.remove();
+        }
+    },
+
+    // Regla: las medidas nunca pueden quedar repartidas entre Filas y
+    // Columnas a la vez (todas juntas en el mismo eje). Comprueba, para un
+    // drop de una medida en "targetZoneId", si el eje CONTRARIO se
+    // quedaría con alguna medida después de esta operación (contando con
+    // que, si la medida viene de ese mismo eje contrario, se está
+    // moviendo fuera de él).
+    wouldSplitMeasuresAcrossAxes(targetZoneId, data, sourceZone) {
+        if (targetZoneId !== "rows" && targetZoneId !== "columns") return false;
+        if (!this.isMeasureField(data)) return false;
+
+        const otherZone = targetZoneId === "rows" ? "columns" : "rows";
+        const otherList = this.listForZone(otherZone);
+        const remaining = otherList.filter(entry => {
+            if (String(entry.dimension).toUpperCase() !== "MEASURE") return false;
+            const isTheOneBeingMoved = sourceZone === otherZone && entry.dimension === data.dim && entry.name === data.name;
+            return !isTheOneBeingMoved;
+        });
+        return remaining.length > 0;
+    },
+
+    // Aviso visual breve (borde rojo + texto en el estado de autoguardado)
+    // cuando se rechaza un drop por la regla anterior.
+    flashZoneWarning(zoneId, message) {
+        const card = document.querySelector(`.zone-card[data-zone="${zoneId}"]`);
+        if (card) {
+            card.classList.add("zone-warning");
+            setTimeout(() => card.classList.remove("zone-warning"), 900);
+        }
+        this.setAutoStatus(message);
+        setTimeout(() => {
+            const el = document.getElementById("autoStatus");
+            if (el && el.innerText === message) el.innerText = "";
+        }, 2500);
     },
 
     handleDragLeave(e) {
@@ -1005,9 +1081,21 @@ const TaskPaneApp = {
             return;
         }
 
+        // Regla: nunca una medida a Filas y otra a Columnas. Si esta medida
+        // dejaría alguna medida en el eje contrario, se rechaza el drop.
+        if (this.wouldSplitMeasuresAcrossAxes(zoneId, data, sourceZone)) {
+            this.flashZoneWarning(zoneId, "Todas las medidas deben ir en el mismo eje (Filas o Columnas).");
+            this.draggedElementData = null;
+            return;
+        }
+
         if (sourceTag) {
             sourceTag.remove();
             this.removeFromState(sourceZone, data);
+            if (sourceZone === "rows" || sourceZone === "columns") {
+                const sourceContent = document.querySelector(`.zone-card[data-zone="${sourceZone}"] .dropzone-content`);
+                if (sourceContent) this.cleanupMeasureGroup(sourceContent);
+            }
         }
 
         this.addField(targetContent, zoneId, data);
@@ -1083,12 +1171,20 @@ const TaskPaneApp = {
     },
 
     renderTag(container, zoneId, entry) {
+        const isMeasure = String(entry.dimension).toUpperCase() === "MEASURE";
+
         const tag = document.createElement("div");
         tag.className = "dropped-tag";
+        if (isMeasure) tag.classList.add("measure-tag");
         tag.draggable = true;
         tag.dataset.dim = entry.dimension;
         tag.dataset.fieldName = entry.name;
         tag.dataset.isHierarchy = entry.isHierarchy;
+
+        // Una medida se muestra solo con su nombre ("Importe"), sin el
+        // prefijo de la pseudo-dimensión ("MEASURE.Importe"); el resto de
+        // campos sigue mostrando "dimensión.nombre" como hasta ahora.
+        const fieldLabel = isMeasure ? entry.name : `${entry.dimension}.${entry.name}`;
 
         // Filtro sin valor seleccionado todavía: se muestra vacío (no se
         // añade al WHERE de la consulta hasta que el usuario elija algo con
@@ -1098,8 +1194,8 @@ const TaskPaneApp = {
             ? window.describeFilter(entry.filter)
             : "";
         const titleText = zoneId === "filters"
-            ? (filterSummary ? `${entry.dimension}.${entry.name}: ${filterSummary}` : `${entry.dimension}.${entry.name}: (vacío · doble clic para elegir)`)
-            : `${entry.dimension}.${entry.name}`;
+            ? (filterSummary ? `${fieldLabel}: ${filterSummary}` : `${fieldLabel}: (vacío · doble clic para elegir)`)
+            : fieldLabel;
 
         tag.innerHTML = `
             <span class="dropped-tag-title">${titleText}</span>
@@ -1135,7 +1231,7 @@ const TaskPaneApp = {
                     entry.filter = result;
                     if (!entry.isHierarchy) entry.realAttribute = result.attribute || entry.name;
                     const summary = window.describeFilter ? window.describeFilter(result) : "";
-                    tag.querySelector(".dropped-tag-title").innerText = `${entry.dimension}.${entry.name}: ${summary}`;
+                    tag.querySelector(".dropped-tag-title").innerText = `${fieldLabel}: ${summary}`;
                     this.scheduleAutoUpdate();
                 }
             });
@@ -1145,6 +1241,7 @@ const TaskPaneApp = {
             e.stopPropagation();
             tag.remove();
             this.removeFromState(zoneId, { dim: entry.dimension, name: entry.name });
+            if (zoneId === "rows" || zoneId === "columns") this.cleanupMeasureGroup(container);
         });
 
         // Clic (simple) sobre el campo: abre/actualiza el panel "Opciones de
@@ -1155,7 +1252,14 @@ const TaskPaneApp = {
             this.selectFieldForOptions(zoneId, entry);
         });
 
-        container.appendChild(tag);
+        // Las medidas de Filas/Columnas se agrupan en su propia caja
+        // "Σ Medidas" (creada bajo demanda), separadas del resto de campos
+        // del eje; el resto de campos (y las medidas en Filtros, si las
+        // hubiera) van directos a la dropzone, como hasta ahora.
+        const appendTarget = (isMeasure && (zoneId === "rows" || zoneId === "columns"))
+            ? this.ensureMeasureGroup(container, zoneId)
+            : container;
+        appendTarget.appendChild(tag);
     },
 
     /* =================================================================
@@ -1360,7 +1464,7 @@ const TaskPaneApp = {
 
         const nameEl = document.createElement("div");
         nameEl.className = "field-options-field-name";
-        nameEl.innerText = `${entry.dimension}.${entry.name}`;
+        nameEl.innerText = isMeasure ? entry.name : `${entry.dimension}.${entry.name}`;
         body.appendChild(nameEl);
 
         if (isMeasure) {
