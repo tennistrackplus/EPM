@@ -2150,7 +2150,7 @@ const UI = {
      *  "multiple"/"cualquiera" siguen usando el editor de select-options propio de cada pantalla.
      *  opts.disabled=true pinta el widget real pero inerte (previsualización en el diseñador). */
     screenVarFieldHtml(v, options = [], opts = {}) {
-        const { disabled = false, idPrefix = "svr_" } = opts;
+        const { disabled = false, idPrefix = "svr_", value = "", valueLow = "", valueHigh = "" } = opts;
         const validation = Object.assign({ type: "NONE", allowEmpty: true, showText: false, searchHelp: "LISTBOX" }, v.validation || {});
         const id = `${idPrefix}${v.id}`;
         const required = validation.type !== "NONE" && validation.allowEmpty === false;
@@ -2160,8 +2160,8 @@ const UI = {
         const name = UI.escapeHtml(v.name);
         const showText = validation.type !== "NONE" && validation.showText && validation.searchHelp !== "LISTBOX";
 
-        const boxRow = (boxId, nameSuffix) => {
-            const box = UI.screenVarBoxHtml({ id: boxId, varId: v.id, name: nameSuffix ? `${name}${nameSuffix}` : name, dataType, htmlType, value: "", validation, options, disabled });
+        const boxRow = (boxId, nameSuffix, boxValue) => {
+            const box = UI.screenVarBoxHtml({ id: boxId, varId: v.id, name: nameSuffix ? `${name}${nameSuffix}` : name, dataType, htmlType, value: boxValue || "", validation, options, disabled });
             return `<span class="flow-field-box-row">${box}${showText ? `<span class="flow-field-desc"></span>` : ""}</span>`;
         };
 
@@ -2169,14 +2169,14 @@ const UI = {
             return `<div class="flow-field-preview flow-field-preview--range">
                 ${labelHtml}
                 <div class="flow-field-range-row">
-                    ${boxRow(`${id}_low`, "__low")}
+                    ${boxRow(`${id}_low`, "__low", valueLow)}
                     <span class="flow-field-range-sep">–</span>
-                    ${boxRow(`${id}_high`, "__high")}
+                    ${boxRow(`${id}_high`, "__high", valueHigh)}
                 </div>
             </div>`;
         }
 
-        return `<div class="flow-field-preview">${labelHtml}${boxRow(id, "")}</div>`;
+        return `<div class="flow-field-preview">${labelHtml}${boxRow(id, "", value)}</div>`;
     },
 
     /** Delegación de eventos (una sola vez por contenedor) para los campos
@@ -2205,6 +2205,109 @@ const UI = {
             if (picked === null) return;
             input.value = picked;
             input.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        // Quita la marca de error en cuanto el usuario toca el campo, para no
+        // dejar un campo en rojo después de haberlo corregido.
+        container.addEventListener("input", (e) => {
+            const el = e.target.closest(".flow-field-invalid");
+            if (el) el.classList.remove("flow-field-invalid");
+        });
+        container.addEventListener("change", (e) => {
+            const el = e.target.closest(".flow-field-invalid");
+            if (el) el.classList.remove("flow-field-invalid");
+        });
+    },
+
+    // ------------------------------------------------------------
+    // Validación de la pantalla de variables al pulsar "Ejecutar" /
+    // "Cargar tabla": obligatoriedad (validation.allowEmpty === false) y
+    // pertenencia a la lista de valores posibles (constante / dimensión /
+    // jerarquía) cuando la variable tiene validación configurada. Se usa
+    // igual desde Flujos de carga y desde Actualización de tablas.
+    //
+    //  vars            -> lista plana de variables (flatVars/forEachScreenVariable)
+    //  values          -> lo que devuelve collectScreenValues()/collectRunScreenValues()
+    //  optionsByVarId  -> { VARIABLE_ID: [{id, desc}, ...] } ya resuelto
+    //  selOptState     -> { VARIABLE_ID: [{sign, option, low, high}, ...] }
+    // ------------------------------------------------------------
+    validateScreenVars(vars, values, optionsByVarId = {}, selOptState = {}) {
+        const errors = [];
+        (vars || []).forEach(v => {
+            // Los checkbox/booleanos siempre tienen un valor; los ficheros no
+            // se validan aquí (su presencia no es exigible desde este punto).
+            if (v.type === "BOOLEAN" || v.type === "FILE") return;
+
+            const validation = Object.assign({ type: "NONE", allowEmpty: true, showText: false, searchHelp: "LISTBOX" }, v.validation || {});
+            const required = validation.type !== "NONE" && validation.allowEmpty === false;
+            const options = optionsByVarId[v.id] || [];
+            const label = v.label || v.name;
+            const inList = (val) => !options.length || options.some(o => String(o.id) === val);
+
+            if (v.selectMode === "multiple" || v.selectMode === "cualquiera") {
+                const rows = selOptState[v.id] || [];
+                const filled = rows.filter(r => (r.low || "").toString().trim() !== "");
+                if (required && !filled.length) {
+                    errors.push({ varId: v.id, scope: "value", message: `"${label}" es obligatorio: añade al menos un valor.` });
+                }
+                if (validation.type !== "NONE" && options.length) {
+                    rows.forEach((r, idx) => {
+                        const low = (r.low || "").toString().trim();
+                        if (!low) return;
+                        if ((r.option === "EQ" || r.option === "NE") && !inList(low)) {
+                            errors.push({ varId: v.id, scope: "selopt", idx, message: `"${label}": "${low}" no es uno de los valores posibles.` });
+                        }
+                    });
+                }
+                return;
+            }
+
+            if (v.selectMode === "rango") {
+                const val = values[v.name] || {};
+                const low = (val.low ?? "").toString().trim();
+                const high = (val.high ?? "").toString().trim();
+                if (required && (!low || !high)) {
+                    errors.push({ varId: v.id, scope: "value", message: `"${label}" es obligatorio: indica el valor desde y hasta.` });
+                }
+                if (validation.type !== "NONE" && options.length) {
+                    if (low && !inList(low)) errors.push({ varId: v.id, scope: "value", message: `"${label}": "${low}" no es uno de los valores posibles.` });
+                    if (high && !inList(high)) errors.push({ varId: v.id, scope: "value", message: `"${label}": "${high}" no es uno de los valores posibles.` });
+                }
+                return;
+            }
+
+            // único
+            const val = (values[v.name] ?? "").toString().trim();
+            if (required && !val) {
+                errors.push({ varId: v.id, scope: "value", message: `"${label}" es obligatorio.` });
+                return;
+            }
+            if (validation.type !== "NONE" && options.length && val && !inList(val)) {
+                errors.push({ varId: v.id, scope: "value", message: `"${label}": "${val}" no es uno de los valores posibles.` });
+            }
+        });
+        return { valid: errors.length === 0, errors };
+    },
+
+    /** Banner persistente (no un toast, que desaparece solo) con el listado
+     *  de errores de validación de la pantalla de variables. */
+    screenErrorBannerHtml(errors) {
+        if (!errors || !errors.length) return "";
+        return `<div class="flow-screen-error-banner">
+            <strong>Revisa estos campos antes de continuar:</strong>
+            <ul>${errors.map(e => `<li>${UI.escapeHtml(e.message)}</li>`).join("")}</ul>
+        </div>`;
+    },
+
+    /** Resalta en rojo las cajas de los campos con error dentro de `container`. */
+    markScreenFieldErrors(container, errors) {
+        container.querySelectorAll(".flow-field-invalid").forEach(el => el.classList.remove("flow-field-invalid"));
+        (errors || []).forEach(e => {
+            if (e.scope === "selopt") {
+                const el = container.querySelector(`.selopt-low[data-selopt-var="${e.varId}"][data-selopt-idx="${e.idx}"]`);
+                if (el) el.classList.add("flow-field-invalid");
+            } else {
+                container.querySelectorAll(`[data-var-id="${e.varId}"]`).forEach(el => el.classList.add("flow-field-invalid"));
+            }
         });
     },
 

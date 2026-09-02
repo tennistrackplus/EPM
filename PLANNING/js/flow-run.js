@@ -33,6 +33,9 @@ const FlowRun = {
     // cualquiera) por VARIABLE_ID: [{sign:'I'|'E', option:'EQ'|..., low, high}, ...]
     selOptState: {},
     _selOptDelegationBound: false,
+    // Valores ya tecleados en la pantalla de variables (único/rango/
+    // booleano), para no perderlos al ir y volver de la pestaña Monitor.
+    screenValues: {},
 
     // Operadores disponibles según el modo de selección de la variable —
     // igual concepto que un SELECT-OPTIONS de ABAP (sign + option + low/high).
@@ -207,6 +210,11 @@ const FlowRun = {
     },
 
     switchView(view) {
+        // Antes de abandonar "Pantalla de variables" se recogen los valores ya
+        // tecleados, para poder repintarlos si el usuario vuelve a esa pestaña.
+        if (this.view === "screen" && view !== "screen" && document.getElementById("flowRunBody")) {
+            this.screenValues = Object.assign({}, this.screenValues, this.collectScreenValues().values);
+        }
         this.view = view;
         document.getElementById("btnTabScreen").classList.toggle("active", view === "screen");
         document.getElementById("btnTabMonitor").classList.toggle("active", view === "monitor");
@@ -229,6 +237,7 @@ const FlowRun = {
 
         body.innerHTML = `
             <div class="flow-run-screen">
+                <div id="flowRunErrorBanner"></div>
                 <div class="flow-screen-blocks flow-screen-blocks--run">${blocksHtml}</div>
                 <div class="flow-run-actions">
                     <button class="btn btn-primary" id="btnExecuteFlow">▶ Ejecutar</button>
@@ -299,12 +308,19 @@ const FlowRun = {
         if (v.type === "BOOLEAN") {
             const id = `runvar_${v.id}`;
             const label = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}</label>`;
-            return `<div class="flow-field-preview flow-field-preview--checkbox"><input type="checkbox" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="BOOLEAN">${label}</div>`;
+            const checked = this.screenValues[v.name] ? " checked" : "";
+            return `<div class="flow-field-preview flow-field-preview--checkbox"><input type="checkbox" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="BOOLEAN"${checked}>${label}</div>`;
         }
 
         // Único / rango: caja(s) pintadas según Propiedades + Validación
         // (listbox/buscador/checkbox si hay validación, obligatorio marcado).
-        return UI.screenVarFieldHtml(v, this.varOptions[v.id] || []);
+        // Se repintan con lo ya tecleado (this.screenValues) para no perderlo
+        // al volver de la pestaña Monitor.
+        const persisted = this.screenValues[v.name];
+        const fieldOpts = v.selectMode === "rango"
+            ? { valueLow: persisted && typeof persisted === "object" ? (persisted.low || "") : "", valueHigh: persisted && typeof persisted === "object" ? (persisted.high || "") : "" }
+            : { value: typeof persisted === "string" || typeof persisted === "number" ? persisted : "" };
+        return UI.screenVarFieldHtml(v, this.varOptions[v.id] || [], fieldOpts);
     },
 
     // ------------------------------------------------------------
@@ -388,6 +404,7 @@ const FlowRun = {
         body.addEventListener("change", (e) => {
             const el = e.target.closest("[data-selopt-field]");
             if (!el) return;
+            el.classList.remove("flow-field-invalid");
             const varId = el.dataset.seloptVar;
             const idx = parseInt(el.dataset.seloptIdx, 10);
             const field = el.dataset.seloptField;
@@ -474,11 +491,29 @@ const FlowRun = {
     async execute() {
         const btn = document.getElementById("btnExecuteFlow");
         const hint = document.getElementById("flowRunStatusHint");
+        const body = document.getElementById("flowRunBody");
+        const banner = document.getElementById("flowRunErrorBanner");
+
+        const { values, files } = this.collectScreenValues();
+        this.screenValues = Object.assign({}, this.screenValues, values);
+
+        // Validación: ni valores vacíos en campos obligatorios ni valores que
+        // no estén en la lista de posibles (constante/dimensión/jerarquía).
+        // Si falla, se marca visiblemente y NO se lanza el flujo.
+        let allVars = [];
+        this.forEachScreenVariable(v => allVars.push(v));
+        const { valid, errors } = UI.validateScreenVars(allVars, values, this.varOptions, this.selOptState);
+        if (!valid) {
+            if (banner) banner.innerHTML = UI.screenErrorBannerHtml(errors);
+            if (body) UI.markScreenFieldErrors(body, errors);
+            UI.toast(`Revisa ${errors.length} campo(s) antes de ejecutar.`, "error");
+            return;
+        }
+        if (banner) banner.innerHTML = "";
+
         btn.disabled = true;
 
         try {
-            const { values, files } = this.collectScreenValues();
-
             // 1) Mover los ficheros locales seleccionados al storage.
             const fileNames = Object.keys(files);
             for (let i = 0; i < fileNames.length; i++) {

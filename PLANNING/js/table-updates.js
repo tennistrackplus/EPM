@@ -1120,6 +1120,9 @@ const TableUpdates = {
         this.applyParamKeys(this.runFields, paramKeys);
         this.gridState = null;
         this.selOptState = {};
+        // Valores ya tecleados en la pantalla de variables (único/rango/
+        // booleano), para no perderlos al ir y volver de la pestaña Tabla.
+        this.runValues = {};
         // El modal de ejecución se recrea por completo en cada startRun() (nuevo
         // #actUpdRunBody), así que las delegaciones de eventos hay que
         // rehacerlas también en cada sesión, no solo la primera vez.
@@ -1161,6 +1164,7 @@ const TableUpdates = {
                     <button type="button" class="flow-run-tab ${this.hasScreenVars ? "" : "active"}" id="actUpdRunTabTable">📋 Tabla</button>
                 </div>
                 <div class="modal-body modal-body-flush" id="actUpdRunBody"></div>
+                <div class="modal-footer" id="actUpdRunFooter" style="display:none"></div>
             </div>`;
 
         document.getElementById("actUpdRunClose").addEventListener("click", () => overlay.remove());
@@ -1177,6 +1181,12 @@ const TableUpdates = {
     },
 
     switchRunTab(tab) {
+        // Antes de abandonar "Pantalla de variables" se recogen los valores ya
+        // tecleados, para poder repintarlos si el usuario vuelve a esa pestaña
+        // (si no, renderRunScreenView() los repinta todos vacíos).
+        if (this.runView === "screen" && tab !== "screen" && document.getElementById("actUpdRunBody")) {
+            this.runValues = Object.assign({}, this.runValues, this.collectRunScreenValues());
+        }
         this.runView = tab;
         const screenTabBtn = document.getElementById("actUpdRunTabScreen");
         if (screenTabBtn) screenTabBtn.classList.toggle("active", tab === "screen");
@@ -1205,12 +1215,15 @@ const TableUpdates = {
     // ---------------- Pestaña 1: pantalla de variables ----------------
     renderRunScreenView() {
         const body = document.getElementById("actUpdRunBody");
+        const footer = document.getElementById("actUpdRunFooter");
+        if (footer) { footer.style.display = "none"; footer.innerHTML = ""; }
         const blocksHtml = this.runScreen.blocks.length
             ? this.runScreen.blocks.map(b => this.runBlockHtml(b)).join("")
             : `<div class="module-empty module-empty--inline">Esta actualización no tiene variables de pantalla definidas.</div>`;
 
         body.innerHTML = `
             <div class="flow-run-screen">
+                <div id="actUpdRunErrorBanner"></div>
                 <div class="flow-screen-blocks flow-screen-blocks--run">${blocksHtml}</div>
                 <div class="flow-run-actions">
                     <button class="btn btn-primary" id="actUpdRunExecute">▶ Cargar tabla</button>
@@ -1273,11 +1286,18 @@ const TableUpdates = {
         if (v.type === "BOOLEAN") {
             const id = `actupdrunvar_${v.id}`;
             const label = `<label for="${id}">${UI.escapeHtml(v.label || v.name)}</label>`;
-            return `<div class="flow-field-preview flow-field-preview--checkbox"><input type="checkbox" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="BOOLEAN">${label}</div>`;
+            const checked = this.runValues[v.name] ? " checked" : "";
+            return `<div class="flow-field-preview flow-field-preview--checkbox"><input type="checkbox" id="${id}" data-var-name="${UI.escapeHtml(v.name)}" data-var-type="BOOLEAN"${checked}>${label}</div>`;
         }
 
-        // Único / rango: caja(s) pintadas según Propiedades + Validación.
-        return UI.screenVarFieldHtml(v, this.runVarOptions[v.id] || []);
+        // Único / rango: caja(s) pintadas según Propiedades + Validación. Se
+        // repintan con lo ya tecleado (this.runValues) para no perderlo al
+        // volver de la pestaña Tabla.
+        const persisted = this.runValues[v.name];
+        const fieldOpts = v.selectMode === "rango"
+            ? { valueLow: persisted && typeof persisted === "object" ? (persisted.low || "") : "", valueHigh: persisted && typeof persisted === "object" ? (persisted.high || "") : "" }
+            : { value: typeof persisted === "string" || typeof persisted === "number" ? persisted : "" };
+        return UI.screenVarFieldHtml(v, this.runVarOptions[v.id] || [], fieldOpts);
     },
 
     // ---- editor de select-options (rango / varios valores / cualquiera), igual que en flow_run.js ----
@@ -1370,6 +1390,7 @@ const TableUpdates = {
         body.addEventListener("change", (e) => {
             const el = e.target.closest("[data-selopt-field]");
             if (!el) return;
+            el.classList.remove("flow-field-invalid");
             const varId = el.dataset.seloptVar;
             const idx = parseInt(el.dataset.seloptIdx, 10);
             const field = el.dataset.seloptField;
@@ -1518,11 +1539,28 @@ const TableUpdates = {
     async executeRun() {
         const btn = document.getElementById("actUpdRunExecute");
         const hint = document.getElementById("actUpdRunHint");
+        const body = document.getElementById("actUpdRunBody");
+        const banner = document.getElementById("actUpdRunErrorBanner");
+
+        const values = this.collectRunScreenValues();
+        this.runValues = Object.assign({}, this.runValues, values);
+
+        // Validación: ni valores vacíos en campos obligatorios ni valores que
+        // no estén en la lista de posibles (constante/dimensión/jerarquía).
+        // Si falla, se marca visiblemente y NO se carga la tabla.
+        const { valid, errors } = UI.validateScreenVars(this.flatVars(this.runScreen), values, this.runVarOptions, this.selOptState);
+        if (!valid) {
+            if (banner) banner.innerHTML = UI.screenErrorBannerHtml(errors);
+            if (body) UI.markScreenFieldErrors(body, errors);
+            UI.toast(`Revisa ${errors.length} campo(s) antes de cargar la tabla.`, "error");
+            return;
+        }
+        if (banner) banner.innerHTML = "";
+
         if (btn) btn.disabled = true;
         if (hint) hint.textContent = "Cargando datos...";
 
         try {
-            const values = this.collectRunScreenValues();
             const where = this.buildWhere(this.runFields, values);
             const table = Provider.qualify(this.project.DATASET, this.runRecord.TABLA);
             const rows = await Provider.runQuery(`SELECT * FROM ${table} ${where}`);
@@ -1567,7 +1605,9 @@ const TableUpdates = {
 
     renderRunTableView() {
         const body = document.getElementById("actUpdRunBody");
+        const footer = document.getElementById("actUpdRunFooter");
         if (!this.gridState) {
+            if (footer) { footer.style.display = "none"; footer.innerHTML = ""; }
             body.innerHTML = this.hasScreenVars
                 ? `<div class="module-empty">Todavía no se ha cargado la tabla. Pulsa "▶ Cargar tabla" en la pestaña "Pantalla de variables".</div>`
                 : `<div class="module-empty">Todavía no se ha cargado la tabla.</div>`;
@@ -1584,9 +1624,17 @@ const TableUpdates = {
                 <button class="btn btn-danger btn-sm" id="actUpdGridDeleteSel" style="display:none;">🗑 Eliminar seleccionadas</button>
                 <span class="values-toolbar-spacer"></span>
                 <span class="values-row-count" id="actUpdGridCount"></span>
-                <button class="btn btn-primary btn-sm" id="actUpdGridSave">Grabar</button>
             </div>
             <div class="values-grid-wrap values-grid-wrap--modal" id="actUpdGridWrap"><span class="spinner"></span></div>`;
+
+        // "Grabar" vive en el pie del modal (no arriba, mezclado con el resto
+        // de la barra de herramientas): es la acción principal de esta
+        // pestaña y conviene tenerla siempre visible, separada y al final,
+        // igual que "Guardar" en el diseñador.
+        if (footer) {
+            footer.style.display = "flex";
+            footer.innerHTML = `<button class="btn btn-primary" id="actUpdGridSave">Grabar</button>`;
+        }
 
         document.getElementById("actUpdGridAddRow").addEventListener("click", () => {
             const blank = {};
