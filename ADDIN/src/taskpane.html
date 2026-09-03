@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="css/theme.css">
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="css/modal.css">
+    <link rel="stylesheet" href="css/distributeValues.css">
 </head>
 <body>
     <div class="taskpane-container">
@@ -23,6 +24,11 @@
             <div style="display:flex; align-items:center; gap:6px;">
                 <span id="autoStatus" style="font-size: var(--fs-sm, 11px); color:#7045A9; min-width: 90px;"></span>
                 <button id="btnAddReport" class="btn-primary" style="padding:6px 14px; font-size: var(--fs-sm);">Añadir informe</button>
+                <button id="btnRefreshAll" class="icon-button" title="Refrescar todos los informes">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 2.5a5.5 5.5 0 100 11 5.5 5.5 0 004.86-2.93.75.75 0 10-1.32-.71A4 4 0 118 4v1.75L10.5 3.5 8 1.25V2.5z"/>
+                    </svg>
+                </button>
                 <button id="btnPauseRefresh" class="icon-button" title="Pausar actualización de datos" aria-pressed="false">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                         <rect x="4" y="3" width="3" height="10" rx="1"/>
@@ -37,6 +43,11 @@
                 <button id="btnFieldOptions" class="icon-button" title="Opciones de campo">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M6 2h4v2H6V2zM2 6h4v2H2V6zm6 0h6v2H8V6zM2 10h8v2H2v-2zm10 0h2v2h-2v-2z"/>
+                    </svg>
+                </button>
+                <button id="btnDistribuirValores" class="icon-button" title="Distribuir valores">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M8 1a1 1 0 011 1v2.09a1 1 0 01-2 0V2a1 1 0 011-1zM3 9a1 1 0 011 1v4a1 1 0 01-2 0v-4a1 1 0 011-1zm5-1.5a1 1 0 011 1V14a1 1 0 01-2 0V8.5a1 1 0 011-1zm5 3a1 1 0 011 1v2.5a1 1 0 01-2 0V11.5a1 1 0 011-1zM4.22 5.64a1 1 0 010 1.42L2.9 8.38a1 1 0 11-1.42-1.42L2.8 5.64a1 1 0 011.42 0zm7.56 0a1 1 0 011.42 0l1.32 1.32a1 1 0 11-1.42 1.42l-1.32-1.32a1 1 0 010-1.42z"/>
                     </svg>
                 </button>
             </div>
@@ -141,6 +152,127 @@
         </div>
     </div>
 
+    <!-- Modal: Distribuir valores (Planning Panel estilo SAP Analytics Cloud) -->
+    <div id="distributeValuesModal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3>Distribuir valores</h3>
+                <button id="btnCloseDistribuirModal" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+
+                <!-- Operación -->
+                <div class="dv-section">
+                    <span class="dv-section-title">Operación</span>
+                    <div class="dv-option-group">
+                        <div class="dv-option">
+                            <input type="radio" name="dvOperation" id="dvOpDistribute" value="distribute" checked>
+                            <label for="dvOpDistribute">Distribuir
+                                <span class="dv-option-sub">Desde el Origen hacia el Destino</span>
+                            </label>
+                        </div>
+                        <div class="dv-option">
+                            <input type="radio" name="dvOperation" id="dvOpRedistribute" value="redistribute">
+                            <label for="dvOpRedistribute">Redistribuir
+                                <span class="dv-option-sub">Reparte el total ya existente en el Destino</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Origen -->
+                <div class="dv-section" id="dvSourceBox">
+                    <span class="dv-section-title">Origen (importe a repartir)</span>
+                    <div class="dv-pick-box">
+                        <span class="dv-pick-info" id="dvSourceInfo"></span>
+                        <button id="btnDvUseSource" class="btn-secondary btn-sm">Usar selección</button>
+                    </div>
+                </div>
+
+                <!-- Destino -->
+                <div class="dv-section">
+                    <span class="dv-section-title">Destino (celdas a repartir)</span>
+                    <div class="dv-pick-box">
+                        <span class="dv-pick-info" id="dvTargetInfo"></span>
+                        <button id="btnDvUseTarget" class="btn-secondary btn-sm">Usar selección</button>
+                    </div>
+                </div>
+
+                <!-- Driver -->
+                <div class="dv-section">
+                    <span class="dv-section-title">Cómo repartir (driver)</span>
+                    <div class="dv-option-group">
+                        <div class="dv-option">
+                            <input type="radio" name="dvDriver" id="dvDriverEqual" value="equal" checked>
+                            <label for="dvDriverEqual">Equitativamente
+                                <span class="dv-option-sub">A partes iguales</span>
+                            </label>
+                        </div>
+                        <div class="dv-option">
+                            <input type="radio" name="dvDriver" id="dvDriverProp" value="proportional">
+                            <label for="dvDriverProp">Proporcionalmente
+                                <span class="dv-option-sub">Según valores actuales</span>
+                            </label>
+                        </div>
+                        <div class="dv-option">
+                            <input type="radio" name="dvDriver" id="dvDriverManual" value="manual">
+                            <label for="dvDriverManual">Valores manuales
+                                <span class="dv-option-sub">Introduces tú cada importe</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Acción -->
+                <div class="dv-section">
+                    <span class="dv-section-title">Acción sobre el valor existente</span>
+                    <div class="dv-option-group">
+                        <div class="dv-option">
+                            <input type="radio" name="dvAction" id="dvActionOverwrite" value="overwrite" checked>
+                            <label for="dvActionOverwrite">Sobrescribir</label>
+                        </div>
+                        <div class="dv-option">
+                            <input type="radio" name="dvAction" id="dvActionAppend" value="append">
+                            <label for="dvActionAppend">Añadir</label>
+                        </div>
+                    </div>
+                </div>
+
+                <label class="dv-checkbox-row">
+                    <input type="checkbox" id="dvUpdateSourceTotal" checked>
+                    Al distribuir, actualizar el Origen con la suma del Destino
+                </label>
+
+                <!-- Vista previa -->
+                <div class="dv-section">
+                    <span class="dv-section-title">Vista previa</span>
+                    <div class="dv-preview-table-wrap">
+                        <table class="dv-preview-table">
+                            <thead>
+                                <tr>
+                                    <th>Celda</th>
+                                    <th class="dv-num">Valor actual</th>
+                                    <th class="dv-num" id="dvManualColHeader" style="display:none;">Importe manual</th>
+                                    <th class="dv-num">Nuevo valor</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dvPreviewBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="dv-preview-footer">
+                        <span>Total repartido</span>
+                        <span id="dvPreviewTotal">0</span>
+                    </div>
+                </div>
+
+            </div>
+            <div class="modal-footer">
+                <button id="btnDistribuirCancelar" class="btn-secondary">Cancelar</button>
+                <button id="btnDistribuirAplicar" class="btn-primary" disabled>Aplicar</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal de Propiedades del informe -->
     <div id="reportPropertiesModal" class="modal-backdrop" style="display: none;">
         <div class="modal-dialog">
@@ -197,6 +329,7 @@
     <script src="js/reportStore.js"></script>
     <script src="js/excelService.js"></script>
     <script src="js/filterModal.js"></script>
+    <script src="js/distributeValues.js"></script>
     <script src="js/commands.js"></script>
     <script src="js/taskpane.js"></script>
 </body>

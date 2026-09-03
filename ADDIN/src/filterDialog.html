@@ -47,7 +47,7 @@
             overflow: hidden;
         }
 
-        /* Columna principal (izquierda): lista de valores o rango */
+        /* Columna principal (izquierda): lista de valores y, si aplica, rango */
         .dialog-main {
             flex: 1 1 62%;
             padding: 14px 16px;
@@ -58,7 +58,7 @@
             border-right: 1px solid var(--border-subtle);
         }
 
-        /* Panel auxiliar (derecha): modo, incluir/excluir, chips, resumen */
+        /* Panel auxiliar (derecha): selección actual (chips) y resumen */
         .dialog-side {
             flex: 1 1 38%;
             padding: 14px 16px;
@@ -80,6 +80,26 @@
 
         .filter-chips { max-height: none; flex: 1; }
 
+        /* Cabecera de cada panel (Valores / Rango) con su propio
+           incluir/excluir independiente, en vez de un único selector
+           global para todo el filtro. */
+        .filter-condition-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        .filter-condition-row .side-section-title { margin: 0; }
+        .segmented-control.compact { padding: 1px; }
+        .segmented-control.compact .segmented-option { padding: 3px 9px; font-size: var(--fs-xs); }
+
+        /* Rango en modo "excluir": mismo código de color que los chips,
+           para reconocer el estado de un vistazo. */
+        .range-selection-box.exclude-mode {
+            background: var(--color-danger-light);
+            border-color: var(--color-danger);
+        }
+
         .dialog-footer {
             padding: 12px 18px;
             border-top: 1px solid var(--border-subtle);
@@ -99,7 +119,10 @@
     </div>
 
     <div class="dialog-body">
-        <!-- Columna principal: lista de valores (checkboxes) o rango -->
+        <!-- Columna principal: lista de valores (checkboxes) Y, si el campo
+             lo permite, un rango; ambos pueden usarse a la vez (los valores
+             sueltos "se suman" al rango) y cada uno tiene su propio
+             incluir/excluir, independiente el uno del otro. -->
         <div class="dialog-main">
             <div id="filterValuesPanel" class="filter-panel">
                 <div class="modal-toolbar">
@@ -107,13 +130,28 @@
                     <button type="button" id="btnSelectAllVisible" class="link-btn">Todo</button>
                     <button type="button" id="btnClearSelection" class="link-btn">Ninguno</button>
                 </div>
+
+                <div class="filter-condition-row">
+                    <p class="side-section-title">Valores seleccionados</p>
+                    <div id="filterValuesIncludeToggle" class="segmented-control include-toggle compact" role="tablist">
+                        <button type="button" class="segmented-option include-option active" data-include="true">✓ Incluir</button>
+                        <button type="button" class="segmented-option exclude-option" data-include="false">✕ Excluir</button>
+                    </div>
+                </div>
+
                 <div id="modalItemsContainer" class="modal-items-list">
                     <div class="loading">Esperando datos…</div>
                 </div>
             </div>
 
             <div id="filterRangePanel" class="filter-panel range-selection-box" style="display:none;">
-                <span class="range-title">Rango de valores</span>
+                <div class="filter-condition-row">
+                    <span class="range-title" style="margin-bottom:0;">Rango de valores</span>
+                    <div id="filterRangeIncludeToggle" class="segmented-control include-toggle compact" role="tablist">
+                        <button type="button" class="segmented-option include-option active" data-include="true">✓ Incluir</button>
+                        <button type="button" class="segmented-option exclude-option" data-include="false">✕ Excluir</button>
+                    </div>
+                </div>
                 <div class="range-controls">
                     <label>Desde
                         <input type="text" id="modalRangeFrom" placeholder="mínimo">
@@ -122,28 +160,12 @@
                         <input type="text" id="modalRangeTo" placeholder="máximo">
                     </label>
                 </div>
-                <p class="filter-range-hint">Ambos límites incluidos. Con "Excluir" se descartan los valores del rango.</p>
+                <p class="filter-range-hint">Ambos límites incluidos. Se combina con los valores seleccionados arriba (vale con cumplir uno de los dos). Con "Excluir" se descartan los valores del rango.</p>
             </div>
         </div>
 
-        <!-- Panel auxiliar de la derecha: modo, incluir/excluir, selección actual -->
+        <!-- Panel auxiliar de la derecha: solo la selección actual (chips) -->
         <div class="dialog-side">
-            <div>
-                <p class="side-section-title">Modo</p>
-                <div id="filterModeTabs" class="segmented-control" role="tablist" style="width:100%;">
-                    <button type="button" class="segmented-option active" data-mode="values" style="flex:1;">☰ Valores</button>
-                    <button type="button" class="segmented-option" data-mode="range" style="flex:1;">↔ Rango</button>
-                </div>
-            </div>
-
-            <div>
-                <p class="side-section-title">Condición</p>
-                <div id="filterIncludeToggle" class="segmented-control include-toggle" role="tablist" style="width:100%;">
-                    <button type="button" class="segmented-option include-option active" data-include="true" style="flex:1;">✓ Incluir</button>
-                    <button type="button" class="segmented-option exclude-option" data-include="false" style="flex:1;">✕ Excluir</button>
-                </div>
-            </div>
-
             <div style="display:flex; flex-direction:column; flex:1; min-height:0;">
                 <p class="side-section-title">Selección actual</p>
                 <div id="modalSelectedChips" class="filter-chips" style="display:none;"></div>
