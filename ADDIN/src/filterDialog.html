@@ -38,6 +38,10 @@
             background: none; border: none; font-size: 20px; line-height: 1;
             color: var(--text-muted); cursor: pointer;
             width: 28px; height: 28px; border-radius: var(--radius-sm);
+            /* Centrado exacto de la "×": sin flex, un <button> alinea el
+               texto según la tipografía y quedaba visiblemente descentrada. */
+            display: flex; align-items: center; justify-content: center;
+            padding: 0;
         }
         .dialog-close-btn:hover { background: var(--gray-100); color: var(--text-primary); }
 
@@ -47,7 +51,10 @@
             overflow: hidden;
         }
 
-        /* Columna principal (izquierda): lista de valores y, si aplica, rango */
+        /* Columna principal (izquierda): un único panel visible a la vez
+           (Valores o Rango), según el "Modo" del panel lateral — como en
+           el diseño original, pero ahora cada panel AÑADE entradas a una
+           selección compartida en vez de sustituir un filtro único. */
         .dialog-main {
             flex: 1 1 62%;
             padding: 14px 16px;
@@ -58,7 +65,7 @@
             border-right: 1px solid var(--border-subtle);
         }
 
-        /* Panel auxiliar (derecha): selección actual (chips) y resumen */
+        /* Panel auxiliar (derecha): modo y selección actual (chips) */
         .dialog-side {
             flex: 1 1 38%;
             padding: 14px 16px;
@@ -78,11 +85,19 @@
             margin: 0 0 6px;
         }
 
-        .filter-chips { max-height: none; flex: 1; }
+        .filter-chips {
+            max-height: none;
+            flex: 1;
+            display: flex;
+            flex-wrap: wrap;
+            align-content: flex-start;
+            gap: 6px;
+        }
 
-        /* Cabecera de cada panel (Valores / Rango) con su propio
-           incluir/excluir independiente, en vez de un único selector
-           global para todo el filtro. */
+        /* Cabecera de cada panel (Valores / Rango), con su propio
+           incluir/excluir: decide bajo qué lista (incluidos/excluidos)
+           cae lo que se marque o añada MIENTRAS esté activo, sin tocar lo
+           que ya se hubiera añadido antes con el otro ajuste. */
         .filter-condition-row {
             display: flex;
             justify-content: space-between;
@@ -93,11 +108,41 @@
         .segmented-control.compact { padding: 1px; }
         .segmented-control.compact .segmented-option { padding: 3px 9px; font-size: var(--fs-xs); }
 
-        /* Rango en modo "excluir": mismo código de color que los chips,
-           para reconocer el estado de un vistazo. */
-        .range-selection-box.exclude-mode {
+        .range-controls-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+        }
+        .range-controls-row .range-controls { flex: 1; }
+        #btnAddRange { flex-shrink: 0; }
+
+        /* Chips: azul (estilo por defecto de .filter-chip) = incluir; rojo
+           del propio tema = excluir. Se reutiliza var(--color-danger) /
+           var(--color-danger-light), las mismas variables de aviso que ya
+           usa theme.css, en vez de un rojo inventado, para que el código
+           de color sea coherente con el resto del add-in. */
+        .filter-chip.exclude-mode {
             background: var(--color-danger-light);
+            color: var(--color-danger);
             border-color: var(--color-danger);
+        }
+        .filter-chip.exclude-mode .chip-remove { color: var(--color-danger); }
+
+        /* Centrado exacto de la "×" de cada chip (mismo ajuste que en
+           dialog-close-btn, antes también quedaba descentrada). */
+        .filter-chip .chip-remove {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+            padding: 0;
+            width: 16px;
+            height: 16px;
+            font-size: 14px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            color: inherit;
         }
 
         .dialog-footer {
@@ -119,10 +164,10 @@
     </div>
 
     <div class="dialog-body">
-        <!-- Columna principal: lista de valores (checkboxes) Y, si el campo
-             lo permite, un rango; ambos pueden usarse a la vez (los valores
-             sueltos "se suman" al rango) y cada uno tiene su propio
-             incluir/excluir, independiente el uno del otro. -->
+        <!-- Columna principal: un único panel visible según el Modo
+             (Valores o Rango). Cada uno tiene su propio Incluir/Excluir,
+             que decide en qué lista (incluidos/excluidos) cae lo que se
+             marque o añada mientras esté activo. -->
         <div class="dialog-main">
             <div id="filterValuesPanel" class="filter-panel">
                 <div class="modal-toolbar">
@@ -133,7 +178,7 @@
 
                 <div class="filter-condition-row">
                     <p class="side-section-title">Valores seleccionados</p>
-                    <div id="filterValuesIncludeToggle" class="segmented-control include-toggle compact" role="tablist">
+                    <div class="segmented-control include-toggle compact js-include-toggle" role="tablist">
                         <button type="button" class="segmented-option include-option active" data-include="true">✓ Incluir</button>
                         <button type="button" class="segmented-option exclude-option" data-include="false">✕ Excluir</button>
                     </div>
@@ -147,25 +192,38 @@
             <div id="filterRangePanel" class="filter-panel range-selection-box" style="display:none;">
                 <div class="filter-condition-row">
                     <span class="range-title" style="margin-bottom:0;">Rango de valores</span>
-                    <div id="filterRangeIncludeToggle" class="segmented-control include-toggle compact" role="tablist">
+                    <div class="segmented-control include-toggle compact js-include-toggle" role="tablist">
                         <button type="button" class="segmented-option include-option active" data-include="true">✓ Incluir</button>
                         <button type="button" class="segmented-option exclude-option" data-include="false">✕ Excluir</button>
                     </div>
                 </div>
-                <div class="range-controls">
-                    <label>Desde
-                        <input type="text" id="modalRangeFrom" placeholder="mínimo">
-                    </label>
-                    <label>Hasta
-                        <input type="text" id="modalRangeTo" placeholder="máximo">
-                    </label>
+                <div class="range-controls-row">
+                    <div class="range-controls">
+                        <label>Desde
+                            <input type="text" id="modalRangeFrom" placeholder="mínimo">
+                        </label>
+                        <label>Hasta
+                            <input type="text" id="modalRangeTo" placeholder="máximo">
+                        </label>
+                    </div>
+                    <button type="button" id="btnAddRange" class="btn-secondary">+ Añadir</button>
                 </div>
-                <p class="filter-range-hint">Ambos límites incluidos. Se combina con los valores seleccionados arriba (vale con cumplir uno de los dos). Con "Excluir" se descartan los valores del rango.</p>
+                <p class="filter-range-hint">Ambos límites incluidos. Puedes añadir varios rangos y combinarlos con valores sueltos: se cumple el filtro con que se satisfaga cualquiera de los incluidos, sin caer en ninguno de los excluidos.</p>
             </div>
         </div>
 
-        <!-- Panel auxiliar de la derecha: solo la selección actual (chips) -->
+        <!-- Panel auxiliar de la derecha: Modo (qué panel se edita ahora)
+             y la selección actual completa (valores y rangos, incluidos y
+             excluidos) como una única lista de chips. -->
         <div class="dialog-side">
+            <div>
+                <p class="side-section-title">Modo</p>
+                <div id="filterModeTabs" class="segmented-control" role="tablist" style="width:100%;">
+                    <button type="button" class="segmented-option active" data-mode="values" style="flex:1;">☰ Valores</button>
+                    <button type="button" class="segmented-option" data-mode="range" style="flex:1;">↔ Rango</button>
+                </div>
+            </div>
+
             <div style="display:flex; flex-direction:column; flex:1; min-height:0;">
                 <p class="side-section-title">Selección actual</p>
                 <div id="modalSelectedChips" class="filter-chips" style="display:none;"></div>
