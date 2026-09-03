@@ -367,7 +367,19 @@
             return out;
         };
 
-        report.design = {
+        // OJO: report.design trae también campos que NO forman parte de
+        // "state" (p.ej. resultSheetName, la hoja de resultados propia de
+        // ESTE informe — ver createReport/setReportResultSheetName). Si
+        // aquí se reemplazara report.design entero por un objeto nuevo sin
+        // ese campo, cada autoguardado (se dispara con CUALQUIER cambio:
+        // mover una flecha de rango, arrastrar un campo...) lo borraría, y
+        // el informe volvería a caer en el fallback físico compartido
+        // EDIT_REPORT!D1 (ver resultSheetNameFromGrid) — con lo que dos
+        // informes cualesquiera que ya se hubieran guardado una vez acaban
+        // en la MISMA hoja sin que el usuario haya hecho nada para
+        // provocarlo. Por eso se parte de report.design existente y solo
+        // se sobrescriben los campos que sí gestiona este formulario.
+        report.design = Object.assign({}, report.design, {
             filters: (state.filters || []).map(f => ({
                 dimension: f.dimension, name: f.name, isHierarchy: f.isHierarchy,
                 realAttribute: f.realAttribute,
@@ -386,7 +398,7 @@
             rrAddress: state.rrAddress || "",
             rcAddress: state.rcAddress || "",
             fieldOptions: state.fieldOptions || {}
-        };
+        });
 
         await _writeReport(reportId, report);
     }
