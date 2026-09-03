@@ -286,6 +286,33 @@ const TaskPaneApp = {
     },
 
     /**
+     * Botón "Refrescar todos los informes" del taskpane: recorre TODOS los
+     * informes de ReportStore (no solo el activo) y los actualiza — ver
+     * actualizarTodosCore() en commands.js (consultas en paralelo, pintado
+     * en Excel en serie). Antes, "Actualizar" (ribbon o autoguardado) solo
+     * refrescaba el informe que se estuviera editando en ese momento.
+     */
+    async refreshAllReports() {
+        const btn = document.getElementById("btnRefreshAll");
+        if (!window.ReportActions || typeof window.ReportActions.actualizarTodos !== "function") return;
+        try {
+            if (btn) { btn.disabled = true; btn.innerText = "Refrescando todos…"; }
+            this.setAutoStatus("Refrescando todos los informes…");
+            await window.ReportActions.actualizarTodos();
+            this.setAutoStatus("Todos los informes actualizados ✓");
+            setTimeout(() => {
+                const el = document.getElementById("autoStatus");
+                if (el && el.innerText === "Todos los informes actualizados ✓") el.innerText = "";
+            }, 2500);
+        } catch (err) {
+            console.error("Error al refrescar todos los informes:", err);
+            this.setAutoStatus("Error al refrescar todos los informes");
+        } finally {
+            if (btn) { btn.disabled = false; btn.innerText = "Refrescar todos"; }
+        }
+    },
+
+    /**
      * Se ejecuta automáticamente en init(), es decir, cada vez que este
      * taskpane se CARGA de nuevo (botón del ribbon "Editar informe" ->
      * ShowTaskpane -> TaskpaneId="Taskpane"). Abrir un taskpane no toca la
@@ -362,6 +389,13 @@ const TaskPaneApp = {
                 editReportSheet.getRange("D1").values = [[activeSheetName]];
                 await context.sync();
             });
+
+            // Se guarda también en el propio informe (no solo en la celda
+            // física compartida EDIT_REPORT!D1): así, si luego se edita OTRO
+            // informe y cambia D1, este informe no "pierde" su hoja.
+            if (this.currentReportId && window.ReportStore && window.ReportStore.setReportResultSheetName) {
+                await window.ReportStore.setReportResultSheetName(this.currentReportId, activeSheetName);
+            }
 
             await this.loadDesignFromSheet();
             this.setAutoStatus(`Editando "${activeSheetName}"`);
@@ -473,6 +507,9 @@ const TaskPaneApp = {
         const btnEditReport = document.getElementById("btnEditReport");
         if (btnEditReport) btnEditReport.addEventListener("click", () => this.editReportFromTaskpane());
 
+        const btnRefreshAll = document.getElementById("btnRefreshAll");
+        if (btnRefreshAll) btnRefreshAll.addEventListener("click", () => this.refreshAllReports());
+
         // Checkboxes Estático / Dinámico (Checkrow / CheckCol del VBA): NO
         // disparan Actualizar() (solo guardan el flag), sombrean la zona y
         // deshabilitan el drag&drop mientras esté marcado. Además, convierten
@@ -537,6 +574,10 @@ const TaskPaneApp = {
         // Botón "Opciones de campo" (toggle del panel derecho)
         const btnFieldOptions = document.getElementById("btnFieldOptions");
         if (btnFieldOptions) btnFieldOptions.addEventListener("click", () => this.toggleFieldOptionsPanel());
+
+        const btnDistribuirValores = document.getElementById("btnDistribuirValores");
+        if (btnDistribuirValores) btnDistribuirValores.addEventListener("click", () => this.openDistributeValuesModal());
+        if (window.DistributeValuesPanel) window.DistributeValuesPanel.initEvents();
     },
 
     /* -------------------------------------------------------------
@@ -1368,6 +1409,10 @@ const TaskPaneApp = {
         this.updateRibbonToggleLabel("BtnPropiedadesInforme", "Propiedades", true);
     },
 
+    openDistributeValuesModal() {
+        if (window.DistributeValuesPanel) window.DistributeValuesPanel.open();
+    },
+
     closeReportPropertiesModal() {
         const modal = document.getElementById("reportPropertiesModal");
         if (modal) modal.style.display = "none";
@@ -1430,6 +1475,8 @@ const TaskPaneApp = {
                 this.openReportPropertiesModal();
             } else if (pending === "fieldOptions") {
                 this.setFieldOptionsPanelOpen(true);
+            } else if (pending === "distributeValues") {
+                this.openDistributeValuesModal();
             }
         } catch (err) {
             console.warn("No se pudo procesar la acción pendiente del ribbon:", err);

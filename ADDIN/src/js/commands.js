@@ -217,15 +217,59 @@ const ReportState = {
  * ------------------------------------------------------------------- */
 const DEFAULT_RESULT_SHEET_NAME = "CSV_RESULT";
 
-// Variante SÍNCRONA: a partir de un grid de EDIT_REPORT ya cargado en memoria.
-function resultSheetNameFromGrid(editReportGrid) {
-    const v = String(cellValue(editReportGrid, 1, 4)).trim(); // EDIT_REPORT!D1
+function activeReportIdOrNull() {
+    return window.ReportStore ? window.ReportStore.getActiveReportId() : null;
+}
+
+// Nº de informe con ceros a la izquierda (mismo formato que _pad3 en
+// reportStore.js), para nombrar tanto la hoja de resultados por defecto
+// como los rangos con nombre Draco_<id>_Rows/Cols/Values de ESE informe.
+function pad3(n) {
+    return String(n).padStart(3, "0");
+}
+
+/**
+ * Nombres de los 3 rangos con nombre de un informe concreto. Antes eran
+ * literales fijos ("Draco_001_Rows/Cols/Values") compartidos por TODOS los
+ * informes del libro: refrescar el informe 2 borraba y reescribía el mismo
+ * nombre que ya apuntaba a las celdas del informe 1 (lo que a su vez
+ * BORRABA lo pintado del informe 1). Con el id del informe en el nombre,
+ * cada uno tiene su propio juego de rangos.
+ */
+function dracoRangeNames(reportId) {
+    const suffix = reportId ? pad3(reportId) : "001"; // "001" = compatibilidad si no hay ReportStore/informe activo
+    return {
+        rows: `Draco_${suffix}_Rows`,
+        cols: `Draco_${suffix}_Cols`,
+        values: `Draco_${suffix}_Values`
+    };
+}
+
+// Variante SÍNCRONA: a partir de un grid de EDIT_REPORT ya cargado en
+// memoria. reportId es opcional (por defecto, el informe activo); se
+// consulta primero la hoja guardada PARA ESE INFORME en ReportStore, y solo
+// si no la tiene (informe creado antes de que esto se guardara por
+// informe) se recurre al valor físico compartido de EDIT_REPORT!D1, como
+// antes.
+function resultSheetNameFromGrid(editReportGrid, reportId) {
+    const id = reportId !== undefined ? reportId : activeReportIdOrNull();
+    if (window.ReportStore && id) {
+        const stored = window.ReportStore.getReportResultSheetName(id);
+        if (stored) return stored;
+    }
+    const v = String(cellValue(editReportGrid, 1, 4)).trim(); // EDIT_REPORT!D1 (compatibilidad)
     return v || DEFAULT_RESULT_SHEET_NAME;
 }
 
 // Variante ASÍNCRONA: cuando todavía no hay un grid de EDIT_REPORT cargado
-// en el punto donde hace falta el nombre de la hoja (lee D1 directamente).
-async function getDracoResultSheetName(context) {
+// en el punto donde hace falta el nombre de la hoja (lee D1 directamente
+// como fallback). Mismo criterio que resultSheetNameFromGrid.
+async function getDracoResultSheetName(context, reportId) {
+    const id = reportId !== undefined ? reportId : activeReportIdOrNull();
+    if (window.ReportStore && id) {
+        const stored = window.ReportStore.getReportResultSheetName(id);
+        if (stored) return stored;
+    }
     try {
         const cell = context.workbook.worksheets.getItem("EDIT_REPORT").getRange("D1");
         cell.load("values");
@@ -234,6 +278,22 @@ async function getDracoResultSheetName(context) {
         return v || DEFAULT_RESULT_SHEET_NAME;
     } catch (e) {
         return DEFAULT_RESULT_SHEET_NAME;
+    }
+}
+
+/**
+ * Crea la hoja de resultados de un informe si todavía no existe (antes se
+ * asumía que "CSV_RESULT" ya venía en la plantilla del libro; con una hoja
+ * por informe, cada informe nuevo necesita la suya la primera vez que se
+ * refresca).
+ */
+async function ensureDracoResultSheetExists(context, sheetName) {
+    const existing = context.workbook.worksheets.getItemOrNullObject(sheetName);
+    existing.load("isNullObject");
+    await context.sync();
+    if (existing.isNullObject) {
+        context.workbook.worksheets.add(sheetName);
+        await context.sync();
     }
 }
 
@@ -303,9 +363,14 @@ function mergeEditReportGrid(physicalGrid, designGrid) {
     return { values, startRow: 0, startCol: 0 };
 }
 
-async function getEditReportGrid(context) {
+// reportId es opcional: por defecto, el informe activo (mismo
+// comportamiento que antes). Se puede pasar explícito para operar sobre UN
+// informe concreto sin depender de cuál esté activo en el taskpane en ese
+// momento (necesario para "Refrescar todos", que recorre varios informes
+// uno a uno).
+async function getEditReportGrid(context, reportIdOverride) {
     const physicalGrid = await getValuesGrid(context, "EDIT_REPORT");
-    const reportId = window.ReportStore ? window.ReportStore.getActiveReportId() : null;
+    const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     const designGrid = (window.ReportStore && reportId)
         ? window.ReportStore.getReportGrid(reportId)
         : { values: [], startRow: 0, startCol: 0 };
@@ -1107,9 +1172,10 @@ function coerceCellLiteral(text) {
     return text;
 }
 
-async function jsonPaintValues(context, json) {
+async function jsonPaintValues(context, json, reportId) {
     const triples = parseJsonValueTriples(json);
-    const resultSheetName = await getDracoResultSheetName(context);
+    const resultSheetName = await getDracoResultSheetName(context, reportId);
+    await ensureDracoResultSheetExists(context, resultSheetName);
     const sheet = context.workbook.worksheets.getItem(resultSheetName);
 
     for (const t of triples) {
@@ -1129,16 +1195,18 @@ async function jsonPaintValues(context, json) {
  * reutilizarlo tanto desde el botón del ribbon como desde el dispatcher
  * Actualizar()).
  */
-async function actualizarInformeFixedCore() {
+async function actualizarInformeFixedCore(reportIdOverride) {
+    const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
 
     // 1) LoadReportDefinition + BuildSQL_Fixed + escritura de A1
     await Excel.run(async (context) => {
-        const editReportGrid = await getEditReportGrid(context);
+        const editReportGrid = await getEditReportGrid(context, reportId);
         const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
         const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
-        const resultSheetName = resultSheetNameFromGrid(editReportGrid);
+        const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
+        await ensureDracoResultSheetExists(context, resultSheetName);
         const csvGrid = await getFormulaGrid(context, resultSheetName);
 
         loadReportDefinition(editReportGrid);
@@ -1168,7 +1236,7 @@ async function actualizarInformeFixedCore() {
 
     // 3) JSON_PaintValues
     await Excel.run(async (context) => {
-        await jsonPaintValues(context, json);
+        await jsonPaintValues(context, json, reportId);
     });
 }
 
@@ -1305,30 +1373,57 @@ function sqlLiteralForFilter(atributesGrid, dimension, attributeName, rawValue) 
 }
 
 /**
+ * Condición para una lista de valores (IN/NOT IN, o "=" / "<>" si es uno
+ * solo), dado el campo SQL ya resuelto ("alias.ATRIBUTO").
+ */
+function buildValuesCondition(atributesGrid, dimension, attributeName, campo, values, include) {
+    const vals = (values || []).filter(v => String(v).trim() !== "");
+    if (vals.length === 0) return "";
+
+    if (vals.length === 1) {
+        const lit = sqlLiteralForFilter(atributesGrid, dimension, attributeName, vals[0]);
+        return campo + (include ? " = " : " <> ") + lit;
+    }
+
+    const lista = vals.map(v => sqlLiteralForFilter(atributesGrid, dimension, attributeName, v)).join(", ");
+    return campo + (include ? " IN (" : " NOT IN (") + lista + ")";
+}
+
+/**
+ * Condición para un rango (BETWEEN/NOT BETWEEN), dado el campo SQL ya
+ * resuelto ("alias.ATRIBUTO").
+ */
+function buildRangeCondition(atributesGrid, dimension, attributeName, campo, from, to, include) {
+    const desde = sqlLiteralForFilter(atributesGrid, dimension, attributeName, from);
+    const hasta = sqlLiteralForFilter(atributesGrid, dimension, attributeName, to);
+    const cond = campo + " BETWEEN " + desde + " AND " + hasta;
+    return include ? cond : ("NOT (" + cond + ")");
+}
+
+/**
  * Condición para un filtro "simple": un único atributo real, con selección
- * de varios valores (IN/NOT IN) o un rango (BETWEEN/NOT BETWEEN). Con un
- * solo valor en modo "values" se genera "=" / "<>", igual que antes.
+ * de varios valores (IN/NOT IN), un rango (BETWEEN/NOT BETWEEN), o ambos a
+ * la vez (modo "mixed": el campo cumple el filtro si cumple los valores O
+ * el rango, cada uno con su propio incluir/excluir). Con un solo valor en
+ * modo "values" se genera "=" / "<>", igual que antes.
  */
 function buildSimpleFilterCondition(atributesGrid, relGrid, dimension, attributeName, filter) {
     const campo = getTableAlias(relGrid, dimension) + "." + attributeName;
 
     if (filter.mode === "range") {
-        const desde = sqlLiteralForFilter(atributesGrid, dimension, attributeName, filter.from);
-        const hasta = sqlLiteralForFilter(atributesGrid, dimension, attributeName, filter.to);
-        const cond = campo + " BETWEEN " + desde + " AND " + hasta;
-        return filter.include ? cond : ("NOT (" + cond + ")");
+        return buildRangeCondition(atributesGrid, dimension, attributeName, campo, filter.from, filter.to, filter.include);
     }
 
-    const values = (filter.values || []).filter(v => String(v).trim() !== "");
-    if (values.length === 0) return "";
-
-    if (values.length === 1) {
-        const lit = sqlLiteralForFilter(atributesGrid, dimension, attributeName, values[0]);
-        return campo + (filter.include ? " = " : " <> ") + lit;
+    if (filter.mode === "mixed") {
+        const valuesCond = buildValuesCondition(atributesGrid, dimension, attributeName, campo, filter.values, filter.valuesInclude);
+        const rangeCond = buildRangeCondition(atributesGrid, dimension, attributeName, campo, filter.from, filter.to, filter.rangeInclude);
+        const partes = [valuesCond, rangeCond].filter(Boolean);
+        if (partes.length === 0) return "";
+        if (partes.length === 1) return partes[0];
+        return "(" + partes.join(CRLF + "   OR ") + ")";
     }
 
-    const lista = values.map(v => sqlLiteralForFilter(atributesGrid, dimension, attributeName, v)).join(", ");
-    return campo + (filter.include ? " IN (" : " NOT IN (") + lista + ")";
+    return buildValuesCondition(atributesGrid, dimension, attributeName, campo, filter.values, filter.include);
 }
 
 /**
@@ -1612,7 +1707,12 @@ function buildFinalSelect() {
         sql += "," + CRLF + "    " + r.AttributeName;
     }
 
-    sql += "," + CRLF + "    IMPORTE" + CRLF + CRLF + "FROM REPORT_DATA";
+    // Una columna por medida (antes: "IMPORTE" fijo, lo que descartaba
+    // cualquier medida adicional aunque ya viniera calculada en REPORT_DATA).
+    for (const m of ReportState.Measures) {
+        sql += "," + CRLF + "    " + m.Name;
+    }
+    sql += CRLF + CRLF + "FROM REPORT_DATA";
 
     return sql;
 }
@@ -1795,7 +1895,10 @@ function buildFinalSelectWithSubtotals(atributesGrid, subtotalsOnTop) {
         sql += "," + CRLF + "    " + fieldFinalExpressionWithSubtotal(atributesGrid, r);
     }
 
-    sql += "," + CRLF + "    IMPORTE" + CRLF + CRLF + "FROM REPORT_DATA";
+    for (const m of ReportState.Measures) {
+        sql += "," + CRLF + "    " + m.Name;
+    }
+    sql += CRLF + CRLF + "FROM REPORT_DATA";
 
     return sql;
 }
@@ -1896,16 +1999,47 @@ function buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop) {
  * ese eje no cambie de campos.
  * ------------------------------------------------------------------- */
 
-const DracoCollapseState = {
-    rows: { signature: null, collapsed: new Set() },
-    cols: { signature: null, collapsed: new Set() }
-};
+// Estado de contraído/expandido, último JSON e indicadores +/- pintados:
+// TODO ESTO ANTES ERA GLOBAL AL LIBRO (un único informe asumido). Con
+// varios informes en el mismo libro, cada uno necesita su propia copia —
+// si no, refrescar el informe 2 "olvidaba" qué nodos tenía contraídos el
+// informe 1 y dejaba sus indicadores +/- apuntando a nodos que ya no
+// existían. Se guardan en mapas indexados por reportId (0 = sin
+// ReportStore/informe, por compatibilidad).
+const DracoCollapseStateByReport = new Map(); // reportId -> { rows:{signature,collapsed}, cols:{signature,collapsed} }
+const DracoLastJsonByReport = new Map();      // reportId -> último JSON de BigQuery de ESE informe
+const DracoIndicatorMapByReport = new Map();  // reportId -> Map("row_col" -> { axis, nodeKey })
 
-let DracoLastJson = null;           // último JSON de BigQuery, para repintar sin re-consultar
-let DracoHandlerRegistered = false; // evita registrar los listeners de CSV_RESULT (clic +/-, reconocimiento) más de una vez
-let DracoEditReportHandlerRegistered = false; // evita registrar el listener de EDIT_REPORT!A5 (picker) más de una vez — INDEPENDIENTE de DracoHandlerRegistered: no depende de que exista CSV_RESULT ni de que se haya refrescado nunca
+function dracoStateKey(reportId) {
+    return reportId || 0;
+}
+
+function getDracoCollapseState(reportId) {
+    const key = dracoStateKey(reportId);
+    if (!DracoCollapseStateByReport.has(key)) {
+        DracoCollapseStateByReport.set(key, {
+            rows: { signature: null, collapsed: new Set() },
+            cols: { signature: null, collapsed: new Set() }
+        });
+    }
+    return DracoCollapseStateByReport.get(key);
+}
+
+function getDracoIndicatorMap(reportId) {
+    const key = dracoStateKey(reportId);
+    if (!DracoIndicatorMapByReport.has(key)) DracoIndicatorMapByReport.set(key, new Map());
+    return DracoIndicatorMapByReport.get(key);
+}
+
+// Hojas de resultados en las que ya se han enganchado los listeners de
+// clic (+/-) y reconocimiento de miembros (antes era un único booleano:
+// solo se enganchaban en la PRIMERA hoja de resultados usada en la sesión,
+// así que el informe 2, si se pinta en otra hoja, se quedaba sin clic
+// interactivo). Ahora es un Set de nombres de hoja: se engancha en cada
+// hoja de resultados distinta que se vaya usando.
+const DracoHandlerRegisteredSheets = new Set();
+let DracoEditReportHandlerRegistered = false; // evita registrar el listener de EDIT_REPORT!A5 (picker) más de una vez — INDEPENDIENTE de lo anterior: no depende de que exista ninguna hoja de resultados ni de que se haya refrescado nunca
 let DracoSuppressChangeEvents = false; // true mientras jsonTo3Matrices pinta celdas (evita que el reconocimiento de miembros reaccione a nuestras propias escrituras)
-let DracoIndicatorMap = new Map();  // "row_col" -> { axis, nodeKey } de los indicadores +/- pintados
 
 // Firma del eje = lista de "DIMENSION.ATRIBUTO:NIVEL" de sus campos, en
 // orden. Si cambia (se añade/quita/reordena un campo en ESE eje), se
@@ -1922,8 +2056,8 @@ function computeDracoAxisSignature(editReportGrid, dimCol, attrCol, hierCol, cou
     return parts.join("|");
 }
 
-function resetDracoCollapseIfAxisChanged(axis, signature) {
-    const st = DracoCollapseState[axis];
+function resetDracoCollapseIfAxisChanged(axis, signature, reportId) {
+    const st = getDracoCollapseState(reportId)[axis];
     if (st.signature !== signature) {
         st.signature = signature;
         st.collapsed = new Set();
@@ -2107,7 +2241,8 @@ function buildAxisFieldsTable(editReportGrid, axis) {
 }
 
 async function convertAxisStaticFormulas(axis, makeStatic) {
-    const rangeName = axis === "rows" ? "Draco_001_Rows" : "Draco_001_Cols";
+    const reportId = activeReportIdOrNull();
+    const rangeName = axis === "rows" ? dracoRangeNames(reportId).rows : dracoRangeNames(reportId).cols;
     // DracoCollapseState/DracoIndicatorMap usan "rows"/"cols" como clave de
     // eje (no "columns"), a diferencia del parámetro `axis` de esta función.
     const stateAxis = axis === "rows" ? "rows" : "cols";
@@ -2124,10 +2259,11 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         // del usuario ahí dispara handleDracoSelectionChanged, que las
         // toma por buenas e intenta un repintado/"refresco" con el último
         // JSON, aunque el eje ya no tenga jerarquías desplegables.
-        for (const [key, meta] of DracoIndicatorMap) {
-            if (meta.axis === stateAxis) DracoIndicatorMap.delete(key);
+        const indicatorMap = getDracoIndicatorMap(reportId);
+        for (const [key, meta] of indicatorMap) {
+            if (meta.axis === stateAxis) indicatorMap.delete(key);
         }
-        const st = DracoCollapseState[stateAxis];
+        const st = getDracoCollapseState(reportId)[stateAxis];
         st.signature = null;
         st.collapsed = new Set();
     }
@@ -2242,13 +2378,15 @@ async function refreshDracoIndicatorTooltips(context, sheet) {
  * Devuelve null si la celda no pertenece a ninguno de los dos ejes.
  */
 async function locateDracoAxisField(context, addr) {
-    const resultSheetName = await getDracoResultSheetName(context);
+    const reportId = activeReportIdOrNull();
+    const resultSheetName = await getDracoResultSheetName(context, reportId);
     const sheet = context.workbook.worksheets.getItem(resultSheetName);
     const cell = sheet.getRange(addr);
     cell.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
-    const rowsNamed = context.workbook.names.getItemOrNullObject("Draco_001_Rows");
-    const colsNamed = context.workbook.names.getItemOrNullObject("Draco_001_Cols");
+    const rangeNames = dracoRangeNames(reportId);
+    const rowsNamed = context.workbook.names.getItemOrNullObject(rangeNames.rows);
+    const colsNamed = context.workbook.names.getItemOrNullObject(rangeNames.cols);
     rowsNamed.load("isNullObject");
     colsNamed.load("isNullObject");
     await context.sync();
@@ -2284,7 +2422,7 @@ async function locateDracoAxisField(context, addr) {
 
     if (!axis) return null;
 
-    const editReportGrid = await getEditReportGrid(context);
+    const editReportGrid = await getEditReportGrid(context, reportId);
     loadReportDefinition(editReportGrid);
     const fields = buildAxisFieldsTable(editReportGrid, axis);
     const field = fields[level];
@@ -2409,7 +2547,8 @@ async function updateCrearInformeLabelForAddress(addr) {
 
     try {
         await Excel.run(async (context) => {
-            const resultSheetName = await getDracoResultSheetName(context);
+            const reportId = activeReportIdOrNull();
+            const resultSheetName = await getDracoResultSheetName(context, reportId);
             const sheet = context.workbook.worksheets.getItemOrNullObject(resultSheetName);
             sheet.load("isNullObject");
             await context.sync();
@@ -2418,7 +2557,7 @@ async function updateCrearInformeLabelForAddress(addr) {
             const cell = sheet.getRange(addr);
             cell.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
 
-            const rowsNamed = context.workbook.names.getItemOrNullObject("Draco_001_Rows");
+            const rowsNamed = context.workbook.names.getItemOrNullObject(dracoRangeNames(reportId).rows);
             rowsNamed.load("isNullObject");
             await context.sync();
 
@@ -2437,7 +2576,7 @@ async function updateCrearInformeLabelForAddress(addr) {
                 cell.columnIndex + cell.columnCount > r.columnIndex;
         });
     } catch (e) {
-        console.warn("[Draco] No se pudo comprobar la selección frente a Draco_001_Rows:", e);
+        console.warn("[Draco] No se pudo comprobar la selección frente al rango de filas del informe activo:", e);
     }
 
     await requestRibbonLabelUpdate(
@@ -2711,8 +2850,14 @@ async function registerEditReportPickerHandler(context) {
     console.log("[Draco] Listener de EDIT_REPORT!A5 (Member Picker) registrado.");
 }
 
-async function registerDracoSelectionHandler(context, sheet) {
-    if (DracoHandlerRegistered) return;
+// sheetName es el nombre de la hoja de resultados donde vive `sheet`: cada
+// informe puede pintarse en una hoja distinta (ver resultSheetNameFromGrid/
+// getDracoResultSheetName), así que los listeners de clic (+/-) y
+// reconocimiento de miembros se enganchan POR HOJA, no una sola vez para
+// todo el libro — si no, un segundo informe en otra hoja se quedaba sin
+// clic interactivo (nunca se registraba nada ahí).
+async function registerDracoSelectionHandler(context, sheet, sheetName) {
+    if (DracoHandlerRegisteredSheets.has(sheetName)) return;
 
     sheet.onSelectionChanged.add(handleDracoSelectionChanged);
     sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
@@ -2723,7 +2868,7 @@ async function registerDracoSelectionHandler(context, sheet) {
     await registerEditReportPickerHandler(context);
 
     await context.sync();
-    DracoHandlerRegistered = true;
+    DracoHandlerRegisteredSheets.add(sheetName);
 }
 
 /**
@@ -2748,10 +2893,10 @@ async function ensureDracoHandlersRegistered() {
         console.warn("[Draco] No se pudo registrar el listener de EDIT_REPORT!A5 de forma temprana:", e);
     }
 
-    if (DracoHandlerRegistered) return;
     try {
         await Excel.run(async (context) => {
             const resultSheetName = await getDracoResultSheetName(context);
+            if (DracoHandlerRegisteredSheets.has(resultSheetName)) return;
             const sheet = context.workbook.worksheets.getItemOrNullObject(resultSheetName);
             sheet.load("isNullObject");
             await context.sync();
@@ -2759,7 +2904,7 @@ async function ensureDracoHandlersRegistered() {
                 console.log("[Draco] ensureDracoHandlersRegistered: " + resultSheetName + " no existe todavía (sin refresco previo).");
                 return;
             }
-            await registerDracoSelectionHandler(context, sheet);
+            await registerDracoSelectionHandler(context, sheet, resultSheetName);
             console.log("[Draco] Listeners de " + resultSheetName + " registrados de forma temprana (sin necesidad de refrescar).");
         });
     } catch (e) {
@@ -2773,7 +2918,9 @@ async function ensureDracoHandlersRegistered() {
  * el último JSON de BigQuery (sin volver a consultar).
  */
 async function handleDracoSelectionChanged(eventArgs) {
-    if (DracoIndicatorMap.size === 0) return;
+    const reportId = activeReportIdOrNull();
+    const indicatorMap = getDracoIndicatorMap(reportId);
+    if (indicatorMap.size === 0) return;
 
     try {
         let addr = (eventArgs && eventArgs.address) || "";
@@ -2781,7 +2928,7 @@ async function handleDracoSelectionChanged(eventArgs) {
         if (!addr) return;
 
         await Excel.run(async (context) => {
-            const resultSheetName = await getDracoResultSheetName(context);
+            const resultSheetName = await getDracoResultSheetName(context, reportId);
             const sheet = context.workbook.worksheets.getItem(resultSheetName);
             const range = sheet.getRange(addr);
             range.load(["rowCount", "columnCount", "rowIndex", "columnIndex", "formulas"]);
@@ -2790,25 +2937,27 @@ async function handleDracoSelectionChanged(eventArgs) {
             if (range.rowCount !== 1 || range.columnCount !== 1) return;
 
             const key = (range.rowIndex + 1) + "_" + (range.columnIndex + 1);
-            const meta = DracoIndicatorMap.get(key);
+            const meta = indicatorMap.get(key);
             if (!meta) return;
 
             // Salvaguarda adicional: una celda de eje Estático es una
             // fórmula EPM_VALUE (sin glifo +/-); si por lo que sea quedara
-            // una entrada obsoleta en DracoIndicatorMap apuntando aquí, no
-            // se actúa (evita el repintado/"refresco" fantasma en Estático).
+            // una entrada obsoleta en el mapa de indicadores apuntando
+            // aquí, no se actúa (evita el repintado/"refresco" fantasma en
+            // Estático).
             const formula = range.formulas[0][0];
             if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) return;
 
-            const st = DracoCollapseState[meta.axis];
+            const st = getDracoCollapseState(reportId)[meta.axis];
             if (st.collapsed.has(meta.nodeKey)) {
                 st.collapsed.delete(meta.nodeKey);
             } else {
                 st.collapsed.add(meta.nodeKey);
             }
 
-            if (DracoLastJson) {
-                await jsonTo3Matrices(context, DracoLastJson);
+            const lastJson = DracoLastJsonByReport.get(dracoStateKey(reportId));
+            if (lastJson) {
+                await jsonTo3Matrices(context, lastJson, reportId);
             }
         });
     } catch (e) {
@@ -2879,16 +3028,25 @@ function computeAxisPaintPlan(levels) {
     const fieldsReal = [];
     const iauxReal = [];
     const flag1OrdinalToIaux = [];
+    // Una entrada por medida, TODAS compartiendo el mismo iAux (una única
+    // fila/columna física "extra" para el grupo de medidas del eje, no una
+    // por medida): measureLevels[k].ordinal (0..N-1) es la posición de esa
+    // medida DENTRO del grupo, usada luego para repartirla en su propio
+    // hueco físico perpendicular al eje (ver measureCount en jsonTo3Matrices).
     const measureLevels = [];
 
     let iAux = 0;
     let dimIdx = 0;
     let ordinal = 0;
+    let measureIaux = null;
 
     for (const level of levels) {
         if (level.isMeasure) {
-            iAux++;
-            measureLevels.push({ iAux, label: (level.attr || level.dim || "").trim() || "MEASURE" });
+            if (measureIaux === null) {
+                iAux++;
+                measureIaux = iAux;
+            }
+            measureLevels.push({ iAux: measureIaux, ordinal: measureLevels.length, label: (level.attr || level.dim || "").trim() || "MEASURE" });
             continue;
         }
         dimIdx++;
@@ -2911,17 +3069,22 @@ function computeAxisPaintPlan(levels) {
  * "invertido" H/N que usa el resto del módulo (total_dim_filas=ColumnCount
  * leído de columnas H/I/J; total_dim_cols=RowCount leído de columnas N/O/P).
  */
-async function jsonTo3Matrices(context, json) {
+// reportId es opcional: por defecto, el informe activo (mismo
+// comportamiento que antes de que existiera "Refrescar todos"). Se pasa
+// explícito cuando se pinta UN informe concreto que no tiene por qué ser
+// el activo en el taskpane (ver actualizarTodosCore).
+async function jsonTo3Matrices(context, json, reportId) {
     DracoSuppressChangeEvents = true; // evita que el reconocimiento de miembros reaccione a este pintado
     try {
-        return await jsonTo3MatricesCore(context, json);
+        return await jsonTo3MatricesCore(context, json, reportId);
     } finally {
         DracoSuppressChangeEvents = false;
     }
 }
 
-async function jsonTo3MatricesCore(context, json) {
-    DracoLastJson = json; // cache para poder repintar en un toggle +/- sin re-consultar BigQuery
+async function jsonTo3MatricesCore(context, json, reportIdOverride) {
+    const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
+    DracoLastJsonByReport.set(dracoStateKey(reportId), json); // cache para poder repintar en un toggle +/- sin re-consultar BigQuery
 
     const totalCampos = 2 + ReportState.RowCount + ReportState.ColumnCount + ReportState.MeasureCount;
 
@@ -2987,7 +3150,7 @@ async function jsonTo3MatricesCore(context, json) {
     }
 
     // ---- PINTAR ----
-    const editReportGrid = await getEditReportGrid(context);
+    const editReportGrid = await getEditReportGrid(context, reportId);
 
     const RRows = parseAddress(cellValue(editReportGrid, 10, 8));  // EDIT_REPORT!H10
     const RCols = parseAddress(cellValue(editReportGrid, 10, 14)); // EDIT_REPORT!N10
@@ -3025,6 +3188,26 @@ async function jsonTo3MatricesCore(context, json) {
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
 
+    // ---- Varias medidas en el MISMO eje (Σ Medidas del taskpane): el
+    // taskpane garantiza que todas las medidas están en un único eje
+    // (nunca repartidas entre Filas y Columnas), así que como mucho uno de
+    // los dos "measureLevels" de abajo tiene contenido. Ese eje se pinta
+    // measureCount veces más ancho/alto (una fila/columna física física
+    // por medida), en vez de una sola celda con el valor de la última
+    // medida (como pasaba antes de este cambio).
+    const measureCount = Math.max(1, ReportState.Measures.length);
+    const measuresOnRowsAxis = planFilas.measureLevels.length > 0;      // eje "Filas" físico (H/I/J)
+    const measuresOnColsAxis = planColumnas.measureLevels.length > 0;   // eje "Columnas" físico (N/O/P)
+    // Índice (0-based) del primer campo de medida dentro de cada fila del
+    // FACT: tras ROW_ID, COLUMN_ID y las dimensiones de ambos ejes, en el
+    // mismo orden en que buildSelect/buildFinalSelect las escriben.
+    const measureFieldBase = 2 + ReportState.ColumnCount + ReportState.RowCount;
+    // logicalId 1..N -> posición física 1..N*measureCount (measureCount
+    // huecos consecutivos por cada logicalId, uno por medida); si el eje no
+    // lleva medidas, o measureCount es 1, devuelve el mismo logicalId.
+    const explodeForMeasures = (logicalId, isMeasureAxis, ordinal) =>
+        isMeasureAxis ? (logicalId - 1) * measureCount + ordinal + 1 : logicalId;
+
     const flagsFilas = planFilas.flagsReal;
     const fieldsFilas = planFilas.fieldsReal; // {dim, attr} por posición — solo hace falta si el eje es Estático (fórmulas EPM_VALUE)
 
@@ -3036,8 +3219,9 @@ async function jsonTo3MatricesCore(context, json) {
     // contraídos; si ha cambiado, se resetea (todo expandido) para ESE eje.
     const rowsSignature = computeDracoAxisSignatureFromLevels(levelsFilas);
     const colsSignature = computeDracoAxisSignatureFromLevels(levelsColumnas);
-    resetDracoCollapseIfAxisChanged("rows", rowsSignature);
-    resetDracoCollapseIfAxisChanged("cols", colsSignature);
+    resetDracoCollapseIfAxisChanged("rows", rowsSignature, reportId);
+    resetDracoCollapseIfAxisChanged("cols", colsSignature, reportId);
+    const dracoCollapseState = getDracoCollapseState(reportId);
 
     // "Suprimir ceros en filas/columnas" (propiedades del informe): se quita
     // del diccionario, ANTES de compactar, cualquier ROW_ID/COLUMN_ID cuyo
@@ -3047,8 +3231,14 @@ async function jsonTo3MatricesCore(context, json) {
         const colsWithValue = new Set();
         for (let i = 0; i < filas; i++) {
             const f = fact[i];
-            const n = Number(f[totalCampos - 1]);
-            if (!isNaN(n) && n !== 0) {
+            // Con varias medidas se suprime la fila/columna solo si TODAS
+            // sus medidas son cero/vacío (antes solo miraba la última).
+            let anyNonZero = false;
+            for (let mIdx = 0; mIdx < measureCount; mIdx++) {
+                const n = Number(f[measureFieldBase + mIdx]);
+                if (!isNaN(n) && n !== 0) { anyNonZero = true; break; }
+            }
+            if (anyNonZero) {
                 rowsWithValue.add(String(f[0]));
                 colsWithValue.add(String(f[1]));
             }
@@ -3065,8 +3255,8 @@ async function jsonTo3MatricesCore(context, json) {
         }
     }
 
-    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, DracoCollapseState.rows.collapsed, flagsFilas, { subtotalsOnTop: reportProps.subtotalsOnTop });
-    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, DracoCollapseState.cols.collapsed, flagsColumnas, { subtotalsOnTop: reportProps.subtotalsOnTop });
+    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, dracoCollapseState.rows.collapsed, flagsFilas, { subtotalsOnTop: reportProps.subtotalsOnTop });
+    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, dracoCollapseState.cols.collapsed, flagsColumnas, { subtotalsOnTop: reportProps.subtotalsOnTop });
 
     console.log("jsonTo3Matrices diagnóstico:", {
         totalCampos, filas,
@@ -3079,20 +3269,28 @@ async function jsonTo3MatricesCore(context, json) {
         filasVisibles: rowsFilter.dict.size, columnasVisibles: colsFilter.dict.size
     });
 
-    const sheet = context.workbook.worksheets.getItem(resultSheetNameFromGrid(editReportGrid));
+    const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
+    await ensureDracoResultSheetExists(context, resultSheetName);
+    const sheet = context.workbook.worksheets.getItem(resultSheetName);
 
     // Antes de refrescar: borrar formato Y contenido de los rangos con
-    // nombre Draco_001_Rows / Draco_001_Cols / Draco_001_Values de la
-    // ejecución anterior (si existen), para no arrastrar colores/bordes
-    // de una tabla previa más grande o con otra forma.
-    await clearDracoNamedRanges(context);
+    // nombre Draco_<id>_Rows / Draco_<id>_Cols / Draco_<id>_Values DE ESTE
+    // INFORME (y solo de este) de la ejecución anterior (si existen), para
+    // no arrastrar colores/bordes de una tabla previa más grande o con
+    // otra forma — y, sobre todo, para NO tocar los rangos de otros
+    // informes (antes, con un nombre compartido "Draco_001_*", refrescar
+    // un informe borraba lo pintado de otro).
+    await clearDracoNamedRanges(context, reportId);
 
     // Limpiar todo lo pintado en ejecuciones anteriores (incluidas posibles
     // fórmulas EPM_VALUE residuales de una tabla previa más grande, y su
     // formato: relleno, fuente, bordes..., y también la franja de
     // indicadores +/- de la ejecución anterior), pero preservando la fila 1
-    // (A1=SQL, B1=JSON) que se escribe aparte.
-    DracoIndicatorMap = new Map();
+    // (A1=SQL, B1=JSON) que se escribe aparte. Solo se reinicia el mapa de
+    // indicadores DE ESTE informe (getDracoIndicatorMap ya lo crea vacío si
+    // no existía); los de otros informes no se tocan.
+    const dracoIndicatorMap = getDracoIndicatorMap(reportId);
+    dracoIndicatorMap.clear();
     const usedRange = sheet.getUsedRangeOrNullObject();
     usedRange.load(["isNullObject", "rowIndex", "rowCount"]);
     await context.sync();
@@ -3120,10 +3318,20 @@ async function jsonTo3MatricesCore(context, json) {
         const newRowId = rowsFilter.idMap.get(Number(f[0]));
         const newColId = colsFilter.idMap.get(Number(f[1]));
         if (newRowId === undefined || newColId === undefined) continue; // oculto por contraído
-        const row = newRowId + rowsOffRow;
-        const col = newColId + colsOffCol;
-        const value = coerceCellLiteral(String(f[totalCampos - 1]));
-        factCells.set(row + "_" + col, { row, col, value });
+
+        // Una celda por cada medida (antes: solo la última, f[totalCampos-1]):
+        // si el eje con medidas es el de Filas, se reparten en filas físicas
+        // consecutivas (misma columna); si es el de Columnas, en columnas
+        // físicas consecutivas (misma fila). Con una sola medida, measureCount
+        // es 1 y esto se comporta exactamente igual que antes.
+        for (let mIdx = 0; mIdx < measureCount; mIdx++) {
+            const physRow = explodeForMeasures(newRowId, measuresOnRowsAxis, mIdx);
+            const physCol = explodeForMeasures(newColId, measuresOnColsAxis, mIdx);
+            const row = physRow + rowsOffRow;
+            const col = physCol + colsOffCol;
+            const value = coerceCellLiteral(String(f[measureFieldBase + mIdx]));
+            factCells.set(row + "_" + col, { row, col, value });
+        }
     }
     await writeCellBlock(context, sheet, factCells);
 
@@ -3138,13 +3346,16 @@ async function jsonTo3MatricesCore(context, json) {
     for (const V of rowsFilter.dict.values()) {
         if (Number(V[0]) > maxRowId) maxRowId = Number(V[0]);
 
+        // Si las medidas están en ESTE eje, cada dimensión real se repite en
+        // las measureCount filas físicas de su grupo (misma columna, una
+        // fila por medida); si no, se pinta una sola vez, como antes.
+        const repeatCount = measuresOnRowsAxis ? measureCount : 1;
+
         for (let i = 1; i <= totalDimFilas; i++) {
             const flag = flagsFilas[i];
             const iAux = planFilas.iauxReal[i];
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
-                const row = Number(V[0]) + rowsOffRow;
-                const col = iAux + rowsOffCol;
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
                 const text = coerceCellLiteral(V[i]);
                 // Eje Estático: se escribe como fórmula EPM_VALUE editable
@@ -3160,15 +3371,20 @@ async function jsonTo3MatricesCore(context, json) {
                 // media pintura (se pintaban los valores del FACT, pero se
                 // interrumpía antes de pintar/formatear este eje).
                 const isTotal = String(text).trim().toUpperCase() === "TOTAL";
-                filasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
+                for (let mIdx = 0; mIdx < repeatCount; mIdx++) {
+                    const row = explodeForMeasures(Number(V[0]), measuresOnRowsAxis, mIdx) + rowsOffRow;
+                    const col = iAux + rowsOffCol;
+                    filasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
+                }
             }
         }
 
         // Filas MEASURE del eje (p.ej. "MEASURE" -> "IMPORTE"): no vienen del
-        // dict (no son un valor variable por ROW_ID), se pintan como etiqueta
-        // constante en su propia columna física, para TODOS los ROW_ID.
+        // dict (no son un valor variable por ROW_ID); se pintan como etiqueta
+        // en su propia columna física, una por cada medida del grupo, en la
+        // fila física que le corresponde a ESA medida (measuresOnRowsAxis).
         for (const m of planFilas.measureLevels) {
-            const row = Number(V[0]) + rowsOffRow;
+            const row = explodeForMeasures(Number(V[0]), measuresOnRowsAxis, m.ordinal) + rowsOffRow;
             const col = m.iAux + rowsOffCol;
             filasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
         }
@@ -3187,12 +3403,16 @@ async function jsonTo3MatricesCore(context, json) {
         // que sí tiene en cuenta el hueco que dejan las filas MEASURE.
         const byLogicalKey = new Map(rowsFilter.indicators.map(it => [it.newId + "_" + planFilas.flag1OrdinalToIaux[it.field], it]));
         for (const [physKey, cell] of filasCells) {
-            const newId = cell.row - rowsOffRow;
+            const physRowId = cell.row - rowsOffRow;
+            // Si las medidas están en este eje, la fila física está
+            // "explotada" (measureCount filas por cada ROW_ID lógico): hay
+            // que deshacer eso para encontrar el nodo de jerarquía real.
+            const newId = measuresOnRowsAxis ? Math.floor((physRowId - 1) / measureCount) + 1 : physRowId;
             const ind = byLogicalKey.get(newId + "_" + cell.field);
             if (ind) {
                 const glyph = ind.collapsed ? "▸" : "▾";
                 cell.value = glyph + " " + cell.value;
-                DracoIndicatorMap.set(physKey, { axis: "rows", nodeKey: ind.nodeKey });
+                dracoIndicatorMap.set(physKey, { axis: "rows", nodeKey: ind.nodeKey });
             }
         }
     }
@@ -3210,13 +3430,14 @@ async function jsonTo3MatricesCore(context, json) {
     for (const V of colsFilter.dict.values()) {
         if (Number(V[0]) > maxColId) maxColId = Number(V[0]);
 
+        // Análogo a "repeatCount" en FILAS, pero para columnas físicas.
+        const repeatCount = measuresOnColsAxis ? measureCount : 1;
+
         for (let i = 1; i <= totalDimCols; i++) {
             const flag = flagsColumnas[i];
             const iAux = planColumnas.iauxReal[i];
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
-                const row = iAux + colsOffRow;
-                const col = Number(V[0]) + colsOffCol;
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
                 const text = coerceCellLiteral(V[i]);
                 const cellVal = colsStatic
@@ -3225,18 +3446,23 @@ async function jsonTo3MatricesCore(context, json) {
                 // Ver comentario equivalente en el bloque de FILAS: text puede
                 // ser un Number (dimensión INTEGER) y no tiene .trim().
                 const isTotal = String(text).trim().toUpperCase() === "TOTAL";
-                columnasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
+                for (let mIdx = 0; mIdx < repeatCount; mIdx++) {
+                    const row = iAux + colsOffRow;
+                    const col = explodeForMeasures(Number(V[0]), measuresOnColsAxis, mIdx) + colsOffCol;
+                    columnasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
+                }
             }
         }
 
-        // Filas MEASURE del eje columnas (p.ej. "MEASURE" -> "IMPORTE"):
-        // etiqueta constante en su propia fila física, para TODOS los
-        // COLUMN_ID (respeta la posición configurada en EDIT_REPORT: por
-        // encima o por debajo de ESCENARIO, según dónde esté la fila
-        // MEASURE en N/O/P).
+        // Filas MEASURE del eje columnas (p.ej. "MEASURE" -> "IMPORTE"/
+        // "CANTIDAD"): una etiqueta por medida, en su propia columna física
+        // dentro del grupo de columnas que le corresponde a ESE COLUMN_ID
+        // (measuresOnColsAxis), en la fila que le corresponde a la medida
+        // (respeta la posición configurada en EDIT_REPORT: por encima o por
+        // debajo de ESCENARIO, según dónde esté la fila MEASURE en N/O/P).
         for (const m of planColumnas.measureLevels) {
             const row = m.iAux + colsOffRow;
-            const col = Number(V[0]) + colsOffCol;
+            const col = explodeForMeasures(Number(V[0]), measuresOnColsAxis, m.ordinal) + colsOffCol;
             columnasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
         }
     }
@@ -3247,12 +3473,13 @@ async function jsonTo3MatricesCore(context, json) {
     if (!colsStatic && reportProps.overwriteFormats) {
         const byLogicalKey = new Map(colsFilter.indicators.map(it => [it.newId + "_" + planColumnas.flag1OrdinalToIaux[it.field], it]));
         for (const [physKey, cell] of columnasCells) {
-            const newId = cell.col - colsOffCol;
+            const physColId = cell.col - colsOffCol;
+            const newId = measuresOnColsAxis ? Math.floor((physColId - 1) / measureCount) + 1 : physColId;
             const ind = byLogicalKey.get(newId + "_" + cell.field);
             if (ind) {
                 const glyph = ind.collapsed ? "▸" : "▾";
                 cell.value = glyph + " " + cell.value;
-                DracoIndicatorMap.set(physKey, { axis: "cols", nodeKey: ind.nodeKey });
+                dracoIndicatorMap.set(physKey, { axis: "cols", nodeKey: ind.nodeKey });
             }
         }
     }
@@ -3289,26 +3516,37 @@ async function jsonTo3MatricesCore(context, json) {
     const paintedFilasCols = planFilas.totalIaux;
     const paintedColsRows = planColumnas.totalIaux;
 
+    // El ANCHO/ALTO de valores también crece ×measureCount en el eje que
+    // lleva las medidas (measuresOnRowsAxis/measuresOnColsAxis): maxRowId/
+    // maxColId son IDs lógicos (una combinación de dimensiones = 1 ID), pero
+    // cada ID ocupa ahora measureCount filas/columnas físicas si ese es el
+    // eje con medidas — los rangos con nombre deben reflejar ese ancho real
+    // pintado, o quedarían más estrechos/bajos que la tabla real.
+    const physicalMaxRowId = measuresOnRowsAxis ? maxRowId * measureCount : maxRowId;
+    const physicalMaxColId = measuresOnColsAxis ? maxColId * measureCount : maxColId;
+
     await applyDracoNamedRanges(context, sheet, {
         RRows, RCols,
         totalDimFilas: paintedFilasCols,
         totalDimCols: paintedColsRows,
-        maxRowId, maxColId,
+        maxRowId: physicalMaxRowId, maxColId: physicalMaxColId,
         applyVisualFormat: reportProps.overwriteFormats
-    });
+    }, reportId);
 
-    // 6) Registrar (una sola vez por sesión) los listeners de clic/edición:
+    // 6) Registrar (una sola vez por hoja) los listeners de clic/edición:
     //    resuelven los indicadores +/- pintados arriba y el "Reconocimiento
-    //    de miembros" sobre las celdas de Draco_001_Rows/Draco_001_Cols.
-    await registerDracoSelectionHandler(context, sheet);
+    //    de miembros" sobre las celdas de Draco_<id>_Rows/Draco_<id>_Cols
+    //    de ESTA hoja.
+    await registerDracoSelectionHandler(context, sheet, resultSheetName);
 
     // 7) Autoajustar ancho de columnas (propiedades del informe: D6), solo
-    // de los rangos con nombre Draco_001_Rows y Draco_001_Cols (donde se
-    // pintan las filas/columnas del informe), no de toda la hoja.
+    // de los rangos con nombre Draco_<id>_Rows y Draco_<id>_Cols de ESTE
+    // informe (donde se pintan sus filas/columnas), no de toda la hoja.
     if (reportProps.autoFitColumns) {
         try {
-            const rowsRangeName = context.workbook.names.getItemOrNullObject("Draco_001_Rows");
-            const colsRangeName = context.workbook.names.getItemOrNullObject("Draco_001_Cols");
+            const rn = dracoRangeNames(reportId);
+            const rowsRangeName = context.workbook.names.getItemOrNullObject(rn.rows);
+            const colsRangeName = context.workbook.names.getItemOrNullObject(rn.cols);
             rowsRangeName.load("isNullObject");
             colsRangeName.load("isNullObject");
             await context.sync();
@@ -3460,8 +3698,9 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
  * Borra (formato + contenido) los rangos de la ejecución anterior a los
  * que apuntaban los nombres Draco_001_Rows/Cols/Values, si existen.
  */
-async function clearDracoNamedRanges(context) {
-    const names = ["Draco_001_Rows", "Draco_001_Cols", "Draco_001_Values"];
+async function clearDracoNamedRanges(context, reportId) {
+    const rn = dracoRangeNames(reportId);
+    const names = [rn.rows, rn.cols, rn.values];
     const items = names.map(n => context.workbook.names.getItemOrNullObject(n));
     items.forEach(it => it.load("isNullObject"));
     await context.sync();
@@ -3484,7 +3723,7 @@ async function clearDracoNamedRanges(context) {
  * separador de miles + centrado en Draco_001_Values, y un borde fino
  * RGB(13,23,42) alrededor de cada uno de los 3 rangos.
  */
-async function applyDracoNamedRanges(context, sheet, dims) {
+async function applyDracoNamedRanges(context, sheet, dims, reportId) {
     const { RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId, applyVisualFormat } = dims;
     const doFormat = applyVisualFormat !== false; // por defecto, sí formatear (comportamiento previo)
 
@@ -3549,10 +3788,11 @@ async function applyDracoNamedRanges(context, sheet, dims) {
     }
 
     // ---- (Re)definir los nombres apuntando a los rangos recién pintados ----
+    const rn = dracoRangeNames(reportId);
     const defs = [
-        { name: "Draco_001_Rows", range: rowsRange },
-        { name: "Draco_001_Cols", range: colsRange },
-        { name: "Draco_001_Values", range: valuesRange }
+        { name: rn.rows, range: rowsRange },
+        { name: rn.cols, range: colsRange },
+        { name: rn.values, range: valuesRange }
     ];
 
     for (const d of defs) {
@@ -3652,17 +3892,22 @@ async function writeIndentRuns(context, sheet, cellsMap) {
 /**
  * Núcleo de Actualizar_informe(), sin manejo de `event`.
  */
-async function actualizarInformeCore() {
+/**
+ * Núcleo de Actualizar_informe(), sin manejo de `event`. reportId es
+ * opcional (por defecto, el informe activo); se pasa explícito desde
+ * "Refrescar todos" para poder recorrer varios informes sin depender de
+ * cuál esté activo en el taskpane.
+ */
+async function actualizarInformeCore(reportIdOverride) {
+    const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
-    let resultSheetName;
 
     await Excel.run(async (context) => {
-        const editReportGrid = await getEditReportGrid(context);
+        const editReportGrid = await getEditReportGrid(context, reportId);
         const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
         const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
 
-        resultSheetName = resultSheetNameFromGrid(editReportGrid);
         loadReportDefinition(editReportGrid);
 
         // EDIT_REPORT!D4 = "Mostrar subtotales arriba" (Propiedades del
@@ -3699,7 +3944,7 @@ async function actualizarInformeCore() {
     });
 
     await Excel.run(async (context) => {
-        await jsonTo3Matrices(context, json);
+        await jsonTo3Matrices(context, json, reportId);
     });
 }
 
@@ -3722,25 +3967,167 @@ async function actualizarInforme(event) {
 }
 
 /**
+ * Núcleo de Actualizar(): dispatcher según EDIT_REPORT!H12/N12 (mismo
+ * criterio "Fijo" vs "Dinámico" de siempre), pero reutilizable para UN
+ * informe concreto (reportId opcional, por defecto el activo). La usan
+ * tanto actualizar() (botón "Actualizar", un único informe: el activo)
+ * como actualizarTodosCore() (recorre todos los informes).
+ */
+async function actualizarUnInforme(reportIdOverride) {
+    const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
+    const isFixed = await Excel.run(async (context) => {
+        const grid = await getEditReportGrid(context, reportId);
+        const h12 = String(cellValue(grid, 12, 8)).trim().toUpperCase();
+        const n12 = String(cellValue(grid, 12, 14)).trim().toUpperCase();
+        return h12 === "X" && n12 === "X";
+    });
+
+    if (isFixed) {
+        await actualizarInformeFixedCore(reportId);
+    } else {
+        await actualizarInformeCore(reportId);
+    }
+}
+
+/**
  * Traducción de Actualizar(): dispatcher según EDIT_REPORT!H12/N12.
  * @param {Office.AddinCommands.Event} event
  */
 async function actualizar(event) {
     try {
-        const isFixed = await Excel.run(async (context) => {
-            const grid = await getEditReportGrid(context);
-            const h12 = String(cellValue(grid, 12, 8)).trim().toUpperCase();
-            const n12 = String(cellValue(grid, 12, 14)).trim().toUpperCase();
-            return h12 === "X" && n12 === "X";
-        });
-
-        if (isFixed) {
-            await actualizarInformeFixedCore();
-        } else {
-            await actualizarInformeCore();
-        }
+        await actualizarUnInforme();
     } catch (error) {
         console.error("Error al actualizar el informe:", error);
+        await surfaceErrorToSheet(error);
+    } finally {
+        if (event) {
+            event.completed();
+        }
+    }
+}
+
+/**
+ * Ejecuta N tareas asíncronas con un límite de concurrencia (para no
+ * lanzar, p.ej., 20 consultas a BigQuery/Snowflake a la vez sin control).
+ */
+async function runWithConcurrency(items, limit, worker) {
+    let next = 0;
+    async function runNext() {
+        while (next < items.length) {
+            const idx = next++;
+            await worker(items[idx], idx);
+        }
+    }
+    const workers = [];
+    for (let i = 0; i < Math.min(limit, items.length); i++) workers.push(runNext());
+    await Promise.all(workers);
+}
+
+/**
+ * "Refrescar todos los informes": recorre TODOS los informes guardados en
+ * ReportStore (no solo el activo) y los actualiza:
+ *   1) Construye el SQL de cada uno (síncrono/local, en serie: no hace
+ *      falta red y así no se pisan los unos a los otros al leer su grid).
+ *   2) Lanza las consultas a BigQuery/Snowflake EN PARALELO (con un tope
+ *      de concurrencia): es la parte lenta (red) y cada informe es
+ *      independiente, así que no hay motivo para esperarlas una a una.
+ *   3) Pinta cada resultado en Excel EN SERIE: la API de Excel no admite
+ *      escrituras concurrentes seguras sobre el mismo libro (Excel.run/
+ *      context.sync no están pensados para solaparse así).
+ * Un fallo en un informe concreto (SQL, consulta o pintado) no interrumpe
+ * a los demás: se registra en consola y se sigue con el resto.
+ */
+async function actualizarTodosCore(concurrency) {
+    if (!window.ReportStore) return;
+    const reports = window.ReportStore.listReports();
+    if (!reports || reports.length === 0) return;
+
+    const dynamicJobs = [];
+    const fixedReports = [];
+
+    // 1) Clasificar cada informe (Fijo/Dinámico, según H12/N12 de su
+    //    propio grid) y, para los Dinámicos, construir ya su SQL: es
+    //    síncrono/local (no toca red), así que se hace en serie sin
+    //    problema — no hay motivo para paralelizar esta parte.
+    for (const r of reports) {
+        try {
+            const reportId = r.id;
+            const isFixed = await Excel.run(async (context) => {
+                const grid = await getEditReportGrid(context, reportId);
+                const h12 = String(cellValue(grid, 12, 8)).trim().toUpperCase();
+                const n12 = String(cellValue(grid, 12, 14)).trim().toUpperCase();
+                return h12 === "X" && n12 === "X";
+            });
+
+            if (isFixed) {
+                fixedReports.push({ reportId, reportName: r.name });
+            } else {
+                let sql;
+                await Excel.run(async (context) => {
+                    const editReportGrid = await getEditReportGrid(context, reportId);
+                    const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
+                    const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+                    const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+                    loadReportDefinition(editReportGrid);
+                    const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
+                    sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
+                });
+                dynamicJobs.push({ reportId, reportName: r.name, sql });
+            }
+        } catch (err) {
+            console.error(`[Draco] Error preparando el informe "${r.name}" (id ${r.id}):`, err);
+        }
+    }
+
+    // 2) Consultas de los informes "Dinámicos" a BigQuery/Snowflake EN
+    //    PARALELO (tope de concurrencia por defecto 4): es la parte lenta
+    //    (red, sin tocar Excel) y cada informe es independiente.
+    await runWithConcurrency(dynamicJobs, concurrency || 4, async (job) => {
+        try {
+            job.json = await executeSQL(job.sql);
+        } catch (err) {
+            job.error = err;
+            console.error(`[Draco] Error consultando datos del informe "${job.reportName}":`, err);
+        }
+    });
+
+    // 3) Pintar los "Dinámicos" en Excel EN SERIE: la API de Excel no
+    //    admite escrituras concurrentes seguras sobre el mismo libro.
+    for (const job of dynamicJobs) {
+        if (job.error || !job.json) continue;
+        try {
+            await Excel.run(async (context) => {
+                const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+                const EXCEL_CELL_CHAR_LIMIT = 32000;
+                const jsonForCell = job.json.length > EXCEL_CELL_CHAR_LIMIT
+                    ? job.json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
+                    : job.json;
+                editReportSheet.getRange("Y1").values = [[jsonForCell]];
+                await jsonTo3Matrices(context, job.json, job.reportId);
+            });
+        } catch (err) {
+            console.error(`[Draco] Error pintando el informe "${job.reportName}":`, err);
+        }
+    }
+
+    // 4) Informes en modo "Fijo" (ambos ejes Estático): flujo aparte,
+    //    todo-en-uno (aquí incluso construir el SQL necesita leer la hoja
+    //    de resultados en Excel, no solo el pintado), así que van en SERIE
+    //    entre sí — no solo el pintado, sino el flujo completo.
+    for (const f of fixedReports) {
+        try {
+            await actualizarInformeFixedCore(f.reportId);
+        } catch (err) {
+            console.error(`[Draco] Error actualizando el informe "${f.reportName}" (modo fijo):`, err);
+        }
+    }
+}
+
+async function actualizarTodos(event) {
+    try {
+        await actualizarTodosCore();
+    } catch (error) {
+        console.error("Error al actualizar todos los informes:", error);
         await surfaceErrorToSheet(error);
     } finally {
         if (event) {
@@ -3752,7 +4139,7 @@ async function actualizar(event) {
 // Exponer las funciones de actualización para poder llamarlas también desde
 // el taskpane (p.ej. tras guardar el diseño), no solo desde el ribbon.
 window.ReportActions = {
-    actualizar, actualizarInforme, actualizarInformeFixed,
+    actualizar, actualizarInforme, actualizarInformeFixed, actualizarTodos,
     toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
     convertAxisStaticFormulas, ensureDracoHandlersRegistered
 };
@@ -3930,6 +4317,31 @@ async function openFieldOptions(event) {
     }
 }
 
+async function abrirDistribuirValores(event) {
+    try {
+        console.log("[Draco] abrirDistribuirValores: shared runtime ¿activo? ->", typeof TaskPaneApp !== "undefined");
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.openDistributeValuesModal) {
+            TaskPaneApp.openDistributeValuesModal();
+            console.log("[Draco] openDistributeValuesModal() ejecutado directamente (shared runtime OK).");
+        } else {
+            console.warn("[Draco] TaskPaneApp NO existe en este contexto: usando fallback de settings (¿manifest sin Runtimes recargado?).");
+            const settings = Office.context.document.settings;
+            settings.set("draco_pendingAction", "distributeValues");
+            await new Promise((resolve) => settings.saveAsync(resolve));
+        }
+        if (Office.addin && Office.addin.showAsTaskpane) {
+            await Office.addin.showAsTaskpane();
+            console.log("[Draco] showAsTaskpane() resuelto sin error.");
+        } else {
+            console.warn("[Draco] Office.addin.showAsTaskpane no está disponible en este runtime.");
+        }
+    } catch (error) {
+        console.error("Error al abrir Distribuir valores:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
 // Nota: este fichero se carga tanto en el runtime de comandos (commands.html)
 // como, ahora, dentro del propio taskpane (taskpane.html), para poder
 // disparar Actualizar()/ActualizarInforme() (y por tanto jsonTo3Matrices)
@@ -3949,6 +4361,7 @@ try {
     Office.actions.associate("toggleMemberRecognition", toggleMemberRecognition);
     Office.actions.associate("openReportProperties", openReportProperties);
     Office.actions.associate("openFieldOptions", openFieldOptions);
+    Office.actions.associate("abrirDistribuirValores", abrirDistribuirValores);
 } catch (e) {
     console.warn("Office.actions.associate no disponible en este contexto:", e);
 }
