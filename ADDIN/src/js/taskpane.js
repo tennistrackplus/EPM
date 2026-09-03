@@ -1139,8 +1139,25 @@ const TaskPaneApp = {
 
         list.push(entry);
 
-        if (zoneId === "rows") RangeAxis.onRowFieldAdded();
-        if (zoneId === "columns") RangeAxis.onColFieldAdded();
+        // Todas las medidas de un eje comparten UNA sola fila/columna física
+        // de cabecera ("Σ Medidas", ver computeAxisPaintPlan en commands.js):
+        // el rango de Filas/Columnas del taskpane solo debe crecer al añadir
+        // la PRIMERA medida de ese eje. Si ya había otra medida, esta nueva
+        // se apila en el MISMO hueco (no en uno nuevo), así que hacer crecer
+        // el rango otra vez dejaba una fila/columna de más (en blanco) sin
+        // usar. Los campos normales (dimensiones) siguen creciendo el rango
+        // siempre, como hasta ahora.
+        const isMeasure = String(entry.dimension).toUpperCase() === "MEASURE";
+        const measureCountInZone = (zoneId === "rows" || zoneId === "columns")
+            ? list.filter(x => String(x.dimension).toUpperCase() === "MEASURE").length
+            : 0;
+        const isFirstMeasureInZone = isMeasure && measureCountInZone === 1;
+        const shouldGrowRange = !isMeasure || isFirstMeasureInZone;
+
+        if (shouldGrowRange) {
+            if (zoneId === "rows") RangeAxis.onRowFieldAdded();
+            if (zoneId === "columns") RangeAxis.onColFieldAdded();
+        }
         this.refreshRangeLabels();
 
         this.renderTag(container, zoneId, entry);
@@ -1154,10 +1171,24 @@ const TaskPaneApp = {
     removeFromState(zoneId, data) {
         const list = this.listForZone(zoneId);
         const idx = list.findIndex(x => x.dimension === data.dim && x.name === data.name);
+        const removed = idx !== -1 ? list[idx] : null;
         if (idx !== -1) list.splice(idx, 1);
 
-        if (zoneId === "rows") RangeAxis.onRowFieldRemoved();
-        if (zoneId === "columns") RangeAxis.onColFieldRemoved();
+        // Simétrico a addField: solo se encoge el rango si se ha quitado un
+        // campo normal, o si la medida quitada era la ÚLTIMA medida de ese
+        // eje. Mientras quede al menos otra medida en el eje, el hueco
+        // compartido "Σ Medidas" sigue haciendo falta, así que el rango no
+        // debe encogerse todavía.
+        const isMeasure = removed && String(removed.dimension).toUpperCase() === "MEASURE";
+        const measureCountLeftInZone = (zoneId === "rows" || zoneId === "columns")
+            ? list.filter(x => String(x.dimension).toUpperCase() === "MEASURE").length
+            : 0;
+        const shouldShrinkRange = !isMeasure || measureCountLeftInZone === 0;
+
+        if (shouldShrinkRange) {
+            if (zoneId === "rows") RangeAxis.onRowFieldRemoved();
+            if (zoneId === "columns") RangeAxis.onColFieldRemoved();
+        }
         this.refreshRangeLabels();
 
         this.scheduleAutoUpdate();
