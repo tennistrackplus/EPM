@@ -1305,57 +1305,30 @@ function sqlLiteralForFilter(atributesGrid, dimension, attributeName, rawValue) 
 }
 
 /**
- * Condición para una lista de valores (IN/NOT IN, o "=" / "<>" si es uno
- * solo), dado el campo SQL ya resuelto ("alias.ATRIBUTO").
- */
-function buildValuesCondition(atributesGrid, dimension, attributeName, campo, values, include) {
-    const vals = (values || []).filter(v => String(v).trim() !== "");
-    if (vals.length === 0) return "";
-
-    if (vals.length === 1) {
-        const lit = sqlLiteralForFilter(atributesGrid, dimension, attributeName, vals[0]);
-        return campo + (include ? " = " : " <> ") + lit;
-    }
-
-    const lista = vals.map(v => sqlLiteralForFilter(atributesGrid, dimension, attributeName, v)).join(", ");
-    return campo + (include ? " IN (" : " NOT IN (") + lista + ")";
-}
-
-/**
- * Condición para un rango (BETWEEN/NOT BETWEEN), dado el campo SQL ya
- * resuelto ("alias.ATRIBUTO").
- */
-function buildRangeCondition(atributesGrid, dimension, attributeName, campo, from, to, include) {
-    const desde = sqlLiteralForFilter(atributesGrid, dimension, attributeName, from);
-    const hasta = sqlLiteralForFilter(atributesGrid, dimension, attributeName, to);
-    const cond = campo + " BETWEEN " + desde + " AND " + hasta;
-    return include ? cond : ("NOT (" + cond + ")");
-}
-
-/**
  * Condición para un filtro "simple": un único atributo real, con selección
- * de varios valores (IN/NOT IN), un rango (BETWEEN/NOT BETWEEN), o ambos a
- * la vez (modo "mixed": el campo cumple el filtro si cumple los valores O
- * el rango, cada uno con su propio incluir/excluir). Con un solo valor en
- * modo "values" se genera "=" / "<>", igual que antes.
+ * de varios valores (IN/NOT IN) o un rango (BETWEEN/NOT BETWEEN). Con un
+ * solo valor en modo "values" se genera "=" / "<>", igual que antes.
  */
 function buildSimpleFilterCondition(atributesGrid, relGrid, dimension, attributeName, filter) {
     const campo = getTableAlias(relGrid, dimension) + "." + attributeName;
 
     if (filter.mode === "range") {
-        return buildRangeCondition(atributesGrid, dimension, attributeName, campo, filter.from, filter.to, filter.include);
+        const desde = sqlLiteralForFilter(atributesGrid, dimension, attributeName, filter.from);
+        const hasta = sqlLiteralForFilter(atributesGrid, dimension, attributeName, filter.to);
+        const cond = campo + " BETWEEN " + desde + " AND " + hasta;
+        return filter.include ? cond : ("NOT (" + cond + ")");
     }
 
-    if (filter.mode === "mixed") {
-        const valuesCond = buildValuesCondition(atributesGrid, dimension, attributeName, campo, filter.values, filter.valuesInclude);
-        const rangeCond = buildRangeCondition(atributesGrid, dimension, attributeName, campo, filter.from, filter.to, filter.rangeInclude);
-        const partes = [valuesCond, rangeCond].filter(Boolean);
-        if (partes.length === 0) return "";
-        if (partes.length === 1) return partes[0];
-        return "(" + partes.join(CRLF + "   OR ") + ")";
+    const values = (filter.values || []).filter(v => String(v).trim() !== "");
+    if (values.length === 0) return "";
+
+    if (values.length === 1) {
+        const lit = sqlLiteralForFilter(atributesGrid, dimension, attributeName, values[0]);
+        return campo + (filter.include ? " = " : " <> ") + lit;
     }
 
-    return buildValuesCondition(atributesGrid, dimension, attributeName, campo, filter.values, filter.include);
+    const lista = values.map(v => sqlLiteralForFilter(atributesGrid, dimension, attributeName, v)).join(", ");
+    return campo + (filter.include ? " IN (" : " NOT IN (") + lista + ")";
 }
 
 /**
@@ -1639,12 +1612,7 @@ function buildFinalSelect() {
         sql += "," + CRLF + "    " + r.AttributeName;
     }
 
-    // Una columna por medida (antes: "IMPORTE" fijo, lo que descartaba
-    // cualquier medida adicional aunque ya viniera calculada en REPORT_DATA).
-    for (const m of ReportState.Measures) {
-        sql += "," + CRLF + "    " + m.Name;
-    }
-    sql += CRLF + CRLF + "FROM REPORT_DATA";
+    sql += "," + CRLF + "    IMPORTE" + CRLF + CRLF + "FROM REPORT_DATA";
 
     return sql;
 }
@@ -1827,10 +1795,7 @@ function buildFinalSelectWithSubtotals(atributesGrid, subtotalsOnTop) {
         sql += "," + CRLF + "    " + fieldFinalExpressionWithSubtotal(atributesGrid, r);
     }
 
-    for (const m of ReportState.Measures) {
-        sql += "," + CRLF + "    " + m.Name;
-    }
-    sql += CRLF + CRLF + "FROM REPORT_DATA";
+    sql += "," + CRLF + "    IMPORTE" + CRLF + CRLF + "FROM REPORT_DATA";
 
     return sql;
 }
@@ -2914,25 +2879,16 @@ function computeAxisPaintPlan(levels) {
     const fieldsReal = [];
     const iauxReal = [];
     const flag1OrdinalToIaux = [];
-    // Una entrada por medida, TODAS compartiendo el mismo iAux (una única
-    // fila/columna física "extra" para el grupo de medidas del eje, no una
-    // por medida): measureLevels[k].ordinal (0..N-1) es la posición de esa
-    // medida DENTRO del grupo, usada luego para repartirla en su propio
-    // hueco físico perpendicular al eje (ver measureCount en jsonTo3Matrices).
     const measureLevels = [];
 
     let iAux = 0;
     let dimIdx = 0;
     let ordinal = 0;
-    let measureIaux = null;
 
     for (const level of levels) {
         if (level.isMeasure) {
-            if (measureIaux === null) {
-                iAux++;
-                measureIaux = iAux;
-            }
-            measureLevels.push({ iAux: measureIaux, ordinal: measureLevels.length, label: (level.attr || level.dim || "").trim() || "MEASURE" });
+            iAux++;
+            measureLevels.push({ iAux, label: (level.attr || level.dim || "").trim() || "MEASURE" });
             continue;
         }
         dimIdx++;
@@ -3069,26 +3025,6 @@ async function jsonTo3MatricesCore(context, json) {
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
 
-    // ---- Varias medidas en el MISMO eje (Σ Medidas del taskpane): el
-    // taskpane garantiza que todas las medidas están en un único eje
-    // (nunca repartidas entre Filas y Columnas), así que como mucho uno de
-    // los dos "measureLevels" de abajo tiene contenido. Ese eje se pinta
-    // measureCount veces más ancho/alto (una fila/columna física física
-    // por medida), en vez de una sola celda con el valor de la última
-    // medida (como pasaba antes de este cambio).
-    const measureCount = Math.max(1, ReportState.Measures.length);
-    const measuresOnRowsAxis = planFilas.measureLevels.length > 0;      // eje "Filas" físico (H/I/J)
-    const measuresOnColsAxis = planColumnas.measureLevels.length > 0;   // eje "Columnas" físico (N/O/P)
-    // Índice (0-based) del primer campo de medida dentro de cada fila del
-    // FACT: tras ROW_ID, COLUMN_ID y las dimensiones de ambos ejes, en el
-    // mismo orden en que buildSelect/buildFinalSelect las escriben.
-    const measureFieldBase = 2 + ReportState.ColumnCount + ReportState.RowCount;
-    // logicalId 1..N -> posición física 1..N*measureCount (measureCount
-    // huecos consecutivos por cada logicalId, uno por medida); si el eje no
-    // lleva medidas, o measureCount es 1, devuelve el mismo logicalId.
-    const explodeForMeasures = (logicalId, isMeasureAxis, ordinal) =>
-        isMeasureAxis ? (logicalId - 1) * measureCount + ordinal + 1 : logicalId;
-
     const flagsFilas = planFilas.flagsReal;
     const fieldsFilas = planFilas.fieldsReal; // {dim, attr} por posición — solo hace falta si el eje es Estático (fórmulas EPM_VALUE)
 
@@ -3111,14 +3047,8 @@ async function jsonTo3MatricesCore(context, json) {
         const colsWithValue = new Set();
         for (let i = 0; i < filas; i++) {
             const f = fact[i];
-            // Con varias medidas se suprime la fila/columna solo si TODAS
-            // sus medidas son cero/vacío (antes solo miraba la última).
-            let anyNonZero = false;
-            for (let mIdx = 0; mIdx < measureCount; mIdx++) {
-                const n = Number(f[measureFieldBase + mIdx]);
-                if (!isNaN(n) && n !== 0) { anyNonZero = true; break; }
-            }
-            if (anyNonZero) {
+            const n = Number(f[totalCampos - 1]);
+            if (!isNaN(n) && n !== 0) {
                 rowsWithValue.add(String(f[0]));
                 colsWithValue.add(String(f[1]));
             }
@@ -3190,20 +3120,10 @@ async function jsonTo3MatricesCore(context, json) {
         const newRowId = rowsFilter.idMap.get(Number(f[0]));
         const newColId = colsFilter.idMap.get(Number(f[1]));
         if (newRowId === undefined || newColId === undefined) continue; // oculto por contraído
-
-        // Una celda por cada medida (antes: solo la última, f[totalCampos-1]):
-        // si el eje con medidas es el de Filas, se reparten en filas físicas
-        // consecutivas (misma columna); si es el de Columnas, en columnas
-        // físicas consecutivas (misma fila). Con una sola medida, measureCount
-        // es 1 y esto se comporta exactamente igual que antes.
-        for (let mIdx = 0; mIdx < measureCount; mIdx++) {
-            const physRow = explodeForMeasures(newRowId, measuresOnRowsAxis, mIdx);
-            const physCol = explodeForMeasures(newColId, measuresOnColsAxis, mIdx);
-            const row = physRow + rowsOffRow;
-            const col = physCol + colsOffCol;
-            const value = coerceCellLiteral(String(f[measureFieldBase + mIdx]));
-            factCells.set(row + "_" + col, { row, col, value });
-        }
+        const row = newRowId + rowsOffRow;
+        const col = newColId + colsOffCol;
+        const value = coerceCellLiteral(String(f[totalCampos - 1]));
+        factCells.set(row + "_" + col, { row, col, value });
     }
     await writeCellBlock(context, sheet, factCells);
 
@@ -3218,16 +3138,13 @@ async function jsonTo3MatricesCore(context, json) {
     for (const V of rowsFilter.dict.values()) {
         if (Number(V[0]) > maxRowId) maxRowId = Number(V[0]);
 
-        // Si las medidas están en ESTE eje, cada dimensión real se repite en
-        // las measureCount filas físicas de su grupo (misma columna, una
-        // fila por medida); si no, se pinta una sola vez, como antes.
-        const repeatCount = measuresOnRowsAxis ? measureCount : 1;
-
         for (let i = 1; i <= totalDimFilas; i++) {
             const flag = flagsFilas[i];
             const iAux = planFilas.iauxReal[i];
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
+                const row = Number(V[0]) + rowsOffRow;
+                const col = iAux + rowsOffCol;
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
                 const text = coerceCellLiteral(V[i]);
                 // Eje Estático: se escribe como fórmula EPM_VALUE editable
@@ -3243,20 +3160,15 @@ async function jsonTo3MatricesCore(context, json) {
                 // media pintura (se pintaban los valores del FACT, pero se
                 // interrumpía antes de pintar/formatear este eje).
                 const isTotal = String(text).trim().toUpperCase() === "TOTAL";
-                for (let mIdx = 0; mIdx < repeatCount; mIdx++) {
-                    const row = explodeForMeasures(Number(V[0]), measuresOnRowsAxis, mIdx) + rowsOffRow;
-                    const col = iAux + rowsOffCol;
-                    filasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
-                }
+                filasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
             }
         }
 
         // Filas MEASURE del eje (p.ej. "MEASURE" -> "IMPORTE"): no vienen del
-        // dict (no son un valor variable por ROW_ID); se pintan como etiqueta
-        // en su propia columna física, una por cada medida del grupo, en la
-        // fila física que le corresponde a ESA medida (measuresOnRowsAxis).
+        // dict (no son un valor variable por ROW_ID), se pintan como etiqueta
+        // constante en su propia columna física, para TODOS los ROW_ID.
         for (const m of planFilas.measureLevels) {
-            const row = explodeForMeasures(Number(V[0]), measuresOnRowsAxis, m.ordinal) + rowsOffRow;
+            const row = Number(V[0]) + rowsOffRow;
             const col = m.iAux + rowsOffCol;
             filasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
         }
@@ -3275,11 +3187,7 @@ async function jsonTo3MatricesCore(context, json) {
         // que sí tiene en cuenta el hueco que dejan las filas MEASURE.
         const byLogicalKey = new Map(rowsFilter.indicators.map(it => [it.newId + "_" + planFilas.flag1OrdinalToIaux[it.field], it]));
         for (const [physKey, cell] of filasCells) {
-            const physRowId = cell.row - rowsOffRow;
-            // Si las medidas están en este eje, la fila física está
-            // "explotada" (measureCount filas por cada ROW_ID lógico): hay
-            // que deshacer eso para encontrar el nodo de jerarquía real.
-            const newId = measuresOnRowsAxis ? Math.floor((physRowId - 1) / measureCount) + 1 : physRowId;
+            const newId = cell.row - rowsOffRow;
             const ind = byLogicalKey.get(newId + "_" + cell.field);
             if (ind) {
                 const glyph = ind.collapsed ? "▸" : "▾";
@@ -3302,14 +3210,13 @@ async function jsonTo3MatricesCore(context, json) {
     for (const V of colsFilter.dict.values()) {
         if (Number(V[0]) > maxColId) maxColId = Number(V[0]);
 
-        // Análogo a "repeatCount" en FILAS, pero para columnas físicas.
-        const repeatCount = measuresOnColsAxis ? measureCount : 1;
-
         for (let i = 1; i <= totalDimCols; i++) {
             const flag = flagsColumnas[i];
             const iAux = planColumnas.iauxReal[i];
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
+                const row = iAux + colsOffRow;
+                const col = Number(V[0]) + colsOffCol;
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
                 const text = coerceCellLiteral(V[i]);
                 const cellVal = colsStatic
@@ -3318,23 +3225,18 @@ async function jsonTo3MatricesCore(context, json) {
                 // Ver comentario equivalente en el bloque de FILAS: text puede
                 // ser un Number (dimensión INTEGER) y no tiene .trim().
                 const isTotal = String(text).trim().toUpperCase() === "TOTAL";
-                for (let mIdx = 0; mIdx < repeatCount; mIdx++) {
-                    const row = iAux + colsOffRow;
-                    const col = explodeForMeasures(Number(V[0]), measuresOnColsAxis, mIdx) + colsOffCol;
-                    columnasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
-                }
+                columnasCells.set(row + "_" + col, { row, col, value: cellVal, indent, field: iAux, isTotal });
             }
         }
 
-        // Filas MEASURE del eje columnas (p.ej. "MEASURE" -> "IMPORTE"/
-        // "CANTIDAD"): una etiqueta por medida, en su propia columna física
-        // dentro del grupo de columnas que le corresponde a ESE COLUMN_ID
-        // (measuresOnColsAxis), en la fila que le corresponde a la medida
-        // (respeta la posición configurada en EDIT_REPORT: por encima o por
-        // debajo de ESCENARIO, según dónde esté la fila MEASURE en N/O/P).
+        // Filas MEASURE del eje columnas (p.ej. "MEASURE" -> "IMPORTE"):
+        // etiqueta constante en su propia fila física, para TODOS los
+        // COLUMN_ID (respeta la posición configurada en EDIT_REPORT: por
+        // encima o por debajo de ESCENARIO, según dónde esté la fila
+        // MEASURE en N/O/P).
         for (const m of planColumnas.measureLevels) {
             const row = m.iAux + colsOffRow;
-            const col = explodeForMeasures(Number(V[0]), measuresOnColsAxis, m.ordinal) + colsOffCol;
+            const col = Number(V[0]) + colsOffCol;
             columnasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
         }
     }
@@ -3345,8 +3247,7 @@ async function jsonTo3MatricesCore(context, json) {
     if (!colsStatic && reportProps.overwriteFormats) {
         const byLogicalKey = new Map(colsFilter.indicators.map(it => [it.newId + "_" + planColumnas.flag1OrdinalToIaux[it.field], it]));
         for (const [physKey, cell] of columnasCells) {
-            const physColId = cell.col - colsOffCol;
-            const newId = measuresOnColsAxis ? Math.floor((physColId - 1) / measureCount) + 1 : physColId;
+            const newId = cell.col - colsOffCol;
             const ind = byLogicalKey.get(newId + "_" + cell.field);
             if (ind) {
                 const glyph = ind.collapsed ? "▸" : "▾";
@@ -3388,20 +3289,11 @@ async function jsonTo3MatricesCore(context, json) {
     const paintedFilasCols = planFilas.totalIaux;
     const paintedColsRows = planColumnas.totalIaux;
 
-    // El ANCHO/ALTO de valores también crece ×measureCount en el eje que
-    // lleva las medidas (measuresOnRowsAxis/measuresOnColsAxis): maxRowId/
-    // maxColId son IDs lógicos (una combinación de dimensiones = 1 ID), pero
-    // cada ID ocupa ahora measureCount filas/columnas físicas si ese es el
-    // eje con medidas — los rangos con nombre deben reflejar ese ancho real
-    // pintado, o quedarían más estrechos/bajos que la tabla real.
-    const physicalMaxRowId = measuresOnRowsAxis ? maxRowId * measureCount : maxRowId;
-    const physicalMaxColId = measuresOnColsAxis ? maxColId * measureCount : maxColId;
-
     await applyDracoNamedRanges(context, sheet, {
         RRows, RCols,
         totalDimFilas: paintedFilasCols,
         totalDimCols: paintedColsRows,
-        maxRowId: physicalMaxRowId, maxColId: physicalMaxColId,
+        maxRowId, maxColId,
         applyVisualFormat: reportProps.overwriteFormats
     });
 

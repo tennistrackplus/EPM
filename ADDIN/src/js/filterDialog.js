@@ -18,26 +18,17 @@
  * resultado de la misma forma (Office.context.ui.messageParent).
  *
  * El objeto "filter" que se envía de vuelta tiene la misma forma que
- * generaba el modal antiguo, más un nuevo modo "mixed" cuando el usuario
- * combina valores sueltos Y un rango a la vez (cada uno con su propio
- * incluir/excluir, independiente el uno del otro):
- *   - Valores (plano):     { mode:"values", include, attribute, values:[...] }
+ * generaba el modal antiguo (ver cabecera de js/filterModal.js):
+ *   - Valores (plano):   { mode:"values", include, attribute, values:[...] }
  *   - Valores (jerarquía): { mode:"values", include, items:[{attribute,value}] }
- *   - Rango (solo plano):  { mode:"range", include, attribute, from, to }
- *   - Mixto (solo plano):  { mode:"mixed", attribute,
- *                            valuesInclude, values:[...],
- *                            rangeInclude, from, to }
- *     (equivale a "cumple los valores según su incluir/excluir, O cumple
- *     el rango según el suyo"; no aplica a jerarquías, donde el rango no
- *     tiene sentido).
+ *   - Rango (solo plano): { mode:"range", include, attribute, from, to }
  */
 
 let allItems = [];
 let fieldData = null;
-let isHierarchy = false;
 
-let valuesInclude = true;     // incluir/excluir de la lista de valores
-let rangeInclude = true;      // incluir/excluir del rango (independiente)
+let mode = "values";          // "values" | "range"
+let include = true;           // true = incluir, false = excluir
 let selectedKeys = new Set(); // claves (attribute||value) marcadas
 let rangeFrom = "";
 let rangeTo = "";
@@ -65,37 +56,35 @@ function closeBySelf() {
 }
 
 /* -------------------------------------------------------------
- * Visibilidad de paneles (Valores siempre visible; Rango solo si el
- * campo no es una jerarquía) e Incluir/Excluir independiente para cada
- * uno.
+ * Modo (Valores/Rango) e Incluir/Excluir
  * ----------------------------------------------------------- */
 
-function renderPanelsVisibility() {
-    document.getElementById("filterRangePanel").style.display = isHierarchy ? "none" : "";
+function setMode(newMode) {
+    if (newMode === "range" && fieldData && fieldData.isHierarchy) return; // no aplica
+    mode = newMode;
+    renderModeUI();
 }
 
-function setValuesInclude(value) {
-    valuesInclude = value;
-    updateValuesIncludeUI();
-}
-
-function updateValuesIncludeUI() {
-    document.querySelectorAll("#filterValuesIncludeToggle .segmented-option").forEach(btn => {
-        btn.classList.toggle("active", (btn.dataset.include === "true") === valuesInclude);
+function renderModeUI() {
+    document.querySelectorAll("#filterModeTabs .segmented-option").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.mode === mode);
     });
-    document.getElementById("modalSelectedChips").classList.toggle("exclude-mode", !valuesInclude);
+    document.getElementById("filterValuesPanel").style.display = mode === "values" ? "" : "none";
+    document.getElementById("filterRangePanel").style.display = mode === "range" ? "" : "none";
+    document.getElementById("modalSelectedChips").parentElement.style.display = mode === "values" ? "" : "none";
+    updateSelectionCount();
 }
 
-function setRangeInclude(value) {
-    rangeInclude = value;
-    updateRangeIncludeUI();
+function setInclude(value) {
+    include = value;
+    updateIncludeUI();
 }
 
-function updateRangeIncludeUI() {
-    document.querySelectorAll("#filterRangeIncludeToggle .segmented-option").forEach(btn => {
-        btn.classList.toggle("active", (btn.dataset.include === "true") === rangeInclude);
+function updateIncludeUI() {
+    document.querySelectorAll("#filterIncludeToggle .segmented-option").forEach(btn => {
+        btn.classList.toggle("active", (btn.dataset.include === "true") === include);
     });
-    document.getElementById("filterRangePanel").classList.toggle("exclude-mode", !rangeInclude);
+    document.getElementById("modalSelectedChips").classList.toggle("exclude-mode", !include);
 }
 
 /* -------------------------------------------------------------
@@ -188,7 +177,7 @@ function renderChips() {
     }
 
     container.style.display = "flex";
-    container.classList.toggle("exclude-mode", !valuesInclude);
+    container.classList.toggle("exclude-mode", !include);
     container.innerHTML = "";
 
     const byKey = new Map(allItems.map(it => [itemKey(it), it]));
@@ -215,7 +204,7 @@ function renderChips() {
 
 function updateSelectionCount() {
     const el = document.getElementById("modalSelectionCount");
-    if (selectedKeys.size === 0) {
+    if (mode !== "values" || selectedKeys.size === 0) {
         el.textContent = "";
         return;
     }
@@ -231,22 +220,15 @@ function updateSelectionCount() {
 function preloadCurrentFilter(currentFilter) {
     if (!currentFilter || !currentFilter.mode) return;
 
+    mode = currentFilter.mode;
+    include = currentFilter.include !== false;
+
     if (currentFilter.mode === "range") {
-        rangeInclude = currentFilter.include !== false;
         rangeFrom = currentFilter.from || "";
         rangeTo = currentFilter.to || "";
-    } else if (currentFilter.mode === "mixed") {
-        valuesInclude = currentFilter.valuesInclude !== false;
-        rangeInclude = currentFilter.rangeInclude !== false;
-        rangeFrom = currentFilter.from || "";
-        rangeTo = currentFilter.to || "";
-        const attr = currentFilter.attribute || (fieldData && fieldData.name);
-        (currentFilter.values || []).forEach(v => selectedKeys.add(attr + "||" + v));
     } else if (currentFilter.items) {
-        valuesInclude = currentFilter.include !== false;
         currentFilter.items.forEach(it => selectedKeys.add(it.attribute + "||" + it.value));
     } else if (currentFilter.values) {
-        valuesInclude = currentFilter.include !== false;
         const attr = currentFilter.attribute || (fieldData && fieldData.name);
         currentFilter.values.forEach(v => selectedKeys.add(attr + "||" + v));
     }
@@ -257,37 +239,30 @@ function preloadCurrentFilter(currentFilter) {
  * ----------------------------------------------------------- */
 
 function apply() {
-    const byKey = new Map(allItems.map(it => [itemKey(it), it]));
-    const chosen = [...selectedKeys].map(k => byKey.get(k)).filter(Boolean);
-    const hasValues = chosen.length > 0;
+    let result = null;
 
-    const from = String(rangeFrom || "").trim();
-    const to = String(rangeTo || "").trim();
-    const hasRange = !isHierarchy && (from !== "" || to !== "");
-
-    if (!hasValues && !hasRange) {
-        sendToParent({ type: "cancel" });
-        return;
-    }
-
-    let result;
-
-    if (isHierarchy) {
-        // El rango no aplica a jerarquías: solo valores, como antes.
-        result = { mode: "values", include: valuesInclude, items: chosen.map(it => ({ attribute: it.attribute, value: it.value })) };
-    } else if (hasValues && hasRange) {
-        // Valores Y rango a la vez, cada uno con su propio incluir/excluir:
-        // el campo cumple el filtro si cumple cualquiera de los dos.
-        result = {
-            mode: "mixed",
-            attribute: fieldData.name,
-            valuesInclude, values: chosen.map(it => it.value),
-            rangeInclude, from, to
-        };
-    } else if (hasRange) {
-        result = { mode: "range", include: rangeInclude, attribute: fieldData.name, from, to };
+    if (mode === "range") {
+        const from = String(rangeFrom || "").trim();
+        const to = String(rangeTo || "").trim();
+        if (from === "" && to === "") {
+            sendToParent({ type: "cancel" });
+            return;
+        }
+        result = { mode: "range", include, attribute: fieldData.name, from, to };
     } else {
-        result = { mode: "values", include: valuesInclude, attribute: fieldData.name, values: chosen.map(it => it.value) };
+        if (selectedKeys.size === 0) {
+            sendToParent({ type: "cancel" });
+            return;
+        }
+
+        const byKey = new Map(allItems.map(it => [itemKey(it), it]));
+        const chosen = [...selectedKeys].map(k => byKey.get(k)).filter(Boolean);
+
+        if (fieldData.isHierarchy) {
+            result = { mode: "values", include, items: chosen.map(it => ({ attribute: it.attribute, value: it.value })) };
+        } else {
+            result = { mode: "values", include, attribute: fieldData.name, values: chosen.map(it => it.value) };
+        }
     }
 
     sendToParent({ type: "apply", filter: result });
@@ -313,11 +288,11 @@ function initEvents() {
     document.getElementById("modalRangeFrom").addEventListener("input", (e) => { rangeFrom = e.target.value; });
     document.getElementById("modalRangeTo").addEventListener("input", (e) => { rangeTo = e.target.value; });
 
-    document.querySelectorAll("#filterValuesIncludeToggle .segmented-option").forEach(btn => {
-        btn.addEventListener("click", () => setValuesInclude(btn.dataset.include === "true"));
+    document.querySelectorAll("#filterModeTabs .segmented-option").forEach(btn => {
+        btn.addEventListener("click", () => setMode(btn.dataset.mode));
     });
-    document.querySelectorAll("#filterRangeIncludeToggle .segmented-option").forEach(btn => {
-        btn.addEventListener("click", () => setRangeInclude(btn.dataset.include === "true"));
+    document.querySelectorAll("#filterIncludeToggle .segmented-option").forEach(btn => {
+        btn.addEventListener("click", () => setInclude(btn.dataset.include === "true"));
     });
 }
 
@@ -338,9 +313,11 @@ Office.onReady(() => {
 
             allItems = payload.items || [];
             fieldData = payload.fieldData || {};
-            isHierarchy = !!fieldData.isHierarchy;
 
             document.getElementById("dialogTitle").textContent = `Filtrar: ${fieldData.dim}.${fieldData.name}`;
+
+            const rangeTab = document.querySelector('#filterModeTabs [data-mode="range"]');
+            if (rangeTab) rangeTab.style.display = fieldData.isHierarchy ? "none" : "";
 
             preloadCurrentFilter(payload.currentFilter);
 
@@ -348,9 +325,8 @@ Office.onReady(() => {
             document.getElementById("modalRangeFrom").value = rangeFrom;
             document.getElementById("modalRangeTo").value = rangeTo;
 
-            renderPanelsVisibility();
-            updateValuesIncludeUI();
-            updateRangeIncludeUI();
+            renderModeUI();
+            updateIncludeUI();
             applySearch(payload.initialSearch || "");
             renderChips();
             updateSelectionCount();

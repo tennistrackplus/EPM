@@ -102,30 +102,9 @@ function parseFilterValue(raw) {
 }
 
 /**
- * Resumen legible de una lista de valores, con su prefijo de
- * incluir ("") / excluir ("≠ ").
- */
-function describeValuesList(values, include) {
-    if (!values || values.length === 0) return "";
-    const prefix = include ? "" : "≠ ";
-    if (values.length <= 2) return prefix + values.join(", ");
-    return prefix + `${values.slice(0, 2).join(", ")} (+${values.length - 2} más)`;
-}
-
-/**
- * Resumen legible de un rango, con su prefijo de incluir/excluir.
- */
-function describeRange(from, to, include) {
-    const desde = from || "…";
-    const hasta = to || "…";
-    return (include ? "" : "≠ ") + `${desde} – ${hasta}`;
-}
-
-/**
  * Construye un resumen legible de un filtro (para el "tag" del taskpane).
- * Acepta tanto el formato nuevo (objeto, incluido el modo "mixed" de
- * valores + rango combinados) como el antiguo (cadena simple), por
- * compatibilidad con informes guardados previamente.
+ * Acepta tanto el formato nuevo (objeto) como el antiguo (cadena simple),
+ * por compatibilidad con informes guardados previamente.
  */
 function describeFilter(filter) {
     if (!filter) return "";
@@ -133,19 +112,17 @@ function describeFilter(filter) {
     if (typeof filter === "string") return filter; // formato antiguo
 
     if (filter.mode === "range") {
-        return describeRange(filter.from, filter.to, filter.include);
-    }
-
-    if (filter.mode === "mixed") {
-        const partes = [
-            describeValuesList(filter.values, filter.valuesInclude),
-            describeRange(filter.from, filter.to, filter.rangeInclude)
-        ].filter(Boolean);
-        return partes.join(" + ");
+        const desde = filter.from || "…";
+        const hasta = filter.to || "…";
+        return (filter.include ? "" : "≠ ") + `${desde} – ${hasta}`;
     }
 
     const values = filter.items ? filter.items.map(it => it.value) : (filter.values || []);
-    return describeValuesList(values, filter.include);
+    if (values.length === 0) return "";
+
+    const prefix = filter.include ? "" : "≠ ";
+    if (values.length <= 2) return prefix + values.join(", ");
+    return prefix + `${values.slice(0, 2).join(", ")} (+${values.length - 2} más)`;
 }
 
 const FilterModal = {
