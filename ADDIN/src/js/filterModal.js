@@ -3,10 +3,10 @@
  * "Filtrar campo" (filterDialog.html), usado desde la zona "Filtros" del
  * taskpane.
  *
- * Antes este fichero pintaba un overlay DENTRO de taskpane.html. Ahora el
- * selector vive en su propia ventana (igual que memberPicker.html), lo que
- * le da sitio para un panel auxiliar a la derecha; ver
- * js/filterDialog.js + filterDialog.html para la UI real.
+ * Este fichero pinta un overlay DENTRO de taskpane.html? No: el selector
+ * vive en su propia ventana (igual que memberPicker.html), lo que le da
+ * sitio para un panel auxiliar a la derecha; ver js/filterDialog.js +
+ * filterDialog.html para la UI real.
  *
  * Un diálogo de Office no tiene acceso al modelo de objetos de Excel, así
  * que aquí (en el taskpane, donde SÍ está disponible window.ExcelService)
@@ -16,22 +16,28 @@
  *
  * El contrato hacia quien llama (taskpane.js) NO ha cambiado:
  * FilterModal.open(fieldData) sigue devolviendo una Promise que resuelve a
- * un objeto "filter" o a null si se cancela:
+ * un objeto "filter" o a null si se cancela. Formato actual (mode:"list"):
+ * el usuario puede combinar libremente valores sueltos y rangos,
+ * incluidos y excluidos, cada uno como una selección independiente (ver
+ * cabecera de js/filterDialog.js para el detalle):
  *
- *   Dimensión plana, varios valores:
- *     { mode: "values", include: true|false, attribute: "PAIS", values: ["ES","FR"] }
+ *   Dimensión plana:
+ *     { mode:"list", attribute:"PAIS",
+ *       values:["ES","FR"], ranges:[{from:"A",to:"M"}],
+ *       excludeValues:["IT"], excludeRanges:[] }
  *
- *   Dimensión plana, rango:
- *     { mode: "range", include: true|false, attribute: "IMPORTE", from: "0", to: "1000" }
- *
- *   Jerarquía, varios miembros (posiblemente de niveles/atributos distintos):
- *     { mode: "values", include: true|false, items: [{attribute:"PAIS", value:"España"}, ...] }
+ *   Jerarquía (el rango no aplica a jerarquías):
+ *     { mode:"list",
+ *       items:[{attribute:"PAIS", value:"España"}, ...],
+ *       excludeItems:[{attribute:"CONTINENTE", value:"África"}, ...] }
  *
  * taskpane.js guarda ese objeto tal cual (como JSON) en entry.filter, y
- * commands.js (buildWhere) lo interpreta para construir IN/NOT IN/BETWEEN.
- * Un valor de filtro "antiguo" (una simple cadena, sin JSON) se sigue
- * interpretando como igualdad simple, por compatibilidad — ver
- * parseFilterValue más abajo.
+ * commands.js (buildWhere) lo interpreta para construir la condición SQL.
+ * Formatos de filtro guardados con versiones ANTERIORES del diálogo
+ * ("values", "range", "mixed") o de antes de la selección múltiple (una
+ * simple cadena) se siguen interpretando igual, por compatibilidad — ver
+ * parseFilterValue más abajo, y su duplicado parseStoredFilterValue en
+ * commands.js.
  * ========================================================================== */
 
 /**
@@ -80,9 +86,11 @@ function loadJsonTree(json) {
 
 /**
  * Interpreta la cadena guardada en la columna "Valor" de un filtro.
- * Formato nuevo: JSON { mode: "values"|"range", include, values|items|from/to }.
- * Formato antiguo (informes previos a la selección múltiple): una cadena
- * simple, que se trata como igualdad de un único valor. Debe coincidir con
+ * Formato actual: JSON { mode:"list", values|items, ranges,
+ * excludeValues|excludeItems, excludeRanges }. Formatos anteriores
+ * ("values"/"range"/"mixed" con include/valuesInclude/rangeInclude) y el
+ * formato "antiguo" (una cadena simple, tratada como igualdad de un único
+ * valor) se aceptan igual, por compatibilidad. Debe coincidir con
  * parseStoredFilterValue de commands.js.
  */
 function parseFilterValue(raw) {
@@ -123,9 +131,14 @@ function describeRange(from, to, include) {
 
 /**
  * Construye un resumen legible de un filtro (para el "tag" del taskpane).
- * Acepta tanto el formato nuevo (objeto, incluido el modo "mixed" de
- * valores + rango combinados) como el antiguo (cadena simple), por
- * compatibilidad con informes guardados previamente.
+ * Acepta el formato actual (mode:"list": valores/rangos incluidos y
+ * excluidos, combinables libremente) y, por compatibilidad, los formatos
+ * de versiones anteriores del diálogo ("values", "range", "mixed") y el
+ * formato "antiguo" (cadena simple).
+ *
+ * Orden del resumen, igual que el que usa commands.js para componer el
+ * WHERE: valores incluidos, rangos incluidos, valores excluidos, rangos
+ * excluidos.
  */
 function describeFilter(filter) {
     if (!filter) return "";
@@ -144,6 +157,22 @@ function describeFilter(filter) {
         return partes.join(" + ");
     }
 
+    if (filter.mode === "list") {
+        const incValues = filter.items ? filter.items.map(it => it.value) : (filter.values || []);
+        const excValues = filter.excludeItems ? filter.excludeItems.map(it => it.value) : (filter.excludeValues || []);
+
+        const partes = [
+            describeValuesList(incValues, true),
+            ...(filter.ranges || []).map(r => describeRange(r.from, r.to, true)),
+            describeValuesList(excValues, false),
+            ...(filter.excludeRanges || []).map(r => describeRange(r.from, r.to, false))
+        ].filter(Boolean);
+
+        return partes.join(" + ");
+    }
+
+    // Formato de selección múltiple "clásico" (values / items, sin mezclar
+    // incluidos y excluidos): un único incluir/excluir para todo el conjunto.
     const values = filter.items ? filter.items.map(it => it.value) : (filter.values || []);
     return describeValuesList(values, filter.include);
 }

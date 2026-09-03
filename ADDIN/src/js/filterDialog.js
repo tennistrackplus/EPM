@@ -2,12 +2,10 @@
  * filterDialog.js — lógica del diálogo de Office independiente "Filtrar
  * campo" (filterDialog.html).
  * ------------------------------------------------------------------------
- * Reemplaza al antiguo overlay embebido en taskpane.html: ahora el
- * selector de filtro vive en SU PROPIA ventana (igual que memberPicker.html
- * u openSemanticModel.html), lo que le da sitio de sobra para un panel
- * auxiliar a la derecha (modo, incluir/excluir, chips de selección) junto
- * a la lista de valores o el rango, sin pelearse con el ancho estrecho
- * del taskpane.
+ * Vive en SU PROPIA ventana (igual que memberPicker.html u
+ * openSemanticModel.html), lo que le da sitio de sobra para un panel
+ * auxiliar a la derecha (modo, selección actual) junto a la lista de
+ * valores o el rango, sin pelearse con el ancho estrecho del taskpane.
  *
  * Como cualquier diálogo de Office, esta ventana NO tiene acceso al modelo
  * de objetos de Excel ni a window.ExcelService: quien lo abre (ver
@@ -17,30 +15,47 @@
  * listos. Cuando el usuario pulsa "Aceptar"/"Cancelar" devolvemos el
  * resultado de la misma forma (Office.context.ui.messageParent).
  *
- * El objeto "filter" que se envía de vuelta tiene la misma forma que
- * generaba el modal antiguo, más un nuevo modo "mixed" cuando el usuario
- * combina valores sueltos Y un rango a la vez (cada uno con su propio
- * incluir/excluir, independiente el uno del otro):
- *   - Valores (plano):     { mode:"values", include, attribute, values:[...] }
- *   - Valores (jerarquía): { mode:"values", include, items:[{attribute,value}] }
- *   - Rango (solo plano):  { mode:"range", include, attribute, from, to }
- *   - Mixto (solo plano):  { mode:"mixed", attribute,
- *                            valuesInclude, values:[...],
- *                            rangeInclude, from, to }
- *     (equivale a "cumple los valores según su incluir/excluir, O cumple
- *     el rango según el suyo"; no aplica a jerarquías, donde el rango no
- *     tiene sentido).
+ * A diferencia de versiones anteriores (un filtro = un modo Valores O
+ * Rango, con un único incluir/excluir para todo el campo), aquí el
+ * usuario puede combinar libremente:
+ *   - Varios valores sueltos incluidos
+ *   - Varios rangos incluidos
+ *   - Varios valores sueltos excluidos
+ *   - Varios rangos excluidos
+ * Cada elemento cae en una lista u otra (incluidos/excluidos) según el
+ * Incluir/Excluir activo EN EL MOMENTO de marcarlo/añadirlo — cambiar el
+ * interruptor después no mueve lo ya añadido: son selecciones
+ * independientes, no una sola que se invierte para todos a la vez. El
+ * "Modo" (Valores/Rango) solo decide qué panel se edita ahora mismo; no
+ * es excluyente con lo que ya haya en el otro panel.
+ *
+ * El objeto "filter" que se envía de vuelta (mode:"list"):
+ *   Dimensión plana:
+ *     { mode:"list", attribute,
+ *       values:[...], ranges:[{from,to}, ...],
+ *       excludeValues:[...], excludeRanges:[{from,to}, ...] }
+ *   Jerarquía (el rango no aplica a jerarquías):
+ *     { mode:"list",
+ *       items:[{attribute,value}, ...], excludeItems:[{attribute,value}, ...] }
+ *
+ * Se conserva la LECTURA (no la escritura) de los formatos de versiones
+ * anteriores del diálogo ("values", "range", "mixed") al reabrir un
+ * filtro ya guardado — ver preloadCurrentFilter. commands.js debe
+ * interpretar igualmente todos estos formatos (ver parseStoredFilterValue
+ * / buildSimpleFilterCondition / buildHierarchyFilterCondition).
  */
 
 let allItems = [];
 let fieldData = null;
 let isHierarchy = false;
 
-let valuesInclude = true;     // incluir/excluir de la lista de valores
-let rangeInclude = true;      // incluir/excluir del rango (independiente)
-let selectedKeys = new Set(); // claves (attribute||value) marcadas
-let rangeFrom = "";
-let rangeTo = "";
+let currentMode = "values";     // "values" | "range" — qué panel se edita
+let currentInclude = true;      // incluir/excluir de lo que se añada AHORA
+
+let includedValues = new Set(); // claves (attribute||value) incluidas
+let excludedValues = new Set(); // claves (attribute||value) excluidas
+let includedRanges = [];        // [{from,to}, ...]
+let excludedRanges = [];        // [{from,to}, ...]
 
 function itemKey(item) {
     return item.attribute + "||" + item.value;
@@ -65,42 +80,57 @@ function closeBySelf() {
 }
 
 /* -------------------------------------------------------------
- * Visibilidad de paneles (Valores siempre visible; Rango solo si el
- * campo no es una jerarquía) e Incluir/Excluir independiente para cada
- * uno.
+ * Modo (Valores/Rango): solo decide qué panel se ve y se edita; ambos
+ * "acumulan" en la misma selección compartida (no se pierde lo del otro
+ * panel al cambiar de modo).
  * ----------------------------------------------------------- */
 
-function renderPanelsVisibility() {
-    document.getElementById("filterRangePanel").style.display = isHierarchy ? "none" : "";
+function setMode(newMode) {
+    if (newMode === "range" && isHierarchy) return; // el rango no aplica a jerarquías
+    currentMode = newMode;
+    renderModeUI();
 }
 
-function setValuesInclude(value) {
-    valuesInclude = value;
-    updateValuesIncludeUI();
-}
-
-function updateValuesIncludeUI() {
-    document.querySelectorAll("#filterValuesIncludeToggle .segmented-option").forEach(btn => {
-        btn.classList.toggle("active", (btn.dataset.include === "true") === valuesInclude);
+function renderModeUI() {
+    document.querySelectorAll("#filterModeTabs .segmented-option").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.mode === currentMode);
     });
-    document.getElementById("modalSelectedChips").classList.toggle("exclude-mode", !valuesInclude);
+    document.getElementById("filterValuesPanel").style.display = currentMode === "values" ? "" : "none";
+    document.getElementById("filterRangePanel").style.display = currentMode === "range" ? "" : "none";
 }
 
-function setRangeInclude(value) {
-    rangeInclude = value;
-    updateRangeIncludeUI();
+/* -------------------------------------------------------------
+ * Incluir/Excluir: un único concepto compartido por los dos paneles (los
+ * dos interruptores de la página se mantienen sincronizados vía la clase
+ * .js-include-toggle), que decide bajo qué lista cae lo próximo que se
+ * marque o añada.
+ * ----------------------------------------------------------- */
+
+function setInclude(value) {
+    currentInclude = value;
+    updateIncludeUI();
+    // El estado "marcado" de los checkboxes depende de qué incluir/excluir
+    // está activo (ver render): al cambiar, hay que repintar la lista.
+    applySearch(document.getElementById("modalSearchInput").value);
 }
 
-function updateRangeIncludeUI() {
-    document.querySelectorAll("#filterRangeIncludeToggle .segmented-option").forEach(btn => {
-        btn.classList.toggle("active", (btn.dataset.include === "true") === rangeInclude);
+function updateIncludeUI() {
+    document.querySelectorAll(".js-include-toggle .segmented-option").forEach(btn => {
+        btn.classList.toggle("active", (btn.dataset.include === "true") === currentInclude);
     });
-    document.getElementById("filterRangePanel").classList.toggle("exclude-mode", !rangeInclude);
 }
 
 /* -------------------------------------------------------------
  * Lista de valores (checkboxes) + búsqueda
  * ----------------------------------------------------------- */
+
+function activeValuesSet() {
+    return currentInclude ? includedValues : excludedValues;
+}
+
+function otherValuesSet() {
+    return currentInclude ? excludedValues : includedValues;
+}
 
 function render(items) {
     const container = document.getElementById("modalItemsContainer");
@@ -111,6 +141,8 @@ function render(items) {
         return;
     }
 
+    const activeSet = activeValuesSet();
+
     items.forEach((item) => {
         const key = itemKey(item);
 
@@ -120,7 +152,11 @@ function render(items) {
 
         const checkbox = document.createElement("input");
         checkbox.type = "checkbox";
-        checkbox.checked = selectedKeys.has(key);
+        // El checkbox refleja la pertenencia al conjunto ACTIVO (incluidos
+        // si "Incluir" está activo, excluidos si "Excluir" está activo): un
+        // valor ya marcado en el OTRO conjunto aparece sin marcar aquí, sin
+        // dejar de estar seleccionado — se ve en los chips de la derecha.
+        checkbox.checked = activeSet.has(key);
 
         const label = document.createElement("label");
         label.textContent = item.text;
@@ -130,12 +166,13 @@ function render(items) {
         row.appendChild(label);
 
         const toggle = () => {
-            if (selectedKeys.has(key)) {
-                selectedKeys.delete(key);
+            if (activeSet.has(key)) {
+                activeSet.delete(key);
             } else {
-                selectedKeys.add(key);
+                activeSet.add(key);
+                otherValuesSet().delete(key); // un valor no puede estar incluido Y excluido a la vez
             }
-            checkbox.checked = selectedKeys.has(key);
+            checkbox.checked = activeSet.has(key);
             row.classList.toggle("selected", checkbox.checked);
             renderChips();
             updateSelectionCount();
@@ -161,94 +198,172 @@ function selectAllVisible() {
     const visible = String(q || "").trim() === ""
         ? allItems
         : allItems.filter(it => it.text.toLowerCase().includes(q.toLowerCase()));
-    visible.forEach(it => selectedKeys.add(itemKey(it)));
+    const activeSet = activeValuesSet();
+    const other = otherValuesSet();
+    visible.forEach(it => {
+        const key = itemKey(it);
+        activeSet.add(key);
+        other.delete(key);
+    });
     applySearch(q);
     renderChips();
     updateSelectionCount();
 }
 
 function clearSelection() {
-    selectedKeys.clear();
+    // Solo vacía la lista ACTUALMENTE activa (incluidos o excluidos): son
+    // selecciones independientes, "Ninguno" no debe borrar la otra.
+    activeValuesSet().clear();
     applySearch(document.getElementById("modalSearchInput").value);
     renderChips();
     updateSelectionCount();
 }
 
 /* -------------------------------------------------------------
- * Chips con la selección actual (panel auxiliar de la derecha)
+ * Rango: "Añadir" mete el rango actual en la lista de incluidos o
+ * excluidos (según el incluir/excluir activo) y limpia los campos para
+ * poder cargar otro rango a continuación.
  * ----------------------------------------------------------- */
+
+function addRange() {
+    const fromInput = document.getElementById("modalRangeFrom");
+    const toInput = document.getElementById("modalRangeTo");
+    const from = String(fromInput.value || "").trim();
+    const to = String(toInput.value || "").trim();
+
+    if (from === "" && to === "") return;
+
+    (currentInclude ? includedRanges : excludedRanges).push({ from, to });
+
+    fromInput.value = "";
+    toInput.value = "";
+
+    renderChips();
+    updateSelectionCount();
+}
+
+/* -------------------------------------------------------------
+ * Chips con la selección actual (panel auxiliar de la derecha). Orden
+ * fijo: valores incluidos, rangos incluidos, valores excluidos, rangos
+ * excluidos — el mismo orden en que commands.js compone la condición SQL
+ * (ver buildListFilterCondition).
+ * ----------------------------------------------------------- */
+
+function rangeLabel(r) {
+    return `${r.from || "…"} – ${r.to || "…"}`;
+}
 
 function renderChips() {
     const container = document.getElementById("modalSelectedChips");
+    const byKey = new Map(allItems.map(it => [itemKey(it), it]));
 
-    if (selectedKeys.size === 0) {
+    const chips = [];
+
+    includedValues.forEach(key => {
+        const item = byKey.get(key);
+        chips.push({
+            label: item ? item.text.trim() : key.split("||")[1],
+            include: true,
+            onRemove: () => { includedValues.delete(key); afterChipRemoved(); }
+        });
+    });
+    includedRanges.forEach((r, idx) => {
+        chips.push({
+            label: rangeLabel(r),
+            include: true,
+            onRemove: () => { includedRanges.splice(idx, 1); afterChipRemoved(); }
+        });
+    });
+    excludedValues.forEach(key => {
+        const item = byKey.get(key);
+        chips.push({
+            label: item ? item.text.trim() : key.split("||")[1],
+            include: false,
+            onRemove: () => { excludedValues.delete(key); afterChipRemoved(); }
+        });
+    });
+    excludedRanges.forEach((r, idx) => {
+        chips.push({
+            label: rangeLabel(r),
+            include: false,
+            onRemove: () => { excludedRanges.splice(idx, 1); afterChipRemoved(); }
+        });
+    });
+
+    if (chips.length === 0) {
         container.style.display = "none";
         container.innerHTML = "";
         return;
     }
 
     container.style.display = "flex";
-    container.classList.toggle("exclude-mode", !valuesInclude);
     container.innerHTML = "";
 
-    const byKey = new Map(allItems.map(it => [itemKey(it), it]));
-
-    selectedKeys.forEach(key => {
-        const item = byKey.get(key);
-        const label = item ? item.text.trim() : key.split("||")[1];
-
+    chips.forEach(spec => {
         const chip = document.createElement("div");
-        chip.className = "filter-chip";
+        chip.className = "filter-chip" + (spec.include ? "" : " exclude-mode");
         chip.innerHTML = `<span class="chip-label"></span><button type="button" class="chip-remove">&times;</button>`;
-        chip.querySelector(".chip-label").textContent = label;
-
-        chip.querySelector(".chip-remove").addEventListener("click", () => {
-            selectedKeys.delete(key);
-            renderChips();
-            applySearch(document.getElementById("modalSearchInput").value);
-            updateSelectionCount();
-        });
-
+        chip.querySelector(".chip-label").textContent = spec.label;
+        chip.querySelector(".chip-remove").addEventListener("click", spec.onRemove);
         container.appendChild(chip);
     });
 }
 
+function afterChipRemoved() {
+    renderChips();
+    applySearch(document.getElementById("modalSearchInput").value);
+    updateSelectionCount();
+}
+
 function updateSelectionCount() {
     const el = document.getElementById("modalSelectionCount");
-    if (selectedKeys.size === 0) {
+    const total = includedValues.size + includedRanges.length + excludedValues.size + excludedRanges.length;
+    if (total === 0) {
         el.textContent = "";
         return;
     }
-    el.textContent = selectedKeys.size === 1
-        ? "1 valor seleccionado"
-        : `${selectedKeys.size} valores seleccionados`;
+    el.textContent = total === 1 ? "1 seleccionado" : `${total} seleccionados`;
 }
 
 /* -------------------------------------------------------------
- * Precarga de un filtro ya aplicado antes (al reabrir sobre el mismo campo)
+ * Precarga de un filtro ya aplicado antes (al reabrir sobre el mismo
+ * campo). Acepta el formato nuevo ("list") y, por compatibilidad, los
+ * formatos de versiones anteriores del diálogo ("values", "range",
+ * "mixed").
  * ----------------------------------------------------------- */
 
 function preloadCurrentFilter(currentFilter) {
     if (!currentFilter || !currentFilter.mode) return;
 
-    if (currentFilter.mode === "range") {
-        rangeInclude = currentFilter.include !== false;
-        rangeFrom = currentFilter.from || "";
-        rangeTo = currentFilter.to || "";
+    const addValues = (values, attr, include) => {
+        const set = include ? includedValues : excludedValues;
+        (values || []).forEach(v => set.add((attr || (fieldData && fieldData.name)) + "||" + v));
+    };
+    const addItems = (items, include) => {
+        const set = include ? includedValues : excludedValues;
+        (items || []).forEach(it => set.add(it.attribute + "||" + it.value));
+    };
+    const addRangeEntry = (from, to, include) => {
+        if ((from === undefined || from === "") && (to === undefined || to === "")) return;
+        (include ? includedRanges : excludedRanges).push({ from: from || "", to: to || "" });
+    };
+
+    if (currentFilter.mode === "list") {
+        addValues(currentFilter.values, currentFilter.attribute, true);
+        addValues(currentFilter.excludeValues, currentFilter.attribute, false);
+        addItems(currentFilter.items, true);
+        addItems(currentFilter.excludeItems, false);
+        (currentFilter.ranges || []).forEach(r => addRangeEntry(r.from, r.to, true));
+        (currentFilter.excludeRanges || []).forEach(r => addRangeEntry(r.from, r.to, false));
+    } else if (currentFilter.mode === "range") {
+        addRangeEntry(currentFilter.from, currentFilter.to, currentFilter.include !== false);
     } else if (currentFilter.mode === "mixed") {
-        valuesInclude = currentFilter.valuesInclude !== false;
-        rangeInclude = currentFilter.rangeInclude !== false;
-        rangeFrom = currentFilter.from || "";
-        rangeTo = currentFilter.to || "";
-        const attr = currentFilter.attribute || (fieldData && fieldData.name);
-        (currentFilter.values || []).forEach(v => selectedKeys.add(attr + "||" + v));
+        addValues(currentFilter.values, currentFilter.attribute, currentFilter.valuesInclude !== false);
+        addRangeEntry(currentFilter.from, currentFilter.to, currentFilter.rangeInclude !== false);
     } else if (currentFilter.items) {
-        valuesInclude = currentFilter.include !== false;
-        currentFilter.items.forEach(it => selectedKeys.add(it.attribute + "||" + it.value));
+        addItems(currentFilter.items, currentFilter.include !== false);
     } else if (currentFilter.values) {
-        valuesInclude = currentFilter.include !== false;
-        const attr = currentFilter.attribute || (fieldData && fieldData.name);
-        currentFilter.values.forEach(v => selectedKeys.add(attr + "||" + v));
+        addValues(currentFilter.values, currentFilter.attribute, currentFilter.include !== false);
     }
 }
 
@@ -257,37 +372,35 @@ function preloadCurrentFilter(currentFilter) {
  * ----------------------------------------------------------- */
 
 function apply() {
-    const byKey = new Map(allItems.map(it => [itemKey(it), it]));
-    const chosen = [...selectedKeys].map(k => byKey.get(k)).filter(Boolean);
-    const hasValues = chosen.length > 0;
+    const hasAny = includedValues.size > 0 || excludedValues.size > 0
+        || includedRanges.length > 0 || excludedRanges.length > 0;
 
-    const from = String(rangeFrom || "").trim();
-    const to = String(rangeTo || "").trim();
-    const hasRange = !isHierarchy && (from !== "" || to !== "");
-
-    if (!hasValues && !hasRange) {
+    if (!hasAny) {
         sendToParent({ type: "cancel" });
         return;
     }
 
+    const byKey = new Map(allItems.map(it => [itemKey(it), it]));
     let result;
 
     if (isHierarchy) {
-        // El rango no aplica a jerarquías: solo valores, como antes.
-        result = { mode: "values", include: valuesInclude, items: chosen.map(it => ({ attribute: it.attribute, value: it.value })) };
-    } else if (hasValues && hasRange) {
-        // Valores Y rango a la vez, cada uno con su propio incluir/excluir:
-        // el campo cumple el filtro si cumple cualquiera de los dos.
+        const toItems = (set) => [...set].map(k => byKey.get(k)).filter(Boolean)
+            .map(it => ({ attribute: it.attribute, value: it.value }));
         result = {
-            mode: "mixed",
-            attribute: fieldData.name,
-            valuesInclude, values: chosen.map(it => it.value),
-            rangeInclude, from, to
+            mode: "list",
+            items: toItems(includedValues),
+            excludeItems: toItems(excludedValues)
         };
-    } else if (hasRange) {
-        result = { mode: "range", include: rangeInclude, attribute: fieldData.name, from, to };
     } else {
-        result = { mode: "values", include: valuesInclude, attribute: fieldData.name, values: chosen.map(it => it.value) };
+        const toValues = (set) => [...set].map(k => byKey.get(k)).filter(Boolean).map(it => it.value);
+        result = {
+            mode: "list",
+            attribute: fieldData.name,
+            values: toValues(includedValues),
+            ranges: includedRanges.slice(),
+            excludeValues: toValues(excludedValues),
+            excludeRanges: excludedRanges.slice()
+        };
     }
 
     sendToParent({ type: "apply", filter: result });
@@ -310,14 +423,16 @@ function initEvents() {
     document.getElementById("btnSelectAllVisible").addEventListener("click", selectAllVisible);
     document.getElementById("btnClearSelection").addEventListener("click", clearSelection);
 
-    document.getElementById("modalRangeFrom").addEventListener("input", (e) => { rangeFrom = e.target.value; });
-    document.getElementById("modalRangeTo").addEventListener("input", (e) => { rangeTo = e.target.value; });
+    document.getElementById("btnAddRange").addEventListener("click", addRange);
+    const onRangeEnter = (e) => { if (e.key === "Enter") addRange(); };
+    document.getElementById("modalRangeFrom").addEventListener("keydown", onRangeEnter);
+    document.getElementById("modalRangeTo").addEventListener("keydown", onRangeEnter);
 
-    document.querySelectorAll("#filterValuesIncludeToggle .segmented-option").forEach(btn => {
-        btn.addEventListener("click", () => setValuesInclude(btn.dataset.include === "true"));
+    document.querySelectorAll("#filterModeTabs .segmented-option").forEach(btn => {
+        btn.addEventListener("click", () => setMode(btn.dataset.mode));
     });
-    document.querySelectorAll("#filterRangeIncludeToggle .segmented-option").forEach(btn => {
-        btn.addEventListener("click", () => setRangeInclude(btn.dataset.include === "true"));
+    document.querySelectorAll(".js-include-toggle .segmented-option").forEach(btn => {
+        btn.addEventListener("click", () => setInclude(btn.dataset.include === "true"));
     });
 }
 
@@ -342,15 +457,15 @@ Office.onReady(() => {
 
             document.getElementById("dialogTitle").textContent = `Filtrar: ${fieldData.dim}.${fieldData.name}`;
 
+            const rangeTab = document.querySelector('#filterModeTabs [data-mode="range"]');
+            if (rangeTab) rangeTab.style.display = isHierarchy ? "none" : "";
+
             preloadCurrentFilter(payload.currentFilter);
 
             document.getElementById("modalSearchInput").value = payload.initialSearch || "";
-            document.getElementById("modalRangeFrom").value = rangeFrom;
-            document.getElementById("modalRangeTo").value = rangeTo;
 
-            renderPanelsVisibility();
-            updateValuesIncludeUI();
-            updateRangeIncludeUI();
+            renderModeUI();
+            updateIncludeUI();
             applySearch(payload.initialSearch || "");
             renderChips();
             updateSelectionCount();

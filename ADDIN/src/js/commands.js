@@ -1344,9 +1344,12 @@ const UNQUOTED_TYPES = ["INTEGER", "INT64", "FLOAT", "NUMERIC", "BIGNUMERIC"];
 
 /**
  * Interpreta la cadena guardada en la columna "Valor" de un filtro.
- * Formato nuevo: JSON { mode: "values"|"range", include, values|items|from/to }.
- * Formato antiguo (informes previos a la selección múltiple): una cadena
- * simple, que se trata como igualdad de un único valor. Misma lógica que
+ * Formato actual: JSON { mode:"list", values|items, ranges,
+ * excludeValues|excludeItems, excludeRanges }. Formatos de versiones
+ * anteriores del diálogo ("values"/"range"/"mixed" con
+ * include/valuesInclude/rangeInclude) y el formato "antiguo" (una cadena
+ * simple, tratada como igualdad de un único valor) se siguen
+ * interpretando igual, por compatibilidad. Misma lógica que
  * parseFilterValue de filterModal.js, duplicada aquí a propósito para que
  * commands.js no dependa de que filterModal.js se haya cargado antes.
  */
@@ -1402,13 +1405,18 @@ function buildRangeCondition(atributesGrid, dimension, attributeName, campo, fro
 
 /**
  * Condición para un filtro "simple": un único atributo real, con selección
- * de varios valores (IN/NOT IN), un rango (BETWEEN/NOT BETWEEN), o ambos a
+ * de varios valores (IN/NOT IN), un rango (BETWEEN/NOT BETWEEN), ambos a
  * la vez (modo "mixed": el campo cumple el filtro si cumple los valores O
- * el rango, cada uno con su propio incluir/excluir). Con un solo valor en
+ * el rango, cada uno con su propio incluir/excluir), o el modo actual del
+ * diálogo ("list": ver buildListFilterCondition). Con un solo valor en
  * modo "values" se genera "=" / "<>", igual que antes.
  */
 function buildSimpleFilterCondition(atributesGrid, relGrid, dimension, attributeName, filter) {
     const campo = getTableAlias(relGrid, dimension) + "." + attributeName;
+
+    if (filter.mode === "list") {
+        return buildListFilterCondition(atributesGrid, dimension, attributeName, campo, filter);
+    }
 
     if (filter.mode === "range") {
         return buildRangeCondition(atributesGrid, dimension, attributeName, campo, filter.from, filter.to, filter.include);
@@ -1427,13 +1435,52 @@ function buildSimpleFilterCondition(atributesGrid, relGrid, dimension, attribute
 }
 
 /**
+ * Condición para el modo "list" del diálogo de filtro actual: valores y
+ * rangos sueltos, incluidos y excluidos, combinables libremente entre sí
+ * (ver cabecera de js/filterDialog.js). Se cumple si se satisface
+ * cualquiera de los incluidos (valores O rangos), sin caer en ninguno de
+ * los excluidos (ni valores NI rangos). Si no hay nada incluido, el filtro
+ * es solo de exclusión (basta con no caer en lo excluido).
+ */
+function buildListFilterCondition(atributesGrid, dimension, attributeName, campo, filter) {
+    const partes = [];
+
+    const includedParts = [];
+    const incValuesCond = buildValuesCondition(atributesGrid, dimension, attributeName, campo, filter.values, true);
+    if (incValuesCond) includedParts.push(incValuesCond);
+    (filter.ranges || []).forEach(r => {
+        const c = buildRangeCondition(atributesGrid, dimension, attributeName, campo, r.from, r.to, true);
+        if (c) includedParts.push(c);
+    });
+    if (includedParts.length > 0) {
+        partes.push(includedParts.length === 1 ? includedParts[0] : ("(" + includedParts.join(CRLF + "   OR ") + ")"));
+    }
+
+    const excValuesCond = buildValuesCondition(atributesGrid, dimension, attributeName, campo, filter.excludeValues, false);
+    if (excValuesCond) partes.push(excValuesCond);
+    (filter.excludeRanges || []).forEach(r => {
+        const c = buildRangeCondition(atributesGrid, dimension, attributeName, campo, r.from, r.to, false);
+        if (c) partes.push(c);
+    });
+
+    if (partes.length === 0) return "";
+    if (partes.length === 1) return partes[0];
+    return "(" + partes.join(CRLF + "   AND ") + ")";
+}
+
+/**
  * Condición para un filtro de JERARQUÍA con varios miembros seleccionados.
  * Los miembros pueden pertenecer a niveles (atributos reales) distintos de
  * la jerarquía, así que se agrupan por atributo y se unen con OR: "está en
  * el continente Europa, o en el país España, o...". Con "Excluir" se niega
- * el conjunto completo.
+ * el conjunto completo. El modo "list" admite miembros incluidos Y
+ * excluidos a la vez (ver buildHierarchyListCondition).
  */
 function buildHierarchyFilterCondition(atributesGrid, relGrid, dimension, filter) {
+    if (filter.mode === "list") {
+        return buildHierarchyListCondition(atributesGrid, relGrid, dimension, filter);
+    }
+
     const items = filter.items || [];
     if (items.length === 0) return "";
 
@@ -1456,6 +1503,43 @@ function buildHierarchyFilterCondition(atributesGrid, relGrid, dimension, filter
     return filter.include ? combinado : ("NOT " + combinado);
 }
 
+/**
+ * Condición de jerarquía para el modo "list": miembros incluidos
+ * (items) O excluidos (excludeItems), cada grupo agrupado por atributo
+ * real igual que el modo clásico, y ambos grupos combinados con AND
+ * (cumple los incluidos Y no cae en ninguno de los excluidos).
+ */
+function buildHierarchyListCondition(atributesGrid, relGrid, dimension, filter) {
+    const buildGroupedCondition = (items, include) => {
+        if (!items || items.length === 0) return "";
+
+        const porAtributo = new Map();
+        for (const it of items) {
+            if (!porAtributo.has(it.attribute)) porAtributo.set(it.attribute, []);
+            porAtributo.get(it.attribute).push(it.value);
+        }
+
+        const partes = [];
+        for (const [attr, values] of porAtributo.entries()) {
+            const cond = buildSimpleFilterCondition(atributesGrid, relGrid, dimension, attr,
+                { mode: "values", include: true, values });
+            if (cond) partes.push(cond);
+        }
+
+        if (partes.length === 0) return "";
+        const combinado = partes.length === 1 ? partes[0] : ("(" + partes.join(CRLF + "   OR ") + ")");
+        return include ? combinado : ("NOT " + combinado);
+    };
+
+    const incCond = buildGroupedCondition(filter.items, true);
+    const excCond = buildGroupedCondition(filter.excludeItems, false);
+    const partes = [incCond, excCond].filter(Boolean);
+
+    if (partes.length === 0) return "";
+    if (partes.length === 1) return partes[0];
+    return "(" + partes.join(CRLF + "   AND ") + ")";
+}
+
 function buildWhere(atributesGrid, relGrid) {
     // Filtros "vacíos" (sin valor seleccionado en el taskpane) no deben
     // añadirse al WHERE: se ignoran por completo, como si no existieran.
@@ -1469,10 +1553,13 @@ function buildWhere(atributesGrid, relGrid) {
         const filter = parseStoredFilterValue(f.Value);
         if (!filter) continue;
 
-        // Un filtro de jerarquía con selección múltiple trae "items" (cada
-        // uno con su propio atributo real); todo lo demás (dimensión plana,
-        // o jerarquía "antigua" de un solo valor) usa f.AttributeName.
-        const cond = (filter.items && filter.items.length)
+        // Un filtro de jerarquía con selección múltiple trae "items" y/o
+        // (modo "list") "excludeItems" (cada uno con su propio atributo
+        // real); todo lo demás (dimensión plana, o jerarquía "antigua" de
+        // un solo valor) usa f.AttributeName.
+        const esJerarquia = (filter.items && filter.items.length)
+            || (filter.excludeItems && filter.excludeItems.length);
+        const cond = esJerarquia
             ? buildHierarchyFilterCondition(atributesGrid, relGrid, f.Dimension, filter)
             : buildSimpleFilterCondition(atributesGrid, relGrid, f.Dimension, f.AttributeName, filter);
 
