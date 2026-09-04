@@ -186,6 +186,14 @@
         }
 
         function init() {
+            // El diálogo puede no compartir localStorage con el panel de
+            // tareas que lo abrió: si el token viene en la URL (ver
+            // BQ.getSessionQueryParams() en js/commands.js), lo copiamos a
+            // nuestro propio localStorage antes de comprobar la conexión.
+            if (window.BQ) {
+                BQ.hydrateSessionFromDialogParams(new URLSearchParams(window.location.search));
+            }
+
             document.getElementById("closeBtn").addEventListener("click", () => {
                 try {
                     Office.context.ui.messageParent("close");
