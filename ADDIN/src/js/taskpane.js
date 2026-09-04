@@ -832,6 +832,14 @@ const TaskPaneApp = {
         try {
             if (btn) { btn.disabled = true; btn.innerText = "Añadiendo…"; }
 
+            // Re-capturar la hoja/celda activas de Excel EN ESTE MOMENTO
+            // (EDIT_REPORT!D1/E1). Sin esto, E1 seguía teniendo la celda
+            // capturada al abrir el taskpane (ver captureActiveEditContext,
+            // que solo se ejecuta una vez en init()), así que el segundo
+            // informe (y siguientes) anclaba en la celda del PRIMER
+            // informe en lugar de en la celda seleccionada ahora.
+            await this.captureActiveEditContext();
+
             const models = (window.ExcelService && window.ExcelService.getSemanticModels)
                 ? await window.ExcelService.getSemanticModels() : [];
             const defaultModel = models.length === 1 ? models[0] : "";
