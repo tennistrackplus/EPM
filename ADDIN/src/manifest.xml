@@ -937,11 +937,11 @@
 
         <bt:String
           id="GuardarBucketButtonTooltip"
-          DefaultValue="Sube una copia del Excel activo (tal cual está guardado) al bucket de Google Cloud Storage configurado en la conexión BigQuery"/>
+          DefaultValue="Elige un proyecto y un bucket de Google Cloud Storage y sube una copia del Excel activo (tal cual está guardado)"/>
 
         <bt:String
           id="AbrirBucketButtonTooltip"
-          DefaultValue="Lista los archivos Excel del bucket de Google Cloud Storage configurado y permite descargar el elegido"/>
+          DefaultValue="Elige un proyecto y un bucket de Google Cloud Storage, lista sus archivos Excel y permite descargar el elegido"/>
 
         <bt:String
           id="OpcionesButtonTooltip"

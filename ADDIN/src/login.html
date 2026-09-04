@@ -40,25 +40,6 @@
             display: none;
         }
 
-        #bucketBrowserPanel.hidden {
-            display: none;
-        }
-
-        #bucketBrowserPanel {
-            background: var(--gray-50, #f6f6f8);
-            border: 1px solid var(--border-default, #e2e2e6);
-            border-radius: 8px;
-            padding: 10px;
-        }
-
-        #bucketBrowserPanel label {
-            font-size: var(--fs-sm, 12px);
-        }
-
-        #bucketBrowserStatus.error {
-            color: #c0392b;
-        }
-
         .login-lead {
             flex-shrink: 0;
             margin-bottom: 10px;
@@ -565,31 +546,7 @@
                                 <input type="text" id="bqBillingProject" placeholder="Ejemplo: MyBillingProject">
                                 <span class="hint">Si se deja vacío, se factura sobre el proyecto de los datos consultados.</span>
 
-                                <label for="bqExportBucket" style="margin-top:10px;">Bucket de exportación (opcional)</label>
-                                <div style="display:flex; gap:6px; align-items:center;">
-                                    <input type="text" id="bqExportBucket" placeholder="Ejemplo: mi-bucket-epm" style="flex:1;">
-                                    <button type="button" id="btnBrowseBuckets" class="btn-secondary" style="white-space:nowrap;">Examinar…</button>
-                                </div>
-                                <span class="hint">Bucket de Google Cloud Storage donde el botón "Guardar en bucket" del panel guarda una copia del Excel activo. Escríbelo a mano o pulsa "Examinar…" para elegirlo entre tus proyectos de Google Cloud (requiere estar ya conectado con esta conexión). Requiere reconectar la sesión de Google si ya estabas conectado antes de tener esta opción (para conceder permiso de escritura en Cloud Storage).</span>
-
-                                <div id="bucketBrowserPanel" class="hidden" style="margin-top:8px;">
-                                    <label for="bqBrowseProject" style="margin-top:0;">Proyecto de Google Cloud</label>
-                                    <select id="bqBrowseProject">
-                                        <option value="">Selecciona un proyecto…</option>
-                                    </select>
-
-                                    <label for="bqBrowseBucket" style="margin-top:8px;">Bucket</label>
-                                    <select id="bqBrowseBucket" disabled>
-                                        <option value="">Selecciona primero un proyecto…</option>
-                                    </select>
-
-                                    <div id="bucketBrowserStatus" class="hint" style="margin-top:6px;"></div>
-
-                                    <div style="display:flex; gap:6px; margin-top:8px;">
-                                        <button type="button" id="btnUseBucket" class="btn-primary" disabled>Usar este bucket</button>
-                                        <button type="button" id="btnCancelBrowseBuckets" class="btn-secondary">Cancelar</button>
-                                    </div>
-                                </div>
+                                <span class="hint">El bucket de Google Cloud Storage para "Abrir desde bucket" y "Guardar en bucket" ya no se configura aquí: se elige el proyecto y el bucket directamente en esos diálogos (botones del panel/ribbon "Abrir bucket" y "Guardar en bucket"), requiere estar conectado con esta conexión.</span>
 
                                 <label for="bqRepoType" style="margin-top:10px;">Repositorio de modelos semánticos (opcional)</label>
                                 <select id="bqRepoType">

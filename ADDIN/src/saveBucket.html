@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Guardar en bucket</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/lkmlDialog.css">
+    <style>
+        #pickerStatus { font-size: 11.5px; color: #64748b; margin-top: 6px; min-height: 14px; }
+        #pickerStatus.error { color: #c0392b; }
+    </style>
+</head>
+<body>
+
+    <div class="dialog-page">
+
+        <div class="dialog-header">
+            <h3>Guardar en bucket</h3>
+            <span class="dialog-subtitle">Elige el proyecto y el bucket de Google Cloud donde subir una copia del Excel activo</span>
+        </div>
+
+        <div class="dialog-body">
+
+            <label class="lkml-field-label" for="pickerProject">Proyecto de Google Cloud</label>
+            <select class="lkml-select" id="pickerProject">
+                <option value="">Cargando proyectos…</option>
+            </select>
+
+            <label class="lkml-field-label" for="pickerBucket">Bucket</label>
+            <select class="lkml-select" id="pickerBucket" disabled>
+                <option value="">Selecciona primero un proyecto…</option>
+            </select>
+
+            <div id="pickerStatus"></div>
+
+            <label class="lkml-field-label" for="saveBucketFileName">Nombre de fichero</label>
+            <input type="text" class="lkml-input" id="saveBucketFileName" placeholder="Informe_EPM.xlsx" />
+        </div>
+
+        <div class="lkml-modal-footer">
+            <button type="button" class="icon-btn" id="btnCancelSaveBucket">Cancelar</button>
+            <button type="button" class="btn-generate" id="btnConfirmSaveBucket" disabled>Guardar</button>
+        </div>
+
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/bigquery.js"></script>
+    <script src="js/gcsExport.js"></script>
+    <script src="js/bucketPickerUI.js"></script>
+    <script>
+        let selectedBucket = "";
+
+        function updateConfirmState() {
+            const nameOk = document.getElementById("saveBucketFileName").value.trim().length > 0;
+            document.getElementById("btnConfirmSaveBucket").disabled = !(selectedBucket && nameOk);
+        }
+
+        function init() {
+            // Nombre de fichero sugerido, recibido por query string desde quien
+            // abrió este diálogo (el propio diálogo no tiene acceso a
+            // Office.context.document, así que no puede calcularlo por sí mismo).
+            const params = new URLSearchParams(window.location.search);
+            const suggested = params.get("name") || "Informe_EPM.xlsx";
+            document.getElementById("saveBucketFileName").value = suggested;
+
+            document.getElementById("saveBucketFileName").addEventListener("input", updateConfirmState);
+
+            document.getElementById("btnCancelSaveBucket").addEventListener("click", () => {
+                try {
+                    Office.context.ui.messageParent(JSON.stringify({ cancelled: true }));
+                } catch (e) {
+                    window.close();
+                }
+            });
+
+            document.getElementById("btnConfirmSaveBucket").addEventListener("click", () => {
+                const objectName = document.getElementById("saveBucketFileName").value.trim();
+                if (!selectedBucket || !objectName) return;
+                try {
+                    Office.context.ui.messageParent(JSON.stringify({ bucket: selectedBucket, objectName }));
+                } catch (e) {
+                    console.error("No se pudo comunicar la selección al add-in:", e);
+                }
+            });
+
+            const picker = BucketPickerUI.mount({
+                projectSelect: document.getElementById("pickerProject"),
+                bucketSelect: document.getElementById("pickerBucket"),
+                statusEl: document.getElementById("pickerStatus"),
+                onBucketChange(bucket) {
+                    selectedBucket = bucket || "";
+                    updateConfirmState();
+                }
+            });
+            picker.init();
+        }
+
+        if (typeof Office !== "undefined") {
+            Office.onReady(init);
+        } else {
+            document.addEventListener("DOMContentLoaded", init);
+        }
+    </script>
+</body>
+</html>
