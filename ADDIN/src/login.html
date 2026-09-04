@@ -546,6 +546,10 @@
                                 <input type="text" id="bqBillingProject" placeholder="Ejemplo: MyBillingProject">
                                 <span class="hint">Si se deja vacío, se factura sobre el proyecto de los datos consultados.</span>
 
+                                <label for="bqExportBucket" style="margin-top:10px;">Bucket de exportación (opcional)</label>
+                                <input type="text" id="bqExportBucket" placeholder="Ejemplo: mi-bucket-epm">
+                                <span class="hint">Bucket de Google Cloud Storage donde el botón "Guardar en bucket" del panel guarda una copia del Excel activo. Requiere reconectar la sesión de Google si ya estabas conectado antes de tener esta opción (para conceder permiso de escritura en Cloud Storage).</span>
+
                                 <label for="bqRepoType" style="margin-top:10px;">Repositorio de modelos semánticos (opcional)</label>
                                 <select id="bqRepoType">
                                     <option value="">Ninguno</option>

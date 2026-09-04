@@ -1,0 +1,968 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp
+    xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+    xsi:type="TaskPaneApp">
+
+  <Id>b7e1a4d2-3c9f-4a2e-9b1a-1234567890ab</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Draco BI</ProviderName>
+  <DefaultLocale>es-ES</DefaultLocale>
+
+  <DisplayName DefaultValue="Draco BI"/>
+  <Description DefaultValue="Draco BI para Excel"/>
+
+  <IconUrl DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icon-32.png"/>
+  <HighResolutionIconUrl DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icon-80.png"/>
+
+  <SupportUrl DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN"/>
+
+  <AppDomains>
+    <AppDomain>https://tennistrackplus.github.io</AppDomain>
+    <AppDomain>https://accounts.google.com</AppDomain>
+    <AppDomain>https://oauth2.googleapis.com</AppDomain>
+	<AppDomain>https://HLRAFRV-RM53388.snowflakecomputing.com</AppDomain>
+  </AppDomains>
+
+  <Hosts>
+    <Host Name="Workbook"/>
+  </Hosts>
+
+  <DefaultSettings>
+    <SourceLocation DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/src/login.html"/>
+  </DefaultSettings>
+
+  <Permissions>ReadWriteDocument</Permissions>
+
+  <VersionOverrides
+      xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+      xsi:type="VersionOverridesV1_0">
+
+    <Requirements>
+      <bt:Sets DefaultMinVersion="1.1">
+        <bt:Set Name="AddinCommands" MinVersion="1.1"/>
+        <bt:Set Name="ContextMenuApi" MinVersion="1.1"/>
+      </bt:Sets>
+    </Requirements>
+
+    <Hosts>
+      <Host xsi:type="Workbook">
+
+        <DesktopFormFactor>
+
+          <FunctionFile resid="CommandsUrl"/>
+
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+
+            <CustomTab id="DracoTab">
+
+              <!-- ===================================================== -->
+              <!-- GRUPO: CONEXIÓN -->
+              <!-- ===================================================== -->
+
+              <Group id="ConexionGroup">
+                <Label resid="ConexionGroupLabel"/>
+
+                <Icon>
+                  <bt:Image size="16" resid="ConexionGroup16"/>
+                  <bt:Image size="32" resid="ConexionGroup32"/>
+                  <bt:Image size="80" resid="ConexionGroup80"/>
+                </Icon>
+
+                <Control xsi:type="Button" id="ConexionButton">
+
+                  <Label resid="ConexionButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="ConexionButtonLabel"/>
+                    <Description resid="ConexionButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="Conexion16"/>
+                    <bt:Image size="32" resid="Conexion32"/>
+                    <bt:Image size="80" resid="Conexion80"/>
+                  </Icon>
+
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>ConexionPane</TaskpaneId>
+                    <SourceLocation resid="LoginUrl"/>
+                  </Action>
+
+                </Control>
+              </Group>
+
+
+              <!-- ===================================================== -->
+              <!-- GRUPO: MODELO SEMÁNTICO -->
+              <!-- ===================================================== -->
+
+              <Group id="ModeloGroup">
+                <Label resid="ModeloGroupLabel"/>
+
+                <Icon>
+                  <bt:Image size="16" resid="ModeloGroup16"/>
+                  <bt:Image size="32" resid="ModeloGroup32"/>
+                  <bt:Image size="80" resid="ModeloGroup80"/>
+                </Icon>
+
+
+                <!-- CREAR -->
+
+                <Control xsi:type="Button" id="ModeloCrearButton">
+
+                  <Label resid="ModeloCrearButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="ModeloCrearButtonLabel"/>
+                    <Description resid="ModeloButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="ModeloCrear16"/>
+                    <bt:Image size="32" resid="ModeloCrear32"/>
+                    <bt:Image size="80" resid="ModeloCrear80"/>
+                  </Icon>
+
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>ModeloPane</TaskpaneId>
+                    <SourceLocation resid="ModeloUrl"/>
+                  </Action>
+
+                </Control>
+
+
+                <!-- ABRIR: abre directamente el diálogo independiente de
+                     importación LookML (Office Dialog API), sin depender
+                     de que el taskpane del modelo semántico esté abierto. -->
+
+                <Control xsi:type="Button" id="ModeloAbrirButton">
+
+                  <Label resid="ModeloAbrirButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="ModeloAbrirButtonLabel"/>
+                    <Description resid="ModeloAbrirButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="ModeloAbrir16"/>
+                    <bt:Image size="32" resid="ModeloAbrir32"/>
+                    <bt:Image size="80" resid="ModeloAbrir80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>abrirModeloSemantico</FunctionName>
+                  </Action>
+
+                </Control>
+
+
+                <!-- GUARDAR: abre directamente el diálogo independiente de
+                     exportación a LookML (Office Dialog API), sin depender
+                     de que el taskpane del modelo semántico esté abierto. -->
+
+                <Control xsi:type="Button" id="ModeloGuardarButton">
+
+                  <Label resid="ModeloGuardarButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="ModeloGuardarButtonLabel"/>
+                    <Description resid="ModeloGuardarButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="ModeloGuardar16"/>
+                    <bt:Image size="32" resid="ModeloGuardar32"/>
+                    <bt:Image size="80" resid="ModeloGuardar80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>guardarModeloSemantico</FunctionName>
+                  </Action>
+
+                </Control>
+
+              </Group>
+
+
+              <!-- ===================================================== -->
+              <!-- GRUPO: EDICIÓN -->
+              <!-- ===================================================== -->
+
+              <Group id="EdicionGroup">
+
+                <Label resid="EdicionGroupLabel"/>
+
+                <Icon>
+                  <bt:Image size="16" resid="EdicionGroup16"/>
+                  <bt:Image size="32" resid="EdicionGroup32"/>
+                  <bt:Image size="80" resid="EdicionGroup80"/>
+                </Icon>
+
+
+                <!-- CREAR INFORME -->
+
+                <Control xsi:type="Button" id="CrearInformeButton">
+
+                  <Label resid="CrearInformeButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="CrearInformeButtonLabel"/>
+                    <Description resid="EditarInfTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="InformeCrear16"/>
+                    <bt:Image size="32" resid="InformeCrear32"/>
+                    <bt:Image size="80" resid="InformeCrear80"/>
+                  </Icon>
+
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>Taskpane</TaskpaneId>
+                    <SourceLocation resid="TaskpaneUrl"/>
+                  </Action>
+
+                </Control>
+
+
+                <!-- ACTUALIZAR INFORME -->
+
+                <Control xsi:type="Button" id="ActualizarInformeButton">
+
+                  <Label resid="ActualizarInformeButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="ActualizarInformeButtonLabel"/>
+                    <Description resid="ActualizarInformeButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="ActualizarInforme16"/>
+                    <bt:Image size="32" resid="ActualizarInforme32"/>
+                    <bt:Image size="80" resid="ActualizarInforme80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>actualizar</FunctionName>
+                  </Action>
+
+                </Control>
+
+
+                <!-- RECONOCIMIENTO DE MIEMBROS -->
+
+                <Control xsi:type="Button" id="ReconocimientoMiembrosButton">
+
+                  <Label resid="ReconMiembrosLabel"/>
+
+                  <Supertip>
+                    <Title resid="ReconMiembrosLabel"/>
+                    <Description resid="ReconMiembrosTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="ReconocimientoOff16"/>
+                    <bt:Image size="32" resid="ReconocimientoOff32"/>
+                    <bt:Image size="80" resid="ReconocimientoOff80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>toggleMemberRecognition</FunctionName>
+                  </Action>
+
+                </Control>
+
+
+                <!-- DISTRIBUIR VALORES -->
+
+                <Control xsi:type="Button" id="DistribuirValoresButton">
+
+                  <Label resid="DistribuirValoresButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="DistribuirValoresButtonLabel"/>
+                    <Description resid="DistribuirValoresButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="DistribuirValores16"/>
+                    <bt:Image size="32" resid="DistribuirValores32"/>
+                    <bt:Image size="80" resid="DistribuirValores80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>abrirDistribuirValores</FunctionName>
+                  </Action>
+
+                </Control>
+
+              </Group>
+
+
+              <!-- ===================================================== -->
+              <!-- GRUPO: INFORME -->
+              <!-- ===================================================== -->
+
+              <Group id="InformeGroup">
+
+                <Label resid="InformeGroupLabel"/>
+
+                <Icon>
+                  <bt:Image size="16" resid="InformeGroup16"/>
+                  <bt:Image size="32" resid="InformeGroup32"/>
+                  <bt:Image size="80" resid="InformeGroup80"/>
+                </Icon>
+
+
+                <!-- COPIAR -->
+
+                <Control xsi:type="Button" id="CopiarInformeButton">
+
+                  <Label resid="CopiarInformeButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="CopiarInformeButtonLabel"/>
+                    <Description resid="CopiarInformeButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="InformeCopiar16"/>
+                    <bt:Image size="32" resid="InformeCopiar32"/>
+                    <bt:Image size="80" resid="InformeCopiar80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>comingSoon</FunctionName>
+                  </Action>
+
+                </Control>
+
+
+                <!-- PEGAR -->
+
+                <Control xsi:type="Button" id="PegarInformeButton">
+
+                  <Label resid="PegarInformeButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="PegarInformeButtonLabel"/>
+                    <Description resid="PegarInformeButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="InformePegar16"/>
+                    <bt:Image size="32" resid="InformePegar32"/>
+                    <bt:Image size="80" resid="InformePegar80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>comingSoon</FunctionName>
+                  </Action>
+
+                </Control>
+
+
+                <!-- ELIMINAR -->
+
+                <Control xsi:type="Button" id="EliminarInformeButton">
+
+                  <Label resid="EliminarInformeButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="EliminarInformeButtonLabel"/>
+                    <Description resid="EliminarInformeButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="InformeEliminar16"/>
+                    <bt:Image size="32" resid="InformeEliminar32"/>
+                    <bt:Image size="80" resid="InformeEliminar80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>comingSoon</FunctionName>
+                  </Action>
+
+                </Control>
+
+              </Group>
+
+
+              <!-- ===================================================== -->
+              <!-- GRUPO: CLOUD STORAGE -->
+              <!-- ===================================================== -->
+
+              <Group id="CloudGroup">
+
+                <Label resid="CloudGroupLabel"/>
+
+                <Icon>
+                  <bt:Image size="16" resid="CloudGroup16"/>
+                  <bt:Image size="32" resid="CloudGroup32"/>
+                  <bt:Image size="80" resid="CloudGroup80"/>
+                </Icon>
+
+                <!-- ABRIR BUCKET: lista los .xlsx del bucket configurado y
+                     permite descargar el elegido. -->
+
+                <Control xsi:type="Button" id="AbrirBucketButton">
+
+                  <Label resid="AbrirBucketButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="AbrirBucketButtonLabel"/>
+                    <Description resid="AbrirBucketButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="AbrirBucket16"/>
+                    <bt:Image size="32" resid="AbrirBucket32"/>
+                    <bt:Image size="80" resid="AbrirBucket80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>abrirDesdeBucket</FunctionName>
+                  </Action>
+
+                </Control>
+
+                <!-- GUARDAR EN BUCKET: sube el .xlsx activo (tal cual) al bucket
+                     de Google Cloud Storage configurado en la conexión BigQuery. -->
+
+                <Control xsi:type="Button" id="GuardarBucketButton">
+
+                  <Label resid="GuardarBucketButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="GuardarBucketButtonLabel"/>
+                    <Description resid="GuardarBucketButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="GuardarBucket16"/>
+                    <bt:Image size="32" resid="GuardarBucket32"/>
+                    <bt:Image size="80" resid="GuardarBucket80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>guardarExcelEnBucket</FunctionName>
+                  </Action>
+
+                </Control>
+
+              </Group>
+
+
+              <!-- ===================================================== -->
+              <!-- GRUPO: MÁS -->
+              <!-- ===================================================== -->
+
+              <Group id="MasGroup">
+
+                <Label resid="MasGroupLabel"/>
+
+                <Icon>
+                  <bt:Image size="16" resid="MasGroup16"/>
+                  <bt:Image size="32" resid="MasGroup32"/>
+                  <bt:Image size="80" resid="MasGroup80"/>
+                </Icon>
+
+                <Control xsi:type="Menu" id="OpcionesMenu">
+
+                  <Label resid="OpcionesButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="OpcionesButtonLabel"/>
+                    <Description resid="OpcionesButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="Opciones16"/>
+                    <bt:Image size="32" resid="Opciones32"/>
+                    <bt:Image size="80" resid="Opciones80"/>
+                  </Icon>
+
+                  <Items>
+
+                    <!-- PREFERENCIAS -->
+
+                    <Item id="PreferenciasItem">
+
+                      <Label resid="PreferenciasItemLabel"/>
+
+                      <Supertip>
+                        <Title resid="PreferenciasItemLabel"/>
+                        <Description resid="PreferenciasItemTooltip"/>
+                      </Supertip>
+
+                      <Icon>
+                        <bt:Image size="16" resid="ItemPreferencias16"/>
+                        <bt:Image size="32" resid="ItemPreferencias32"/>
+                        <bt:Image size="80" resid="ItemPreferencias80"/>
+                      </Icon>
+
+                      <Action xsi:type="ExecuteFunction">
+                        <FunctionName>comingSoon</FunctionName>
+                      </Action>
+
+                    </Item>
+
+
+                    <!-- DIAGNÓSTICO -->
+
+                    <Item id="DiagnosticoItem">
+
+                      <Label resid="DiagnosticoItemLabel"/>
+
+                      <Supertip>
+                        <Title resid="DiagnosticoItemLabel"/>
+                        <Description resid="DiagnosticoItemTooltip"/>
+                      </Supertip>
+
+                      <Icon>
+                        <bt:Image size="16" resid="ItemDiagnostico16"/>
+                        <bt:Image size="32" resid="ItemDiagnostico32"/>
+                        <bt:Image size="80" resid="ItemDiagnostico80"/>
+                      </Icon>
+
+                      <Action xsi:type="ExecuteFunction">
+                        <FunctionName>comingSoon</FunctionName>
+                      </Action>
+
+                    </Item>
+
+
+                    <!-- ACERCA DE -->
+
+                    <Item id="AcercaDeItem">
+
+                      <Label resid="AcercaDeItemLabel"/>
+
+                      <Supertip>
+                        <Title resid="AcercaDeItemLabel"/>
+                        <Description resid="AcercaDeItemTooltip"/>
+                      </Supertip>
+
+                      <Icon>
+                        <bt:Image size="16" resid="ItemAcercaDe16"/>
+                        <bt:Image size="32" resid="ItemAcercaDe32"/>
+                        <bt:Image size="80" resid="ItemAcercaDe80"/>
+                      </Icon>
+
+                      <Action xsi:type="ExecuteFunction">
+                        <FunctionName>comingSoon</FunctionName>
+                      </Action>
+
+                    </Item>
+
+                  </Items>
+
+                </Control>
+
+              </Group>
+
+              <Label resid="TabLabel"/>
+
+            </CustomTab>
+
+          </ExtensionPoint>
+
+
+          <!-- ===================================================== -->
+          <!-- MENÚ CONTEXTUAL (clic derecho sobre una celda) -->
+          <!-- ===================================================== -->
+
+          <ExtensionPoint xsi:type="ContextMenu">
+
+            <OfficeMenu id="ContextMenuCell">
+
+              <Control xsi:type="Menu" id="DracoContextMenuGroup">
+
+                <Label resid="TabLabel"/>
+
+                <Supertip>
+                  <Title resid="TabLabel"/>
+                  <Description resid="DistribuirValoresButtonTooltip"/>
+                </Supertip>
+
+                <Icon>
+                  <bt:Image size="16" resid="DistribuirValores16"/>
+                  <bt:Image size="32" resid="DistribuirValores32"/>
+                  <bt:Image size="80" resid="DistribuirValores80"/>
+                </Icon>
+
+                <Items>
+
+                  <Item id="DistribuirValoresContextItem">
+
+                    <Label resid="DistribuirValoresButtonLabel"/>
+
+                    <Supertip>
+                      <Title resid="DistribuirValoresButtonLabel"/>
+                      <Description resid="DistribuirValoresButtonTooltip"/>
+                    </Supertip>
+
+                    <Icon>
+                      <bt:Image size="16" resid="DistribuirValores16"/>
+                      <bt:Image size="32" resid="DistribuirValores32"/>
+                      <bt:Image size="80" resid="DistribuirValores80"/>
+                    </Icon>
+
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>abrirDistribuirValores</FunctionName>
+                    </Action>
+
+                  </Item>
+
+                </Items>
+
+              </Control>
+
+            </OfficeMenu>
+
+          </ExtensionPoint>
+
+        </DesktopFormFactor>
+
+      </Host>
+    </Hosts>
+
+
+    <!-- =============================================================== -->
+    <!-- RECURSOS -->
+    <!-- =============================================================== -->
+
+    <Resources>
+
+      <bt:Images>
+
+        <!-- CONEXIÓN -->
+
+        <bt:Image id="ConexionGroup16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-conexion-16.png"/>
+        <bt:Image id="ConexionGroup32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-conexion-32.png"/>
+        <bt:Image id="ConexionGroup80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-conexion-80.png"/>
+
+        <bt:Image id="Conexion16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-conexion-16.png"/>
+        <bt:Image id="Conexion32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-conexion-32.png"/>
+        <bt:Image id="Conexion80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-conexion-80.png"/>
+
+
+        <!-- MODELO SEMÁNTICO -->
+
+        <bt:Image id="ModeloGroup16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-modelo-16.png"/>
+        <bt:Image id="ModeloGroup32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-modelo-32.png"/>
+        <bt:Image id="ModeloGroup80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-modelo-80.png"/>
+
+        <bt:Image id="ModeloCrear16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-crear-16.png"/>
+        <bt:Image id="ModeloCrear32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-crear-32.png"/>
+        <bt:Image id="ModeloCrear80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-crear-80.png"/>
+
+        <bt:Image id="ModeloAbrir16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-abrir-16.png"/>
+        <bt:Image id="ModeloAbrir32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-abrir-32.png"/>
+        <bt:Image id="ModeloAbrir80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-abrir-80.png"/>
+
+        <bt:Image id="ModeloGuardar16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-guardar-16.png"/>
+        <bt:Image id="ModeloGuardar32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-guardar-32.png"/>
+        <bt:Image id="ModeloGuardar80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-guardar-80.png"/>
+
+
+        <!-- EDICIÓN -->
+
+        <bt:Image id="EdicionGroup16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-edicion-16.png"/>
+        <bt:Image id="EdicionGroup32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-edicion-32.png"/>
+        <bt:Image id="EdicionGroup80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-edicion-80.png"/>
+
+        <bt:Image id="InformeCrear16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-crear-16.png"/>
+        <bt:Image id="InformeCrear32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-crear-32.png"/>
+        <bt:Image id="InformeCrear80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-crear-80.png"/>
+
+        <bt:Image id="ActualizarInforme16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-actualizar-informe-16.png"/>
+        <bt:Image id="ActualizarInforme32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-actualizar-informe-32.png"/>
+        <bt:Image id="ActualizarInforme80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-actualizar-informe-80.png"/>
+
+        <bt:Image id="ReconocimientoOff16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-reconocimiento-off-16.png"/>
+        <bt:Image id="ReconocimientoOff32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-reconocimiento-off-32.png"/>
+        <bt:Image id="ReconocimientoOff80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-reconocimiento-off-80.png"/>
+
+        <bt:Image id="DistribuirValores16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-opciones-campo-16.png"/>
+        <bt:Image id="DistribuirValores32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-opciones-campo-32.png"/>
+        <bt:Image id="DistribuirValores80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-opciones-campo-80.png"/>
+
+
+        <!-- INFORME -->
+
+        <bt:Image id="InformeGroup16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-informe-16.png"/>
+        <bt:Image id="InformeGroup32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-informe-32.png"/>
+        <bt:Image id="InformeGroup80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-informe-80.png"/>
+
+        <bt:Image id="InformeCopiar16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-copiar-16.png"/>
+        <bt:Image id="InformeCopiar32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-copiar-32.png"/>
+        <bt:Image id="InformeCopiar80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-copiar-80.png"/>
+
+        <bt:Image id="InformePegar16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-pegar-16.png"/>
+        <bt:Image id="InformePegar32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-pegar-32.png"/>
+        <bt:Image id="InformePegar80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-pegar-80.png"/>
+
+        <bt:Image id="InformeEliminar16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-eliminar-16.png"/>
+        <bt:Image id="InformeEliminar32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-eliminar-32.png"/>
+        <bt:Image id="InformeEliminar80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-eliminar-80.png"/>
+
+
+        <!-- CLOUD STORAGE -->
+
+        <bt:Image id="CloudGroup16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-cloud-16.png"/>
+        <bt:Image id="CloudGroup32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-cloud-32.png"/>
+        <bt:Image id="CloudGroup80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-cloud-80.png"/>
+
+        <bt:Image id="GuardarBucket16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-guardar-bucket-16.png"/>
+        <bt:Image id="GuardarBucket32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-guardar-bucket-32.png"/>
+        <bt:Image id="GuardarBucket80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-guardar-bucket-80.png"/>
+
+        <bt:Image id="AbrirBucket16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-abrir-bucket-16.png"/>
+        <bt:Image id="AbrirBucket32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-abrir-bucket-32.png"/>
+        <bt:Image id="AbrirBucket80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-abrir-bucket-80.png"/>
+
+
+        <!-- MÁS / OPCIONES -->
+
+        <bt:Image id="MasGroup16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-mas-16.png"/>
+        <bt:Image id="MasGroup32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-mas-32.png"/>
+        <bt:Image id="MasGroup80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/group-mas-80.png"/>
+
+        <bt:Image id="Opciones16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-opciones-16.png"/>
+        <bt:Image id="Opciones32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-opciones-32.png"/>
+        <bt:Image id="Opciones80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-opciones-80.png"/>
+
+        <bt:Image id="ItemPreferencias16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/item-preferencias-16.png"/>
+        <bt:Image id="ItemPreferencias32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/item-preferencias-32.png"/>
+        <bt:Image id="ItemPreferencias80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/item-preferencias-80.png"/>
+
+        <bt:Image id="ItemDiagnostico16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/item-diagnostico-16.png"/>
+        <bt:Image id="ItemDiagnostico32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/item-diagnostico-32.png"/>
+        <bt:Image id="ItemDiagnostico80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/item-diagnostico-80.png"/>
+
+        <bt:Image id="ItemAcercaDe16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/item-acerca-de-16.png"/>
+        <bt:Image id="ItemAcercaDe32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/item-acerca-de-32.png"/>
+        <bt:Image id="ItemAcercaDe80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/item-acerca-de-80.png"/>
+
+      </bt:Images>
+
+
+      <!-- ============================================================= -->
+      <!-- URLS -->
+      <!-- ============================================================= -->
+
+      <bt:Urls>
+
+        <bt:Url
+          id="CommandsUrl"
+          DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/src/commands.html"/>
+
+        <bt:Url
+          id="LoginUrl"
+          DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/src/login.html"/>
+
+        <bt:Url
+          id="ModeloUrl"
+          DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/src/semantic_model.html"/>
+
+        <bt:Url
+          id="TaskpaneUrl"
+          DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/src/taskpane.html"/>
+
+      </bt:Urls>
+
+
+      <!-- ============================================================= -->
+      <!-- SHORT STRINGS -->
+      <!-- ============================================================= -->
+
+      <bt:ShortStrings>
+
+        <bt:String id="TabLabel" DefaultValue="Draco BI"/>
+
+        <bt:String id="ConexionGroupLabel" DefaultValue="Conexión"/>
+        <bt:String id="ConexionButtonLabel" DefaultValue="Conexión"/>
+
+        <bt:String id="ModeloGroupLabel" DefaultValue="Modelo semántico"/>
+        <bt:String id="ModeloCrearButtonLabel" DefaultValue="Crear modelo semántico"/>
+        <bt:String id="ModeloAbrirButtonLabel" DefaultValue="Abrir modelo semántico"/>
+        <bt:String id="ModeloGuardarButtonLabel" DefaultValue="Guardar modelo semántico"/>
+
+        <bt:String id="EdicionGroupLabel" DefaultValue="Edición"/>
+        <bt:String id="CrearInformeButtonLabel" DefaultValue="Crear informe"/>
+        <bt:String id="ActualizarInformeButtonLabel" DefaultValue="Actualizar informe"/>
+
+        <bt:String id="ReconMiembrosLabel" DefaultValue="Reconoc. de miembros"/>
+        <bt:String id="DistribuirValoresButtonLabel" DefaultValue="Distribuir valores"/>
+
+        <bt:String id="InformeGroupLabel" DefaultValue="Informe"/>
+        <bt:String id="CopiarInformeButtonLabel" DefaultValue="Copiar informe"/>
+        <bt:String id="PegarInformeButtonLabel" DefaultValue="Pegar informe"/>
+        <bt:String id="EliminarInformeButtonLabel" DefaultValue="Eliminar informe"/>
+
+        <bt:String id="CloudGroupLabel" DefaultValue="Cloud Storage"/>
+        <bt:String id="AbrirBucketButtonLabel" DefaultValue="Abrir bucket"/>
+        <bt:String id="GuardarBucketButtonLabel" DefaultValue="Guardar en bucket"/>
+
+        <bt:String id="MasGroupLabel" DefaultValue="Más"/>
+        <bt:String id="OpcionesButtonLabel" DefaultValue="Opciones"/>
+        <bt:String id="PreferenciasItemLabel" DefaultValue="Preferencias"/>
+        <bt:String id="DiagnosticoItemLabel" DefaultValue="Diagnóstico"/>
+        <bt:String id="AcercaDeItemLabel" DefaultValue="Acerca de"/>
+
+      </bt:ShortStrings>
+
+
+      <!-- ============================================================= -->
+      <!-- LONG STRINGS -->
+      <!-- ============================================================= -->
+
+      <bt:LongStrings>
+
+        <bt:String
+          id="ConexionButtonTooltip"
+          DefaultValue="Abre el panel de conexión y fuentes de datos"/>
+
+        <bt:String
+          id="ModeloButtonTooltip"
+          DefaultValue="Abre el panel para crear o editar el modelo semántico (modelo en estrella)"/>
+
+        <bt:String
+          id="ModeloAbrirButtonTooltip"
+          DefaultValue="Abre un modelo semántico existente desde LookML (.lkml), en un repositorio o en local"/>
+
+        <bt:String
+          id="ModeloGuardarButtonTooltip"
+          DefaultValue="Guarda el modelo semántico actual como LookML (.lkml), en un repositorio o en local"/>
+
+        <bt:String
+          id="EditarInfTooltip"
+          DefaultValue="Abre el panel para editar el diseño del informe (filtros, filas y columnas)"/>
+
+        <bt:String
+          id="ActualizarInformeButtonTooltip"
+          DefaultValue="Actualiza el informe ejecutando la consulta y escribiendo los resultados en Excel"/>
+
+        <bt:String
+          id="ReconMiembrosTooltip"
+          DefaultValue="Activa o desactiva el reconocimiento de miembros al escribir valores en el informe"/>
+
+        <bt:String
+          id="DistribuirValoresButtonTooltip"
+          DefaultValue="Distribuye o redistribuye un importe entre las celdas seleccionadas del informe (equitativo, proporcional o manual)"/>
+
+        <bt:String
+          id="CopiarInformeButtonTooltip"
+          DefaultValue="Copiar informe (próximamente)"/>
+
+        <bt:String
+          id="PegarInformeButtonTooltip"
+          DefaultValue="Pegar informe (próximamente)"/>
+
+        <bt:String
+          id="EliminarInformeButtonTooltip"
+          DefaultValue="Eliminar informe (próximamente)"/>
+
+        <bt:String
+          id="GuardarBucketButtonTooltip"
+          DefaultValue="Sube una copia del Excel activo (tal cual está guardado) al bucket de Google Cloud Storage configurado en la conexión BigQuery"/>
+
+        <bt:String
+          id="AbrirBucketButtonTooltip"
+          DefaultValue="Lista los archivos Excel del bucket de Google Cloud Storage configurado y permite descargar el elegido"/>
+
+        <bt:String
+          id="OpcionesButtonTooltip"
+          DefaultValue="Preferencias, diagnóstico y acerca de Draco BI"/>
+
+        <bt:String
+          id="PreferenciasItemTooltip"
+          DefaultValue="Preferencias del complemento (próximamente)"/>
+
+        <bt:String
+          id="DiagnosticoItemTooltip"
+          DefaultValue="Herramientas de diagnóstico (próximamente)"/>
+
+        <bt:String
+          id="AcercaDeItemTooltip"
+          DefaultValue="Información sobre Draco BI (próximamente)"/>
+
+      </bt:LongStrings>
+
+    </Resources>
+
+  </VersionOverrides>
+
+</OfficeApp>
