@@ -492,8 +492,18 @@ const LoginApp = {
 
             if (response.provider === "bigquery") {
                 if (response.status === "success") {
-                    localStorage.setItem("bigquery_access_token", response.token);
-                    localStorage.setItem("bigquery_token_expires", Date.now() + (parseInt(response.expiresIn, 10) * 1000));
+                    // BQ.setToken guarda el token en localStorage Y en
+                    // Office.context.document.settings, para que también lo
+                    // vea el runtime aislado de los botones del ribbon
+                    // (commands.html) cuando se pulse "Abrir bucket" /
+                    // "Guardar en bucket" (ver bigquery.js).
+                    const expiresAt = Date.now() + (parseInt(response.expiresIn, 10) * 1000);
+                    if (window.BQ && typeof BQ.setToken === "function") {
+                        BQ.setToken(response.token, expiresAt);
+                    } else {
+                        localStorage.setItem("bigquery_access_token", response.token);
+                        localStorage.setItem("bigquery_token_expires", expiresAt);
+                    }
                     Provider.setKey("bigquery");
                     this.showAlert("¡Conexión con Google BigQuery establecida con éxito!");
                     this.switchView("list");
