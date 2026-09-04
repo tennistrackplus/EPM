@@ -55,35 +55,13 @@ function guardarModeloSemantico(event) {
  * @param {Office.AddinCommands.Event} event
  */
 
-
-
 /**
- * VERSIÓN TEMPORAL DE DIAGNÓSTICO de abrirDesdeBucket.
- * Sustituye la función original en commands.js por esta, prueba el botón
- * "Abrir bucket" una vez, mira lo que aparece en la celda A1 de la hoja
- * activa, y cuéntamelo. Luego deshaz el cambio (o pídeme que te devuelva
- * la versión original).
+ * Botón de ribbon "Abrir bucket" (AbrirBucketButton).
+ * Versión limpia (sin diagnóstico) — pega esto sustituyendo tanto la
+ * versión original como la de depuración que te pasé antes.
  */
 function abrirDesdeBucket(event) {
     try {
-        // --- DIAGNÓSTICO TEMPORAL: escribe en A1 lo que ve este runtime ---
-        const diag = {
-            hasBQ: !!window.BQ,
-            token: (window.BQ && typeof BQ.getToken === "function") ? BQ.getToken() : "sin BQ.getToken",
-            hasDocSettings: !!(typeof Office !== "undefined" && Office.context && Office.context.document && Office.context.document.settings),
-            settingsToken: (typeof Office !== "undefined" && Office.context && Office.context.document && Office.context.document.settings)
-                ? Office.context.document.settings.get("epm_bq_token")
-                : "sin document.settings"
-        };
-        if (typeof Excel !== "undefined") {
-            Excel.run(function (context) {
-                const sheet = context.workbook.worksheets.getActiveWorksheet();
-                sheet.getRange("A1").values = [[JSON.stringify(diag)]];
-                return context.sync();
-            }).catch(function (e) { console.error("Error escribiendo diagnóstico:", e); });
-        }
-        // --- FIN DIAGNÓSTICO TEMPORAL ---
-
         const url = new URL("bucketBrowser.html", window.location.href);
         const sessionParams = window.BQ ? BQ.getSessionQueryParams() : "";
         if (sessionParams) url.search = sessionParams;
@@ -101,6 +79,8 @@ function abrirDesdeBucket(event) {
         if (event) event.completed();
     }
 }
+
+
 
 /**
  * Botón de ribbon "Guardar en bucket" (GuardarBucketButton).
