@@ -32,6 +32,45 @@ const GCS = {
     },
 
     /**
+     * Lista los buckets de Cloud Storage visibles en un proyecto GCP dado
+     * (requiere que el usuario tenga permiso storage.buckets.list en ese
+     * proyecto). Devuelve un array de nombres de bucket, ordenado alfabéticamente.
+     */
+    async listBuckets(projectId) {
+        const token = BQ.getToken();
+        if (!token) {
+            const err = new Error("Sesión de Google/BigQuery no válida o expirada. Inicia sesión de nuevo.");
+            err.code = "NO_AUTH";
+            throw err;
+        }
+        if (!projectId) {
+            throw new Error("Falta indicar el proyecto de Google Cloud.");
+        }
+
+        const names = [];
+        let pageToken = "";
+        do {
+            let url = `${this.API_BASE}?project=${encodeURIComponent(projectId)}` +
+                `&fields=items(name),nextPageToken&maxResults=200`;
+            if (pageToken) url += `&pageToken=${encodeURIComponent(pageToken)}`;
+
+            const response = await fetch(url, {
+                headers: { "Authorization": `Bearer ${token}` }
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || data.error) {
+                const msg = (data.error && data.error.message) || `Error HTTP ${response.status}`;
+                throw new Error(msg);
+            }
+            (data.items || []).forEach(b => names.push(b.name));
+            pageToken = data.nextPageToken || "";
+        } while (pageToken);
+
+        names.sort((a, b) => a.localeCompare(b));
+        return names;
+    },
+
+    /**
      * Lista los objetos .xlsx/.xlsm del bucket configurado (opcionalmente bajo
      * un prefijo/carpeta). Devuelve un array de { name, size, updated } ordenado
      * por fecha de modificación descendente (más recientes primero).
