@@ -91,6 +91,33 @@ const BQ = {
         return !!this.getToken();
     },
 
+    // ---------------------------------------------------------
+    // Los diálogos independientes (Office.context.ui.displayDialogAsync,
+    // p.ej. bucketBrowser.html / saveBucket.html) se abren en su propia
+    // ventana/proceso y, en varias plataformas de Office (sobre todo
+    // Office de escritorio), NO comparten localStorage con el panel de
+    // tareas que los abrió. Sin esto, el diálogo ve "no conectado" aunque
+    // el usuario sí lo esté en el panel. Para evitarlo, quien abre el
+    // diálogo añade el token vigente a la URL (ver getSessionQueryParams),
+    // y el propio diálogo lo copia a SU localStorage nada más cargar
+    // (ver hydrateSessionFromDialogParams), antes de comprobar isConnected().
+    // ---------------------------------------------------------
+    getSessionQueryParams() {
+        const token = localStorage.getItem("bigquery_access_token");
+        const expires = localStorage.getItem("bigquery_token_expires");
+        if (!token || !expires) return "";
+        return `epmTok=${encodeURIComponent(token)}&epmExp=${encodeURIComponent(expires)}`;
+    },
+
+    hydrateSessionFromDialogParams(searchParams) {
+        const token = searchParams.get("epmTok");
+        const expires = searchParams.get("epmExp");
+        if (token && expires) {
+            localStorage.setItem("bigquery_access_token", token);
+            localStorage.setItem("bigquery_token_expires", expires);
+        }
+    },
+
     logout() {
         localStorage.removeItem("bigquery_access_token");
         localStorage.removeItem("bigquery_token_expires");

@@ -57,6 +57,12 @@ function guardarModeloSemantico(event) {
 function abrirDesdeBucket(event) {
     try {
         const url = new URL("bucketBrowser.html", window.location.href);
+        // Ver BQ.getSessionQueryParams(): el diálogo se abre en su propia
+        // ventana y puede no compartir localStorage con este runtime, así
+        // que le pasamos el token vigente por la URL para que no pida
+        // conectarse de nuevo estando ya conectado.
+        const sessionParams = window.BQ ? BQ.getSessionQueryParams() : "";
+        if (sessionParams) url.search = sessionParams;
         Office.context.ui.displayDialogAsync(url.href, { height: 55, width: 40, displayInIframe: false }, (asyncResult) => {
             if (asyncResult.status === Office.AsyncResultStatus.Failed) {
                 console.error("No se pudo abrir el diálogo del bucket:", asyncResult.error.message);

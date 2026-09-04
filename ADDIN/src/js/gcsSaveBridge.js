@@ -22,10 +22,19 @@
      */
     function openSaveBucketDialog(onSelected) {
         const suggested = (window.GCS && GCS.getSuggestedFileName && GCS.getSuggestedFileName()) || "Informe_EPM.xlsx";
-        const url = new URL(`saveBucket.html?name=${encodeURIComponent(suggested)}`, window.location.href).href;
+        const url = new URL("saveBucket.html", window.location.href);
+        url.searchParams.set("name", suggested);
+        // Ver BQ.getSessionQueryParams(): el diálogo se abre en su propia
+        // ventana y puede no compartir localStorage con este runtime, así
+        // que le pasamos el token vigente por la URL para que no pida
+        // conectarse de nuevo estando ya conectado.
+        const sessionParams = window.BQ ? BQ.getSessionQueryParams() : "";
+        if (sessionParams) {
+            new URLSearchParams(sessionParams).forEach((value, key) => url.searchParams.set(key, value));
+        }
 
         Office.context.ui.displayDialogAsync(
-            url,
+            url.href,
             { height: 55, width: 40, displayInIframe: false },
             (asyncResult) => {
                 if (asyncResult.status === Office.AsyncResultStatus.Failed) {
