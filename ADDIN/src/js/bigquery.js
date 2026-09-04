@@ -290,3 +290,10 @@ const BQ = {
             .replace(/^(\d)/, "N$1");
     }
 };
+
+// IMPORTANTE: el resto de módulos (commands.js, login.js, gcsSaveBridge.js,
+// bucketPickerUI.js) comprueban "window.BQ" antes de usarlo. Sin esta línea,
+// "const BQ = {...}" de arriba NO cuelga de window (a diferencia de "var"),
+// así que todos esos "window.BQ ? ... : ''" evaluaban siempre a falso, sin
+// dar ningún error visible — el origen real de "Conéctate primero".
+window.BQ = BQ;
