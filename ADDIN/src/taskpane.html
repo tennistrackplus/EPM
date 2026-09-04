@@ -24,6 +24,7 @@
             <div style="display:flex; align-items:center; gap:6px;">
                 <span id="autoStatus" style="font-size: var(--fs-sm, 11px); color:#7045A9; min-width: 90px;"></span>
                 <button id="btnAddReport" class="btn-primary" style="padding:6px 14px; font-size: var(--fs-sm);">Añadir informe</button>
+                <button id="btnAddFilterRange" class="btn-secondary" style="padding:6px 14px; font-size: var(--fs-sm);" title="Crea un rango de filtro sobre la celda seleccionada en Excel">Añadir filtro</button>
                 <button id="btnRefreshAll" class="icon-button" title="Refrescar todos los informes">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M8 2.5a5.5 5.5 0 100 11 5.5 5.5 0 004.86-2.93.75.75 0 10-1.32-.71A4 4 0 118 4v1.75L10.5 3.5 8 1.25V2.5z"/>
@@ -327,6 +328,42 @@
         </div>
     </div>
 
+    <!-- Modal "Añadir filtro": crea un rango con nombre sobre la celda que
+         esté seleccionada en Excel en ese momento. La celda se queda vacía
+         (sin escribir nada todavía); el usuario elige los valores más
+         adelante haciendo clic sobre esa celda, lo que reabre el mismo
+         selector que usa la zona "Filtros" del diseño del informe. -->
+    <div id="addFilterRangeModal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3>Añadir filtro</h3>
+                <button id="closeAddFilterRangeModalBtn" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="properties-form">
+                    <p style="margin:0 0 12px; font-size: var(--fs-sm, 11px); color:#605e5c;">
+                        Se creará un rango con nombre sobre la celda que tengas
+                        seleccionada ahora mismo en Excel. Más adelante, haz doble
+                        clic sobre esa celda para elegir los valores del filtro
+                        (los valores excluidos se pintarán en granate).
+                    </p>
+                    <label class="form-row">
+                        Dimensión / campo
+                        <select id="selAddFilterDimension"></select>
+                    </label>
+                    <label class="form-row">
+                        Informe
+                        <select id="selAddFilterReport"></select>
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btnCancelAddFilterRange" class="btn-secondary">Cancelar</button>
+                <button id="btnConfirmAddFilterRange" class="btn-primary">Añadir</button>
+            </div>
+        </div>
+    </div>
+
     <script src="js/config.js"></script>
     <script src="js/bigquery.js"></script>
     <script src="js/gcsExport.js"></script>
@@ -334,6 +371,7 @@
     <script src="js/provider.js"></script>
     <script src="js/semanticModelStore.js"></script>
     <script src="js/reportStore.js"></script>
+    <script src="js/filterRangeStore.js"></script>
     <script src="js/excelService.js"></script>
     <script src="js/filterModal.js"></script>
     <script src="js/distributeValues.js"></script>
