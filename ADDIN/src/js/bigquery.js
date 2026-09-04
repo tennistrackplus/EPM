@@ -34,6 +34,17 @@ const BQ = {
     // Excel activo al pulsar "Guardar en bucket" (ver js/gcsExport.js).
     // Se guarda junto al resto de config de la conexión BigQuery.
     // ---------------------------------------------------------
+    getExportProject() {
+        return localStorage.getItem("bq_export_project") || "";
+    },
+    setExportProject(v) {
+        if (v) {
+            localStorage.setItem("bq_export_project", String(v).trim());
+        } else {
+            localStorage.removeItem("bq_export_project");
+        }
+    },
+
     getExportBucket() {
         return localStorage.getItem("bq_export_bucket") || "";
     },

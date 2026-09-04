@@ -264,6 +264,24 @@ const GCS = {
      */
     async saveActiveWorkbookToBucket(objectName) {
         const bucket = this._requireBucket();
+        return await this.saveActiveWorkbookToBucketNamed(bucket, objectName);
+    },
+
+    /**
+     * Igual que saveActiveWorkbookToBucket, pero recibe el bucket de forma
+     * explícita (elegido por el usuario en el diálogo "Guardar en bucket",
+     * ver saveBucket.html + js/gcsSaveBridge.js) en vez de leerlo de la
+     * conexión configurada.
+     */
+    async saveActiveWorkbookToBucketNamed(bucket, objectName) {
+        if (!BQ.isConnected()) {
+            const err = new Error("No hay una sesión de Google/BigQuery activa. Conéctate primero desde \"Conexiones\".");
+            err.code = "NO_AUTH";
+            throw err;
+        }
+        if (!bucket) {
+            throw new Error("Falta indicar el bucket de Cloud Storage donde guardar el archivo.");
+        }
 
         const bytes = await this.getWorkbookBytes();
         const name = objectName || this.getSuggestedFileName();

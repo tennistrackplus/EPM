@@ -74,27 +74,15 @@ function abrirDesdeBucket(event) {
 
 /**
  * Botón de ribbon "Guardar en bucket" (GuardarBucketButton).
- * Sube el .xlsx activo (tal cual está guardado) al bucket de Google Cloud
- * Storage configurado en la conexión BigQuery (BQ.getExportBucket(), ver
- * "Bucket de exportación" en el panel de Conexión). Como es un botón de
- * ribbon sin taskpane propio, el resultado se muestra en un pequeño
- * diálogo (uploadStatus.html) en vez de un alert() bloqueante.
+ * Abre primero el diálogo de selección de proyecto/bucket (saveBucket.html,
+ * ver js/gcsSaveBridge.js) y, con esa elección, sube el .xlsx activo (tal
+ * cual está guardado) al bucket elegido. Como es un botón de ribbon sin
+ * taskpane propio, el resultado se muestra en un pequeño diálogo
+ * (uploadStatus.html) en vez de un alert() bloqueante.
  * @param {Office.AddinCommands.Event} event
  */
-async function guardarExcelEnBucket(event) {
-    let ok = false;
-    let msg = "";
-    try {
-        if (!window.GCS) {
-            throw new Error("No se encontró el módulo de exportación a Cloud Storage (js/gcsExport.js).");
-        }
-        const result = await window.GCS.saveActiveWorkbookToBucket();
-        ok = true;
-        msg = `Archivo subido correctamente a gs://${result.bucket}/${result.name}`;
-    } catch (error) {
-        console.error("Error al subir el Excel a Cloud Storage:", error);
-        msg = (error && error.message) ? error.message : String(error);
-    } finally {
+function guardarExcelEnBucket(event) {
+    function showResult(ok, msg) {
         try {
             const url = new URL("uploadStatus.html", window.location.href);
             url.searchParams.set("ok", ok ? "1" : "0");
@@ -111,7 +99,38 @@ async function guardarExcelEnBucket(event) {
         } catch (dialogError) {
             console.error("No se pudo mostrar el resultado de la subida a Cloud Storage:", dialogError);
         }
+    }
+
+    let eventCompleted = false;
+    function completeEventOnce() {
+        if (eventCompleted) return;
+        eventCompleted = true;
         if (event) event.completed();
+    }
+
+    try {
+        if (!window.GCS || !window.GcsSaveBridge) {
+            throw new Error("No se encontró el módulo de exportación a Cloud Storage (js/gcsExport.js o js/gcsSaveBridge.js).");
+        }
+        window.GcsSaveBridge.openSaveBucketDialog(async ({ bucket, objectName }) => {
+            try {
+                const result = await window.GCS.saveActiveWorkbookToBucketNamed(bucket, objectName);
+                showResult(true, `Archivo subido correctamente a gs://${result.bucket}/${result.name}`);
+            } catch (error) {
+                console.error("Error al subir el Excel a Cloud Storage:", error);
+                showResult(false, (error && error.message) ? error.message : String(error));
+            } finally {
+                completeEventOnce();
+            }
+        });
+        // El diálogo de selección se muestra de forma asíncrona; si el
+        // usuario cancela o tarda demasiado, no hay callback y hay que
+        // completar el evento del ribbon igualmente para no dejarlo "colgado".
+        setTimeout(completeEventOnce, 120000);
+    } catch (error) {
+        console.error("Error al abrir el selector de bucket:", error);
+        showResult(false, (error && error.message) ? error.message : String(error));
+        completeEventOnce();
     }
 }
 

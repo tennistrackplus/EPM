@@ -771,35 +771,39 @@ const TaskPaneApp = {
     },
 
     /**
-     * Sube una copia del Excel activo (tal cual está guardado) al bucket
-     * de Google Cloud Storage configurado en la conexión de BigQuery.
-     * Ver js/gcsExport.js (GCS.saveActiveWorkbookToBucket).
+     * Abre el selector de proyecto/bucket (saveBucket.html, ver
+     * js/gcsSaveBridge.js) y, con esa elección, sube una copia del Excel
+     * activo (tal cual está guardado) al bucket elegido.
+     * Ver js/gcsExport.js (GCS.saveActiveWorkbookToBucketNamed).
      */
-    async saveWorkbookToBucket() {
-        if (!window.GCS) {
-            alert("No se encontró el módulo de exportación a Cloud Storage (js/gcsExport.js).");
+    saveWorkbookToBucket() {
+        if (!window.GCS || !window.GcsSaveBridge) {
+            alert("No se encontró el módulo de exportación a Cloud Storage (js/gcsExport.js o js/gcsSaveBridge.js).");
             return;
         }
 
         const btn = document.getElementById("btnSaveToBucket");
-        if (btn) btn.disabled = true;
-        this.setAutoStatus("Subiendo a Cloud Storage…");
 
-        try {
-            const result = await window.GCS.saveActiveWorkbookToBucket();
-            this.setAutoStatus("Guardado en el bucket ✓");
-            alert(`Archivo subido correctamente a gs://${result.bucket}/${result.name}`);
-            setTimeout(() => {
-                const el = document.getElementById("autoStatus");
-                if (el && el.innerText === "Guardado en el bucket ✓") el.innerText = "";
-            }, 2500);
-        } catch (err) {
-            console.error("Error al subir el Excel a Cloud Storage:", err);
-            this.setAutoStatus("Error al subir");
-            alert("Error al subir el archivo a Cloud Storage: " + (err.message || err));
-        } finally {
-            if (btn) btn.disabled = false;
-        }
+        window.GcsSaveBridge.openSaveBucketDialog(async ({ bucket, objectName }) => {
+            if (btn) btn.disabled = true;
+            this.setAutoStatus("Subiendo a Cloud Storage…");
+
+            try {
+                const result = await window.GCS.saveActiveWorkbookToBucketNamed(bucket, objectName);
+                this.setAutoStatus("Guardado en el bucket ✓");
+                alert(`Archivo subido correctamente a gs://${result.bucket}/${result.name}`);
+                setTimeout(() => {
+                    const el = document.getElementById("autoStatus");
+                    if (el && el.innerText === "Guardado en el bucket ✓") el.innerText = "";
+                }, 2500);
+            } catch (err) {
+                console.error("Error al subir el Excel a Cloud Storage:", err);
+                this.setAutoStatus("Error al subir");
+                alert("Error al subir el archivo a Cloud Storage: " + (err.message || err));
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        });
     },
 
     /* -------------------------------------------------------------

@@ -79,26 +79,6 @@ const LoginApp = {
             this.saveConnection();
         });
 
-        // Explorador de buckets de Cloud Storage (proyecto -> bucket)
-        document.getElementById("btnBrowseBuckets").addEventListener("click", () => {
-            this.openBucketBrowser();
-        });
-        document.getElementById("btnCancelBrowseBuckets").addEventListener("click", () => {
-            this.closeBucketBrowser();
-        });
-        document.getElementById("bqBrowseProject").addEventListener("change", (e) => {
-            this.loadBucketsForProject(e.target.value);
-        });
-        document.getElementById("bqBrowseBucket").addEventListener("change", (e) => {
-            document.getElementById("btnUseBucket").disabled = !e.target.value;
-        });
-        document.getElementById("btnUseBucket").addEventListener("click", () => {
-            const bucket = document.getElementById("bqBrowseBucket").value;
-            if (!bucket) return;
-            document.getElementById("bqExportBucket").value = bucket;
-            this.closeBucketBrowser();
-        });
-
         // Selector de origen de datos dentro de la vista "crear"
         document.querySelectorAll("#viewCreate .connector-card").forEach(card => {
             card.addEventListener("click", () => {
@@ -270,7 +250,6 @@ const LoginApp = {
         const cfg = conn.config || {};
         if (conn.provider === "bigquery") {
             BQ.setBillingProject(cfg.billingProjectId || "");
-            BQ.setExportBucket(cfg.exportBucket || "");
             BQ.setSemanticRepo(cfg.semanticRepo || { type: "", url: "" });
         } else if (conn.provider === "snowflake") {
             SF.setAccount(cfg.account || "");
@@ -289,7 +268,6 @@ const LoginApp = {
 
         document.getElementById("connName").value = "";
         document.getElementById("bqBillingProject").value = "";
-        document.getElementById("bqExportBucket").value = "";
         document.getElementById("bqRepoType").value = "";
         document.getElementById("bqRepoUrl").value = "";
         document.getElementById("bqRepoBranch").value = "";
@@ -299,7 +277,6 @@ const LoginApp = {
         document.getElementById("sfDatabase").value = "";
         document.getElementById("sfRole").value = "";
         document.querySelectorAll("#viewCreate .connector-card").forEach(c => c.classList.remove("selected"));
-        this.closeBucketBrowser();
 
         const title = document.getElementById("createTitle");
         const saveBtn = document.getElementById("btnSaveConnection");
@@ -314,7 +291,6 @@ const LoginApp = {
             const cfg = conn.config || {};
             if (conn.provider === "bigquery") {
                 document.getElementById("bqBillingProject").value = cfg.billingProjectId || "";
-                document.getElementById("bqExportBucket").value = cfg.exportBucket || "";
                 document.getElementById("bqRepoType").value = (cfg.semanticRepo && cfg.semanticRepo.type) || "";
                 document.getElementById("bqRepoUrl").value = (cfg.semanticRepo && cfg.semanticRepo.url) || "";
                 document.getElementById("bqRepoBranch").value = (cfg.semanticRepo && cfg.semanticRepo.branch) || "";
@@ -359,7 +335,6 @@ const LoginApp = {
         if (this.selectedProvider === "bigquery") {
             return {
                 billingProjectId: document.getElementById("bqBillingProject").value.trim(),
-                exportBucket: document.getElementById("bqExportBucket").value.trim(),
                 semanticRepo: {
                     type: document.getElementById("bqRepoType").value,
                     url: document.getElementById("bqRepoUrl").value.trim(),
@@ -377,92 +352,6 @@ const LoginApp = {
             };
         }
         return {};
-    },
-
-    // =====================================================================
-    // Explorador de buckets de Cloud Storage (proyecto -> bucket), usado
-    // por el campo "Bucket de exportación" de la conexión BigQuery.
-    // =====================================================================
-    setBucketBrowserStatus(msg, isError = false) {
-        const el = document.getElementById("bucketBrowserStatus");
-        if (!el) return;
-        el.textContent = msg || "";
-        el.classList.toggle("error", !!isError);
-    },
-
-    async openBucketBrowser() {
-        if (!BQ.isConnected()) {
-            this.showAlert("Conéctate primero con esta conexión de Google/BigQuery para poder explorar tus proyectos y buckets. Mientras tanto puedes escribir el nombre del bucket a mano.", true);
-            return;
-        }
-
-        const panel = document.getElementById("bucketBrowserPanel");
-        const projectSelect = document.getElementById("bqBrowseProject");
-        const bucketSelect = document.getElementById("bqBrowseBucket");
-
-        panel.classList.remove("hidden");
-        projectSelect.innerHTML = `<option value="">Cargando proyectos…</option>`;
-        projectSelect.disabled = true;
-        bucketSelect.innerHTML = `<option value="">Selecciona primero un proyecto…</option>`;
-        bucketSelect.disabled = true;
-        document.getElementById("btnUseBucket").disabled = true;
-        this.setBucketBrowserStatus("");
-
-        try {
-            const projects = await BQ.listProjects();
-            if (!projects.length) {
-                projectSelect.innerHTML = `<option value="">No se encontraron proyectos</option>`;
-                this.setBucketBrowserStatus("No se encontró ningún proyecto de Google Cloud visible para esta cuenta.", true);
-                return;
-            }
-            projectSelect.innerHTML = `<option value="">Selecciona un proyecto…</option>` +
-                projects.map(p => {
-                    const id = p.id || (p.projectReference && p.projectReference.projectId);
-                    const name = p.friendlyName || id;
-                    return `<option value="${this.escapeHtml(id)}">${this.escapeHtml(name)}${name !== id ? ` (${this.escapeHtml(id)})` : ""}</option>`;
-                }).join("");
-            projectSelect.disabled = false;
-        } catch (err) {
-            console.error("Error al listar proyectos de Google Cloud:", err);
-            projectSelect.innerHTML = `<option value="">Error al cargar proyectos</option>`;
-            this.setBucketBrowserStatus("Error al listar proyectos: " + (err.message || err), true);
-        }
-    },
-
-    closeBucketBrowser() {
-        document.getElementById("bucketBrowserPanel").classList.add("hidden");
-        this.setBucketBrowserStatus("");
-    },
-
-    async loadBucketsForProject(projectId) {
-        const bucketSelect = document.getElementById("bqBrowseBucket");
-        document.getElementById("btnUseBucket").disabled = true;
-
-        if (!projectId) {
-            bucketSelect.innerHTML = `<option value="">Selecciona primero un proyecto…</option>`;
-            bucketSelect.disabled = true;
-            return;
-        }
-
-        bucketSelect.innerHTML = `<option value="">Cargando buckets…</option>`;
-        bucketSelect.disabled = true;
-        this.setBucketBrowserStatus("");
-
-        try {
-            const buckets = await GCS.listBuckets(projectId);
-            if (!buckets.length) {
-                bucketSelect.innerHTML = `<option value="">Este proyecto no tiene buckets</option>`;
-                this.setBucketBrowserStatus("Este proyecto no tiene ningún bucket de Cloud Storage (o no tienes permiso para verlos).", true);
-                return;
-            }
-            bucketSelect.innerHTML = `<option value="">Selecciona un bucket…</option>` +
-                buckets.map(name => `<option value="${this.escapeHtml(name)}">${this.escapeHtml(name)}</option>`).join("");
-            bucketSelect.disabled = false;
-        } catch (err) {
-            console.error("Error al listar buckets:", err);
-            bucketSelect.innerHTML = `<option value="">Error al cargar buckets</option>`;
-            this.setBucketBrowserStatus("Error al listar buckets: " + (err.message || err), true);
-        }
     },
 
     validateConfig(provider, config) {
