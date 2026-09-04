@@ -162,31 +162,22 @@
     }
 
     /**
-     * Nombre de hoja de Excel válido a partir del nombre del informe: quita
-     * los caracteres que Excel no admite en un nombre de pestaña
-     * (\ / ? * [ ] :) y recorta al límite de 31 caracteres. Se usa como
-     * hoja de resultados POR DEFECTO de cada informe nuevo (ver
-     * createReport): antes, todos los informes nuevos "heredaban" la
-     * última hoja activa físicamente en EDIT_REPORT!D1 (normalmente
-     * "CSV_RESULT", la del primer informe), así que un segundo informe se
-     * pintaba encima del primero. Con un nombre de hoja distinto por
-     * informe desde el principio, cada uno tiene sitio propio aunque el
-     * usuario no lo reubique nunca a mano con "Editar report".
-     */
-    function sheetNameFromReportName(name, id) {
-        let base = String(name || "").replace(/[\\/?*[\]:]/g, "").trim();
-        if (!base) base = "Informe " + _pad3(id);
-        if (base.length > 31) base = base.slice(0, 31);
-        return base;
-    }
-
-    /**
      * Crea un informe nuevo y VACÍO (sin filtros/filas/columnas), lo marca
      * como activo y lo devuelve. El id interno es el secuencial (nunca se
      * reutiliza, aunque se borren informes). El nombre por defecto es
      * "Informe - 0XX".
+     *
+     * resultSheetName (opcional): hoja donde se va a pintar ESTE informe.
+     * El add-in YA NO crea una pestaña nueva por informe: addReport() en
+     * taskpane.js captura la hoja activa de Excel en el momento de pulsar
+     * "Añadir informe" (ver captureActiveEditContext) y la pasa aquí, así
+     * que el informe se queda anclado en la pestaña/celda donde estaba el
+     * cursor. Si no se recibe (compatibilidad con llamadas antiguas), se
+     * guarda vacío y el código que lee la hoja de resultados
+     * (resultSheetNameFromGrid / getDracoResultSheetName en commands.js)
+     * usa como último recurso la celda física compartida EDIT_REPORT!D1.
      */
-    async function createReport(semanticModelName) {
+    async function createReport(semanticModelName, resultSheetName) {
         const id = _nextSequence();
         const name = `Informe - ${_pad3(id)}`;
         const report = {
@@ -203,10 +194,7 @@
                 colsStatic: false,
                 rrAddress: "",
                 rcAddress: "",
-                // Hoja de resultados de ESTE informe (antes se leía siempre
-                // de una única celda física compartida, EDIT_REPORT!D1: ver
-                // sheetNameFromReportName más arriba).
-                resultSheetName: sheetNameFromReportName(name, id),
+                resultSheetName: resultSheetName || "",
                 fieldOptions: {}
             },
             reportProperties: Object.assign({}, DEFAULT_REPORT_PROPERTIES, { reportName: name }),
@@ -367,19 +355,7 @@
             return out;
         };
 
-        // OJO: report.design trae también campos que NO forman parte de
-        // "state" (p.ej. resultSheetName, la hoja de resultados propia de
-        // ESTE informe — ver createReport/setReportResultSheetName). Si
-        // aquí se reemplazara report.design entero por un objeto nuevo sin
-        // ese campo, cada autoguardado (se dispara con CUALQUIER cambio:
-        // mover una flecha de rango, arrastrar un campo...) lo borraría, y
-        // el informe volvería a caer en el fallback físico compartido
-        // EDIT_REPORT!D1 (ver resultSheetNameFromGrid) — con lo que dos
-        // informes cualesquiera que ya se hubieran guardado una vez acaban
-        // en la MISMA hoja sin que el usuario haya hecho nada para
-        // provocarlo. Por eso se parte de report.design existente y solo
-        // se sobrescriben los campos que sí gestiona este formulario.
-        report.design = Object.assign({}, report.design, {
+        report.design = {
             filters: (state.filters || []).map(f => ({
                 dimension: f.dimension, name: f.name, isHierarchy: f.isHierarchy,
                 realAttribute: f.realAttribute,
@@ -398,7 +374,7 @@
             rrAddress: state.rrAddress || "",
             rcAddress: state.rcAddress || "",
             fieldOptions: state.fieldOptions || {}
-        });
+        };
 
         await _writeReport(reportId, report);
     }

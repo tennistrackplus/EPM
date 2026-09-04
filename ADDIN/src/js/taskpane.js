@@ -358,8 +358,10 @@ const TaskPaneApp = {
             });
 
             console.log(`[Draco] Editar informe: EDIT_REPORT!D1="${activeSheetName}", EDIT_REPORT!E1="${selectedCellAddress}"`);
+            return { activeSheetName, selectedCellAddress };
         } catch (err) {
             console.error("Error guardando la hoja/celda activa en EDIT_REPORT (D1/E1):", err);
+            return null;
         }
     },
 
@@ -826,6 +828,11 @@ const TaskPaneApp = {
      * deja el taskpane listo para diseñarlo desde cero. Sustituye al
      * antiguo botón "Guardar" (el diseño ya se autoguarda solo, ver
      * scheduleAutoUpdate/runAutoSaveAndRefresh).
+     *
+     * El informe NO crea una pestaña nueva: se pinta en la hoja y celda
+     * donde esté el cursor en el momento de pulsar el botón (ver
+     * captureActiveEditContext, que se re-ejecuta aquí para tener la hoja/
+     * celda actuales, no las de cuando se abrió el taskpane).
      * ----------------------------------------------------------- */
     async addReport() {
         const btn = document.getElementById("btnAddReport");
@@ -838,13 +845,17 @@ const TaskPaneApp = {
             // que solo se ejecuta una vez en init()), así que el segundo
             // informe (y siguientes) anclaba en la celda del PRIMER
             // informe en lugar de en la celda seleccionada ahora.
-            await this.captureActiveEditContext();
+            const editContext = await this.captureActiveEditContext();
 
             const models = (window.ExcelService && window.ExcelService.getSemanticModels)
                 ? await window.ExcelService.getSemanticModels() : [];
             const defaultModel = models.length === 1 ? models[0] : "";
 
-            const report = await window.ReportStore.createReport(defaultModel);
+            // La hoja de resultados de este informe es la hoja activa
+            // capturada arriba: NO se crea una pestaña nueva "Informe -
+            // 0XX" por informe (ver reportStore.createReport).
+            const activeSheetName = editContext ? editContext.activeSheetName : "";
+            const report = await window.ReportStore.createReport(defaultModel, activeSheetName);
             this.currentReportId = report.id;
 
             // Estado en memoria del taskpane, vacío para el informe recién creado.
