@@ -54,13 +54,37 @@ function guardarModeloSemantico(event) {
  * guardarlo (no reemplaza el libro activo).
  * @param {Office.AddinCommands.Event} event
  */
+
+
+
+/**
+ * VERSIÓN TEMPORAL DE DIAGNÓSTICO de abrirDesdeBucket.
+ * Sustituye la función original en commands.js por esta, prueba el botón
+ * "Abrir bucket" una vez, mira lo que aparece en la celda A1 de la hoja
+ * activa, y cuéntamelo. Luego deshaz el cambio (o pídeme que te devuelva
+ * la versión original).
+ */
 function abrirDesdeBucket(event) {
     try {
+        // --- DIAGNÓSTICO TEMPORAL: escribe en A1 lo que ve este runtime ---
+        const diag = {
+            hasBQ: !!window.BQ,
+            token: (window.BQ && typeof BQ.getToken === "function") ? BQ.getToken() : "sin BQ.getToken",
+            hasDocSettings: !!(typeof Office !== "undefined" && Office.context && Office.context.document && Office.context.document.settings),
+            settingsToken: (typeof Office !== "undefined" && Office.context && Office.context.document && Office.context.document.settings)
+                ? Office.context.document.settings.get("epm_bq_token")
+                : "sin document.settings"
+        };
+        if (typeof Excel !== "undefined") {
+            Excel.run(function (context) {
+                const sheet = context.workbook.worksheets.getActiveWorksheet();
+                sheet.getRange("A1").values = [[JSON.stringify(diag)]];
+                return context.sync();
+            }).catch(function (e) { console.error("Error escribiendo diagnóstico:", e); });
+        }
+        // --- FIN DIAGNÓSTICO TEMPORAL ---
+
         const url = new URL("bucketBrowser.html", window.location.href);
-        // Ver BQ.getSessionQueryParams(): el diálogo se abre en su propia
-        // ventana y puede no compartir localStorage con este runtime, así
-        // que le pasamos el token vigente por la URL para que no pida
-        // conectarse de nuevo estando ya conectado.
         const sessionParams = window.BQ ? BQ.getSessionQueryParams() : "";
         if (sessionParams) url.search = sessionParams;
         Office.context.ui.displayDialogAsync(url.href, { height: 55, width: 40, displayInIframe: false }, (asyncResult) => {
