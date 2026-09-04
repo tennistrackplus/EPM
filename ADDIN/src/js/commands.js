@@ -2759,6 +2759,332 @@ async function handleDracoRibbonLabelSelection(eventArgs) {
     }
 }
 
+/* =================================================================
+ * "Añadir filtro": rango con nombre sobre CUALQUIER celda del libro que
+ * representa un filtro de dimensión, independiente del filtro de la zona
+ * "Filtros" del diseño del informe (que vive dentro de EDIT_REPORT/
+ * ReportStore). El botón "Añadir filtro" del taskpane (ver
+ * openAddFilterRangeModal/createFilterRangeFromModal en taskpane.js) crea
+ * el rango con nombre sobre la celda activa; aquí se localiza ese rango al
+ * hacer clic sobre él, se abre el mismo selector filterDialog.html que usa
+ * FilterModal, y se pinta el resultado en la celda.
+ *
+ * Convención de nombre: Draco_Filter_<DIM>_<CAMPO>_<sufijo>, donde sufijo
+ * es el nº de informe con 3 dígitos (001, 002…) o "all" si el filtro se
+ * creó para "Todos los informes". El nombre solo sirve para identificar
+ * el rango en el Administrador de nombres de Excel: los metadatos reales
+ * (dimensión, campo, jerarquía sí/no, informe/"todos" y el último filtro
+ * aplicado) viven en FilterRangeStore (roaming settings), indexados por
+ * ese mismo nombre — así no hace falta "parsear" el nombre para
+ * recuperarlos, y el nombre puede sanearse (mayúsculas, sin acentos ni
+ * espacios) sin perder información.
+ * ================================================================= */
+
+function sanitizeDracoNamePart(s) {
+    return String(s || "")
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // quita acentos
+        .replace(/[^A-Za-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .toUpperCase() || "X";
+}
+
+function dracoFilterRangeName(dim, name, suffix) {
+    return `Draco_Filter_${sanitizeDracoNamePart(dim)}_${sanitizeDracoNamePart(name)}_${suffix}`;
+}
+
+/**
+ * Busca, entre los rangos con nombre registrados en FilterRangeStore, si
+ * alguno apunta EXACTAMENTE a la celda indicada (misma hoja, misma
+ * dirección). Devuelve {rangeName, meta} o null si esa celda no es
+ * ninguno de nuestros rangos de filtro.
+ */
+async function locateDracoFilterRangeAtAddress(context, sheetName, addr) {
+    if (!window.FilterRangeStore) return null;
+    const names = window.FilterRangeStore.listNames();
+    if (names.length === 0) return null;
+
+    const candidates = names.map(n => {
+        const item = context.workbook.names.getItemOrNullObject(n);
+        item.load("isNullObject");
+        return { name: n, item };
+    });
+    await context.sync();
+
+    const alive = candidates.filter(c => !c.item.isNullObject);
+    alive.forEach(c => {
+        c.range = c.item.getRange();
+        c.range.load("address");
+    });
+    await context.sync();
+
+    const target = (sheetName + "!" + addr).toUpperCase();
+    for (const c of alive) {
+        if (String(c.range.address || "").toUpperCase() === target) {
+            return { rangeName: c.name, meta: window.FilterRangeStore.get(c.name) };
+        }
+    }
+    return null;
+}
+
+/**
+ * Construye los "segmentos" de texto (valor o rango, incluido o excluido)
+ * a partir del objeto filtro que devuelve filterDialog.js (mode:"list",
+ * ver cabecera de js/filterModal.js). Mismo orden que describeFilter():
+ * valores incluidos, rangos incluidos, valores excluidos, rangos
+ * excluidos.
+ */
+function buildDracoFilterCellSegments(filter) {
+    if (!filter) return [];
+
+    const incValues = filter.items ? filter.items.map(it => it.value) : (filter.values || []);
+    const excValues = filter.excludeItems ? filter.excludeItems.map(it => it.value) : (filter.excludeValues || []);
+    const incRanges = filter.ranges || [];
+    const excRanges = filter.excludeRanges || [];
+
+    const segments = [];
+    incValues.forEach(v => segments.push({ text: String(v), excluded: false }));
+    incRanges.forEach(r => segments.push({ text: `[${r.from || "…"}-${r.to || "…"}]`, excluded: false }));
+    excValues.forEach(v => segments.push({ text: String(v), excluded: true }));
+    excRanges.forEach(r => segments.push({ text: `[${r.from || "…"}-${r.to || "…"}]`, excluded: true }));
+    return segments;
+}
+
+/**
+ * Pinta en la celda el resumen del filtro (segmentos separados por ", "),
+ * coloreando en granate SOLO los tramos excluidos (Range.getCharacters,
+ * ExcelApi 1.16: formato de caracteres dentro de una misma celda). Si el
+ * Excel del usuario no soporta esa API, se colorea la celda ENTERA en
+ * granate cuando haya alguna exclusión — la mejor aproximación posible
+ * sin coloreado por carácter.
+ */
+async function paintDracoFilterCell(context, sheet, addr, filter) {
+    const EXCLUDED_COLOR = "#A80000";
+    const segments = buildDracoFilterCellSegments(filter);
+    const cell = sheet.getRange(addr);
+
+    if (segments.length === 0) {
+        cell.values = [[""]];
+        cell.format.font.color = "#000000";
+        await context.sync();
+        return;
+    }
+
+    const fullText = segments.map(s => s.text).join(", ");
+    cell.values = [[fullText]];
+    cell.format.font.color = "#000000";
+    await context.sync();
+
+    let paintedPerCharacter = false;
+    if (Office.context.requirements.isSetSupported("ExcelApi", "1.16")) {
+        try {
+            let cursor = 0;
+            for (let i = 0; i < segments.length; i++) {
+                const seg = segments[i];
+                if (seg.excluded && seg.text.length > 0) {
+                    const chars = cell.getCharacters(cursor, seg.text.length);
+                    chars.font.color = EXCLUDED_COLOR;
+                }
+                cursor += seg.text.length + (i < segments.length - 1 ? 2 : 0); // ", "
+            }
+            await context.sync();
+            paintedPerCharacter = true;
+        } catch (err) {
+            console.warn("[Draco] Añadir filtro: coloreado por carácter no disponible en este Excel, se colorea la celda completa.", err);
+        }
+    }
+
+    if (!paintedPerCharacter && segments.some(s => s.excluded)) {
+        cell.format.font.color = EXCLUDED_COLOR;
+        await context.sync();
+    }
+}
+
+/**
+ * Abre filterDialog.html — el MISMO diálogo de selección de valores que
+ * usa la zona "Filtros" del taskpane a través de FilterModal.open — como
+ * diálogo independiente de Office, igual que openMemberRecognitionPicker,
+ * para que funcione también desde el runtime oculto de comandos (sin
+ * depender de que el taskpane esté abierto). Al aceptar, pinta el
+ * resultado en la celda y actualiza FilterRangeStore.
+ */
+async function openDracoFilterRangePicker(addr, sheetName, rangeName, meta) {
+    let items = [];
+    try {
+        const sql = await window.ExcelService.buildFilterValuesSQL(meta.dim, meta.name);
+        if (!sql) {
+            console.warn("[Draco] Añadir filtro: no se ha encontrado el atributo o jerarquía.", meta);
+            return;
+        }
+        const json = await window.ExcelService.executeSQL(sql);
+        items = parseMemberJsonTree(json);
+    } catch (err) {
+        console.error("[Draco] Añadir filtro: error cargando los valores del filtro:", err);
+        return;
+    }
+
+    const dialogUrl = new URL("filterDialog.html", window.location.href).href;
+
+    await new Promise((resolve) => {
+        Office.context.ui.displayDialogAsync(
+            dialogUrl,
+            { height: 65, width: 48, displayInIframe: false },
+            (asyncResult) => {
+                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                    console.error(
+                        "[Draco] Añadir filtro: displayDialogAsync ha fallado:",
+                        asyncResult.error && asyncResult.error.code,
+                        asyncResult.error && asyncResult.error.message
+                    );
+                    resolve();
+                    return;
+                }
+
+                const dialog = asyncResult.value;
+                let settled = false;
+                const closeDialog = () => { try { dialog.close(); } catch (e) { /* ya cerrado */ } };
+
+                dialog.addEventHandler(Office.EventType.DialogMessageReceived, async (arg) => {
+                    let payload;
+                    try {
+                        payload = JSON.parse(arg.message);
+                    } catch (err) {
+                        console.error("[Draco] Añadir filtro: mensaje del diálogo no es JSON válido:", err);
+                        return;
+                    }
+
+                    if (payload.type === "ready") {
+                        dialog.messageChild(JSON.stringify({
+                            items,
+                            fieldData: { dim: meta.dim, name: meta.name, isHierarchy: meta.isHierarchy },
+                            currentFilter: meta.filter || null,
+                            initialSearch: ""
+                        }));
+                        return;
+                    }
+
+                    if (payload.type === "apply") {
+                        settled = true;
+                        closeDialog();
+                        try {
+                            DracoSuppressChangeEvents = true; // evita reabrir el selector por nuestra propia escritura
+                            await Excel.run(async (context) => {
+                                const sheet = context.workbook.worksheets.getItem(sheetName);
+                                await paintDracoFilterCell(context, sheet, addr, payload.filter);
+                            });
+                            await window.FilterRangeStore.set(rangeName, Object.assign({}, meta, { filter: payload.filter }));
+                        } catch (err) {
+                            console.error("[Draco] Añadir filtro: error pintando el filtro en la celda:", err);
+                        } finally {
+                            DracoSuppressChangeEvents = false;
+                        }
+                        resolve();
+                        return;
+                    }
+
+                    if (payload.type === "cancel") {
+                        settled = true;
+                        closeDialog();
+                        resolve();
+                    }
+                });
+
+                dialog.addEventHandler(Office.EventType.DialogEventReceived, () => {
+                    if (!settled) resolve();
+                });
+            }
+        );
+    });
+}
+
+/**
+ * Aproximación al doble clic (misma limitación de plataforma documentada
+ * en handleDracoMemberRecognitionSelection: Office.js no expone un evento
+ * de doble clic real sobre una celda): al SELECCIONAR una celda que sea
+ * uno de los rangos con nombre creados con "Añadir filtro", se abre
+ * directamente el selector de valores.
+ */
+async function handleDracoFilterRangeSelection(eventArgs) {
+    try {
+        if (DracoSuppressChangeEvents) return;
+
+        let addr = (eventArgs && eventArgs.address) || "";
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        if (!addr) return;
+
+        let located = null;
+        let sheetName = "";
+
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getActiveWorksheet();
+            sheet.load("name");
+            const cell = sheet.getRange(addr);
+            cell.load(["rowCount", "columnCount"]);
+            await context.sync();
+
+            sheetName = sheet.name;
+            if (cell.rowCount !== 1 || cell.columnCount !== 1) return; // solo celda única
+
+            located = await locateDracoFilterRangeAtAddress(context, sheetName, addr);
+        });
+
+        if (!located) return;
+        await openDracoFilterRangePicker(addr, sheetName, located.rangeName, located.meta);
+    } catch (e) {
+        console.error("[Draco] Error en el selector de 'Añadir filtro' (clic sobre la celda):", e);
+    }
+}
+
+const DracoFilterRangeHandlerRegisteredSheets = new Set();
+let DracoFilterRangeOnAddedRegistered = false;
+
+/**
+ * Engancha handleDracoFilterRangeSelection en TODAS las hojas del libro
+ * (los rangos de "Añadir filtro" pueden vivir en cualquier hoja, no solo
+ * en la hoja de resultados de un informe) y en las hojas que se añadan
+ * después. Se puede llamar varias veces sin problema (cada hoja solo se
+ * engancha una vez).
+ */
+async function ensureDracoFilterRangeHandlersRegistered() {
+    try {
+        await Excel.run(async (context) => {
+            const sheets = context.workbook.worksheets;
+            sheets.load("items/name");
+            await context.sync();
+
+            sheets.items.forEach(sheet => {
+                if (DracoFilterRangeHandlerRegisteredSheets.has(sheet.name)) return;
+                sheet.onSelectionChanged.add(handleDracoFilterRangeSelection);
+                DracoFilterRangeHandlerRegisteredSheets.add(sheet.name);
+            });
+
+            if (!DracoFilterRangeOnAddedRegistered) {
+                sheets.onAdded.add(async (e) => {
+                    try {
+                        await Excel.run(async (ctx) => {
+                            const sheet = ctx.workbook.worksheets.getItem(e.worksheetId);
+                            sheet.load("name");
+                            await ctx.sync();
+                            if (!DracoFilterRangeHandlerRegisteredSheets.has(sheet.name)) {
+                                sheet.onSelectionChanged.add(handleDracoFilterRangeSelection);
+                                DracoFilterRangeHandlerRegisteredSheets.add(sheet.name);
+                                await ctx.sync();
+                            }
+                        });
+                    } catch (err) {
+                        console.warn("[Draco] No se pudo enganchar 'Añadir filtro' en la hoja nueva:", err);
+                    }
+                });
+                DracoFilterRangeOnAddedRegistered = true;
+            }
+
+            await context.sync();
+        });
+        console.log("[Draco] Listeners de 'Añadir filtro' registrados en todas las hojas.");
+    } catch (e) {
+        console.warn("[Draco] No se pudieron registrar los listeners de 'Añadir filtro':", e);
+    }
+}
+
 /**
  * Parser mínimo del JSON de BigQuery a una lista plana {text, attribute,
  * value} — copia local de loadJsonTree (filterModal.js) para no depender
@@ -4335,7 +4661,9 @@ async function actualizarTodos(event) {
 window.ReportActions = {
     actualizar, actualizarInforme, actualizarInformeFixed, actualizarTodos,
     toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
-    convertAxisStaticFormulas, ensureDracoHandlersRegistered
+    convertAxisStaticFormulas, ensureDracoHandlersRegistered,
+    // "Añadir filtro" (rango con nombre sobre una celda cualquiera del libro)
+    dracoFilterRangeName, ensureDracoFilterRangeHandlersRegistered
 };
 
 

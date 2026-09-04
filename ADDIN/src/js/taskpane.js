@@ -464,6 +464,15 @@ const TaskPaneApp = {
                 await window.ReportActions.ensureDracoHandlersRegistered();
             }
         });
+
+        // Igual que arriba, pero para los rangos de "Añadir filtro": se
+        // enganchan en TODAS las hojas del libro (pueden vivir en
+        // cualquiera, no solo en la de resultados de un informe).
+        await safeStep("ensureDracoFilterRangeHandlersRegistered", async () => {
+            if (window.ReportActions && window.ReportActions.ensureDracoFilterRangeHandlersRegistered) {
+                await window.ReportActions.ensureDracoFilterRangeHandlersRegistered();
+            }
+        });
     },
 
     /**
@@ -584,6 +593,181 @@ const TaskPaneApp = {
         // Botón "Guardar en bucket" (sube el .xlsx activo a Cloud Storage)
         const btnSaveToBucket = document.getElementById("btnSaveToBucket");
         if (btnSaveToBucket) btnSaveToBucket.addEventListener("click", () => this.saveWorkbookToBucket());
+
+        // Botón "Añadir filtro" (rango con nombre sobre la celda activa)
+        const btnAddFilterRange = document.getElementById("btnAddFilterRange");
+        if (btnAddFilterRange) btnAddFilterRange.addEventListener("click", () => this.openAddFilterRangeModal());
+
+        const btnCancelAddFilterRange = document.getElementById("btnCancelAddFilterRange");
+        if (btnCancelAddFilterRange) btnCancelAddFilterRange.addEventListener("click", () => this.closeAddFilterRangeModal());
+
+        const btnCloseAddFilterRange = document.getElementById("closeAddFilterRangeModalBtn");
+        if (btnCloseAddFilterRange) btnCloseAddFilterRange.addEventListener("click", () => this.closeAddFilterRangeModal());
+
+        const btnConfirmAddFilterRange = document.getElementById("btnConfirmAddFilterRange");
+        if (btnConfirmAddFilterRange) btnConfirmAddFilterRange.addEventListener("click", () => this.createFilterRangeFromModal());
+    },
+
+    /* -------------------------------------------------------------
+     * "Añadir filtro": crea, sobre la celda seleccionada AHORA MISMO en
+     * Excel, un rango con nombre Draco_Filter_<DIM>_<CAMPO>_<sufijo> que
+     * más adelante (clic sobre esa celda) abre el selector de valores y
+     * pinta el resultado con las exclusiones en granate. Ver
+     * dracoFilterRangeName/ensureDracoFilterRangeHandlersRegistered y el
+     * resto de "Añadir filtro" en commands.js, y js/filterRangeStore.js
+     * para los metadatos guardados.
+     * ----------------------------------------------------------- */
+    async openAddFilterRangeModal() {
+        const modal = document.getElementById("addFilterRangeModal");
+        if (!modal) return;
+
+        const dimSelect = document.getElementById("selAddFilterDimension");
+        const reportSelect = document.getElementById("selAddFilterReport");
+        if (dimSelect) dimSelect.innerHTML = "<option value=\"\">Cargando…</option>";
+        if (reportSelect) reportSelect.innerHTML = "";
+
+        modal.style.display = "flex";
+
+        // Dimensiones/campos: mismo origen de datos que el árbol de campos
+        // de la izquierda (readDim2Data, sobre el modelo semántico activo).
+        try {
+            const result = await window.ExcelService.readDim2Data();
+            const dimensions = (result && result.data) || [];
+            if (dimSelect) {
+                dimSelect.innerHTML = "";
+                dimensions.forEach(dim => {
+                    const group = document.createElement("optgroup");
+                    group.label = dim.dimension;
+
+                    dim.attributes.forEach(attr => {
+                        const opt = document.createElement("option");
+                        opt.value = JSON.stringify({ dim: dim.dimension, name: attr, isHierarchy: false });
+                        opt.textContent = attr;
+                        group.appendChild(opt);
+                    });
+                    dim.hierarchies.forEach(hier => {
+                        const opt = document.createElement("option");
+                        opt.value = JSON.stringify({ dim: dim.dimension, name: hier, isHierarchy: true });
+                        opt.textContent = `${hier} (jerarquía)`;
+                        group.appendChild(opt);
+                    });
+
+                    if (group.children.length) dimSelect.appendChild(group);
+                });
+                if (!dimSelect.options.length) {
+                    dimSelect.innerHTML = "<option value=\"\">No hay campos disponibles</option>";
+                }
+            }
+        } catch (err) {
+            console.error("Error al cargar dimensiones para 'Añadir filtro':", err);
+            if (dimSelect) dimSelect.innerHTML = "<option value=\"\">Error al cargar</option>";
+        }
+
+        // Informes: los ya creados en este libro (ReportStore) + "Todos".
+        if (reportSelect) {
+            const reports = (window.ReportStore ? window.ReportStore.listReports() : []) || [];
+            reports.forEach(r => {
+                const opt = document.createElement("option");
+                opt.value = String(r.id);
+                opt.textContent = r.name || `Informe ${r.id}`;
+                if (this.currentReportId && Number(this.currentReportId) === Number(r.id)) opt.selected = true;
+                reportSelect.appendChild(opt);
+            });
+            const optAll = document.createElement("option");
+            optAll.value = "all";
+            optAll.textContent = "Todos los informes";
+            reportSelect.appendChild(optAll);
+        }
+    },
+
+    closeAddFilterRangeModal() {
+        const modal = document.getElementById("addFilterRangeModal");
+        if (modal) modal.style.display = "none";
+    },
+
+    async createFilterRangeFromModal() {
+        const dimSelect = document.getElementById("selAddFilterDimension");
+        const reportSelect = document.getElementById("selAddFilterReport");
+        const btn = document.getElementById("btnConfirmAddFilterRange");
+
+        if (!dimSelect || !dimSelect.value) {
+            alert("Elige una dimensión o jerarquía para el filtro.");
+            return;
+        }
+        if (typeof dracoFilterRangeName !== "function") {
+            alert("No se encuentra la lógica de 'Añadir filtro' (commands.js). Recarga el panel e inténtalo de nuevo.");
+            return;
+        }
+
+        let fieldData;
+        try {
+            fieldData = JSON.parse(dimSelect.value);
+        } catch (e) {
+            alert("No se ha podido leer el campo seleccionado.");
+            return;
+        }
+
+        const reportValue = reportSelect ? reportSelect.value : "all";
+        const isAll = !reportValue || reportValue === "all";
+        const reportId = isAll ? null : Number(reportValue);
+        const suffix = isAll ? "all" : pad3(reportId);
+
+        const rangeName = dracoFilterRangeName(fieldData.dim, fieldData.name, suffix);
+
+        if (btn) { btn.disabled = true; btn.innerText = "Añadiendo…"; }
+
+        try {
+            await Excel.run(async (context) => {
+                const sheet = context.workbook.worksheets.getActiveWorksheet();
+                sheet.load("name");
+
+                const selectedRange = context.workbook.getSelectedRange();
+                selectedRange.load("address");
+                await context.sync();
+
+                // Esquina superior izquierda si hay varias celdas seleccionadas.
+                const rawAddress = selectedRange.address.split("!").pop();
+                const addr = rawAddress.split(":")[0];
+                const cell = sheet.getRange(addr);
+
+                // Si ya existía un rango con este mismo nombre (misma
+                // dimensión/campo + mismo informe), se borra y se vuelve a
+                // crear sobre la NUEVA celda seleccionada (así "Añadir
+                // filtro" también sirve para mover un filtro existente).
+                const existing = context.workbook.names.getItemOrNullObject(rangeName);
+                existing.load("isNullObject");
+                await context.sync();
+                if (!existing.isNullObject) {
+                    existing.delete();
+                    await context.sync();
+                }
+
+                context.workbook.names.add(rangeName, cell);
+                await context.sync();
+            });
+
+            await window.FilterRangeStore.set(rangeName, {
+                dim: fieldData.dim,
+                name: fieldData.name,
+                isHierarchy: !!fieldData.isHierarchy,
+                reportId: reportId,
+                filter: null
+            });
+
+            this.closeAddFilterRangeModal();
+            this.setAutoStatus("Filtro añadido ✓");
+
+            // Por si el usuario ha creado el filtro en una hoja nueva que
+            // todavía no tuviera enganchado el listener de clic.
+            if (window.ReportActions && window.ReportActions.ensureDracoFilterRangeHandlersRegistered) {
+                await window.ReportActions.ensureDracoFilterRangeHandlersRegistered();
+            }
+        } catch (err) {
+            console.error("Error al añadir el rango de filtro:", err);
+            alert("Error al añadir el filtro: " + (err.message || err));
+        } finally {
+            if (btn) { btn.disabled = false; btn.innerText = "Añadir"; }
+        }
     },
 
     /**
