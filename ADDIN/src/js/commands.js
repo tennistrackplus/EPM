@@ -47,6 +47,75 @@ function guardarModeloSemantico(event) {
 }
 
 /**
+ * Botón de ribbon "Abrir bucket" (AbrirBucketButton).
+ * Abre un diálogo que lista los .xlsx/.xlsm del bucket de Google Cloud
+ * Storage configurado en la conexión BigQuery (bucketBrowser.html) y
+ * permite descargar el elegido; el navegador se encarga de abrirlo o
+ * guardarlo (no reemplaza el libro activo).
+ * @param {Office.AddinCommands.Event} event
+ */
+function abrirDesdeBucket(event) {
+    try {
+        const url = new URL("bucketBrowser.html", window.location.href);
+        Office.context.ui.displayDialogAsync(url.href, { height: 55, width: 40, displayInIframe: false }, (asyncResult) => {
+            if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                console.error("No se pudo abrir el diálogo del bucket:", asyncResult.error.message);
+                return;
+            }
+            const dialog = asyncResult.value;
+            dialog.addEventHandler(Office.EventType.DialogMessageReceived, () => dialog.close());
+        });
+    } catch (error) {
+        console.error("Error al abrir el explorador del bucket:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+/**
+ * Botón de ribbon "Guardar en bucket" (GuardarBucketButton).
+ * Sube el .xlsx activo (tal cual está guardado) al bucket de Google Cloud
+ * Storage configurado en la conexión BigQuery (BQ.getExportBucket(), ver
+ * "Bucket de exportación" en el panel de Conexión). Como es un botón de
+ * ribbon sin taskpane propio, el resultado se muestra en un pequeño
+ * diálogo (uploadStatus.html) en vez de un alert() bloqueante.
+ * @param {Office.AddinCommands.Event} event
+ */
+async function guardarExcelEnBucket(event) {
+    let ok = false;
+    let msg = "";
+    try {
+        if (!window.GCS) {
+            throw new Error("No se encontró el módulo de exportación a Cloud Storage (js/gcsExport.js).");
+        }
+        const result = await window.GCS.saveActiveWorkbookToBucket();
+        ok = true;
+        msg = `Archivo subido correctamente a gs://${result.bucket}/${result.name}`;
+    } catch (error) {
+        console.error("Error al subir el Excel a Cloud Storage:", error);
+        msg = (error && error.message) ? error.message : String(error);
+    } finally {
+        try {
+            const url = new URL("uploadStatus.html", window.location.href);
+            url.searchParams.set("ok", ok ? "1" : "0");
+            url.searchParams.set("msg", msg);
+            Office.context.ui.displayDialogAsync(url.href, { height: 25, width: 30, displayInIframe: false }, (asyncResult) => {
+                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                    console.error("No se pudo abrir el diálogo de estado de la subida:", asyncResult.error.message);
+                    return;
+                }
+                const dialog = asyncResult.value;
+                dialog.addEventHandler(Office.EventType.DialogMessageReceived, () => dialog.close());
+                dialog.addEventHandler(Office.EventType.DialogEventReceived, () => {});
+            });
+        } catch (dialogError) {
+            console.error("No se pudo mostrar el resultado de la subida a Cloud Storage:", dialogError);
+        }
+        if (event) event.completed();
+    }
+}
+
+/**
  * Función que maneja el botón 'Ocultar panel' (HidePaneButton) definido en el manifiesto
  * @param {Office.AddinCommands.Event} event
  */
@@ -3360,6 +3429,41 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     await ensureDracoResultSheetExists(context, resultSheetName);
     const sheet = context.workbook.worksheets.getItem(resultSheetName);
 
+    // Rectángulo que ocupaba la ÚLTIMA pintada de ESTE informe (unión de
+    // los rangos con nombre Draco_<id>_Rows/Cols/Values de la ejecución
+    // anterior, si existen). Antes se limpiaba directamente TODO el
+    // "usedRange" de la hoja (ver más abajo) porque cada informe tenía su
+    // propia pestaña en exclusiva; ahora que varios informes pueden
+    // compartir una misma pestaña (ver addReport()/reportStore.
+    // createReport: ya no se crea una hoja nueva por informe, se usa la
+    // hoja activa en el momento de crearlo), limpiar TODO el usedRange
+    // borraría también lo pintado de OTROS informes de esa misma hoja. Se
+    // calcula ANTES de limpiar los rangos con nombre porque clear() no
+    // borra la definición del nombre ni su dirección, solo el contenido.
+    const rangeNamesForClear = dracoRangeNames(reportId);
+    const prevNamedItems = [rangeNamesForClear.rows, rangeNamesForClear.cols, rangeNamesForClear.values]
+        .map(n => context.workbook.names.getItemOrNullObject(n));
+    prevNamedItems.forEach(it => it.load("isNullObject"));
+    await context.sync();
+
+    const prevRanges = prevNamedItems.filter(it => !it.isNullObject).map(it => it.getRange());
+    prevRanges.forEach(r => r.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]));
+    if (prevRanges.length > 0) await context.sync();
+
+    let prevBounds = null;
+    for (const r of prevRanges) {
+        const top = r.rowIndex, left = r.columnIndex;
+        const bottom = r.rowIndex + r.rowCount, right = r.columnIndex + r.columnCount;
+        if (!prevBounds) {
+            prevBounds = { top, left, bottom, right };
+        } else {
+            prevBounds.top = Math.min(prevBounds.top, top);
+            prevBounds.left = Math.min(prevBounds.left, left);
+            prevBounds.bottom = Math.max(prevBounds.bottom, bottom);
+            prevBounds.right = Math.max(prevBounds.right, right);
+        }
+    }
+
     // Antes de refrescar: borrar formato Y contenido de los rangos con
     // nombre Draco_<id>_Rows / Draco_<id>_Cols / Draco_<id>_Values DE ESTE
     // INFORME (y solo de este) de la ejecución anterior (si existen), para
@@ -3369,25 +3473,28 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // un informe borraba lo pintado de otro).
     await clearDracoNamedRanges(context, reportId);
 
-    // Limpiar todo lo pintado en ejecuciones anteriores (incluidas posibles
-    // fórmulas EPM_VALUE residuales de una tabla previa más grande, y su
-    // formato: relleno, fuente, bordes..., y también la franja de
-    // indicadores +/- de la ejecución anterior), pero preservando la fila 1
-    // (A1=SQL, B1=JSON) que se escribe aparte. Solo se reinicia el mapa de
-    // indicadores DE ESTE informe (getDracoIndicatorMap ya lo crea vacío si
-    // no existía); los de otros informes no se tocan.
+    // Limpiar cualquier resto de la ejecución anterior que hubiera quedado
+    // FUERA de esos rangos con nombre (p.ej. fórmulas EPM_VALUE residuales
+    // de una tabla previa más grande, y su formato: relleno, fuente,
+    // bordes...), pero SOLO dentro del rectángulo que ocupaba la ejecución
+    // anterior de ESTE informe (prevBounds, calculado arriba) — nunca toda
+    // la hoja, que ahora puede tener pintados otros informes si comparten
+    // pestaña. Los indicadores +/- van fusionados en las propias celdas de
+    // Rows/Cols (no en una columna aparte), así que quedan cubiertos por
+    // este mismo rectángulo. Se preserva siempre la fila 1 (A1=SQL,
+    // B1=JSON), que se escribe aparte. Solo se reinicia el mapa de
+    // indicadores DE ESTE informe (getDracoIndicatorMap ya lo crea vacío
+    // si no existía); los de otros informes no se tocan.
     const dracoIndicatorMap = getDracoIndicatorMap(reportId);
     dracoIndicatorMap.clear();
-    const usedRange = sheet.getUsedRangeOrNullObject();
-    usedRange.load(["isNullObject", "rowIndex", "rowCount"]);
-    await context.sync();
 
-    if (!usedRange.isNullObject) {
-        const firstDataRow = Math.max(usedRange.rowIndex, 1); // índice 0-based: fila 2 en adelante
-        const lastRow = usedRange.rowIndex + usedRange.rowCount; // exclusivo
-        if (lastRow > firstDataRow) {
-            sheet.getRangeByIndexes(firstDataRow, 0, lastRow - firstDataRow, 16384)
-                .clear(Excel.ClearApplyTo.all);
+    if (prevBounds) {
+        const firstDataRow = Math.max(prevBounds.top, 1); // índice 0-based: fila 2 en adelante
+        if (prevBounds.bottom > firstDataRow) {
+            sheet.getRangeByIndexes(
+                firstDataRow, prevBounds.left,
+                prevBounds.bottom - firstDataRow, prevBounds.right - prevBounds.left
+            ).clear(Excel.ClearApplyTo.all);
         }
     }
     await context.sync();
@@ -4449,6 +4556,8 @@ try {
     Office.actions.associate("openReportProperties", openReportProperties);
     Office.actions.associate("openFieldOptions", openFieldOptions);
     Office.actions.associate("abrirDistribuirValores", abrirDistribuirValores);
+    Office.actions.associate("guardarExcelEnBucket", guardarExcelEnBucket);
+    Office.actions.associate("abrirDesdeBucket", abrirDesdeBucket);
 } catch (e) {
     console.warn("Office.actions.associate no disponible en este contexto:", e);
 }

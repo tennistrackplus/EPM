@@ -580,6 +580,42 @@ const TaskPaneApp = {
         const btnDistribuirValores = document.getElementById("btnDistribuirValores");
         if (btnDistribuirValores) btnDistribuirValores.addEventListener("click", () => this.openDistributeValuesModal());
         if (window.DistributeValuesPanel) window.DistributeValuesPanel.initEvents();
+
+        // Botón "Guardar en bucket" (sube el .xlsx activo a Cloud Storage)
+        const btnSaveToBucket = document.getElementById("btnSaveToBucket");
+        if (btnSaveToBucket) btnSaveToBucket.addEventListener("click", () => this.saveWorkbookToBucket());
+    },
+
+    /**
+     * Sube una copia del Excel activo (tal cual está guardado) al bucket
+     * de Google Cloud Storage configurado en la conexión de BigQuery.
+     * Ver js/gcsExport.js (GCS.saveActiveWorkbookToBucket).
+     */
+    async saveWorkbookToBucket() {
+        if (!window.GCS) {
+            alert("No se encontró el módulo de exportación a Cloud Storage (js/gcsExport.js).");
+            return;
+        }
+
+        const btn = document.getElementById("btnSaveToBucket");
+        if (btn) btn.disabled = true;
+        this.setAutoStatus("Subiendo a Cloud Storage…");
+
+        try {
+            const result = await window.GCS.saveActiveWorkbookToBucket();
+            this.setAutoStatus("Guardado en el bucket ✓");
+            alert(`Archivo subido correctamente a gs://${result.bucket}/${result.name}`);
+            setTimeout(() => {
+                const el = document.getElementById("autoStatus");
+                if (el && el.innerText === "Guardado en el bucket ✓") el.innerText = "";
+            }, 2500);
+        } catch (err) {
+            console.error("Error al subir el Excel a Cloud Storage:", err);
+            this.setAutoStatus("Error al subir");
+            alert("Error al subir el archivo a Cloud Storage: " + (err.message || err));
+        } finally {
+            if (btn) btn.disabled = false;
+        }
     },
 
     /* -------------------------------------------------------------

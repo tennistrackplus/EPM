@@ -250,6 +250,7 @@ const LoginApp = {
         const cfg = conn.config || {};
         if (conn.provider === "bigquery") {
             BQ.setBillingProject(cfg.billingProjectId || "");
+            BQ.setExportBucket(cfg.exportBucket || "");
             BQ.setSemanticRepo(cfg.semanticRepo || { type: "", url: "" });
         } else if (conn.provider === "snowflake") {
             SF.setAccount(cfg.account || "");
@@ -268,6 +269,7 @@ const LoginApp = {
 
         document.getElementById("connName").value = "";
         document.getElementById("bqBillingProject").value = "";
+        document.getElementById("bqExportBucket").value = "";
         document.getElementById("bqRepoType").value = "";
         document.getElementById("bqRepoUrl").value = "";
         document.getElementById("bqRepoBranch").value = "";
@@ -291,6 +293,7 @@ const LoginApp = {
             const cfg = conn.config || {};
             if (conn.provider === "bigquery") {
                 document.getElementById("bqBillingProject").value = cfg.billingProjectId || "";
+                document.getElementById("bqExportBucket").value = cfg.exportBucket || "";
                 document.getElementById("bqRepoType").value = (cfg.semanticRepo && cfg.semanticRepo.type) || "";
                 document.getElementById("bqRepoUrl").value = (cfg.semanticRepo && cfg.semanticRepo.url) || "";
                 document.getElementById("bqRepoBranch").value = (cfg.semanticRepo && cfg.semanticRepo.branch) || "";
@@ -335,6 +338,7 @@ const LoginApp = {
         if (this.selectedProvider === "bigquery") {
             return {
                 billingProjectId: document.getElementById("bqBillingProject").value.trim(),
+                exportBucket: document.getElementById("bqExportBucket").value.trim(),
                 semanticRepo: {
                     type: document.getElementById("bqRepoType").value,
                     url: document.getElementById("bqRepoUrl").value.trim(),

@@ -29,6 +29,22 @@ const BQ = {
         }
     },
 
+    // ---------------------------------------------------------
+    // Bucket de Google Cloud Storage donde se guarda una copia del
+    // Excel activo al pulsar "Guardar en bucket" (ver js/gcsExport.js).
+    // Se guarda junto al resto de config de la conexión BigQuery.
+    // ---------------------------------------------------------
+    getExportBucket() {
+        return localStorage.getItem("bq_export_bucket") || "";
+    },
+    setExportBucket(v) {
+        if (v) {
+            localStorage.setItem("bq_export_bucket", String(v).trim());
+        } else {
+            localStorage.removeItem("bq_export_bucket");
+        }
+    },
+
     /** { type: "github"|"gitlab"|"azure_devops"|"local"|"", url: "", branch: "", token: "" } */
     getSemanticRepo() {
         try {
