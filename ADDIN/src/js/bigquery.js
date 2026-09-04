@@ -78,11 +78,76 @@ const BQ = {
         }
     },
 
-    getToken() {
-        const token = localStorage.getItem("bigquery_access_token");
-        const expires = localStorage.getItem("bigquery_token_expires");
-        if (!token || !expires || Date.now() >= parseInt(expires, 10)) {
+    // ---------------------------------------------------------
+    // El manifest de este add-in NO declara <Runtimes> (shared runtime),
+    // así que commands.html (el runtime aislado que ejecuta los botones
+    // del ribbon, p.ej. AbrirBucketButton/GuardarBucketButton -> commands.js)
+    // tiene su PROPIO localStorage, distinto del de los paneles de tareas
+    // (taskpane.html y el panel de login "ConexionPane"). El login solo
+    // guarda el token en el localStorage del panel, así que ese runtime
+    // del ribbon nunca lo ve y siempre parece "no conectado".
+    //
+    // Office.context.document.settings sí es visible desde CUALQUIER
+    // runtime del mismo documento (paneles y ribbon) — es el mismo
+    // mecanismo de "roaming settings" que ya usan reportStore.js,
+    // filterRangeStore.js y SemanticModelStore en este proyecto — así que
+    // lo usamos aquí también como respaldo del token.
+    // ---------------------------------------------------------
+    _syncTokenToDocumentSettings(token, expires) {
+        try {
+            if (typeof Office === "undefined" || !Office.context || !Office.context.document || !Office.context.document.settings) return;
+            const settings = Office.context.document.settings;
+            if (token && expires) {
+                settings.set("epm_bq_token", token);
+                settings.set("epm_bq_token_expires", String(expires));
+            } else {
+                settings.remove("epm_bq_token");
+                settings.remove("epm_bq_token_expires");
+            }
+            settings.saveAsync();
+        } catch (e) {
+            // Fuera de Excel, o sin documento accesible desde este runtime: no pasa nada.
+        }
+    },
+
+    _getTokenFromDocumentSettings() {
+        try {
+            if (typeof Office === "undefined" || !Office.context || !Office.context.document || !Office.context.document.settings) return null;
+            const settings = Office.context.document.settings;
+            const token = settings.get("epm_bq_token");
+            const expires = settings.get("epm_bq_token_expires");
+            if (!token || !expires || Date.now() >= parseInt(expires, 10)) return null;
+            return { token, expires };
+        } catch (e) {
             return null;
+        }
+    },
+
+    /** Guarda el token tras un login correcto: en localStorage (rápido,
+     *  para este mismo runtime) y en Office.context.document.settings
+     *  (para que lo vean también el resto de runtimes, incluido el
+     *  aislado de los botones del ribbon). Llamar desde login.js. */
+    setToken(token, expiresAt) {
+        localStorage.setItem("bigquery_access_token", token);
+        localStorage.setItem("bigquery_token_expires", String(expiresAt));
+        this._syncTokenToDocumentSettings(token, expiresAt);
+    },
+
+    getToken() {
+        let token = localStorage.getItem("bigquery_access_token");
+        let expires = localStorage.getItem("bigquery_token_expires");
+        if (!token || !expires || Date.now() >= parseInt(expires, 10)) {
+            // Este runtime puede no tener el token en su propio localStorage
+            // (p.ej. el runtime aislado del ribbon): lo intentamos recuperar
+            // de Office.context.document.settings antes de rendirnos.
+            const fromSettings = this._getTokenFromDocumentSettings();
+            if (!fromSettings) return null;
+            token = fromSettings.token;
+            expires = fromSettings.expires;
+            // Lo copiamos a este localStorage para que las próximas lecturas
+            // en este mismo runtime sean inmediatas.
+            localStorage.setItem("bigquery_access_token", token);
+            localStorage.setItem("bigquery_token_expires", expires);
         }
         return token;
     },
@@ -101,9 +166,15 @@ const BQ = {
     // diálogo añade el token vigente a la URL (ver getSessionQueryParams),
     // y el propio diálogo lo copia a SU localStorage nada más cargar
     // (ver hydrateSessionFromDialogParams), antes de comprobar isConnected().
+    //
+    // getSessionQueryParams() usa this.getToken() (no localStorage
+    // directamente) precisamente para que esto funcione también cuando
+    // quien abre el diálogo es el runtime aislado del ribbon: getToken()
+    // ya sabe recuperar el token de Office.context.document.settings si
+    // su propio localStorage está vacío.
     // ---------------------------------------------------------
     getSessionQueryParams() {
-        const token = localStorage.getItem("bigquery_access_token");
+        const token = this.getToken();
         const expires = localStorage.getItem("bigquery_token_expires");
         if (!token || !expires) return "";
         return `epmTok=${encodeURIComponent(token)}&epmExp=${encodeURIComponent(expires)}`;
@@ -121,6 +192,7 @@ const BQ = {
     logout() {
         localStorage.removeItem("bigquery_access_token");
         localStorage.removeItem("bigquery_token_expires");
+        this._syncTokenToDocumentSettings(null, null);
     },
 
     async request(path, options = {}) {
