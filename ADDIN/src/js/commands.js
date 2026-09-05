@@ -3470,10 +3470,36 @@ async function handleDracoRowsSingleClick(eventArgs) {
         const isDoubleClick = clickInfo.isDouble;
 
         await Excel.run(async (context) => {
-            const located = await findDracoRowsNamedRangeForCell(context, eventArgs.worksheetId, addr);
-            if (!located) return; // el clic no cayó dentro de ninguna tabla de Filas de Draco
-
             const sheet = context.workbook.worksheets.getItem(eventArgs.worksheetId);
+
+            // A53/A54: traza SIEMPRE, incluso si el clic no cae dentro de
+            // ninguna tabla Draco_XXX_Rows. Así se puede distinguir:
+            //   - Si A53/A54 NO cambian en absoluto -> el evento
+            //     onSingleClicked ni siquiera se está disparando para ese
+            //     clic (problema de registro/hoja, no de rango).
+            //   - Si A53/A54 SÍ cambian pero A55 dice "fuera de rango" ->
+            //     el clic se detecta bien, pero esa celda no pertenece a
+            //     Draco_XXX_Rows (hay que revisar a qué rango con nombre
+            //     pertenece realmente esa columna/celda).
+            sheet.getRange("A53:A54").values = [
+                [`Click1 (anterior)=${clickInfo.click1Time ? formatDracoClickTime(clickInfo.click1Time) + " @" + clickInfo.click1Addr : "(ninguno todavía)"}`],
+                [`Click2 (actual)=${formatDracoClickTime(clickInfo.click2Time)} @${clickInfo.click2Addr} | Delta=${clickInfo.deltaMs === null ? "-" : clickInfo.deltaMs + "ms"} (umbral=${DRACO_DOUBLE_CLICK_MS}ms) | EsDobleClick=${isDoubleClick ? "SI" : "NO"}`]
+            ];
+            await context.sync();
+
+            const located = await findDracoRowsNamedRangeForCell(context, eventArgs.worksheetId, addr);
+            if (!located) {
+                // Se detectó el clic (A53/A54 ya actualizadas arriba) pero
+                // cae fuera de cualquier Draco_XXX_Rows: se anota y se sale.
+                sheet.getRange("A55:A58").values = [
+                    [`FUERA DE RANGO: addr=${addr} no pertenece a ningún Draco_XXX_Rows.`],
+                    [""],
+                    [""],
+                    [""]
+                ];
+                await context.sync();
+                return;
+            }
             const cell = sheet.getRange(addr);
             cell.load([
                 "values",
@@ -3591,11 +3617,9 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 `celda=${cell.format.font.name} ${cell.format.font.size}pt | Normal=${normalStyle.font.name} ${normalStyle.font.size}pt | texto="${cellText}"`
             ]];
 
-            // A53:A58 — traza detallada de cada clic, para depurar por qué
-            // no se abre el buscador de miembros. Se reescribe en TODOS
-            // los clics (simples y dobles), así que siempre se ve el
-            // último estado, incluyendo el clic1 (anterior) y clic2
-            // (actual) que se comparan para decidir si hay doble clic.
+            // A55:A58 — resto de la traza detallada de este clic (A53/A54
+            // ya se escribieron al principio de la función, antes de
+            // saber siquiera si el clic caía dentro de un Draco_XXX_Rows).
             if (isDoubleClick) {
                 console.log(`[Draco] Doble clic detectado en ${addr} (${located.rangeName}).`);
             }
@@ -3611,14 +3635,12 @@ async function handleDracoRowsSingleClick(eventArgs) {
                     : "(no evaluado)");
 
             const traceRows = [
-                [`Click1 (anterior)=${clickInfo.click1Time ? formatDracoClickTime(clickInfo.click1Time) + " @" + clickInfo.click1Addr : "(ninguno todavía)"}`],
-                [`Click2 (actual)=${formatDracoClickTime(clickInfo.click2Time)} @${clickInfo.click2Addr} | Delta=${clickInfo.deltaMs === null ? "-" : clickInfo.deltaMs + "ms"} (umbral=${DRACO_DOUBLE_CLICK_MS}ms)`],
-                [`EsDobleClick=${isDoubleClick ? "SI" : "NO"} | SobreIconoJerarquia=${hasHierarchyGlyph ? "SI" : "NO"} (resultado=${resultado})`],
+                [`SobreIconoJerarquia=${hasHierarchyGlyph ? "SI" : "NO"} (resultado=${resultado}) | Rango=${located.rangeName} Nivel=${located.level}`],
                 [`EntraPorEstaticos=${staticInfo}`],
                 [`CampoLocalizado=${campoInfo}`],
                 [`AccionFinal=${accionTexto ? accionTexto.replace(/^ \| Accion: /, "") : "(ninguna)"}`]
             ];
-            const traceRange = sheet.getRange("A53:A58");
+            const traceRange = sheet.getRange("A55:A58");
             traceRange.values = traceRows;
 
             await context.sync();
