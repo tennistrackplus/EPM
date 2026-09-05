@@ -595,6 +595,40 @@ function loadFilters(editReportGrid) {
     }
 }
 
+/**
+ * Añade a ReportState.Filters los filtros "bloqueados" creados con el
+ * botón "Añadir filtro" (rangos con nombre Draco_Filter_…, ver
+ * FilterRangeStore): los atados directamente a este informe (meta.reportId
+ * === reportId), más los creados para "Todos los informes" (meta.reportId
+ * null). Solo participan los que YA tienen un filtro elegido (meta.filter
+ * distinto de null); el rango recién creado, sin doble clic todavía, no
+ * añade ninguna condición. buildWhere() no distingue estos de los filtros
+ * normales de la zona "Filtros": se combinan todos con AND, igual que
+ * antes.
+ */
+function appendLockedFilterRangesToState(reportId) {
+    if (!window.FilterRangeStore) return;
+    const all = window.FilterRangeStore.getAll();
+
+    for (const rangeName of Object.keys(all)) {
+        const meta = all[rangeName];
+        if (!meta || !meta.filter) continue;
+
+        const isAll = meta.reportId === null || meta.reportId === undefined;
+        const appliesToThisReport = isAll
+            || (reportId !== null && reportId !== undefined && Number(meta.reportId) === Number(reportId));
+        if (!appliesToThisReport) continue;
+
+        ReportState.Filters.push({
+            Dimension: meta.dim,
+            AttributeName: meta.isHierarchy ? "" : meta.name,
+            Value: JSON.stringify(meta.filter),
+            Locked: true,
+            RangeName: rangeName
+        });
+    }
+}
+
 function loadRows(editReportGrid) {
     ReportState.RowCount = 0;
     ReportState.AttrRowCount = 0;
@@ -676,8 +710,9 @@ function loadColumns(editReportGrid) {
     }
 }
 
-function loadReportDefinition(editReportGrid) {
+function loadReportDefinition(editReportGrid, reportId) {
     loadFilters(editReportGrid);
+    appendLockedFilterRangesToState(reportId !== undefined ? reportId : activeReportIdOrNull());
     loadRows(editReportGrid);
     loadColumns(editReportGrid);
 }
@@ -1307,7 +1342,7 @@ async function actualizarInformeFixedCore(reportIdOverride) {
         await ensureDracoResultSheetExists(context, resultSheetName);
         const csvGrid = await getFormulaGrid(context, resultSheetName);
 
-        loadReportDefinition(editReportGrid);
+        loadReportDefinition(editReportGrid, reportId);
 
         sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
 
@@ -2856,6 +2891,33 @@ async function locateDracoFilterRangeAtAddress(context, sheetName, addr) {
 }
 
 /**
+ * Inverso de locateDracoFilterRangeAtAddress: dado el NOMBRE de un rango
+ * de filtro, devuelve en qué hoja y celda está ahora mismo ({sheetName,
+ * addr}), o null si el nombre ya no existe en el libro (p.ej. se borró la
+ * hoja). Lo usa el taskpane para poder reabrir el selector con doble clic
+ * sobre la etiqueta "bloqueada" de la zona Filtros, sin que el usuario
+ * tenga que ir a buscar la celda en Excel.
+ */
+async function resolveDracoFilterRangeAddress(rangeName) {
+    let result = null;
+    await Excel.run(async (context) => {
+        const item = context.workbook.names.getItemOrNullObject(rangeName);
+        item.load("isNullObject");
+        await context.sync();
+        if (item.isNullObject) return;
+
+        const range = item.getRange();
+        range.load("address");
+        const sheet = range.worksheet;
+        sheet.load("name");
+        await context.sync();
+
+        result = { addr: String(range.address).split("!").pop(), sheetName: sheet.name };
+    });
+    return result;
+}
+
+/**
  * Construye los "segmentos" de texto (valor o rango, incluido o excluido)
  * a partir del objeto filtro que devuelve filterDialog.js (mode:"list",
  * ver cabecera de js/filterModal.js). Mismo orden que describeFilter():
@@ -2880,52 +2942,58 @@ function buildDracoFilterCellSegments(filter) {
 
 /**
  * Pinta en la celda el resumen del filtro (segmentos separados por ", "),
- * coloreando en granate SOLO los tramos excluidos (Range.getCharacters,
- * ExcelApi 1.16: formato de caracteres dentro de una misma celda). Si el
- * Excel del usuario no soporta esa API, se colorea la celda ENTERA en
+ * coloreando en granate SOLO los tramos excluidos.
+ *
+ * IMPORTANTE: Excel.Range NO tiene un método getCharacters() (eso es de
+ * Word/VBA, no de la Excel JS API). El formato de texto por tramos dentro
+ * de una misma celda ("rich text runs") se hace con
+ * Range.setCellProperties([[{ textRuns: [...] }]]), disponible desde
+ * ExcelApi 1.18 (liberado feb-2025) vía Range.setCellProperties/
+ * getCellProperties + CellPropertiesInternal.textRuns. Si el Excel del
+ * usuario no soporta ese requirement set, se colorea la celda ENTERA en
  * granate cuando haya alguna exclusión — la mejor aproximación posible
- * sin coloreado por carácter.
+ * sin coloreado por tramos.
  */
 async function paintDracoFilterCell(context, sheet, addr, filter) {
     const EXCLUDED_COLOR = "#A80000";
+    const DEFAULT_COLOR = "#000000";
     const segments = buildDracoFilterCellSegments(filter);
     const cell = sheet.getRange(addr);
 
     if (segments.length === 0) {
         cell.values = [[""]];
-        cell.format.font.color = "#000000";
+        cell.format.font.color = DEFAULT_COLOR;
         await context.sync();
         return;
     }
 
-    const fullText = segments.map(s => s.text).join(", ");
-    cell.values = [[fullText]];
-    cell.format.font.color = "#000000";
-    await context.sync();
-
-    let paintedPerCharacter = false;
-    if (Office.context.requirements.isSetSupported("ExcelApi", "1.16")) {
+    if (Office.context.requirements.isSetSupported("ExcelApi", "1.18")) {
         try {
-            let cursor = 0;
-            for (let i = 0; i < segments.length; i++) {
-                const seg = segments[i];
-                if (seg.excluded && seg.text.length > 0) {
-                    const chars = cell.getCharacters(cursor, seg.text.length);
-                    chars.font.color = EXCLUDED_COLOR;
+            const textRuns = [];
+            segments.forEach((seg, i) => {
+                textRuns.push({
+                    text: seg.text,
+                    font: { color: seg.excluded ? EXCLUDED_COLOR : DEFAULT_COLOR }
+                });
+                if (i < segments.length - 1) {
+                    // separador entre segmentos, siempre en color normal
+                    textRuns.push({ text: ", ", font: { color: DEFAULT_COLOR } });
                 }
-                cursor += seg.text.length + (i < segments.length - 1 ? 2 : 0); // ", "
-            }
+            });
+
+            cell.setCellProperties([[{ textRuns }]]);
             await context.sync();
-            paintedPerCharacter = true;
+            return;
         } catch (err) {
-            console.warn("[Draco] Añadir filtro: coloreado por carácter no disponible en este Excel, se colorea la celda completa.", err);
+            console.warn("[Draco] Añadir filtro: coloreado por tramos no disponible en este Excel, se colorea la celda completa.", err);
         }
     }
 
-    if (!paintedPerCharacter && segments.some(s => s.excluded)) {
-        cell.format.font.color = EXCLUDED_COLOR;
-        await context.sync();
-    }
+    // Fallback: ExcelApi < 1.18 (o setCellProperties ha fallado) -> celda completa
+    const fullText = segments.map(s => s.text).join(", ");
+    cell.values = [[fullText]];
+    cell.format.font.color = segments.some(s => s.excluded) ? EXCLUDED_COLOR : DEFAULT_COLOR;
+    await context.sync();
 }
 
 /**
@@ -3005,6 +3073,13 @@ async function openDracoFilterRangePicker(addr, sheetName, rangeName, meta) {
                             console.error("[Draco] Añadir filtro: error pintando el filtro en la celda:", err);
                         } finally {
                             DracoSuppressChangeEvents = false;
+                        }
+                        // Si el taskpane está abierto (mismo contexto que
+                        // commands.js), refresca la zona "Filtros" para que
+                        // la etiqueta bloqueada muestre el nuevo resumen sin
+                        // esperar a que el usuario cambie de informe y vuelva.
+                        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.loadDesignFromSheet) {
+                            try { await TaskPaneApp.loadDesignFromSheet(); } catch (e) { /* taskpane sin informe abierto: se ignora */ }
                         }
                         resolve();
                         return;
@@ -4457,7 +4532,7 @@ async function actualizarInformeCore(reportIdOverride) {
         const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
 
-        loadReportDefinition(editReportGrid);
+        loadReportDefinition(editReportGrid, reportId);
 
         // EDIT_REPORT!D4 = "Mostrar subtotales arriba" (Propiedades del
         // informe). Solo tiene efecto real cuando además hay algún campo
@@ -4617,7 +4692,7 @@ async function actualizarTodosCore(concurrency) {
                     const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
                     const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
                     const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
-                    loadReportDefinition(editReportGrid);
+                    loadReportDefinition(editReportGrid, reportId);
                     const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
                     sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
                 });
@@ -4692,7 +4767,8 @@ window.ReportActions = {
     toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
     convertAxisStaticFormulas, ensureDracoHandlersRegistered,
     // "Añadir filtro" (rango con nombre sobre una celda cualquiera del libro)
-    dracoFilterRangeName, ensureDracoFilterRangeHandlersRegistered
+    dracoFilterRangeName, ensureDracoFilterRangeHandlersRegistered,
+    resolveDracoFilterRangeAddress, openDracoFilterRangePicker
 };
 
 
@@ -4893,6 +4969,40 @@ async function abrirDistribuirValores(event) {
     }
 }
 
+/**
+ * Botón de ribbon "Añadir filtro" (ver AnadirFiltroButton en manifest.xml):
+ * mismo patrón que abrirDistribuirValores/openReportProperties — sin
+ * shared runtime declarado en el manifest, esto se ejecuta en el contexto
+ * aislado de comandos (commands.html), así que se deja marcada la acción
+ * pendiente en Office roaming settings y se fuerza a mostrar el taskpane;
+ * este, al arrancar (o al recibir SettingsChanged si ya estaba abierto),
+ * la recoge en handlePendingRibbonAction() y abre el modal.
+ */
+async function abrirAnadirFiltro(event) {
+    try {
+        console.log("[Draco] abrirAnadirFiltro: shared runtime ¿activo? ->", typeof TaskPaneApp !== "undefined");
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.openAddFilterRangeModal) {
+            TaskPaneApp.openAddFilterRangeModal();
+            console.log("[Draco] openAddFilterRangeModal() ejecutado directamente (shared runtime OK).");
+        } else {
+            console.warn("[Draco] TaskPaneApp NO existe en este contexto: usando fallback de settings (¿manifest sin Runtimes recargado?).");
+            const settings = Office.context.document.settings;
+            settings.set("draco_pendingAction", "addFilterRange");
+            await new Promise((resolve) => settings.saveAsync(resolve));
+        }
+        if (Office.addin && Office.addin.showAsTaskpane) {
+            await Office.addin.showAsTaskpane();
+            console.log("[Draco] showAsTaskpane() resuelto sin error.");
+        } else {
+            console.warn("[Draco] Office.addin.showAsTaskpane no está disponible en este runtime.");
+        }
+    } catch (error) {
+        console.error("Error al abrir 'Añadir filtro':", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
 // Nota: este fichero se carga tanto en el runtime de comandos (commands.html)
 // como, ahora, dentro del propio taskpane (taskpane.html), para poder
 // disparar Actualizar()/ActualizarInforme() (y por tanto jsonTo3Matrices)
@@ -4913,6 +5023,7 @@ try {
     Office.actions.associate("openReportProperties", openReportProperties);
     Office.actions.associate("openFieldOptions", openFieldOptions);
     Office.actions.associate("abrirDistribuirValores", abrirDistribuirValores);
+    Office.actions.associate("abrirAnadirFiltro", abrirAnadirFiltro);
     Office.actions.associate("guardarExcelEnBucket", guardarExcelEnBucket);
     Office.actions.associate("abrirDesdeBucket", abrirDesdeBucket);
 } catch (e) {
