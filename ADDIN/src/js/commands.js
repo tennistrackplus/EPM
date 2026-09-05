@@ -3,6 +3,17 @@
  */
 Office.onReady(() => {
     // Handshake completado para comandos
+
+    // Clic en A50 (cualquier hoja) -> escribe X/Y del clic en A51.
+    // Este mismo fichero (commands.js) se carga tanto en el runtime de
+    // comandos del ribbon (commands.html) como en el taskpane
+    // (taskpane.html lo incluye antes que taskpane.js), así que este
+    // Office.onReady se dispara con lo que ocurra ANTES: que el usuario
+    // abra el panel de tareas o que pulse cualquier botón del ribbon
+    // (p.ej. "Actualizar"). No depende de ningún flujo del taskpane.
+    ensureA50ClickLoggerRegistered().catch(e => {
+        console.warn("[Draco] No se pudo registrar el listener de A50 desde Office.onReady:", e);
+    });
 });
 
 /**
@@ -380,6 +391,32 @@ async function getDracoResultSheetName(context, reportId) {
 }
 
 /**
+ * Recorre los informes guardados en ReportStore y devuelve el id de aquel
+ * cuya hoja de resultados (design.resultSheetName) coincide con
+ * sheetName. Es el camino inverso a getReportResultSheetName/
+ * resultSheetNameFromGrid, necesario porque la petición de
+ * expandir/contraer desde EDIT_REPORT!T1 llega con el NOMBRE de la
+ * pestaña, no con el id de informe.
+ *
+ * Si ningún informe guardado tiene esa hoja asignada (p.ej. informe
+ * antiguo, creado antes de guardar resultSheetName por informe, o
+ * simplemente no hay ReportStore disponible) se usa como último recurso
+ * el informe activo, igual que hace el resto del código con
+ * EDIT_REPORT!D1 (ver resultSheetNameFromGrid).
+ */
+function reportIdForResultSheet(sheetName) {
+    if (window.ReportStore && sheetName) {
+        const store = window.ReportStore.getAllReports() || {};
+        for (const idStr of Object.keys(store)) {
+            const report = store[idStr];
+            const stored = report && report.design ? report.design.resultSheetName : "";
+            if (stored && stored === sheetName) return Number(idStr);
+        }
+    }
+    return activeReportIdOrNull();
+}
+
+/**
  * Crea la hoja de resultados de un informe si todavía no existe (antes se
  * asumía que "CSV_RESULT" ya venía en la plantilla del libro; con una hoja
  * por informe, cada informe nuevo necesita la suya la primera vez que se
@@ -572,6 +609,23 @@ function parseAddress(addr) {
         col = col * 26 + (colLetters.charCodeAt(i) - 64);
     }
     return { row, col };
+}
+
+// Igual que parseAddress, pero para un rango completo ("T1", "T1:V1"...):
+// devuelve el rectángulo {r1,c1,r2,c2} (base 1, normalizado) que ocupa.
+// Se usa para saber si una escritura/pegado en EDIT_REPORT TOCA alguna de
+// las celdas de control T1/U1/V1 aunque venga como un rango más amplio.
+function parseAddressRange(addr) {
+    addr = String(addr).replace(/\$/g, "");
+    const parts = addr.split(":");
+    const first = parseAddress(parts[0]);
+    const second = parts.length > 1 ? parseAddress(parts[1]) : first;
+    return {
+        r1: Math.min(first.row, second.row),
+        r2: Math.max(first.row, second.row),
+        c1: Math.min(first.col, second.col),
+        c2: Math.max(first.col, second.col)
+    };
 }
 
 /* ---------------------------------------------------------------------
@@ -2475,10 +2529,11 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         // que OLVIDAR tanto los indicadores ya registrados de ese eje como
         // su estado de contraído — si no, quedan entradas obsoletas en
         // DracoIndicatorMap que siguen apuntando a esas mismas posiciones
-        // de celda (ahora con fórmula EPM_VALUE, sin jerarquía), y un clic
-        // del usuario ahí dispara handleDracoSelectionChanged, que las
-        // toma por buenas e intenta un repintado/"refresco" con el último
-        // JSON, aunque el eje ya no tenga jerarquías desplegables.
+        // de celda (ahora con fórmula EPM_VALUE, sin jerarquía), y una
+        // petición desde EDIT_REPORT!T1:V1 sobre esa misma posición (ver
+        // handleDracoEditReportExpandCollapseRequest) las tomaría por
+        // buenas e intentaría un repintado/"refresco" con el último JSON,
+        // aunque el eje ya no tenga jerarquías desplegables.
         const indicatorMap = getDracoIndicatorMap(reportId);
         for (const [key, meta] of indicatorMap) {
             if (meta.axis === stateAxis) indicatorMap.delete(key);
@@ -2808,8 +2863,8 @@ async function updateCrearInformeLabelForAddress(addr) {
 
 /**
  * onSelectionChanged: dispara la comprobación anterior con la dirección
- * seleccionada. Es un listener más, independiente de handleDracoSelectionChanged
- * y handleDracoMemberRecognitionSelection (no altera su comportamiento).
+ * seleccionada. Es un listener más, independiente de
+ * handleDracoMemberRecognitionSelection (no altera su comportamiento).
  */
 async function handleDracoRibbonLabelSelection(eventArgs) {
     try {
@@ -3189,6 +3244,93 @@ async function ensureDracoFilterRangeHandlersRegistered() {
     }
 }
 
+/* ---------------------------------------------------------------------
+ * Registro del clic en la celda A50 (cualquier hoja): al hacer clic
+ * izquierdo sobre A50, escribe en A51 la posición (X, Y) del clic
+ * DENTRO de la celda (offset en puntos desde la esquina superior
+ * izquierda de A50). Usa el evento onSingleClicked (ExcelApi 1.10), que
+ * es distinto de onSelectionChanged: se dispara con cada clic, aunque
+ * la celda ya estuviera seleccionada.
+ * ------------------------------------------------------------------- */
+
+/** Normaliza una dirección de celda: quita el prefijo de hoja ("Hoja1!"),
+ *  los símbolos de referencia absoluta ("$") y pasa a mayúsculas, para
+ *  poder comparar de forma fiable contra "A50". */
+function normalizeA50Address(addr) {
+    if (!addr) return "";
+    let a = addr;
+    if (a.indexOf("!") !== -1) a = a.split("!").pop();
+    return a.replace(/\$/g, "").toUpperCase();
+}
+
+async function handleA50SingleClick(eventArgs) {
+    try {
+        const addr = normalizeA50Address(eventArgs && eventArgs.address);
+        if (addr !== "A50") return; // solo nos interesa el clic en A50
+
+        const offsetX = eventArgs.offsetX;
+        const offsetY = eventArgs.offsetY;
+
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItem(eventArgs.worksheetId);
+            const target = sheet.getRange("A51");
+            target.values = [[`X: ${offsetX} pt, Y: ${offsetY} pt`]];
+            await context.sync();
+        });
+    } catch (e) {
+        console.error("[Draco] Error registrando el clic en A50:", e);
+    }
+}
+
+const A50ClickHandlerRegisteredSheets = new Set();
+let A50ClickOnAddedRegistered = false;
+
+/**
+ * Engancha handleA50SingleClick en TODAS las hojas del libro (A50 puede
+ * estar en cualquiera) y en las hojas que se añadan después. Se puede
+ * llamar varias veces sin problema (cada hoja solo se engancha una vez).
+ */
+async function ensureA50ClickLoggerRegistered() {
+    try {
+        await Excel.run(async (context) => {
+            const sheets = context.workbook.worksheets;
+            sheets.load("items/name");
+            await context.sync();
+
+            sheets.items.forEach(sheet => {
+                if (A50ClickHandlerRegisteredSheets.has(sheet.name)) return;
+                sheet.onSingleClicked.add(handleA50SingleClick);
+                A50ClickHandlerRegisteredSheets.add(sheet.name);
+            });
+
+            if (!A50ClickOnAddedRegistered) {
+                sheets.onAdded.add(async (e) => {
+                    try {
+                        await Excel.run(async (ctx) => {
+                            const sheet = ctx.workbook.worksheets.getItem(e.worksheetId);
+                            sheet.load("name");
+                            await ctx.sync();
+                            if (!A50ClickHandlerRegisteredSheets.has(sheet.name)) {
+                                sheet.onSingleClicked.add(handleA50SingleClick);
+                                A50ClickHandlerRegisteredSheets.add(sheet.name);
+                                await ctx.sync();
+                            }
+                        });
+                    } catch (err) {
+                        console.warn("[Draco] No se pudo enganchar el listener de A50 en la hoja nueva:", err);
+                    }
+                });
+                A50ClickOnAddedRegistered = true;
+            }
+
+            await context.sync();
+        });
+        console.log("[Draco] Listener de clic en A50 registrado en todas las hojas.");
+    } catch (e) {
+        console.warn("[Draco] No se pudo registrar el listener de clic en A50 (¿host sin soporte de ExcelApi 1.10?):", e);
+    }
+}
+
 /**
  * Parser mínimo del JSON de BigQuery a una lista plana {text, attribute,
  * value} — copia local de loadJsonTree (filterModal.js) para no depender
@@ -3406,16 +3548,146 @@ async function handleEditReportMemberPickerRequest(eventArgs) {
 
 
 
+// Celdas de control de EDIT_REPORT para pedir un expandir/contraer sin
+// pasar por onSelectionChanged (ver handleDracoEditReportExpandCollapseRequest).
+// No se usan D15/E15/F15 (como se planteó al principio) porque esa zona
+// (fila >=15, columnas C:F) está reservada al primer filtro del diseño
+// (ver isDesignOwnedCell y el comentario "C15:F.. -> filtros" en
+// reportStore.js): aunque el JS ya no las lee para los filtros (gana
+// siempre el JSON), reutilizarlas aquí podría chocar con el XLAM si en
+// algún momento vuelve a escribir físicamente ahí. T1/U1/V1 están fuera
+// de cualquier zona ya usada (picker A1:A5, B1, D1/D4/D5/D6/E1/G1, X1/Y1,
+// H10/N10/H12/N12 y toda la fila >=15 de C a S).
+const DRACO_EXPAND_COLLAPSE_SHEET_CELL = "T1"; // nombre de la pestaña de resultados
+const DRACO_EXPAND_COLLAPSE_TARGET_CELL = "U1"; // celda con el indicador +/- a tocar
+const DRACO_EXPAND_COLLAPSE_FLAG_CELL = "V1"; // "E"/"EXPANDIR" o "C"/"CONTRAER" (opcional)
+
 /**
- * Registra (una sola vez) el listener de EDIT_REPORT!A5 que abre el
- * Member Picker. Es INDEPENDIENTE de registerDracoSelectionHandler/
- * DracoHandlerRegistered a propósito: antes estaba dentro de esa misma
- * función y compartía su flag, lo que significaba que si CSV_RESULT
- * (la hoja de resultados) todavía no existía —p.ej. sesión recién
- * abierta, sin haber pulsado nunca "Actualizar"— el picker de A5 NO se
- * registraba, aunque EDIT_REPORT sí existiera y el usuario ya estuviera
- * rellenando A1/A2/A4/A5. Con esta función aparte, ensureDracoHandlersRegistered
- * puede engancharla sin depender de que exista CSV_RESULT.
+ * Reemplaza al antiguo handleDracoSelectionChanged (expandía/contraía con
+ * solo seleccionar la celda del indicador +/-). Ahora hace falta rellenar
+ * explícitamente, en EDIT_REPORT:
+ *   T1 -> nombre de la pestaña de resultados (p.ej. "CSV_RESULT")
+ *   U1 -> celda de esa pestaña donde está el indicador +/- a expandir o
+ *         contraer (p.ej. "B7")
+ *   V1 -> opcional: "E"/"EXPANDIR" o "C"/"CONTRAER". Si se omite o trae un
+ *         valor no reconocido, se alterna (mismo comportamiento que el
+ *         clic de antes).
+ *
+ * Se dispara con onChanged de EDIT_REPORT al tocar T1, U1 o V1 (o un
+ * rango que las incluya, p.ej. si se pegan las 3 a la vez), pero solo
+ * actúa si T1 Y U1 tienen valor. Al terminar, limpia T1:V1 (con
+ * DracoSuppressChangeEvents activo, para no reaccionar a nuestra propia
+ * escritura) y así la misma petición puede repetirse más adelante sin
+ * quedarse "pegada" en las celdas.
+ */
+async function handleDracoEditReportExpandCollapseRequest(eventArgs) {
+    try {
+        if (DracoSuppressChangeEvents) return;
+        if (!eventArgs || !eventArgs.address) return;
+
+        let addr = String(eventArgs.address);
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        if (!addr) return;
+
+        const touchedRange = parseAddressRange(addr);
+        const controlCells = [DRACO_EXPAND_COLLAPSE_SHEET_CELL, DRACO_EXPAND_COLLAPSE_TARGET_CELL, DRACO_EXPAND_COLLAPSE_FLAG_CELL]
+            .map(parseAddress);
+        const touchesControlZone = controlCells.some(p =>
+            p.row >= touchedRange.r1 && p.row <= touchedRange.r2 &&
+            p.col >= touchedRange.c1 && p.col <= touchedRange.c2
+        );
+        if (!touchesControlZone) return;
+
+        await Excel.run(async (context) => {
+            const editReport = context.workbook.worksheets.getItem("EDIT_REPORT");
+            const ctrl = editReport.getRange(
+                DRACO_EXPAND_COLLAPSE_SHEET_CELL + ":" + DRACO_EXPAND_COLLAPSE_FLAG_CELL
+            );
+            ctrl.load("values");
+            await context.sync();
+
+            const sheetName = String(ctrl.values[0][0] || "").trim();
+            const targetAddr = String(ctrl.values[0][1] || "").trim();
+            const flag = String(ctrl.values[0][2] || "").trim().toUpperCase();
+
+            if (!sheetName || !targetAddr) return; // hacen falta las 2
+
+            console.log("[Draco] Petición de expandir/contraer desde EDIT_REPORT:", { sheetName, targetAddr, flag });
+
+            const reportId = reportIdForResultSheet(sheetName);
+            const indicatorMap = getDracoIndicatorMap(reportId);
+
+            if (indicatorMap.size > 0) {
+                const resultSheet = context.workbook.worksheets.getItemOrNullObject(sheetName);
+                resultSheet.load("isNullObject");
+                await context.sync();
+
+                if (resultSheet.isNullObject) {
+                    console.warn("[Draco] EDIT_REPORT!T1 apunta a una pestaña que no existe:", sheetName);
+                } else {
+                    const targetRange = resultSheet.getRange(targetAddr);
+                    targetRange.load(["rowCount", "columnCount", "rowIndex", "columnIndex", "formulas"]);
+                    await context.sync();
+
+                    if (targetRange.rowCount === 1 && targetRange.columnCount === 1) {
+                        // Misma salvaguarda que tenía el clic: una celda de eje
+                        // Estático es una fórmula EPM_VALUE (sin glifo +/-).
+                        const formula = targetRange.formulas[0][0];
+                        const isStaticFormula = typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula);
+
+                        const key = (targetRange.rowIndex + 1) + "_" + (targetRange.columnIndex + 1);
+                        const meta = indicatorMap.get(key);
+
+                        if (meta && !isStaticFormula) {
+                            const st = getDracoCollapseState(reportId)[meta.axis];
+                            if (flag === "C" || flag === "CONTRAER") {
+                                st.collapsed.add(meta.nodeKey);
+                            } else if (flag === "E" || flag === "EXPANDIR") {
+                                st.collapsed.delete(meta.nodeKey);
+                            } else if (st.collapsed.has(meta.nodeKey)) {
+                                st.collapsed.delete(meta.nodeKey);
+                            } else {
+                                st.collapsed.add(meta.nodeKey);
+                            }
+
+                            const lastJson = DracoLastJsonByReport.get(dracoStateKey(reportId));
+                            if (lastJson) {
+                                await jsonTo3Matrices(context, lastJson, reportId);
+                            }
+                        } else {
+                            console.warn("[Draco] EDIT_REPORT!U1 no apunta a un indicador +/- válido:", sheetName, targetAddr);
+                        }
+                    }
+                }
+            }
+
+            // Consumimos la petición (igual que A5 con el Member Picker) para
+            // que T1/U1 rellenas no sigan disparando el handler indefinidamente.
+            DracoSuppressChangeEvents = true;
+            editReport.getRange(
+                DRACO_EXPAND_COLLAPSE_SHEET_CELL + ":" + DRACO_EXPAND_COLLAPSE_FLAG_CELL
+            ).clear(Excel.ClearApplyTo.contents);
+            await context.sync();
+        });
+    } catch (e) {
+        console.error("[Draco] Error al expandir/contraer desde EDIT_REPORT!T1:V1:", e);
+    } finally {
+        DracoSuppressChangeEvents = false;
+    }
+}
+
+/**
+ * Registra (una sola vez) los listeners de EDIT_REPORT que no dependen de
+ * que exista ninguna hoja de resultados: el picker de A5 (Member Picker)
+ * y la petición de expandir/contraer de T1:V1. Es INDEPENDIENTE de
+ * registerDracoSelectionHandler/DracoHandlerRegistered a propósito: antes
+ * el picker estaba dentro de esa misma función y compartía su flag, lo
+ * que significaba que si CSV_RESULT (la hoja de resultados) todavía no
+ * existía —p.ej. sesión recién abierta, sin haber pulsado nunca
+ * "Actualizar"— el picker de A5 NO se registraba, aunque EDIT_REPORT sí
+ * existiera y el usuario ya estuviera rellenando A1/A2/A4/A5. Con esta
+ * función aparte, ensureDracoHandlersRegistered puede engancharla sin
+ * depender de que exista CSV_RESULT.
  */
 async function registerEditReportPickerHandler(context) {
     if (DracoEditReportHandlerRegistered) return;
@@ -3430,10 +3702,11 @@ async function registerEditReportPickerHandler(context) {
     }
 
     editReport.onChanged.add(handleEditReportMemberPickerRequest);
+    editReport.onChanged.add(handleDracoEditReportExpandCollapseRequest);
     await context.sync();
 
     DracoEditReportHandlerRegistered = true;
-    console.log("[Draco] Listener de EDIT_REPORT!A5 (Member Picker) registrado.");
+    console.log("[Draco] Listeners de EDIT_REPORT!A5 (Member Picker) y T1:V1 (expandir/contraer) registrados.");
 }
 
 // sheetName es el nombre de la hoja de resultados donde vive `sheet`: cada
@@ -3445,7 +3718,6 @@ async function registerEditReportPickerHandler(context) {
 async function registerDracoSelectionHandler(context, sheet, sheetName) {
     if (DracoHandlerRegisteredSheets.has(sheetName)) return;
 
-    sheet.onSelectionChanged.add(handleDracoSelectionChanged);
     sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
     sheet.onSelectionChanged.add(handleDracoRibbonLabelSelection);
     sheet.onChanged.add(handleDracoMemberRecognitionChanged);
@@ -3495,59 +3767,6 @@ async function ensureDracoHandlersRegistered() {
         });
     } catch (e) {
         console.warn("[Draco] No se pudieron registrar los listeners de forma temprana:", e);
-    }
-}
-
-/**
- * Handler del clic (selección de una sola celda) sobre un indicador +/-:
- * alterna el estado contraído/expandido de ese nodo y repinta reutilizando
- * el último JSON de BigQuery (sin volver a consultar).
- */
-async function handleDracoSelectionChanged(eventArgs) {
-    const reportId = activeReportIdOrNull();
-    const indicatorMap = getDracoIndicatorMap(reportId);
-    if (indicatorMap.size === 0) return;
-
-    try {
-        let addr = (eventArgs && eventArgs.address) || "";
-        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
-        if (!addr) return;
-
-        await Excel.run(async (context) => {
-            const resultSheetName = await getDracoResultSheetName(context, reportId);
-            const sheet = context.workbook.worksheets.getItem(resultSheetName);
-            const range = sheet.getRange(addr);
-            range.load(["rowCount", "columnCount", "rowIndex", "columnIndex", "formulas"]);
-            await context.sync();
-
-            if (range.rowCount !== 1 || range.columnCount !== 1) return;
-
-            const key = (range.rowIndex + 1) + "_" + (range.columnIndex + 1);
-            const meta = indicatorMap.get(key);
-            if (!meta) return;
-
-            // Salvaguarda adicional: una celda de eje Estático es una
-            // fórmula EPM_VALUE (sin glifo +/-); si por lo que sea quedara
-            // una entrada obsoleta en el mapa de indicadores apuntando
-            // aquí, no se actúa (evita el repintado/"refresco" fantasma en
-            // Estático).
-            const formula = range.formulas[0][0];
-            if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) return;
-
-            const st = getDracoCollapseState(reportId)[meta.axis];
-            if (st.collapsed.has(meta.nodeKey)) {
-                st.collapsed.delete(meta.nodeKey);
-            } else {
-                st.collapsed.add(meta.nodeKey);
-            }
-
-            const lastJson = DracoLastJsonByReport.get(dracoStateKey(reportId));
-            if (lastJson) {
-                await jsonTo3Matrices(context, lastJson, reportId);
-            }
-        });
-    } catch (e) {
-        console.error("Error al contraer/expandir jerarquía Draco:", e);
     }
 }
 
@@ -4768,7 +4987,9 @@ window.ReportActions = {
     convertAxisStaticFormulas, ensureDracoHandlersRegistered,
     // "Añadir filtro" (rango con nombre sobre una celda cualquiera del libro)
     dracoFilterRangeName, ensureDracoFilterRangeHandlersRegistered,
-    resolveDracoFilterRangeAddress, openDracoFilterRangePicker
+    resolveDracoFilterRangeAddress, openDracoFilterRangePicker,
+    // Registro del clic en A50 -> escribe X/Y del clic en A51
+    ensureA50ClickLoggerRegistered
 };
 
 

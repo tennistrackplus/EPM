@@ -473,6 +473,11 @@ const TaskPaneApp = {
                 await window.ReportActions.ensureDracoFilterRangeHandlersRegistered();
             }
         });
+        // Nota: el listener de clic en A50 -> A51 NO se registra aquí.
+        // Se registra en commands.js (Office.onReady), que se carga tanto
+        // en este taskpane como en el runtime de comandos del ribbon, así
+        // que se activa con lo que ocurra antes: abrir el panel o pulsar
+        // cualquier botón del ribbon (p.ej. "Actualizar").
     },
 
     /**
