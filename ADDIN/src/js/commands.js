@@ -4,15 +4,16 @@
 Office.onReady(() => {
     // Handshake completado para comandos
 
-    // Clic en A50 (cualquier hoja) -> escribe X/Y del clic en A51.
+    // Clic en celdas de Draco_XXX_Rows (cualquier hoja) -> escribe el
+    // resultado (zona + jerarquía SI/NO) en A51.
     // Este mismo fichero (commands.js) se carga tanto en el runtime de
     // comandos del ribbon (commands.html) como en el taskpane
     // (taskpane.html lo incluye antes que taskpane.js), así que este
     // Office.onReady se dispara con lo que ocurra ANTES: que el usuario
     // abra el panel de tareas o que pulse cualquier botón del ribbon
     // (p.ej. "Actualizar"). No depende de ningún flujo del taskpane.
-    ensureA50ClickLoggerRegistered().catch(e => {
-        console.warn("[Draco] No se pudo registrar el listener de A50 desde Office.onReady:", e);
+    ensureDracoRowsClickLoggerRegistered().catch(e => {
+        console.warn("[Draco] No se pudo registrar el listener de Draco_*_Rows desde Office.onReady:", e);
     });
 });
 
@@ -3245,44 +3246,79 @@ async function ensureDracoFilterRangeHandlersRegistered() {
 }
 
 /* ---------------------------------------------------------------------
- * Registro del clic en la celda A50 (cualquier hoja): al hacer clic
- * izquierdo sobre A50, se clasifica SIEMPRE en una de 3 zonas según el
- * offsetX del clic (en puntos, desde la esquina izquierda de la celda),
- * y se escribe el resultado en A51:
- *   - "Izquierda" -> el clic cae en la zona del padding + indentLevel,
- *                    ANTES de que empiece la primera letra.
- *   - "Letra"     -> el clic cae dentro del ancho estimado de esa
- *                    primera letra.
- *   - "Derecha"   -> el clic cae DESPUÉS del final de la primera letra.
+ * Registro del clic en cualquier celda de las tablas de Filas de Draco
+ * (rangos con nombre Draco_001_Rows, Draco_002_Rows, ...): al hacer clic
+ * izquierdo sobre una celda que caiga dentro de alguno de esos rangos, se
+ * clasifica el clic en una de 3 zonas según el offsetX (en puntos, desde
+ * la esquina izquierda de la celda) -Izquierda / Letra / Derecha-, y
+ * además se comprueba si el texto de la celda empieza por el glifo "▾"
+ * (nodo de jerarquía EXPANDIDO) para escribir "Jerarquia: SI/NO". Todo
+ * el resultado se escribe en A51 de la MISMA hoja donde se ha hecho clic.
  *
- * Usa el evento onSingleClicked (ExcelApi 1.10), que es distinto de
- * onSelectionChanged: se dispara con cada clic, aunque la celda ya
- * estuviera seleccionada, y trae offsetX/offsetY (en puntos, desde la
- * esquina superior izquierda de la celda).
+ * Usa onSingleClicked (ExcelApi 1.10), igual que la versión anterior
+ * sobre A50: se dispara con cada clic (aunque la celda ya estuviera
+ * seleccionada) y trae offsetX/offsetY.
  *
- * IMPORTANTE — esto es una APROXIMACIÓN, no una medida exacta:
- * Office.js no expone las métricas reales de renderizado de Excel (la
- * fuente del sistema con la que Excel pinta, hinting, kerning, DPI del
- * monitor...). Lo que hacemos es:
- *   1) Medir con un <canvas> oculto el ancho de una "D" mayúscula con el
- *      nombre/tamaño/negrita/cursiva de la fuente de A50 (referencia de
- *      ancho de letra pedida).
- *   2) Calcular el ancho del indentado como "3 espacios de esa fuente
- *      por cada nivel de indentLevel", que es la regla que documenta el
- *      propio formato de Excel para IndentLevel (no hay una API que
- *      devuelva el valor exacto en puntos).
- * El resultado puede desviarse unos puntos del pixel exacto que pinta
- * Excel, sobre todo con fuentes poco comunes o en pantallas con escalado.
+ * NOTA: solo se considera "Jerarquia: SI" cuando el texto empieza
+ * exactamente por "▾" (expandido). Un nodo contraído empieza por "▸"
+ * y, tal como se ha pedido, NO cuenta como "SI" aquí.
+ *
+ * IMPORTANTE — la clasificación Izquierda/Letra/Derecha sigue siendo una
+ * APROXIMACIÓN, no una medida exacta (ver notas de estimateFirstLetterBoundsPt
+ * más abajo).
  * ------------------------------------------------------------------- */
 
-/** Normaliza una dirección de celda: quita el prefijo de hoja ("Hoja1!"),
- *  los símbolos de referencia absoluta ("$") y pasa a mayúsculas, para
- *  poder comparar de forma fiable contra "A50". */
-function normalizeA50Address(addr) {
-    if (!addr) return "";
-    let a = addr;
-    if (a.indexOf("!") !== -1) a = a.split("!").pop();
-    return a.replace(/\$/g, "").toUpperCase();
+/**
+ * Busca, entre todos los nombres del libro que cumplan el patrón
+ * "Draco_<n>_Rows", cuál (si alguno) contiene la celda indicada EN LA
+ * MISMA HOJA del clic. Devuelve {rangeName, reportId, level} o null si el
+ * clic no cayó dentro de ninguna tabla de Filas de Draco.
+ * `level` es la posición (1-based) de esa columna dentro del eje de
+ * Filas (columna 1 = primer nivel de la jerarquía).
+ */
+async function findDracoRowsNamedRangeForCell(context, worksheetId, addr) {
+    const sheet = context.workbook.worksheets.getItem(worksheetId);
+    sheet.load("name");
+    const cell = sheet.getRange(addr);
+    cell.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    const names = context.workbook.names;
+    names.load("items/name");
+    await context.sync();
+
+    if (cell.rowCount !== 1 || cell.columnCount !== 1) return null;
+
+    const rowsNames = names.items
+        .map(n => n.name)
+        .filter(n => /^Draco_\d+_Rows$/i.test(n));
+    if (rowsNames.length === 0) return null;
+
+    const candidates = rowsNames.map(name => {
+        const item = context.workbook.names.getItem(name);
+        const range = item.getRange();
+        range.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+        const ws = range.worksheet;
+        ws.load("name");
+        return { name, range, ws };
+    });
+    await context.sync();
+
+    for (const c of candidates) {
+        if (c.ws.name !== sheet.name) continue;
+        const within =
+            cell.rowIndex >= c.range.rowIndex &&
+            cell.rowIndex < c.range.rowIndex + c.range.rowCount &&
+            cell.columnIndex >= c.range.columnIndex &&
+            cell.columnIndex < c.range.columnIndex + c.range.columnCount;
+        if (within) {
+            const m = c.name.match(/^Draco_(\d+)_Rows$/i);
+            return {
+                rangeName: c.name,
+                reportId: m ? Number(m[1]) : null,
+                level: (cell.columnIndex - c.range.columnIndex) + 1
+            };
+        }
+    }
+    return null;
 }
 
 // Contexto de canvas reutilizado para medir texto (evita crear un
@@ -3349,18 +3385,24 @@ function estimateFirstLetterBoundsPt(cellFontName, cellFontSizePt, cellBold, cel
     return { start, end, dWidthPt, indentWidthPt, spaceWidthPt };
 }
 
-async function handleA50SingleClick(eventArgs) {
+async function handleDracoRowsSingleClick(eventArgs) {
     try {
-        const addr = normalizeA50Address(eventArgs && eventArgs.address);
-        if (addr !== "A50") return; // solo nos interesa el clic en A50
+        let addr = (eventArgs && eventArgs.address) || "";
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        addr = addr.replace(/\$/g, "").toUpperCase();
+        if (!addr) return;
 
         const offsetX = eventArgs.offsetX;
         const offsetY = eventArgs.offsetY;
 
         await Excel.run(async (context) => {
+            const located = await findDracoRowsNamedRangeForCell(context, eventArgs.worksheetId, addr);
+            if (!located) return; // el clic no cayó dentro de ninguna tabla de Filas de Draco
+
             const sheet = context.workbook.worksheets.getItem(eventArgs.worksheetId);
-            const cell = sheet.getRange("A50");
+            const cell = sheet.getRange(addr);
             cell.load([
+                "values",
                 "format/font/name",
                 "format/font/size",
                 "format/font/bold",
@@ -3369,12 +3411,16 @@ async function handleA50SingleClick(eventArgs) {
                 "format/columnWidth"
             ]);
 
-            // Fuente del estilo "Normal" del libro: es la que Excel usa
-            // como unidad de medida del indentado (no la de la celda).
+            // Fuente del estilo "Normal" del libro: unidad de medida del indentado.
             const normalStyle = context.workbook.styles.getItem("Normal");
             normalStyle.load(["font/name", "font/size"]);
 
             await context.sync();
+
+            const cellText = String((cell.values && cell.values[0] && cell.values[0][0]) || "");
+            // Solo cuenta como "SI" si empieza EXACTAMENTE por el glifo de
+            // expandido ("▾"); un nodo contraído ("▸") cuenta como "NO".
+            const jerarquiaTexto = cellText.indexOf("▾") === 0 ? "SI" : "NO";
 
             const bounds = estimateFirstLetterBoundsPt(
                 cell.format.font.name,
@@ -3386,12 +3432,6 @@ async function handleA50SingleClick(eventArgs) {
                 normalStyle.font.size
             );
 
-            // Clasificación en 3 zonas según dónde cae el clic respecto a
-            // la primera letra estimada:
-            //  - antes de que empiece la letra -> "Izquierda"
-            //  - dentro del ancho de la letra   -> "Letra"
-            //  - después de que termine la letra -> "Derecha"
-            // Siempre se escribe una de las tres en A51.
             let resultado;
             if (offsetX < bounds.start) {
                 resultado = "Izquierda";
@@ -3402,41 +3442,39 @@ async function handleA50SingleClick(eventArgs) {
             }
 
             console.log(
-                `[Draco] Clic en A50 -> offsetX=${offsetX.toFixed(2)}pt | letra estimada entre ${bounds.start.toFixed(2)}pt y ${bounds.end.toFixed(2)}pt ` +
-                `(indent=${cell.format.indentLevel}, fuente celda="${cell.format.font.name}" ${cell.format.font.size}pt, ` +
-                `fuente Normal="${normalStyle.font.name}" ${normalStyle.font.size}pt) -> ${resultado}`
+                `[Draco] Clic en ${located.rangeName} (nivel ${located.level}) -> offsetX=${offsetX.toFixed(2)}pt | ` +
+                `letra estimada entre ${bounds.start.toFixed(2)}pt y ${bounds.end.toFixed(2)}pt -> ${resultado} | Jerarquia: ${jerarquiaTexto}`
             );
 
             const target = sheet.getRange("A51");
-            target.values = [[resultado]];
+            target.values = [[`${resultado} | Jerarquia: ${jerarquiaTexto}`]];
 
-            // A52: volcado de diagnóstico para poder calibrar el cálculo
-            // del indentado/letra con datos reales (X/Y del clic, rango
-            // de letra calculado, indentLevel, ancho de columna, fuente
-            // de la celda y fuente "Normal" usada para el indentado).
+            // A52: volcado de diagnóstico para poder calibrar el cálculo.
             const debugRange = sheet.getRange("A52");
             debugRange.values = [[
-                `X=${offsetX.toFixed(2)} Y=${offsetY.toFixed(2)} | letra=[${bounds.start.toFixed(2)},${bounds.end.toFixed(2)}] | ` +
-                `indent=${cell.format.indentLevel} (espacio=${bounds.spaceWidthPt.toFixed(2)}pt) | colW=${cell.format.columnWidth.toFixed(2)}pt | ` +
-                `celda=${cell.format.font.name} ${cell.format.font.size}pt | Normal=${normalStyle.font.name} ${normalStyle.font.size}pt`
+                `Rango=${located.rangeName} Nivel=${located.level} | X=${offsetX.toFixed(2)} Y=${offsetY.toFixed(2)} | ` +
+                `letra=[${bounds.start.toFixed(2)},${bounds.end.toFixed(2)}] | indent=${cell.format.indentLevel} ` +
+                `(espacio=${bounds.spaceWidthPt.toFixed(2)}pt) | colW=${cell.format.columnWidth.toFixed(2)}pt | ` +
+                `celda=${cell.format.font.name} ${cell.format.font.size}pt | Normal=${normalStyle.font.name} ${normalStyle.font.size}pt | texto="${cellText}"`
             ]];
 
             await context.sync();
         });
     } catch (e) {
-        console.error("[Draco] Error registrando el clic en A50:", e);
+        console.error("[Draco] Error registrando el clic en Draco_*_Rows:", e);
     }
 }
 
-const A50ClickHandlerRegisteredSheets = new Set();
-let A50ClickOnAddedRegistered = false;
+const DracoRowsClickHandlerRegisteredSheets = new Set();
+let DracoRowsClickOnAddedRegistered = false;
 
 /**
- * Engancha handleA50SingleClick en TODAS las hojas del libro (A50 puede
- * estar en cualquiera) y en las hojas que se añadan después. Se puede
- * llamar varias veces sin problema (cada hoja solo se engancha una vez).
+ * Engancha handleDracoRowsSingleClick en TODAS las hojas del libro (los
+ * rangos Draco_XXX_Rows pueden estar en cualquiera) y en las hojas que se
+ * añadan después. Se puede llamar varias veces sin problema (cada hoja
+ * solo se engancha una vez).
  */
-async function ensureA50ClickLoggerRegistered() {
+async function ensureDracoRowsClickLoggerRegistered() {
     try {
         await Excel.run(async (context) => {
             const sheets = context.workbook.worksheets;
@@ -3444,36 +3482,36 @@ async function ensureA50ClickLoggerRegistered() {
             await context.sync();
 
             sheets.items.forEach(sheet => {
-                if (A50ClickHandlerRegisteredSheets.has(sheet.name)) return;
-                sheet.onSingleClicked.add(handleA50SingleClick);
-                A50ClickHandlerRegisteredSheets.add(sheet.name);
+                if (DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) return;
+                sheet.onSingleClicked.add(handleDracoRowsSingleClick);
+                DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
             });
 
-            if (!A50ClickOnAddedRegistered) {
+            if (!DracoRowsClickOnAddedRegistered) {
                 sheets.onAdded.add(async (e) => {
                     try {
                         await Excel.run(async (ctx) => {
                             const sheet = ctx.workbook.worksheets.getItem(e.worksheetId);
                             sheet.load("name");
                             await ctx.sync();
-                            if (!A50ClickHandlerRegisteredSheets.has(sheet.name)) {
-                                sheet.onSingleClicked.add(handleA50SingleClick);
-                                A50ClickHandlerRegisteredSheets.add(sheet.name);
+                            if (!DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) {
+                                sheet.onSingleClicked.add(handleDracoRowsSingleClick);
+                                DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
                                 await ctx.sync();
                             }
                         });
                     } catch (err) {
-                        console.warn("[Draco] No se pudo enganchar el listener de A50 en la hoja nueva:", err);
+                        console.warn("[Draco] No se pudo enganchar el listener de Draco_*_Rows en la hoja nueva:", err);
                     }
                 });
-                A50ClickOnAddedRegistered = true;
+                DracoRowsClickOnAddedRegistered = true;
             }
 
             await context.sync();
         });
-        console.log("[Draco] Listener de clic en A50 registrado en todas las hojas.");
+        console.log("[Draco] Listener de clic en rangos Draco_*_Rows registrado en todas las hojas.");
     } catch (e) {
-        console.warn("[Draco] No se pudo registrar el listener de clic en A50 (¿host sin soporte de ExcelApi 1.10?):", e);
+        console.warn("[Draco] No se pudo registrar el listener de clic en Draco_*_Rows (¿host sin soporte de ExcelApi 1.10?):", e);
     }
 }
 
@@ -5134,8 +5172,8 @@ window.ReportActions = {
     // "Añadir filtro" (rango con nombre sobre una celda cualquiera del libro)
     dracoFilterRangeName, ensureDracoFilterRangeHandlersRegistered,
     resolveDracoFilterRangeAddress, openDracoFilterRangePicker,
-    // Registro del clic en A50 -> escribe X/Y del clic en A51
-    ensureA50ClickLoggerRegistered
+    // Registro del clic en Draco_XXX_Rows -> escribe zona + Jerarquia SI/NO en A51
+    ensureDracoRowsClickLoggerRegistered
 };
 
 
