@@ -3319,16 +3319,29 @@ const A50_CELL_LEFT_PADDING_PT = 1;
  * Devuelve el rango [start, end] en puntos (relativo a la esquina
  * izquierda de la celda) donde se estima que cae la "primera letra",
  * usando el ancho de una "D" mayúscula como referencia.
+ *
+ * OJO: el ancho de la "D" se mide con la fuente DE LA CELDA (A50), pero
+ * el ancho del indentado se mide con la fuente del estilo "Normal" del
+ * libro — es la que usa Excel internamente como unidad de medida del
+ * indentado (y también del ancho de columna en "caracteres"), NO la
+ * fuente concreta que tenga puesta la celda. Con fuentes condensadas
+ * (p.ej. "Aptos Narrow") calcular el indentado con la fuente de la
+ * celda da un resultado muy desplazado a la derecha.
  */
-function estimateFirstLetterBoundsPt(fontName, fontSizePt, bold, italic, indentLevel) {
+function estimateFirstLetterBoundsPt(cellFontName, cellFontSizePt, cellBold, cellItalic, indentLevel, normalFontName, normalFontSizePt) {
     const ctx = getA50MeasureCtx();
-    ctx.font = buildA50CanvasFont(fontSizePt, fontName, bold, italic);
 
-    const spaceWidthPt = pxToPt(ctx.measureText(" ").width);
+    // Ancho de la "D" -> con la fuente de la celda.
+    ctx.font = buildA50CanvasFont(cellFontSizePt, cellFontName, cellBold, cellItalic);
     const dWidthPt = pxToPt(ctx.measureText("D").width);
 
+    // Ancho del espacio para el indentado -> con la fuente "Normal" del
+    // libro (sin negrita/cursiva, es el estilo base).
+    ctx.font = buildA50CanvasFont(normalFontSizePt, normalFontName, false, false);
+    const spaceWidthPt = pxToPt(ctx.measureText(" ").width);
+
     // Regla de Excel: cada nivel de indentado equivale al ancho de 3
-    // espacios de la fuente.
+    // espacios de la fuente "Normal" del libro.
     const indentWidthPt = (indentLevel || 0) * 3 * spaceWidthPt;
 
     const start = A50_CELL_LEFT_PADDING_PT + indentWidthPt;
@@ -3355,6 +3368,12 @@ async function handleA50SingleClick(eventArgs) {
                 "format/indentLevel",
                 "format/columnWidth"
             ]);
+
+            // Fuente del estilo "Normal" del libro: es la que Excel usa
+            // como unidad de medida del indentado (no la de la celda).
+            const normalStyle = context.workbook.styles.getItem("Normal");
+            normalStyle.load(["font/name", "font/size"]);
+
             await context.sync();
 
             const bounds = estimateFirstLetterBoundsPt(
@@ -3362,7 +3381,9 @@ async function handleA50SingleClick(eventArgs) {
                 cell.format.font.size,
                 cell.format.font.bold,
                 cell.format.font.italic,
-                cell.format.indentLevel
+                cell.format.indentLevel,
+                normalStyle.font.name,
+                normalStyle.font.size
             );
 
             // Clasificación en 3 zonas según dónde cae el clic respecto a
@@ -3382,7 +3403,8 @@ async function handleA50SingleClick(eventArgs) {
 
             console.log(
                 `[Draco] Clic en A50 -> offsetX=${offsetX.toFixed(2)}pt | letra estimada entre ${bounds.start.toFixed(2)}pt y ${bounds.end.toFixed(2)}pt ` +
-                `(indent=${cell.format.indentLevel}, fuente="${cell.format.font.name}" ${cell.format.font.size}pt) -> ${resultado}`
+                `(indent=${cell.format.indentLevel}, fuente celda="${cell.format.font.name}" ${cell.format.font.size}pt, ` +
+                `fuente Normal="${normalStyle.font.name}" ${normalStyle.font.size}pt) -> ${resultado}`
             );
 
             const target = sheet.getRange("A51");
@@ -3390,12 +3412,13 @@ async function handleA50SingleClick(eventArgs) {
 
             // A52: volcado de diagnóstico para poder calibrar el cálculo
             // del indentado/letra con datos reales (X/Y del clic, rango
-            // de letra calculado, indentLevel, ancho de columna y fuente).
+            // de letra calculado, indentLevel, ancho de columna, fuente
+            // de la celda y fuente "Normal" usada para el indentado).
             const debugRange = sheet.getRange("A52");
             debugRange.values = [[
                 `X=${offsetX.toFixed(2)} Y=${offsetY.toFixed(2)} | letra=[${bounds.start.toFixed(2)},${bounds.end.toFixed(2)}] | ` +
-                `indent=${cell.format.indentLevel} | colW=${cell.format.columnWidth.toFixed(2)}pt | ` +
-                `fuente=${cell.format.font.name} ${cell.format.font.size}pt`
+                `indent=${cell.format.indentLevel} (espacio=${bounds.spaceWidthPt.toFixed(2)}pt) | colW=${cell.format.columnWidth.toFixed(2)}pt | ` +
+                `celda=${cell.format.font.name} ${cell.format.font.size}pt | Normal=${normalStyle.font.name} ${normalStyle.font.size}pt`
             ]];
 
             await context.sync();
