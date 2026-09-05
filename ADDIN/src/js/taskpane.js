@@ -594,10 +594,9 @@ const TaskPaneApp = {
         const btnSaveToBucket = document.getElementById("btnSaveToBucket");
         if (btnSaveToBucket) btnSaveToBucket.addEventListener("click", () => this.saveWorkbookToBucket());
 
-        // Botón "Añadir filtro" (rango con nombre sobre la celda activa)
-        const btnAddFilterRange = document.getElementById("btnAddFilterRange");
-        if (btnAddFilterRange) btnAddFilterRange.addEventListener("click", () => this.openAddFilterRangeModal());
-
+        // Botón "Añadir filtro" (ribbon, ver AnadirFiltroButton en manifest.xml
+        // y abrirAnadirFiltro en commands.js): abre el modal vía
+        // handlePendingRibbonAction, no hay botón propio en esta barra.
         const btnCancelAddFilterRange = document.getElementById("btnCancelAddFilterRange");
         if (btnCancelAddFilterRange) btnCancelAddFilterRange.addEventListener("click", () => this.closeAddFilterRangeModal());
 
@@ -756,6 +755,7 @@ const TaskPaneApp = {
 
             this.closeAddFilterRangeModal();
             this.setAutoStatus("Filtro añadido ✓");
+            await this.loadDesignFromSheet();
 
             // Por si el usuario ha creado el filtro en una hoja nueva que
             // todavía no tuviera enganchado el listener de clic.
@@ -927,6 +927,7 @@ const TaskPaneApp = {
             if (colsContent) colsContent.innerHTML = "";
 
             this.state.filters.forEach(f => this.renderTag(filtersContent, "filters", f));
+            this.renderLockedFilterTags(filtersContent);
             this.state.rows.forEach(r => this.renderTag(rowsContent, "rows", r));
             this.state.columns.forEach(c => this.renderTag(colsContent, "columns", c));
 
@@ -1577,6 +1578,98 @@ const TaskPaneApp = {
         appendTarget.appendChild(tag);
     },
 
+    /* -------------------------------------------------------------
+     * Etiquetas "bloqueadas" en la zona Filtros: uno por cada rango con
+     * nombre creado con "Añadir filtro" (FilterRangeStore) que aplique al
+     * informe actual (atado a este informe, o creado para "Todos los
+     * informes"). A diferencia de renderTag(), NO son arrastrables ni se
+     * pueden quitar con un simple clic en la "×" — hace falta confirmar,
+     * porque quitar una de estas etiquetas borra también el rango con
+     * nombre en Excel, no solo la fila de diseño de este informe.
+     * ----------------------------------------------------------- */
+    renderLockedFilterTags(filtersContent) {
+        if (!filtersContent || !window.FilterRangeStore) return;
+
+        const all = window.FilterRangeStore.getAll();
+        Object.keys(all).forEach(rangeName => {
+            const meta = all[rangeName];
+            if (!meta) return;
+
+            const isAll = meta.reportId === null || meta.reportId === undefined;
+            const appliesToThisReport = isAll
+                || (this.currentReportId !== null && this.currentReportId !== undefined
+                    && Number(meta.reportId) === Number(this.currentReportId));
+            if (!appliesToThisReport) return;
+
+            this.renderLockedFilterTag(filtersContent, rangeName, meta);
+        });
+    },
+
+    renderLockedFilterTag(container, rangeName, meta) {
+        const tag = document.createElement("div");
+        tag.className = "dropped-tag locked-filter-tag";
+        tag.draggable = false;
+        tag.style.borderLeft = "3px solid #A80000";
+        tag.style.background = "#FBEAEA";
+        tag.dataset.rangeName = rangeName;
+
+        const fieldLabel = `${meta.dim}.${meta.name}`;
+        const filterSummary = typeof window.describeFilter === "function" ? window.describeFilter(meta.filter) : "";
+        const scopeLabel = (meta.reportId === null || meta.reportId === undefined) ? "Todos los informes" : `Informe ${meta.reportId}`;
+        const titleText = filterSummary
+            ? `🔒 ${fieldLabel}: ${filterSummary}`
+            : `🔒 ${fieldLabel}: (vacío · doble clic para elegir)`;
+
+        tag.innerHTML = `
+            <span class="dropped-tag-title" title="Creado con 'Añadir filtro' (${scopeLabel}). Bloqueado: no se arrastra ni se reordena; doble clic para cambiar los valores.">${titleText}</span>
+            <span class="dropped-tag-remove" title="Eliminar este filtro y su rango con nombre en Excel">&times;</span>
+        `;
+
+        tag.addEventListener("dblclick", () => this.openLockedFilterRangePicker(rangeName, meta));
+
+        tag.querySelector(".dropped-tag-remove").addEventListener("click", async (e) => {
+            e.stopPropagation();
+            const ok = confirm(`¿Eliminar el filtro "${fieldLabel}"?\n\nEsto borra también el rango con nombre "${rangeName}" en Excel (no solo la etiqueta).`);
+            if (!ok) return;
+            await this.deleteLockedFilterRange(rangeName);
+        });
+
+        container.appendChild(tag);
+    },
+
+    async openLockedFilterRangePicker(rangeName, meta) {
+        if (typeof resolveDracoFilterRangeAddress !== "function" || typeof openDracoFilterRangePicker !== "function") {
+            alert("No se encuentra la lógica de 'Añadir filtro' (commands.js). Recarga el panel e inténtalo de nuevo.");
+            return;
+        }
+        const loc = await resolveDracoFilterRangeAddress(rangeName);
+        if (!loc) {
+            alert(`No se encuentra el rango "${rangeName}" en el libro (¿se borró la hoja o el nombre?).`);
+            return;
+        }
+        await openDracoFilterRangePicker(loc.addr, loc.sheetName, rangeName, meta);
+        await this.loadDesignFromSheet();
+    },
+
+    async deleteLockedFilterRange(rangeName) {
+        try {
+            await Excel.run(async (context) => {
+                const item = context.workbook.names.getItemOrNullObject(rangeName);
+                item.load("isNullObject");
+                await context.sync();
+                if (!item.isNullObject) {
+                    item.delete();
+                    await context.sync();
+                }
+            });
+            if (window.FilterRangeStore) await window.FilterRangeStore.remove(rangeName);
+            await this.loadDesignFromSheet();
+        } catch (err) {
+            console.error("Error al eliminar el filtro bloqueado:", err);
+            alert("Error al eliminar el filtro: " + (err.message || err));
+        }
+    },
+
     /* =================================================================
      * PROPIEDADES DEL INFORME (modal): nombre del informe, suprimir
      * ceros en filas/columnas, subtotales arriba, sobrescribir formatos,
@@ -1720,6 +1813,8 @@ const TaskPaneApp = {
                 this.setFieldOptionsPanelOpen(true);
             } else if (pending === "distributeValues") {
                 this.openDistributeValuesModal();
+            } else if (pending === "addFilterRange") {
+                this.openAddFilterRangeModal();
             }
         } catch (err) {
             console.warn("No se pudo procesar la acción pendiente del ribbon:", err);
