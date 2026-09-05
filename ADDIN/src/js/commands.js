@@ -3342,6 +3342,7 @@ async function handleA50SingleClick(eventArgs) {
         if (addr !== "A50") return; // solo nos interesa el clic en A50
 
         const offsetX = eventArgs.offsetX;
+        const offsetY = eventArgs.offsetY;
 
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem(eventArgs.worksheetId);
@@ -3351,7 +3352,8 @@ async function handleA50SingleClick(eventArgs) {
                 "format/font/size",
                 "format/font/bold",
                 "format/font/italic",
-                "format/indentLevel"
+                "format/indentLevel",
+                "format/columnWidth"
             ]);
             await context.sync();
 
@@ -3385,6 +3387,17 @@ async function handleA50SingleClick(eventArgs) {
 
             const target = sheet.getRange("A51");
             target.values = [[resultado]];
+
+            // A52: volcado de diagnóstico para poder calibrar el cálculo
+            // del indentado/letra con datos reales (X/Y del clic, rango
+            // de letra calculado, indentLevel, ancho de columna y fuente).
+            const debugRange = sheet.getRange("A52");
+            debugRange.values = [[
+                `X=${offsetX.toFixed(2)} Y=${offsetY.toFixed(2)} | letra=[${bounds.start.toFixed(2)},${bounds.end.toFixed(2)}] | ` +
+                `indent=${cell.format.indentLevel} | colW=${cell.format.columnWidth.toFixed(2)}pt | ` +
+                `fuente=${cell.format.font.name} ${cell.format.font.size}pt`
+            ]];
+
             await context.sync();
         });
     } catch (e) {
