@@ -3422,7 +3422,7 @@ function estimateFirstLetterBoundsPt(cellFontName, cellFontSizePt, cellBold, cel
 // clic. Tras detectarlo, se borra el registro (para que un 3er clic rápido
 // no cuente como "doble clic" otra vez contra el 2º).
 const DracoLastClickByWorksheet = new Map(); // worksheetId -> { addr, time }
-const DRACO_DOUBLE_CLICK_MS = 500;
+const DRACO_DOUBLE_CLICK_MS = 2000;
 
 // Formatea un timestamp (ms epoch) como HH:MM:SS.mmm, para poder leer a
 // simple vista en la hoja el instante de cada clic (trazas A53 en
