@@ -3363,6 +3363,19 @@ const A50_CELL_LEFT_PADDING_PT = 1;
  * fuente concreta que tenga puesta la celda. Con fuentes condensadas
  * (p.ej. "Aptos Narrow") calcular el indentado con la fuente de la
  * celda da un resultado muy desplazado a la derecha.
+ *
+ * CALIBRACIÓN (revisada): la regla "3 espacios por nivel" quedaba
+ * desplazada hacia la derecha frente a clics reales sobre el icono
+ * ▾/▸ (con indent creciente el desfase se acumulaba y el clic pasaba a
+ * clasificarse como "Izquierda" en vez de "Letra"). Excel define el
+ * "carácter estándar" (el mismo que usa para el ancho de columna en
+ * "caracteres") como el ancho del dígito "0" en la fuente Normal del
+ * libro, y cada nivel de IndentLevel equivale a 1 carácter estándar
+ * (NO a 3 espacios). Con datos reales de clic se comprobó que esta
+ * unidad encaja mucho mejor: indent1 ≈ +5.2pt e indent2 ≈ +5.6pt sobre
+ * el nivel anterior, frente al ancho del dígito "0" en Aptos Narrow
+ * 11pt (≈5.5pt aprox.) — mientras que 3 espacios daban ≈8.25pt, muy
+ * por encima de lo observado.
  */
 function estimateFirstLetterBoundsPt(cellFontName, cellFontSizePt, cellBold, cellItalic, indentLevel, normalFontName, normalFontSizePt) {
     const ctx = getA50MeasureCtx();
@@ -3371,18 +3384,19 @@ function estimateFirstLetterBoundsPt(cellFontName, cellFontSizePt, cellBold, cel
     ctx.font = buildA50CanvasFont(cellFontSizePt, cellFontName, cellBold, cellItalic);
     const dWidthPt = pxToPt(ctx.measureText("D").width);
 
-    // Ancho del espacio para el indentado -> con la fuente "Normal" del
-    // libro (sin negrita/cursiva, es el estilo base).
+    // Ancho del "carácter estándar" de Excel para el indentado -> ancho
+    // del dígito "0" con la fuente "Normal" del libro (sin negrita/
+    // cursiva, es el estilo base). Es la misma unidad que usa Excel
+    // para el ancho de columna en "caracteres".
     ctx.font = buildA50CanvasFont(normalFontSizePt, normalFontName, false, false);
-    const spaceWidthPt = pxToPt(ctx.measureText(" ").width);
+    const stdCharWidthPt = pxToPt(ctx.measureText("0").width);
 
-    // Regla de Excel: cada nivel de indentado equivale al ancho de 3
-    // espacios de la fuente "Normal" del libro.
-    const indentWidthPt = (indentLevel || 0) * 3 * spaceWidthPt;
+    // 1 nivel de indentado = 1 carácter estándar de la fuente "Normal".
+    const indentWidthPt = (indentLevel || 0) * stdCharWidthPt;
 
     const start = A50_CELL_LEFT_PADDING_PT + indentWidthPt;
     const end = start + dWidthPt;
-    return { start, end, dWidthPt, indentWidthPt, spaceWidthPt };
+    return { start, end, dWidthPt, indentWidthPt, stdCharWidthPt };
 }
 
 async function handleDracoRowsSingleClick(eventArgs) {
@@ -3454,7 +3468,7 @@ async function handleDracoRowsSingleClick(eventArgs) {
             debugRange.values = [[
                 `Rango=${located.rangeName} Nivel=${located.level} | X=${offsetX.toFixed(2)} Y=${offsetY.toFixed(2)} | ` +
                 `letra=[${bounds.start.toFixed(2)},${bounds.end.toFixed(2)}] | indent=${cell.format.indentLevel} ` +
-                `(espacio=${bounds.spaceWidthPt.toFixed(2)}pt) | colW=${cell.format.columnWidth.toFixed(2)}pt | ` +
+                `(carácter=${bounds.stdCharWidthPt.toFixed(2)}pt) | colW=${cell.format.columnWidth.toFixed(2)}pt | ` +
                 `celda=${cell.format.font.name} ${cell.format.font.size}pt | Normal=${normalStyle.font.name} ${normalStyle.font.size}pt | texto="${cellText}"`
             ]];
 
