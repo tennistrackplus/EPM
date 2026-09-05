@@ -298,6 +298,33 @@
 
                 </Control>
 
+
+                <!-- AÑADIR FILTRO: crea un rango con nombre sobre la celda
+                     seleccionada en Excel (dimensión/campo + informe, con
+                     opción "Todos"); doble clic sobre esa celda abre el
+                     selector de valores. -->
+
+                <Control xsi:type="Button" id="AnadirFiltroButton">
+
+                  <Label resid="AnadirFiltroButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="AnadirFiltroButtonLabel"/>
+                    <Description resid="AnadirFiltroButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="AnadirFiltro16"/>
+                    <bt:Image size="32" resid="AnadirFiltro32"/>
+                    <bt:Image size="80" resid="AnadirFiltro80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>abrirAnadirFiltro</FunctionName>
+                  </Action>
+
+                </Control>
+
               </Group>
 
 
@@ -723,6 +750,17 @@
         <bt:Image id="DistribuirValores80"
                   DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-opciones-campo-80.png"/>
 
+        <!-- AÑADIR FILTRO: sin icono propio todavía en /assets/icons -> se
+             reutiliza el mismo icono que "Reconocimiento de miembros" como
+             placeholder. Sustituye estas 3 URLs en cuanto haya un icono
+             dedicado (p.ej. btn-anadir-filtro-16/32/80.png). -->
+        <bt:Image id="AnadirFiltro16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-reconocimiento-off-16.png"/>
+        <bt:Image id="AnadirFiltro32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-reconocimiento-off-32.png"/>
+        <bt:Image id="AnadirFiltro80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-reconocimiento-off-80.png"/>
+
 
         <!-- INFORME -->
 
@@ -866,6 +904,7 @@
 
         <bt:String id="ReconMiembrosLabel" DefaultValue="Reconoc. de miembros"/>
         <bt:String id="DistribuirValoresButtonLabel" DefaultValue="Distribuir valores"/>
+        <bt:String id="AnadirFiltroButtonLabel" DefaultValue="Añadir filtro"/>
 
         <bt:String id="InformeGroupLabel" DefaultValue="Informe"/>
         <bt:String id="CopiarInformeButtonLabel" DefaultValue="Copiar informe"/>
@@ -922,6 +961,10 @@
         <bt:String
           id="DistribuirValoresButtonTooltip"
           DefaultValue="Distribuye o redistribuye un importe entre las celdas seleccionadas del informe (equitativo, proporcional o manual)"/>
+
+        <bt:String
+          id="AnadirFiltroButtonTooltip"
+          DefaultValue="Crea un rango con nombre sobre la celda seleccionada para un filtro de dimensión + informe (o 'Todos'); doble clic en esa celda para elegir los valores"/>
 
         <bt:String
           id="CopiarInformeButtonTooltip"
