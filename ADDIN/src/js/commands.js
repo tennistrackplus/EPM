@@ -3246,11 +3246,29 @@ async function ensureDracoFilterRangeHandlersRegistered() {
 
 /* ---------------------------------------------------------------------
  * Registro del clic en la celda A50 (cualquier hoja): al hacer clic
- * izquierdo sobre A50, escribe en A51 la posición (X, Y) del clic
- * DENTRO de la celda (offset en puntos desde la esquina superior
- * izquierda de A50). Usa el evento onSingleClicked (ExcelApi 1.10), que
- * es distinto de onSelectionChanged: se dispara con cada clic, aunque
- * la celda ya estuviera seleccionada.
+ * izquierdo sobre A50, se calcula si el clic ha caído sobre la PRIMERA
+ * LETRA del contenido de la celda (teniendo en cuenta el indentLevel) y,
+ * si es así, se escribe en A51 "Izquierda" o "Derecha" según en qué
+ * mitad de esa letra ha caído el clic.
+ *
+ * Usa el evento onSingleClicked (ExcelApi 1.10), que es distinto de
+ * onSelectionChanged: se dispara con cada clic, aunque la celda ya
+ * estuviera seleccionada, y trae offsetX/offsetY (en puntos, desde la
+ * esquina superior izquierda de la celda).
+ *
+ * IMPORTANTE — esto es una APROXIMACIÓN, no una medida exacta:
+ * Office.js no expone las métricas reales de renderizado de Excel (la
+ * fuente del sistema con la que Excel pinta, hinting, kerning, DPI del
+ * monitor...). Lo que hacemos es:
+ *   1) Medir con un <canvas> oculto el ancho de una "D" mayúscula con el
+ *      nombre/tamaño/negrita/cursiva de la fuente de A50 (referencia de
+ *      ancho de letra pedida).
+ *   2) Calcular el ancho del indentado como "3 espacios de esa fuente
+ *      por cada nivel de indentLevel", que es la regla que documenta el
+ *      propio formato de Excel para IndentLevel (no hay una API que
+ *      devuelva el valor exacto en puntos).
+ * El resultado puede desviarse unos puntos del pixel exacto que pinta
+ * Excel, sobre todo con fuentes poco comunes o en pantallas con escalado.
  * ------------------------------------------------------------------- */
 
 /** Normaliza una dirección de celda: quita el prefijo de hoja ("Hoja1!"),
@@ -3263,18 +3281,100 @@ function normalizeA50Address(addr) {
     return a.replace(/\$/g, "").toUpperCase();
 }
 
+// Contexto de canvas reutilizado para medir texto (evita crear un
+// <canvas> nuevo en cada clic).
+let _a50MeasureCtx = null;
+function getA50MeasureCtx() {
+    if (!_a50MeasureCtx) {
+        const canvas = document.createElement("canvas");
+        _a50MeasureCtx = canvas.getContext("2d");
+    }
+    return _a50MeasureCtx;
+}
+
+// 1 punto = 4/3 px a 96 dpi (estándar CSS/canvas) -> para volver de px a pt:
+function pxToPt(px) { return px * (72 / 96); }
+
+/** Construye el string de fuente CSS para el canvas a partir de los
+ *  datos de Excel.Font. Entrecomillamos el nombre por si tiene espacios
+ *  (p. ej. "Segoe UI"). */
+function buildA50CanvasFont(fontSizePt, fontName, bold, italic) {
+    const weight = bold ? "bold " : "";
+    const style = italic ? "italic " : "";
+    const size = fontSizePt || 11;
+    const name = fontName || "Calibri";
+    return `${style}${weight}${size}pt "${name}"`;
+}
+
+/** Pequeño margen izquierdo interno que Excel deja siempre dentro de la
+ *  celda antes de empezar a pintar el texto, incluso con indentLevel 0.
+ *  Es un valor aproximado (no hay API que lo exponga). */
+const A50_CELL_LEFT_PADDING_PT = 1;
+
+/**
+ * Devuelve el rango [start, end] en puntos (relativo a la esquina
+ * izquierda de la celda) donde se estima que cae la "primera letra",
+ * usando el ancho de una "D" mayúscula como referencia.
+ */
+function estimateFirstLetterBoundsPt(fontName, fontSizePt, bold, italic, indentLevel) {
+    const ctx = getA50MeasureCtx();
+    ctx.font = buildA50CanvasFont(fontSizePt, fontName, bold, italic);
+
+    const spaceWidthPt = pxToPt(ctx.measureText(" ").width);
+    const dWidthPt = pxToPt(ctx.measureText("D").width);
+
+    // Regla de Excel: cada nivel de indentado equivale al ancho de 3
+    // espacios de la fuente.
+    const indentWidthPt = (indentLevel || 0) * 3 * spaceWidthPt;
+
+    const start = A50_CELL_LEFT_PADDING_PT + indentWidthPt;
+    const end = start + dWidthPt;
+    return { start, end, dWidthPt, indentWidthPt, spaceWidthPt };
+}
+
 async function handleA50SingleClick(eventArgs) {
     try {
         const addr = normalizeA50Address(eventArgs && eventArgs.address);
         if (addr !== "A50") return; // solo nos interesa el clic en A50
 
         const offsetX = eventArgs.offsetX;
-        const offsetY = eventArgs.offsetY;
 
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getItem(eventArgs.worksheetId);
+            const cell = sheet.getRange("A50");
+            cell.load([
+                "format/font/name",
+                "format/font/size",
+                "format/font/bold",
+                "format/font/italic",
+                "format/indentLevel"
+            ]);
+            await context.sync();
+
+            const bounds = estimateFirstLetterBoundsPt(
+                cell.format.font.name,
+                cell.format.font.size,
+                cell.format.font.bold,
+                cell.format.font.italic,
+                cell.format.indentLevel
+            );
+
+            console.log(
+                `[Draco] Clic en A50 -> offsetX=${offsetX}pt | letra estimada entre ${bounds.start.toFixed(2)}pt y ${bounds.end.toFixed(2)}pt ` +
+                `(indent=${cell.format.indentLevel}, fuente="${cell.format.font.name}" ${cell.format.font.size}pt)`
+            );
+
+            if (offsetX < bounds.start || offsetX > bounds.end) {
+                // El clic no ha caído sobre la primera letra estimada:
+                // no tocamos A51.
+                return;
+            }
+
+            const midPoint = (bounds.start + bounds.end) / 2;
+            const side = offsetX < midPoint ? "Izquierda" : "Derecha";
+
             const target = sheet.getRange("A51");
-            target.values = [[`X: ${offsetX} pt, Y: ${offsetY} pt`]];
+            target.values = [[side]];
             await context.sync();
         });
     } catch (e) {
