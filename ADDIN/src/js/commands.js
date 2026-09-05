@@ -3410,6 +3410,32 @@ function estimateFirstLetterBoundsPt(cellFontName, cellFontSizePt, cellBold, cel
     return { start, end, dWidthPt, indentWidthPt, stdCharWidthPt };
 }
 
+// Detección "manual" de doble clic: Office.js NO expone un evento nativo
+// de doble clic sobre una celda (a diferencia de Workbook_SheetBeforeDoubleClick
+// en VBA) — Excel.Worksheet solo ofrece onSingleClicked, onChanged y
+// onSelectionChanged (ver comentarios de handleDracoMemberRecognitionChanged
+// más arriba, donde ya se documentaba esta misma limitación).
+//
+// Lo simulamos guardando, por cada hoja, sobre qué celda y en qué instante
+// cayó el ÚLTIMO clic simple. Si el siguiente clic llega en menos de
+// DRACO_DOUBLE_CLICK_MS Y es sobre la MISMA celda, lo contamos como doble
+// clic. Tras detectarlo, se borra el registro (para que un 3er clic rápido
+// no cuente como "doble clic" otra vez contra el 2º).
+const DracoLastClickByWorksheet = new Map(); // worksheetId -> { addr, time }
+const DRACO_DOUBLE_CLICK_MS = 500;
+
+function detectDracoDoubleClick(worksheetId, addr) {
+    const now = Date.now();
+    const last = DracoLastClickByWorksheet.get(worksheetId);
+    const isDouble = !!(last && last.addr === addr && (now - last.time) < DRACO_DOUBLE_CLICK_MS);
+    if (isDouble) {
+        DracoLastClickByWorksheet.delete(worksheetId);
+    } else {
+        DracoLastClickByWorksheet.set(worksheetId, { addr, time: now });
+    }
+    return isDouble;
+}
+
 async function handleDracoRowsSingleClick(eventArgs) {
     try {
         let addr = (eventArgs && eventArgs.address) || "";
@@ -3419,6 +3445,7 @@ async function handleDracoRowsSingleClick(eventArgs) {
 
         const offsetX = eventArgs.offsetX;
         const offsetY = eventArgs.offsetY;
+        const isDoubleClick = detectDracoDoubleClick(eventArgs.worksheetId, addr);
 
         await Excel.run(async (context) => {
             const located = await findDracoRowsNamedRangeForCell(context, eventArgs.worksheetId, addr);
@@ -3479,6 +3506,36 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 accionTexto = toggled
                     ? " | Accion: expandir/contraer ejecutado"
                     : " | Accion: sin indicador +/- valido en esa celda";
+            } else if (isDoubleClick) {
+                // Doble clic "real" fuera del icono +/-: equivalente a
+                // Workbook_SheetBeforeDoubleClick + GetDimAttrRows/
+                // GetDimAttrCols + Helpvalue del VBA. Allí Helpvalue
+                // escribía dimname/attr/valor/dirección en
+                // EDIT_REPORT!A1:A5 y algo aguas abajo leía esas celdas
+                // para abrir el buscador de miembros. Aquí se hace lo
+                // mismo pero sin pasar por ninguna celda física: se
+                // localiza el campo con locateDracoAxisField (la misma
+                // función que ya usa el "reconocimiento de miembros" de
+                // onChanged/onSelectionChanged) y se abre el picker
+                // directamente con el resultado en memoria.
+                const reportId = activeReportIdOrNull();
+                const editReportGrid = await getEditReportGrid(context, reportId);
+                const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
+                const colsStatic = String(cellValue(editReportGrid, 12, 14)).trim().toUpperCase() === "X";
+
+                // Igual que en VBA (RowsStatic Y ColsStatic ambos "X"):
+                // el buscador de doble clic solo actúa si TODO el diseño
+                // del informe (filas y columnas) está marcado como
+                // Estático.
+                if (rowsStatic && colsStatic) {
+                    const fieldLocated = await locateDracoAxisField(context, addr);
+                    if (fieldLocated) {
+                        accionTexto = " | Accion: buscador de miembros abierto (doble clic)";
+                        await openMemberRecognitionPicker(addr, fieldLocated, cellText);
+                    } else {
+                        accionTexto = " | Accion: doble clic fuera de Filas/Columnas del informe";
+                    }
+                }
             }
 
             console.log(
@@ -3497,6 +3554,19 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 `(carácter=${bounds.stdCharWidthPt.toFixed(2)}pt) | colW=${cell.format.columnWidth.toFixed(2)}pt | ` +
                 `celda=${cell.format.font.name} ${cell.format.font.size}pt | Normal=${normalStyle.font.name} ${normalStyle.font.size}pt | texto="${cellText}"`
             ]];
+
+            // A53: si el clic actual llegó a menos de DRACO_DOUBLE_CLICK_MS
+            // del clic anterior sobre ESTA MISMA celda, lo tratamos como
+            // doble clic (Office.js no expone un evento nativo para esto).
+            // En un clic simple se limpia, para no dejar un "DobleClick"
+            // de una detección anterior confundiendo la lectura.
+            const doubleClickRange = sheet.getRange("A53");
+            if (isDoubleClick) {
+                console.log(`[Draco] Doble clic detectado en ${addr} (${located.rangeName}).`);
+                doubleClickRange.values = [[`DobleClick ${addr}`]];
+            } else {
+                doubleClickRange.values = [[""]];
+            }
 
             await context.sync();
         });
