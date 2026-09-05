@@ -3424,16 +3424,37 @@ function estimateFirstLetterBoundsPt(cellFontName, cellFontSizePt, cellBold, cel
 const DracoLastClickByWorksheet = new Map(); // worksheetId -> { addr, time }
 const DRACO_DOUBLE_CLICK_MS = 500;
 
+// Formatea un timestamp (ms epoch) como HH:MM:SS.mmm, para poder leer a
+// simple vista en la hoja el instante de cada clic (trazas A53 en
+// adelante de handleDracoRowsSingleClick).
+function formatDracoClickTime(ms) {
+    if (!ms && ms !== 0) return "";
+    const d = new Date(ms);
+    const pad = (n, len) => String(n).padStart(len || 2, "0");
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`;
+}
+
+// Devuelve toda la info del par de clics (no solo el booleano) para
+// poder trazarla: hora del clic anterior (click1), hora del actual
+// (click2), diferencia en ms y si cuenta como doble clic.
 function detectDracoDoubleClick(worksheetId, addr) {
     const now = Date.now();
     const last = DracoLastClickByWorksheet.get(worksheetId);
     const isDouble = !!(last && last.addr === addr && (now - last.time) < DRACO_DOUBLE_CLICK_MS);
+    const info = {
+        isDouble,
+        click1Time: last ? last.time : null,
+        click1Addr: last ? last.addr : null,
+        click2Time: now,
+        click2Addr: addr,
+        deltaMs: last ? (now - last.time) : null
+    };
     if (isDouble) {
         DracoLastClickByWorksheet.delete(worksheetId);
     } else {
         DracoLastClickByWorksheet.set(worksheetId, { addr, time: now });
     }
-    return isDouble;
+    return info;
 }
 
 async function handleDracoRowsSingleClick(eventArgs) {
@@ -3445,7 +3466,8 @@ async function handleDracoRowsSingleClick(eventArgs) {
 
         const offsetX = eventArgs.offsetX;
         const offsetY = eventArgs.offsetY;
-        const isDoubleClick = detectDracoDoubleClick(eventArgs.worksheetId, addr);
+        const clickInfo = detectDracoDoubleClick(eventArgs.worksheetId, addr);
+        const isDoubleClick = clickInfo.isDouble;
 
         await Excel.run(async (context) => {
             const located = await findDracoRowsNamedRangeForCell(context, eventArgs.worksheetId, addr);
@@ -3499,6 +3521,14 @@ async function handleDracoRowsSingleClick(eventArgs) {
             const hasHierarchyGlyph = cellText.indexOf("▾") === 0 || cellText.indexOf("▸") === 0;
 
             let accionTexto = "";
+            // Variables de traza (ver bloque A53:A58 más abajo): reflejan
+            // por qué rama pasó este clic, aunque no sea doble clic o no
+            // llegue a entrar en la comprobación de Estáticos.
+            let staticCheckEntered = false;
+            let rowsStaticTrace = null;
+            let colsStaticTrace = null;
+            let fieldLocatedTrace = null;
+
             if (resultado === "Letra" && hasHierarchyGlyph) {
                 // El clic ha caído sobre el icono ▾/▸: expandir/contraer el
                 // nodo, igual que si se hubiera rellenado EDIT_REPORT!T1:V1.
@@ -3518,10 +3548,13 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 // función que ya usa el "reconocimiento de miembros" de
                 // onChanged/onSelectionChanged) y se abre el picker
                 // directamente con el resultado en memoria.
+                staticCheckEntered = true;
                 const reportId = activeReportIdOrNull();
                 const editReportGrid = await getEditReportGrid(context, reportId);
                 const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
                 const colsStatic = String(cellValue(editReportGrid, 12, 14)).trim().toUpperCase() === "X";
+                rowsStaticTrace = rowsStatic;
+                colsStaticTrace = colsStatic;
 
                 // Igual que en VBA (RowsStatic Y ColsStatic ambos "X"):
                 // el buscador de doble clic solo actúa si TODO el diseño
@@ -3529,12 +3562,15 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 // Estático.
                 if (rowsStatic && colsStatic) {
                     const fieldLocated = await locateDracoAxisField(context, addr);
+                    fieldLocatedTrace = fieldLocated;
                     if (fieldLocated) {
                         accionTexto = " | Accion: buscador de miembros abierto (doble clic)";
                         await openMemberRecognitionPicker(addr, fieldLocated, cellText);
                     } else {
                         accionTexto = " | Accion: doble clic fuera de Filas/Columnas del informe";
                     }
+                } else {
+                    accionTexto = " | Accion: doble clic ignorado (informe no 100% Estatico)";
                 }
             }
 
@@ -3555,18 +3591,35 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 `celda=${cell.format.font.name} ${cell.format.font.size}pt | Normal=${normalStyle.font.name} ${normalStyle.font.size}pt | texto="${cellText}"`
             ]];
 
-            // A53: si el clic actual llegó a menos de DRACO_DOUBLE_CLICK_MS
-            // del clic anterior sobre ESTA MISMA celda, lo tratamos como
-            // doble clic (Office.js no expone un evento nativo para esto).
-            // En un clic simple se limpia, para no dejar un "DobleClick"
-            // de una detección anterior confundiendo la lectura.
-            const doubleClickRange = sheet.getRange("A53");
+            // A53:A58 — traza detallada de cada clic, para depurar por qué
+            // no se abre el buscador de miembros. Se reescribe en TODOS
+            // los clics (simples y dobles), así que siempre se ve el
+            // último estado, incluyendo el clic1 (anterior) y clic2
+            // (actual) que se comparan para decidir si hay doble clic.
             if (isDoubleClick) {
                 console.log(`[Draco] Doble clic detectado en ${addr} (${located.rangeName}).`);
-                doubleClickRange.values = [[`DobleClick ${addr}`]];
-            } else {
-                doubleClickRange.values = [[""]];
             }
+
+            const staticInfo = staticCheckEntered
+                ? `SI | RowsStatic=${rowsStaticTrace ? "X" : "(no)"} ColsStatic=${colsStaticTrace ? "X" : "(no)"}`
+                : "NO (no fue doble clic fuera del icono +/-)";
+
+            const campoInfo = fieldLocatedTrace
+                ? `${fieldLocatedTrace.axis} nivel ${fieldLocatedTrace.level} -> Dim=${fieldLocatedTrace.dim} Attr=${fieldLocatedTrace.attr || "(sin attr)"}`
+                : (staticCheckEntered && rowsStaticTrace && colsStaticTrace
+                    ? "(no encontrado por locateDracoAxisField)"
+                    : "(no evaluado)");
+
+            const traceRows = [
+                [`Click1 (anterior)=${clickInfo.click1Time ? formatDracoClickTime(clickInfo.click1Time) + " @" + clickInfo.click1Addr : "(ninguno todavía)"}`],
+                [`Click2 (actual)=${formatDracoClickTime(clickInfo.click2Time)} @${clickInfo.click2Addr} | Delta=${clickInfo.deltaMs === null ? "-" : clickInfo.deltaMs + "ms"} (umbral=${DRACO_DOUBLE_CLICK_MS}ms)`],
+                [`EsDobleClick=${isDoubleClick ? "SI" : "NO"} | SobreIconoJerarquia=${hasHierarchyGlyph ? "SI" : "NO"} (resultado=${resultado})`],
+                [`EntraPorEstaticos=${staticInfo}`],
+                [`CampoLocalizado=${campoInfo}`],
+                [`AccionFinal=${accionTexto ? accionTexto.replace(/^ \| Accion: /, "") : "(ninguna)"}`]
+            ];
+            const traceRange = sheet.getRange("A53:A58");
+            traceRange.values = traceRows;
 
             await context.sync();
         });
