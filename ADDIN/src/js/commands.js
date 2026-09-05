@@ -3255,13 +3255,23 @@ async function ensureDracoFilterRangeHandlersRegistered() {
  * (nodo de jerarquía EXPANDIDO) para escribir "Jerarquia: SI/NO". Todo
  * el resultado se escribe en A51 de la MISMA hoja donde se ha hecho clic.
  *
+ * ACCIÓN REAL: si el clic cae en la zona "Letra" (sobre el icono) Y el
+ * texto empieza por "▾" o por "▸" (nodo con indicador +/-, expandido o
+ * contraído), se dispara de verdad el expandir/contraer de ese nodo
+ * (toggleDracoCollapseAtCell, la misma lógica que antes solo se podía
+ * pedir rellenando EDIT_REPORT!T1:V1) y se repinta el informe. El
+ * resultado de esa acción también se anota en A51 ("Accion: ...").
+ *
  * Usa onSingleClicked (ExcelApi 1.10), igual que la versión anterior
  * sobre A50: se dispara con cada clic (aunque la celda ya estuviera
  * seleccionada) y trae offsetX/offsetY.
  *
- * NOTA: solo se considera "Jerarquia: SI" cuando el texto empieza
- * exactamente por "▾" (expandido). Un nodo contraído empieza por "▸"
- * y, tal como se ha pedido, NO cuenta como "SI" aquí.
+ * NOTA: solo se considera "Jerarquia: SI" (para el texto informativo de
+ * A51) cuando el texto empieza exactamente por "▾" (expandido); un nodo
+ * contraído empieza por "▸" y cuenta como "NO" ahí. Esto es solo el
+ * indicador de diagnóstico — para decidir si HAY que disparar la acción
+ * de expandir/contraer se admiten los 2 glifos (▾ Y ▸), ya que un nodo
+ * contraído también se puede expandir haciendo clic en su icono.
  *
  * IMPORTANTE — la clasificación Izquierda/Letra/Derecha sigue siendo una
  * APROXIMACIÓN, no una medida exacta (ver notas de estimateFirstLetterBoundsPt
@@ -3314,7 +3324,8 @@ async function findDracoRowsNamedRangeForCell(context, worksheetId, addr) {
             return {
                 rangeName: c.name,
                 reportId: m ? Number(m[1]) : null,
-                level: (cell.columnIndex - c.range.columnIndex) + 1
+                level: (cell.columnIndex - c.range.columnIndex) + 1,
+                sheetName: sheet.name
             };
         }
     }
@@ -3455,13 +3466,28 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 resultado = "Letra";
             }
 
+            // Además de "SI" (expandido), un nodo contraído ("▸") también
+            // tiene un icono con el que se puede interactuar: cualquiera de
+            // los 2 glifos cuenta como "tiene indicador +/- clicable".
+            const hasHierarchyGlyph = cellText.indexOf("▾") === 0 || cellText.indexOf("▸") === 0;
+
+            let accionTexto = "";
+            if (resultado === "Letra" && hasHierarchyGlyph) {
+                // El clic ha caído sobre el icono ▾/▸: expandir/contraer el
+                // nodo, igual que si se hubiera rellenado EDIT_REPORT!T1:V1.
+                const toggled = await toggleDracoCollapseAtCell(context, located.sheetName, addr);
+                accionTexto = toggled
+                    ? " | Accion: expandir/contraer ejecutado"
+                    : " | Accion: sin indicador +/- valido en esa celda";
+            }
+
             console.log(
                 `[Draco] Clic en ${located.rangeName} (nivel ${located.level}) -> offsetX=${offsetX.toFixed(2)}pt | ` +
-                `letra estimada entre ${bounds.start.toFixed(2)}pt y ${bounds.end.toFixed(2)}pt -> ${resultado} | Jerarquia: ${jerarquiaTexto}`
+                `letra estimada entre ${bounds.start.toFixed(2)}pt y ${bounds.end.toFixed(2)}pt -> ${resultado} | Jerarquia: ${jerarquiaTexto}${accionTexto}`
             );
 
             const target = sheet.getRange("A51");
-            target.values = [[`${resultado} | Jerarquia: ${jerarquiaTexto}`]];
+            target.values = [[`${resultado} | Jerarquia: ${jerarquiaTexto}${accionTexto}`]];
 
             // A52: volcado de diagnóstico para poder calibrar el cálculo.
             const debugRange = sheet.getRange("A52");
@@ -3746,6 +3772,65 @@ async function handleEditReportMemberPickerRequest(eventArgs) {
 
 
 
+/**
+ * Alterna (o fuerza) el estado colapsado/expandido del nodo de jerarquía
+ * cuya celda de indicador +/- (el icono ▾/▸ fusionado en el texto) está en
+ * targetAddr, dentro de la hoja sheetName. Es la lógica común para las 2
+ * formas de disparar un expandir/contraer:
+ *   1) Rellenando EDIT_REPORT!T1:V1 (ver handleDracoEditReportExpandCollapseRequest).
+ *   2) Haciendo clic directamente sobre el icono ▾/▸ en una celda de
+ *      Draco_XXX_Rows (ver handleDracoRowsSingleClick).
+ *
+ * flag: "C"/"CONTRAER" fuerza contraído, "E"/"EXPANDIR" fuerza expandido,
+ * cualquier otro valor (incluido undefined) alterna el estado actual.
+ *
+ * Devuelve true si se ha encontrado un indicador +/- válido en esa celda y
+ * se ha alternado/forzado su estado (y repintado el informe); false si la
+ * celda no tiene un indicador asociado (p.ej. eje Estático, celda sin
+ * jerarquía, o la hoja/informe no existen).
+ */
+async function toggleDracoCollapseAtCell(context, sheetName, targetAddr, flag) {
+    const reportId = reportIdForResultSheet(sheetName);
+    const indicatorMap = getDracoIndicatorMap(reportId);
+    if (indicatorMap.size === 0) return false;
+
+    const resultSheet = context.workbook.worksheets.getItemOrNullObject(sheetName);
+    resultSheet.load("isNullObject");
+    await context.sync();
+    if (resultSheet.isNullObject) return false;
+
+    const targetRange = resultSheet.getRange(targetAddr);
+    targetRange.load(["rowCount", "columnCount", "rowIndex", "columnIndex", "formulas"]);
+    await context.sync();
+
+    if (targetRange.rowCount !== 1 || targetRange.columnCount !== 1) return false;
+
+    // Una celda de eje Estático es una fórmula EPM_VALUE (sin glifo +/-).
+    const formula = targetRange.formulas[0][0];
+    const isStaticFormula = typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula);
+
+    const key = (targetRange.rowIndex + 1) + "_" + (targetRange.columnIndex + 1);
+    const meta = indicatorMap.get(key);
+    if (!meta || isStaticFormula) return false;
+
+    const st = getDracoCollapseState(reportId)[meta.axis];
+    if (flag === "C" || flag === "CONTRAER") {
+        st.collapsed.add(meta.nodeKey);
+    } else if (flag === "E" || flag === "EXPANDIR") {
+        st.collapsed.delete(meta.nodeKey);
+    } else if (st.collapsed.has(meta.nodeKey)) {
+        st.collapsed.delete(meta.nodeKey);
+    } else {
+        st.collapsed.add(meta.nodeKey);
+    }
+
+    const lastJson = DracoLastJsonByReport.get(dracoStateKey(reportId));
+    if (lastJson) {
+        await jsonTo3Matrices(context, lastJson, reportId);
+    }
+    return true;
+}
+
 // Celdas de control de EDIT_REPORT para pedir un expandir/contraer sin
 // pasar por onSelectionChanged (ver handleDracoEditReportExpandCollapseRequest).
 // No se usan D15/E15/F15 (como se planteó al principio) porque esa zona
@@ -3812,51 +3897,9 @@ async function handleDracoEditReportExpandCollapseRequest(eventArgs) {
 
             console.log("[Draco] Petición de expandir/contraer desde EDIT_REPORT:", { sheetName, targetAddr, flag });
 
-            const reportId = reportIdForResultSheet(sheetName);
-            const indicatorMap = getDracoIndicatorMap(reportId);
-
-            if (indicatorMap.size > 0) {
-                const resultSheet = context.workbook.worksheets.getItemOrNullObject(sheetName);
-                resultSheet.load("isNullObject");
-                await context.sync();
-
-                if (resultSheet.isNullObject) {
-                    console.warn("[Draco] EDIT_REPORT!T1 apunta a una pestaña que no existe:", sheetName);
-                } else {
-                    const targetRange = resultSheet.getRange(targetAddr);
-                    targetRange.load(["rowCount", "columnCount", "rowIndex", "columnIndex", "formulas"]);
-                    await context.sync();
-
-                    if (targetRange.rowCount === 1 && targetRange.columnCount === 1) {
-                        // Misma salvaguarda que tenía el clic: una celda de eje
-                        // Estático es una fórmula EPM_VALUE (sin glifo +/-).
-                        const formula = targetRange.formulas[0][0];
-                        const isStaticFormula = typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula);
-
-                        const key = (targetRange.rowIndex + 1) + "_" + (targetRange.columnIndex + 1);
-                        const meta = indicatorMap.get(key);
-
-                        if (meta && !isStaticFormula) {
-                            const st = getDracoCollapseState(reportId)[meta.axis];
-                            if (flag === "C" || flag === "CONTRAER") {
-                                st.collapsed.add(meta.nodeKey);
-                            } else if (flag === "E" || flag === "EXPANDIR") {
-                                st.collapsed.delete(meta.nodeKey);
-                            } else if (st.collapsed.has(meta.nodeKey)) {
-                                st.collapsed.delete(meta.nodeKey);
-                            } else {
-                                st.collapsed.add(meta.nodeKey);
-                            }
-
-                            const lastJson = DracoLastJsonByReport.get(dracoStateKey(reportId));
-                            if (lastJson) {
-                                await jsonTo3Matrices(context, lastJson, reportId);
-                            }
-                        } else {
-                            console.warn("[Draco] EDIT_REPORT!U1 no apunta a un indicador +/- válido:", sheetName, targetAddr);
-                        }
-                    }
-                }
+            const toggled = await toggleDracoCollapseAtCell(context, sheetName, targetAddr, flag);
+            if (!toggled) {
+                console.warn("[Draco] EDIT_REPORT!U1 no apunta a un indicador +/- válido:", sheetName, targetAddr);
             }
 
             // Consumimos la petición (igual que A5 con el Member Picker) para
