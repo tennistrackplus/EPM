@@ -594,9 +594,15 @@ const TaskPaneApp = {
         const btnSaveToBucket = document.getElementById("btnSaveToBucket");
         if (btnSaveToBucket) btnSaveToBucket.addEventListener("click", () => this.saveWorkbookToBucket());
 
-        // Botón "Añadir filtro" (ribbon, ver AnadirFiltroButton en manifest.xml
-        // y abrirAnadirFiltro en commands.js): abre el modal vía
-        // handlePendingRibbonAction, no hay botón propio en esta barra.
+        // Botón "Añadir filtro" DE LA BARRA DEL TASKPANE (btnAddFilterRange,
+        // junto a "Añadir informe"): al estar en esta misma página, abre
+        // directamente el modal embebido (sin diálogo aparte). Distinto del
+        // botón del RIBBON (AnadirFiltroButton en manifest.xml), que corre
+        // en el runtime aislado de comandos y por eso usa un diálogo
+        // standalone (addFilterRange.html) — ver abrirAnadirFiltro en
+        // commands.js.
+        const btnAddFilterRange = document.getElementById("btnAddFilterRange");
+        if (btnAddFilterRange) btnAddFilterRange.addEventListener("click", () => this.openAddFilterRangeModal());
         const btnCancelAddFilterRange = document.getElementById("btnCancelAddFilterRange");
         if (btnCancelAddFilterRange) btnCancelAddFilterRange.addEventListener("click", () => this.closeAddFilterRangeModal());
 
@@ -615,6 +621,11 @@ const TaskPaneApp = {
      * dracoFilterRangeName/ensureDracoFilterRangeHandlersRegistered y el
      * resto de "Añadir filtro" en commands.js, y js/filterRangeStore.js
      * para los metadatos guardados.
+     *
+     * Se abre desde btnAddFilterRange (barra del taskpane, ver bindEvents).
+     * El botón del RIBBON (AnadirFiltroButton) es un flujo aparte: usa el
+     * diálogo standalone addFilterRange.html + abrirAnadirFiltro en
+     * commands.js, porque ese runtime no tiene acceso a este modal.
      * ----------------------------------------------------------- */
     async openAddFilterRangeModal() {
         const modal = document.getElementById("addFilterRangeModal");

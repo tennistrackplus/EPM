@@ -4971,31 +4971,168 @@ async function abrirDistribuirValores(event) {
 
 /**
  * Botón de ribbon "Añadir filtro" (ver AnadirFiltroButton en manifest.xml):
- * mismo patrón que abrirDistribuirValores/openReportProperties — sin
- * shared runtime declarado en el manifest, esto se ejecuta en el contexto
- * aislado de comandos (commands.html), así que se deja marcada la acción
- * pendiente en Office roaming settings y se fuerza a mostrar el taskpane;
- * este, al arrancar (o al recibir SettingsChanged si ya estaba abierto),
- * la recoge en handlePendingRibbonAction() y abre el modal.
+ * abre addFilterRange.html como diálogo INDEPENDIENTE de Office
+ * (Office.context.ui.displayDialogAsync), sin depender del taskpane ni de
+ * shared runtime — exactamente el mismo patrón que openDracoFilterRangePicker
+ * usa para el selector de valores. Antes intentaba
+ * Office.addin.showAsTaskpane(), pero esa API SOLO existe cuando el
+ * manifest declara <Runtimes> (shared runtime), lo cual no es el caso aquí;
+ * por eso el botón no hacía nada visible.
+ *
+ * Flujo:
+ *  1) Captura la celda seleccionada AHORA MISMO en Excel (antes de abrir el
+ *     diálogo: una ventana de diálogo no tiene acceso a Excel.run).
+ *  2) Carga dimensiones/jerarquías (ExcelService.readDim2Data) e informes
+ *     (ReportStore.listReports) — ninguno de los dos necesita Excel.run,
+ *     leen de Office roaming settings, así que es seguro hacerlo aquí.
+ *  3) Abre el diálogo y le envía esos datos en cuanto avisa "ready".
+ *  4) Al recibir "apply", crea/reemplaza el rango con nombre
+ *     Draco_Filter_<DIM>_<CAMPO>_<sufijo> sobre la celda capturada en el
+ *     paso 1 (misma lógica que tenía TaskPaneApp.createFilterRangeFromModal)
+ *     y lo guarda en FilterRangeStore.
  */
 async function abrirAnadirFiltro(event) {
     try {
-        console.log("[Draco] abrirAnadirFiltro: shared runtime ¿activo? ->", typeof TaskPaneApp !== "undefined");
-        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.openAddFilterRangeModal) {
-            TaskPaneApp.openAddFilterRangeModal();
-            console.log("[Draco] openAddFilterRangeModal() ejecutado directamente (shared runtime OK).");
-        } else {
-            console.warn("[Draco] TaskPaneApp NO existe en este contexto: usando fallback de settings (¿manifest sin Runtimes recargado?).");
-            const settings = Office.context.document.settings;
-            settings.set("draco_pendingAction", "addFilterRange");
-            await new Promise((resolve) => settings.saveAsync(resolve));
+        let addr = "";
+        let sheetName = "";
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getActiveWorksheet();
+            sheet.load("name");
+            const selectedRange = context.workbook.getSelectedRange();
+            selectedRange.load("address");
+            await context.sync();
+
+            sheetName = sheet.name;
+            // Esquina superior izquierda si hay varias celdas seleccionadas.
+            const rawAddress = String(selectedRange.address).split("!").pop();
+            addr = rawAddress.split(":")[0];
+        });
+
+        let dimensions = [];
+        let dimensionsError = "";
+        try {
+            const result = await window.ExcelService.readDim2Data();
+            if (result && result.error) {
+                dimensionsError = result.error;
+            } else {
+                dimensions = (result && result.data) || [];
+            }
+        } catch (err) {
+            console.error("[Draco] Añadir filtro: error cargando dimensiones:", err);
+            dimensionsError = "Error al cargar los campos del modelo semántico.";
         }
-        if (Office.addin && Office.addin.showAsTaskpane) {
-            await Office.addin.showAsTaskpane();
-            console.log("[Draco] showAsTaskpane() resuelto sin error.");
-        } else {
-            console.warn("[Draco] Office.addin.showAsTaskpane no está disponible en este runtime.");
-        }
+
+        const reports = (window.ReportStore ? window.ReportStore.listReports() : []) || [];
+
+        const dialogUrl = new URL("addFilterRange.html", window.location.href).href;
+
+        await new Promise((resolve) => {
+            Office.context.ui.displayDialogAsync(
+                dialogUrl,
+                { height: 45, width: 32, displayInIframe: false },
+                (asyncResult) => {
+                    if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                        console.error(
+                            "[Draco] Añadir filtro: displayDialogAsync ha fallado:",
+                            asyncResult.error && asyncResult.error.code,
+                            asyncResult.error && asyncResult.error.message
+                        );
+                        resolve();
+                        return;
+                    }
+
+                    const dialog = asyncResult.value;
+                    let settled = false;
+                    const closeDialog = () => { try { dialog.close(); } catch (e) { /* ya cerrado */ } };
+
+                    dialog.addEventHandler(Office.EventType.DialogMessageReceived, async (arg) => {
+                        let payload;
+                        try {
+                            payload = JSON.parse(arg.message);
+                        } catch (err) {
+                            console.error("[Draco] Añadir filtro: mensaje del diálogo no es JSON válido:", err);
+                            return;
+                        }
+
+                        if (payload.type === "ready") {
+                            if (dimensionsError) {
+                                dialog.messageChild(JSON.stringify({ type: "error", message: dimensionsError }));
+                            } else {
+                                dialog.messageChild(JSON.stringify({ type: "data", dimensions, reports }));
+                            }
+                            return;
+                        }
+
+                        if (payload.type === "apply") {
+                            settled = true;
+                            closeDialog();
+                            try {
+                                const fieldData = payload.fieldData;
+                                const reportValue = payload.reportValue;
+                                const isAll = !reportValue || reportValue === "all";
+                                const reportId = isAll ? null : Number(reportValue);
+                                const suffix = isAll ? "all" : pad3(reportId);
+                                const rangeName = dracoFilterRangeName(fieldData.dim, fieldData.name, suffix);
+
+                                await Excel.run(async (context) => {
+                                    const sheet = context.workbook.worksheets.getItem(sheetName);
+                                    const cell = sheet.getRange(addr);
+
+                                    // Si ya existía un rango con este mismo nombre (misma
+                                    // dimensión/campo + mismo informe), se borra y se
+                                    // vuelve a crear sobre la NUEVA celda seleccionada
+                                    // (así "Añadir filtro" también sirve para mover un
+                                    // filtro existente).
+                                    const existing = context.workbook.names.getItemOrNullObject(rangeName);
+                                    existing.load("isNullObject");
+                                    await context.sync();
+                                    if (!existing.isNullObject) {
+                                        existing.delete();
+                                        await context.sync();
+                                    }
+
+                                    context.workbook.names.add(rangeName, cell);
+                                    await context.sync();
+                                });
+
+                                await window.FilterRangeStore.set(rangeName, {
+                                    dim: fieldData.dim,
+                                    name: fieldData.name,
+                                    isHierarchy: !!fieldData.isHierarchy,
+                                    reportId: reportId,
+                                    filter: null
+                                });
+
+                                // Por si el usuario ha creado el filtro en una hoja nueva
+                                // que todavía no tuviera enganchado el listener de clic,
+                                // y para refrescar la zona "Filtros" si el taskpane ya
+                                // estaba abierto (mismo contexto que commands.js).
+                                if (window.ReportActions && window.ReportActions.ensureDracoFilterRangeHandlersRegistered) {
+                                    await window.ReportActions.ensureDracoFilterRangeHandlersRegistered();
+                                }
+                                if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.loadDesignFromSheet) {
+                                    try { await TaskPaneApp.loadDesignFromSheet(); } catch (e) { /* taskpane sin informe abierto: se ignora */ }
+                                }
+                            } catch (err) {
+                                console.error("[Draco] Añadir filtro: error al crear el rango de filtro:", err);
+                            }
+                            resolve();
+                            return;
+                        }
+
+                        if (payload.type === "cancel") {
+                            settled = true;
+                            closeDialog();
+                            resolve();
+                        }
+                    });
+
+                    dialog.addEventHandler(Office.EventType.DialogEventReceived, () => {
+                        if (!settled) resolve();
+                    });
+                }
+            );
+        });
     } catch (error) {
         console.error("Error al abrir 'Añadir filtro':", error);
     } finally {
