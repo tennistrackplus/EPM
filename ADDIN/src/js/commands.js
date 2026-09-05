@@ -3246,10 +3246,14 @@ async function ensureDracoFilterRangeHandlersRegistered() {
 
 /* ---------------------------------------------------------------------
  * Registro del clic en la celda A50 (cualquier hoja): al hacer clic
- * izquierdo sobre A50, se calcula si el clic ha caído sobre la PRIMERA
- * LETRA del contenido de la celda (teniendo en cuenta el indentLevel) y,
- * si es así, se escribe en A51 "Izquierda" o "Derecha" según en qué
- * mitad de esa letra ha caído el clic.
+ * izquierdo sobre A50, se clasifica SIEMPRE en una de 3 zonas según el
+ * offsetX del clic (en puntos, desde la esquina izquierda de la celda),
+ * y se escribe el resultado en A51:
+ *   - "Izquierda" -> el clic cae en la zona del padding + indentLevel,
+ *                    ANTES de que empiece la primera letra.
+ *   - "Letra"     -> el clic cae dentro del ancho estimado de esa
+ *                    primera letra.
+ *   - "Derecha"   -> el clic cae DESPUÉS del final de la primera letra.
  *
  * Usa el evento onSingleClicked (ExcelApi 1.10), que es distinto de
  * onSelectionChanged: se dispara con cada clic, aunque la celda ya
@@ -3359,22 +3363,28 @@ async function handleA50SingleClick(eventArgs) {
                 cell.format.indentLevel
             );
 
-            console.log(
-                `[Draco] Clic en A50 -> offsetX=${offsetX}pt | letra estimada entre ${bounds.start.toFixed(2)}pt y ${bounds.end.toFixed(2)}pt ` +
-                `(indent=${cell.format.indentLevel}, fuente="${cell.format.font.name}" ${cell.format.font.size}pt)`
-            );
-
-            if (offsetX < bounds.start || offsetX > bounds.end) {
-                // El clic no ha caído sobre la primera letra estimada:
-                // no tocamos A51.
-                return;
+            // Clasificación en 3 zonas según dónde cae el clic respecto a
+            // la primera letra estimada:
+            //  - antes de que empiece la letra -> "Izquierda"
+            //  - dentro del ancho de la letra   -> "Letra"
+            //  - después de que termine la letra -> "Derecha"
+            // Siempre se escribe una de las tres en A51.
+            let resultado;
+            if (offsetX < bounds.start) {
+                resultado = "Izquierda";
+            } else if (offsetX > bounds.end) {
+                resultado = "Derecha";
+            } else {
+                resultado = "Letra";
             }
 
-            const midPoint = (bounds.start + bounds.end) / 2;
-            const side = offsetX < midPoint ? "Izquierda" : "Derecha";
+            console.log(
+                `[Draco] Clic en A50 -> offsetX=${offsetX.toFixed(2)}pt | letra estimada entre ${bounds.start.toFixed(2)}pt y ${bounds.end.toFixed(2)}pt ` +
+                `(indent=${cell.format.indentLevel}, fuente="${cell.format.font.name}" ${cell.format.font.size}pt) -> ${resultado}`
+            );
 
             const target = sheet.getRange("A51");
-            target.values = [[side]];
+            target.values = [[resultado]];
             await context.sync();
         });
     } catch (e) {
