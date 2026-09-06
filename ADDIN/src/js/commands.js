@@ -2482,38 +2482,84 @@ function buildEpmValueFormula(dim, attr, text) {
  */
 // {dim, attr} por posición (nivel) de un eje, igual que fieldsFilas/fieldsColumnas
 // en jsonTo3Matrices. Requiere que ReportState ya esté cargado (loadReportDefinition).
-function buildAxisFieldsTable(editReportGrid, axis) {
-    const totalDimFilas = ReportState.ColumnCount; // nº de entradas EDIT_REPORT del eje Filas (jerarquías expandidas a 1 fila por nivel)
-    const totalDimCols = ReportState.RowCount;      // nº de entradas EDIT_REPORT del eje Columnas
-    // Igual que en jsonTo3Matrices: cada COLUMNA FÍSICA corresponde a una
-    // entrada con NIVEL/flag === 1 (inicio de un campo nuevo); los niveles
-    // siguientes de esa misma jerarquía (flag > 1) se pintan en la MISMA
-    // columna física, así que no deben generar una entrada nueva en la
-    // tabla devuelta (si no, con jerarquías multinivel + campos simples
-    // mezclados, las columnas físicas quedaban desalineadas con el campo
-    // correcto).
-    const fields = [];
-    if (axis === "rows") {
-        let iAux = 0;
-        for (let i = 1; i <= totalDimFilas; i++) {
-            const flag = Number(cellValue(editReportGrid, i + 14, 10)); // J
-            if (flag === 1) {
-                iAux++;
-                fields[iAux] = { dim: cellValue(editReportGrid, i + 14, 8), attr: cellValue(editReportGrid, i + 14, 9) };
-            }
+//
+// CORREGIDO: antes esta tabla guardaba UN SOLO {dim, attr} por columna
+// física (iAux), tomado siempre de la primera fila de EDIT_REPORT de ese
+// campo (la de NIVEL/flag=1). Eso está bien para campos simples, pero en
+// una JERARQUÍA multinivel, cada profundidad (flag=1,2,3...) puede tener
+// su propio Attr distinto (p.ej. "NIVEL1", "NIVEL2"...) aunque compartan
+// columna física — y al convertir a Estático se aplicaba SIEMPRE el Attr
+// del nivel 1 a todas las filas pintadas de esa columna, sin importar su
+// profundidad real (de ahí que toda la jerarquía se pintase con NIVEL1).
+// Ahora se guarda, por columna física, un {dim, attr} POR CADA flag/nivel
+// (byFlag), para poder elegir el correcto según la profundidad real de
+// cada celda pintada (ver resolveAxisFieldForFlag).
+function buildAxisFieldLevelsTable(editReportGrid, axis) {
+    const [dimCol, attrCol, hierCol, jerCol] = axis === "rows" ? [8, 9, 10, 11] : [14, 15, 16, 17];
+    const levels = buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol, jerCol);
+    const columns = [];
+    let iAux = 0;
+    let current = null;
+    for (const lvl of levels) {
+        if (lvl.isMeasure) continue; // las filas MEASURE no pintan como Filas/Columnas Estáticas
+        const flag = lvl.flag || 1;
+        if (flag === 1 || !current) {
+            iAux++;
+            current = { byFlag: {}, maxFlag: 0 };
+            columns[iAux] = current;
         }
-    } else {
-        let iAux = 0;
-        for (let i = 1; i <= totalDimCols; i++) {
-            const flag = Number(cellValue(editReportGrid, i + 14, 16)); // P
-            if (flag === 1) {
-                iAux++;
-                fields[iAux] = { dim: cellValue(editReportGrid, i + 14, 14), attr: cellValue(editReportGrid, i + 14, 15) };
-            }
-        }
+        current.byFlag[flag] = { dim: lvl.dim, attr: lvl.attr, jerarquia: lvl.jerarquia };
+        if (flag > current.maxFlag) current.maxFlag = flag;
     }
-    return fields;
+    return columns;
 }
+
+// Dada la entrada de buildAxisFieldLevelsTable para UNA columna física y
+// el "flag" (nivel de profundidad, 1-based = indentLevel+1) de la celda
+// pintada, devuelve el {dim, attr} del nivel correspondiente. Si ese
+// nivel exacto no está definido (p.ej. una fila con más indentado del
+// que tiene el eje configurado), usa el nivel más profundo conocido; si
+// tampoco hay nada, cae al nivel 1.
+function resolveAxisFieldForFlag(columnEntry, flag) {
+    if (!columnEntry) return null;
+    if (columnEntry.byFlag[flag]) return columnEntry.byFlag[flag];
+    if (flag > columnEntry.maxFlag && columnEntry.byFlag[columnEntry.maxFlag]) {
+        return columnEntry.byFlag[columnEntry.maxFlag];
+    }
+    return columnEntry.byFlag[1] || null;
+}
+
+// Lee, para cada celda de `range` (mismo orden que range.values), su
+// format.indentLevel actual, en UNA sola llamada a la API (en vez de un
+// cell.load por celda). Devuelve una matriz [row][col] de números.
+async function readIndentLevelsForRange(context, range) {
+    try {
+        const result = range.getCellProperties({ format: { indentLevel: true } });
+        await context.sync();
+        return result.value.map(row =>
+            row.map(c => (c && c.format && typeof c.format.indentLevel === "number") ? c.format.indentLevel : 0)
+        );
+    } catch (err) {
+        // Fallback para Excel sin soporte de getCellProperties (< ExcelApi
+        // 1.9): una llamada de load por celda, todas en el mismo sync.
+        console.warn("[Draco] getCellProperties no disponible, usando fallback celda a celda para indentLevel:", err);
+        range.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+        await context.sync();
+        const cells = [];
+        for (let r = 0; r < range.rowCount; r++) {
+            const rowCells = [];
+            for (let c = 0; c < range.columnCount; c++) {
+                const cell = range.getCell(r, c);
+                cell.load("format/indentLevel");
+                rowCells.push(cell);
+            }
+            cells.push(rowCells);
+        }
+        await context.sync();
+        return cells.map(row => row.map(cell => cell.format.indentLevel || 0));
+    }
+}
+
 
 async function convertAxisStaticFormulas(axis, makeStatic) {
     const reportId = activeReportIdOrNull();
@@ -2547,7 +2593,7 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
     await Excel.run(async (context) => {
         const editReportGrid = await getEditReportGrid(context);
         loadReportDefinition(editReportGrid);
-        const fields = buildAxisFieldsTable(editReportGrid, axis);
+        const fieldLevels = buildAxisFieldLevelsTable(editReportGrid, axis);
 
         const namedRange = context.workbook.names.getItemOrNullObject(rangeName);
         namedRange.load("isNullObject");
@@ -2560,6 +2606,13 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         const range = namedRange.getRange();
         range.load(["values", "formulas", "rowCount", "columnCount"]);
         await context.sync();
+
+        // Profundidad real (indentLevel) de cada celda ya pintada: para una
+        // jerarquía, cada fila/columna puede estar a un nivel distinto
+        // aunque compartan columna/fila física, y el Attr correcto (p.ej.
+        // "NIVEL1" vs "NIVEL2") depende de esa profundidad, no solo de la
+        // posición del campo dentro del eje.
+        const indentLevels = await readIndentLevelsForRange(context, range);
 
         const GLYPH_PREFIX = /^[▸▾]\s+/; // indicador +/- fusionado (solo aplica en eje Dinámico)
         const EPM_RE = /^=\s*EPM_VALUE\s*\(/i;
@@ -2579,10 +2632,16 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
                     continue;
                 }
 
-                // Nivel del campo dentro del eje: en Filas crece por COLUMNA,
-                // en Columnas crece por FILA (misma orientación que al pintar).
-                const level = (axis === "rows" ? c : r) + 1;
-                const field = fields[level];
+                // Columna/fila física del campo dentro del eje: en Filas
+                // crece por COLUMNA, en Columnas crece por FILA (misma
+                // orientación que al pintar).
+                const iAux = (axis === "rows" ? c : r) + 1;
+                const columnEntry = fieldLevels[iAux];
+                // Profundidad real de ESTA celda (1-based, como el flag de
+                // EDIT_REPORT): indentLevel 0 -> nivel 1, indentLevel 1 ->
+                // nivel 2, etc.
+                const flag = (indentLevels[r][c] || 0) + 1;
+                const field = resolveAxisFieldForFlag(columnEntry, flag);
                 const isEpmFormula = typeof currentFormula === "string" && EPM_RE.test(currentFormula);
 
                 if (makeStatic) {
@@ -2658,7 +2717,7 @@ async function locateDracoAxisField(context, addr) {
     const resultSheetName = await getDracoResultSheetName(context, reportId);
     const sheet = context.workbook.worksheets.getItem(resultSheetName);
     const cell = sheet.getRange(addr);
-    cell.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    cell.load(["rowIndex", "columnIndex", "rowCount", "columnCount", "format/indentLevel"]);
 
     const rangeNames = dracoRangeNames(reportId);
     const rowsNamed = context.workbook.names.getItemOrNullObject(rangeNames.rows);
@@ -2700,11 +2759,25 @@ async function locateDracoAxisField(context, addr) {
 
     const editReportGrid = await getEditReportGrid(context, reportId);
     loadReportDefinition(editReportGrid);
-    const fields = buildAxisFieldsTable(editReportGrid, axis);
-    const field = fields[level];
+    const fieldLevels = buildAxisFieldLevelsTable(editReportGrid, axis);
+    const columnEntry = fieldLevels[level];
+    // Profundidad real de la celda pulsada (1-based, como el flag de
+    // EDIT_REPORT): antes se usaba siempre el Attr del primer nivel del
+    // campo (p.ej. "NIVEL1"), aunque el clic fuera sobre un nodo más
+    // profundo de la jerarquía (NIVEL2, NIVEL3...).
+    const flag = (cell.format.indentLevel || 0) + 1;
+    const field = resolveAxisFieldForFlag(columnEntry, flag);
     if (!field || !field.dim) return null;
 
-    return { axis, level, dim: field.dim, attr: field.attr };
+    // Igual que el VBA original (GetDimAttrRows/GetDimAttrCols): si el
+    // campo es una JERARQUÍA, el buscador de miembros debe abrir el
+    // árbol COMPLETO de la jerarquía (todos los niveles), no la lista
+    // plana de un único nivel — así que aquí se usa el nombre de la
+    // Jerarquía en vez del Attr del nivel concreto. Attr (NIVEL1/NIVEL2)
+    // solo se usa para la fórmula EPM_VALUE final, no para buscar.
+    const searchAttr = field.jerarquia || field.attr;
+
+    return { axis, level, dim: field.dim, attr: searchAttr };
 }
 
 /**
@@ -3582,11 +3655,14 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 rowsStaticTrace = rowsStatic;
                 colsStaticTrace = colsStatic;
 
-                // Igual que en VBA (RowsStatic Y ColsStatic ambos "X"):
-                // el buscador de doble clic solo actúa si TODO el diseño
-                // del informe (filas y columnas) está marcado como
-                // Estático.
-                if (rowsStatic && colsStatic) {
+                // NOTA: en el VBA original esto exigía RowsStatic Y
+                // ColsStatic ambos "X". Se ha quitado esa condición: el
+                // buscador de miembros se abre en doble clic sobre
+                // cualquier celda de Filas/Columnas del informe, esté o
+                // no marcado como Estático en el diseño. rowsStatic/
+                // colsStatic se siguen leyendo y trazando (arriba, en
+                // A56) solo a título informativo.
+                {
                     const fieldLocated = await locateDracoAxisField(context, addr);
                     fieldLocatedTrace = fieldLocated;
                     if (fieldLocated) {
@@ -3595,8 +3671,6 @@ async function handleDracoRowsSingleClick(eventArgs) {
                     } else {
                         accionTexto = " | Accion: doble clic fuera de Filas/Columnas del informe";
                     }
-                } else {
-                    accionTexto = " | Accion: doble clic ignorado (informe no 100% Estatico)";
                 }
             }
 
@@ -4167,7 +4241,7 @@ async function ensureDracoHandlersRegistered() {
  * necesita esa posición para pintar correctamente cuando MEASURE no es
  * la última fila del eje (ver computeAxisPaintPlan).
  */
-function buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol) {
+function buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol, jerCol) {
     const levels = [];
     let R = 15;
     while (String(cellValue(editReportGrid, R, dimCol)).trim() !== "") {
@@ -4176,7 +4250,14 @@ function buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol) {
             isMeasure: dim.toUpperCase() === "MEASURE",
             dim,
             attr: String(cellValue(editReportGrid, R, attrCol)).trim(),
-            flag: Number(cellValue(editReportGrid, R, hierCol))
+            flag: Number(cellValue(editReportGrid, R, hierCol)),
+            // Nombre de la JERARQUÍA (col K=11 en Filas / Q=17 en Columnas,
+            // ver ReportStore.saveDesign/getReportGrid), NO el atributo del
+            // nivel: todos los niveles de una misma jerarquía comparten este
+            // mismo nombre (p.ej. "H_CUENTA"), a diferencia de `attr`
+            // (NIVEL1/NIVEL2...), que sí cambia por nivel. Cadena vacía para
+            // campos que no son jerarquía, o si no se pide esta columna.
+            jerarquia: jerCol ? String(cellValue(editReportGrid, R, jerCol)).trim() : ""
         });
         R++;
     }
