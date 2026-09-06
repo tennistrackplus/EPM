@@ -96,5 +96,36 @@ const GithubRepo = {
         }
 
         return await putRes.json();
+    },
+
+    /**
+     * Lee el contenido de `path` dentro del repositorio configurado (texto
+     * UTF-8 decodificado). Devuelve null si el fichero no existe (404).
+     * Se usa para volver a abrir el .lkml que generó SemanticModel al
+     * guardar un cubo (ver js/widget-pivot.js).
+     */
+    async getFile(path, repoConfig) {
+        const cfg = repoConfig || (typeof DracoConfig !== "undefined" && DracoConfig.semanticModelGithub) || {};
+
+        const ref = this.parseUrl(cfg.url);
+        if (!ref) throw new Error("DracoConfig.semanticModelGithub.url no es una URL de GitHub válida (revisa js/config.js).");
+        if (!cfg.token) throw new Error("Falta DracoConfig.semanticModelGithub.token en js/config.js (Personal Access Token con permiso de lectura sobre el repo).");
+
+        const branch = (cfg.branch || "main").trim();
+        const cleanPath = (path || "").replace(/^\/+|\/+$/g, "");
+        if (!cleanPath) throw new Error("Falta la ruta del fichero a leer en GitHub.");
+
+        const headers = { Accept: "application/vnd.github+json", Authorization: `Bearer ${cfg.token}` };
+        const apiUrl = `https://api.github.com/repos/${ref.owner}/${ref.repo}/contents/${encodeURI(cleanPath)}?ref=${encodeURIComponent(branch)}`;
+
+        const res = await fetch(apiUrl, { headers });
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error(this._friendlyError(res.status));
+
+        const data = await res.json();
+        if (!data || typeof data.content !== "string") throw new Error("GitHub: respuesta sin contenido de fichero.");
+        // decodeURIComponent/escape es lo simétrico de _toBase64Utf8 (btoa
+        // solo admite Latin1) para volver a obtener el texto UTF-8 original.
+        return decodeURIComponent(escape(atob(data.content.replace(/\n/g, ""))));
     }
 };

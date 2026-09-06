@@ -42,6 +42,569 @@
  * columnas/filas conservan su tamaño (no se recalculan ni se "corren" los
  * anchos al borrar).
  */
+// Estilos del editor incrustados directamente desde JS: así el motor de
+// rejilla (posiciones absolutas, virtualización) funciona aunque el HTML
+// que incluye este script no tenga bien enlazados (o cacheados) los
+// ficheros css/widget-table-editor.css y css/widget-pivot.css. Sin esta
+// red de seguridad, si el <link> no carga, TODAS las celdas caen a
+// position:static y se apilan verticalmente, y la virtualización pierde
+// el límite de viewport real (el scroller ya no tiene overflow:auto),
+// así que se acaban creando los ~200.000 nodos DOM de golpe.
+const WTE_EMBEDDED_CSS = `
+/* ---------- Editor de widget tipo Tabla (estilo Excel, virtualizado) ---------- */
+.wte-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-sunken);
+    flex-shrink: 0;
+}
+
+.wte-toolbar select {
+    height: 30px;
+    font-size: var(--fs-sm);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 0 6px;
+    background: var(--surface-card);
+}
+
+#wteFont { width: 110px; }
+#wteSize { width: 56px; }
+
+.wte-toolbar-sep {
+    width: 1px;
+    height: 22px;
+    background: var(--border-default);
+    margin: 0 2px;
+}
+
+.wte-toolbar-spacer { flex: 1; }
+
+.wte-toolbar-hint {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    padding: 0 4px;
+}
+
+.wte-color-label {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+
+.wte-color-label input[type="color"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+}
+
+/* ---------- Layout: corner + col headers | row headers + body (scroll) ---------- */
+.wte-grid-wrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
+    background: var(--surface-card);
+}
+
+.wte-grid-main {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    user-select: none;
+}
+
+.wte-headrow {
+    display: flex;
+    flex-shrink: 0;
+}
+
+.wte-corner {
+    flex-shrink: 0;
+    width: 50px;
+    height: 26px;
+    background: var(--surface-sunken);
+    border-right: 1px solid var(--border-default);
+    border-bottom: 1px solid var(--border-default);
+}
+
+.wte-colhead-clip {
+    flex: 1;
+    min-width: 0;
+    height: 26px;
+    overflow: hidden;
+    position: relative;
+    background: var(--surface-sunken);
+    border-bottom: 1px solid var(--border-default);
+}
+
+.wte-colhead-track {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+}
+
+.wte-colhead-cell {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    box-sizing: border-box;
+    border-right: 1px solid var(--border-default);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.wte-colhead-cell:hover,
+.wte-colhead-cell.wte-head-selected {
+    background: var(--brand-primary-light);
+    color: var(--brand-primary-hover);
+}
+
+.wte-resize-col {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 3;
+}
+
+.wte-bodyrow {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
+
+.wte-rowhead-clip {
+    flex-shrink: 0;
+    width: 50px;
+    overflow: hidden;
+    position: relative;
+    background: var(--surface-sunken);
+    border-right: 1px solid var(--border-default);
+}
+
+.wte-rowhead-track {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+}
+
+.wte-rowhead-cell {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    box-sizing: border-box;
+    border-bottom: 1px solid var(--border-default);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.wte-rowhead-cell:hover,
+.wte-rowhead-cell.wte-head-selected {
+    background: var(--brand-primary-light);
+    color: var(--brand-primary-hover);
+}
+
+.wte-resize-row {
+    position: absolute;
+    left: 0;
+    bottom: -3px;
+    height: 6px;
+    width: 100%;
+    cursor: row-resize;
+    z-index: 3;
+}
+
+.wte-body-scroll {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: auto;
+    position: relative;
+    background: var(--gray-50);
+}
+
+.wte-body-canvas {
+    position: relative;
+}
+
+.wte-cell {
+    position: absolute;
+    box-sizing: border-box;
+    padding: 3px 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow: hidden;
+    cursor: cell;
+    outline: none;
+    background: #ffffff;
+}
+
+.wte-cell-selected {
+    box-shadow: inset 0 0 0 9999px rgba(42, 91, 215, 0.08);
+}
+
+.wte-cell-anchor {
+    box-shadow: inset 0 0 0 2px var(--brand-primary);
+    z-index: 2;
+}
+
+.wte-resizing {
+    cursor: col-resize !important;
+}
+
+.wte-resizing-row {
+    cursor: row-resize !important;
+}
+
+#wteToggleReport.active,
+#wteRecognition.active {
+    background: var(--brand-primary-light);
+    border-color: var(--brand-primary);
+    color: var(--brand-primary-hover);
+}
+
+.wte-pivot-toggle {
+    display: inline-block;
+    width: 14px;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+.wte-cell-pivot-head {
+    font-weight: 600;
+}
+/* ==========================================================
+   Panel de Informe — mismas clases que ADDIN/src/css/styles.css
+   (taskpane.html), embebido dentro de wte-report-panel en vez de
+   ocupar toda la ventana.
+   ========================================================== */
+.wte-report-panel.visible {
+    width: 420px;
+    display: flex;
+    flex-direction: column;
+}
+
+.wtp-embedded {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.wtp-embedded .taskpane-body {
+    display: flex;
+    flex: 1;
+    gap: 10px;
+    min-height: 0;
+    padding: 10px;
+}
+
+.wtp-select {
+    width: 100%;
+    margin-bottom: 6px;
+    padding: 6px 8px;
+    font-size: var(--fs-sm, 12px);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--surface-card);
+}
+
+/* ---- Panel izquierdo: catálogo de campos (copiado de styles.css) ---- */
+.fields-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    padding: 8px;
+    min-width: 150px;
+}
+
+.search-input-wrapper {
+    position: relative;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+.search-icon {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.search-input-wrapper input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px 6px 26px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-base, 12.5px);
+    outline: none;
+    background-color: var(--surface-sunken);
+}
+
+.search-input-wrapper input:focus {
+    border-color: var(--brand-primary);
+    background-color: var(--surface-card);
+    box-shadow: 0 0 0 3px var(--brand-primary-light);
+}
+
+.fields-tree {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.dimension-group {
+    margin-bottom: 10px;
+}
+
+.dimension-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 4px 6px;
+    cursor: pointer;
+    user-select: none;
+    border-radius: var(--radius-sm);
+}
+
+.dimension-header:hover {
+    background-color: var(--brand-primary-light);
+}
+
+.dimension-caret {
+    display: inline-block;
+    width: 10px;
+    font-size: 9px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.dimension-group.collapsed > .field-item {
+    display: none;
+}
+
+.field-item {
+    display: flex;
+    align-items: center;
+    padding: 6px 8px;
+    margin: 1px 0;
+    border-radius: var(--radius-sm);
+    cursor: grab;
+    background-color: transparent;
+    border: 1px solid transparent;
+}
+
+.field-item:hover {
+    background-color: var(--brand-primary-light);
+    border-color: #D7E3FC;
+}
+
+.field-item.dragging {
+    opacity: 0.4;
+}
+
+.field-icon {
+    margin-right: 8px;
+    font-size: var(--fs-sm);
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.field-label {
+    font-size: var(--fs-base, 12.5px);
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ---- Panel derecho: ejes / dropzones (copiado de styles.css) ---- */
+.zones-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 160px;
+}
+
+.zone-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 64px;
+    overflow: hidden;
+}
+
+.zone-card.drag-over {
+    border-color: var(--brand-primary);
+    background-color: var(--brand-primary-light);
+    box-shadow: 0 0 0 3px var(--brand-primary-light);
+}
+
+.zone-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7px 10px;
+    background-color: var(--surface-sunken);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+}
+
+.zone-title-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 700;
+    font-size: var(--fs-sm);
+    color: var(--text-primary);
+    letter-spacing: 0.2px;
+}
+
+.zone-icon {
+    color: var(--brand-primary);
+    flex-shrink: 0;
+}
+
+.dropzone-content {
+    flex: 1;
+    padding: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 5px;
+    overflow-y: auto;
+}
+
+.dropzone-content:empty::before {
+    content: "Suelta aquí un campo";
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    padding: 4px 2px;
+}
+
+.dropped-tag {
+    background-color: var(--brand-primary);
+    background-image: linear-gradient(160deg, var(--brand-primary) 0%, var(--brand-primary-hover) 100%);
+    color: var(--text-inverse);
+    padding: 4px 6px 4px 10px;
+    border-radius: var(--radius-pill);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    box-shadow: var(--shadow-xs);
+}
+
+.dropped-tag.measure-tag {
+    background-color: var(--brand-accent);
+    background-image: linear-gradient(160deg, var(--brand-accent) 0%, #0E9C71 100%);
+}
+
+.dropped-tag-title {
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.dropped-tag-remove {
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    opacity: 0.85;
+}
+
+.dropped-tag-remove:hover {
+    opacity: 1;
+    background-color: rgba(255, 255, 255, 0.28);
+}
+
+/* ---- Modal de selección (elegir dimensión / miembros de un filtro) ---- */
+.wtp-choice-list {
+    max-height: 280px;
+    overflow-y: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+}
+
+.wtp-choice-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    font-size: var(--fs-sm);
+    border-bottom: 1px solid var(--border-subtle);
+    cursor: pointer;
+}
+
+.wtp-choice-item:last-child { border-bottom: none; }
+.wtp-choice-item:hover { background: var(--surface-sunken); }
+
+.wtp-empty-hint,
+.field-options-empty {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 6px;
+}
+
+`;
+
 const WidgetTableEditor = {
     DEFAULT_ROWS: 1000,
     DEFAULT_COLS: 200,
@@ -55,6 +618,8 @@ const WidgetTableEditor = {
     SIZES: [9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36],
 
     async open(widgetRow, project = null) {
+        this.ensureStylesInjected();
+
         this.widget = {
             id: widgetRow.WIDGET_ID,
             name: widgetRow.WIDGET,
@@ -94,6 +659,17 @@ const WidgetTableEditor = {
         if (typeof WidgetPivot !== "undefined") WidgetPivot.onWidgetOpened();
     },
 
+    // Inyecta (una sola vez) el CSS crítico del motor de rejilla directamente
+    // en <head>, para que funcione aunque el <link> a los .css falle o esté
+    // cacheado con una versión antigua.
+    ensureStylesInjected() {
+        if (document.getElementById("wteEmbeddedStyles")) return;
+        const style = document.createElement("style");
+        style.id = "wteEmbeddedStyles";
+        style.textContent = WTE_EMBEDDED_CSS;
+        document.head.appendChild(style);
+    },
+
     blankState() {
         return {
             rows: this.DEFAULT_ROWS,
@@ -109,11 +685,11 @@ const WidgetTableEditor = {
     defaultReport() {
         return {
             cuboId: null,
-            rowField: null,   // { dimId, hierarchyId|null }
-            colField: null,   // { dimId, hierarchyId|null }
-            values: [],       // [{ name, colId, agg:"SUM" }]
-            filters: [],      // [{ dimId, dimName, colId, values:[...] }]
-            expandedRows: [], // rutas "valNivel0|valNivel1|..." expandidas
+            rowField: null,   // { dimId, kind:'hierarchy'|'attribute', ref: nombreJerarquia|colId, label }
+            colField: null,
+            values: [],       // [{ name, column }]
+            filters: [],      // [{ dimId, dimLabel, colId, values:[...] }]
+            expandedRows: [], // rutas expandidas
             expandedCols: [],
             memberRecognition: false
         };
@@ -250,7 +826,10 @@ const WidgetTableEditor = {
             <button class="btn btn-secondary btn-sm" id="wteMerge" title="Combinar celdas seleccionadas">⛭ Combinar</button>
             <button class="btn btn-secondary btn-sm" id="wteUnmerge" title="Separar celdas">⛝ Separar</button>
             <span class="wte-toolbar-sep"></span>
-            <button class="btn btn-secondary btn-sm" id="wteToggleReport" title="Diseñar informe sobre un cubo">☰ Informe</button>
+            <button class="btn btn-secondary btn-sm" id="wteToggleReport" title="Diseñar informe sobre un modelo semántico (cubo)">☰ Informe</button>
+            <button class="btn btn-secondary btn-sm" id="wteRecognition" title="Reconocimiento de miembros">🔎 Reconocimiento</button>
+            <button class="btn btn-secondary btn-sm" id="wteRefreshReport" title="Actualizar informe">⟳ Actualizar</button>
+            <button class="btn btn-secondary btn-sm" id="wteAddFilterTop" title="Añadir filtro">▽ Filtro</button>
             <span class="wte-toolbar-spacer"></span>
             <span class="wte-toolbar-hint" id="wteDimHint"></span>
             <button class="btn btn-secondary btn-sm" id="wteAddRow" title="Añadir fila">+ Fila</button>
@@ -275,6 +854,9 @@ const WidgetTableEditor = {
         document.getElementById("wteMerge").addEventListener("click", () => this.mergeSelection());
         document.getElementById("wteUnmerge").addEventListener("click", () => this.unmergeSelection());
         document.getElementById("wteToggleReport").addEventListener("click", () => this.toggleReportPanel());
+        document.getElementById("wteRecognition").addEventListener("click", () => { if (typeof WidgetPivot !== "undefined") WidgetPivot.toggleRecognition(); });
+        document.getElementById("wteRefreshReport").addEventListener("click", () => { if (typeof WidgetPivot !== "undefined") WidgetPivot.refresh(); });
+        document.getElementById("wteAddFilterTop").addEventListener("click", () => { if (typeof WidgetPivot !== "undefined") WidgetPivot.addFilter(); });
         document.getElementById("wteAddRow").addEventListener("click", () => this.insertRow());
         document.getElementById("wteDelRow").addEventListener("click", () => this.deleteRow());
         document.getElementById("wteAddCol").addEventListener("click", () => this.insertCol());

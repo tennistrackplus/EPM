@@ -1,35 +1,27 @@
 /**
  * WidgetPivot — panel de "Informe" del editor de widgets tipo Tabla.
  *
- * Permite atar el widget a un cubo del proyecto y diseñar un pivot simple:
- * una dimensión (opcional, con jerarquía opcional) en Filas, una en
- * Columnas, y una o varias medidas en Valores. El resultado se pinta
- * directamente sobre la rejilla del widget (WidgetTableEditor), a partir
- * de la celda seleccionada en el momento de pulsar "Actualizar".
+ * Réplica del taskpane de ADDIN/src (mismas cajas: selector de modelo
+ * semántico + buscador + árbol de campos por dimensión a la izquierda;
+ * zonas Filtros / Filas / Columnas como dropzones a la derecha). La única
+ * diferencia deliberada es de dónde sale el modelo semántico: el add-in
+ * lee modelos ya guardados (semanticModelStore); aquí se lee DIRECTAMENTE
+ * el .lkml que SemanticModel.generateAndSave sube a GitHub al guardar
+ * cada cubo (uno por cubo, ver js/lkml-parse.js) — así el propio LookML
+ * es la fuente de verdad de dimensiones/jerarquías/medidas, ni siquiera
+ * se consulta DIMENSIONES/JERARQUIAS/CAMPOS_JSON.
  *
- * Diseño de datos (una sola consulta, pivotado en el cliente):
- * ------------------------------------------------------------------
- * En vez de relanzar una consulta cada vez que se expande o contrae un
- * miembro, se trae TODA la jerarquía de filas y de columnas en una única
- * consulta agrupada por todos sus niveles a la vez, y se construye en
- * JavaScript un árbol por eje (buildAxisTree) más un mapa de sumas para
- * cualquier combinación fila×columna a cualquier profundidad
- * (buildValueMap, con roll-up hacia todos los ancestros). Expandir o
- * contraer un miembro (toggleMember) solo cambia qué nodos del árbol se
- * pintan — no vuelve a consultar el motor.
+ * Los tres botones de "ribbon" (Reconocimiento de miembros, Actualizar,
+ * Añadir filtro) viven en la barra de herramientas PRINCIPAL del editor
+ * (ver widget-table-editor.js), igual que en el add-in viven en la cinta
+ * de Excel — no dentro de este panel, que es solo el diseño del informe.
  *
- * El icono de expandir/contraer (▸/▾) se pinta como un <span> propio
- * dentro de la celda (ver cellHtml en widget-table-editor.js) con su
- * propio manejador de clic — tal y como se pidió, en vez de un listener
- * de hover.
- *
- * Persistencia: todo el diseño vive en widget.CONFIG_JSON.report (ver
- * defaultReport() en widget-table-editor.js), así que viaja con el resto
- * del widget al guardar.
+ * Motor de datos (una sola consulta, pivotado en el cliente) y pintado
+ * sobre la rejilla: sin cambios respecto a la versión anterior — ver
+ * buildAxisTree/buildValueMap/paint más abajo.
  */
 const WidgetPivot = {
-    dimMetaCache: {},
-    _hierCache: {},
+    lkmlCache: {},   // cuboId -> { factTable, measures, dimensions, joins }
     cubes: [],
 
     editor() { return WidgetTableEditor; },
@@ -42,8 +34,8 @@ const WidgetPivot = {
     },
 
     // Se llama desde WidgetTableEditor.open() cada vez que se abre CUALQUIER
-    // widget: limpia el resultado cacheado del widget anterior (los catálogos
-    // de cubos/dimensiones/jerarquías del proyecto sí se conservan).
+    // widget: limpia el resultado cacheado del widget anterior (el catálogo
+    // de cubos/modelos del proyecto sí se conserva).
     onWidgetOpened() {
         this.panelEl = null;
         this.lastRowTree = null;
@@ -60,6 +52,7 @@ const WidgetPivot = {
         this.panelEl = panelEl;
         if (!this.cubes.length) await this.loadCubes();
         this.renderPanel();
+        this.syncTopButtons();
 
         const report = this.ensureReport();
         if (report.cuboId && (report.rowField || report.colField || report.values.length) && !this.lastRowTree) {
@@ -67,9 +60,15 @@ const WidgetPivot = {
         }
     },
 
+    syncTopButtons() {
+        const report = this.ensureReport();
+        const btn = document.getElementById("wteRecognition");
+        if (btn) btn.classList.toggle("active", !!report.memberRecognition);
+    },
+
     async loadCubes() {
         const project = this.editorProject();
-        const sql = `SELECT CUBO_ID, CUBOS, CAMPOS_JSON, TABLA
+        const sql = `SELECT CUBO_ID, CUBOS, MODELO_YAML_PATH
                      FROM ${Provider.qualifyControl("CUBOS")}
                      WHERE PROYECTO_ID = '${Provider.esc(project.PROYECTO_ID)}'
                      ORDER BY CUBOS`;
@@ -81,105 +80,121 @@ const WidgetPivot = {
         }
     },
 
-    parseCubeSpec(cube) {
-        let spec;
-        try { spec = JSON.parse(cube.CAMPOS_JSON || "{}"); } catch (e) { spec = {}; }
-        const dimensions = spec.dimensions || [];
-        const measures = (spec.measures || []).map(m => ({ name: m.name, type: m.type, colId: Provider.toIdentifier(m.name) }));
-        return { dimensions, measures };
+    lkmlPathFor(cube) {
+        if (!cube || !cube.MODELO_YAML_PATH) return null;
+        return cube.MODELO_YAML_PATH.replace(/\.yaml$/i, ".lkml");
     },
 
-    async getDimMeta(dimId) {
-        if (this.dimMetaCache[dimId]) return this.dimMetaCache[dimId];
-        const rows = await Provider.runQuery(
-            `SELECT DIMENSION_ID, DIMENSION, TABLA, CAMPOS_JSON FROM ${Provider.qualifyControl("DIMENSIONES")} WHERE DIMENSION_ID = '${Provider.esc(dimId)}'`
-        );
-        const row = rows[0];
-        if (!row) throw new Error("Dimensión no encontrada.");
-        const hierRows = await Provider.runQuery(
-            `SELECT JERARQUIA_ID, JERARQUIA, NIVELES_JSON FROM ${Provider.qualifyControl("JERARQUIAS")} WHERE DIMENSION_ID = '${Provider.esc(dimId)}' ORDER BY JERARQUIA`
-        );
-        let fields;
-        try { fields = JSON.parse(row.CAMPOS_JSON || "[]"); } catch (e) { fields = []; }
-        const meta = { row, keyColId: Provider.toIdentifier(row.DIMENSION), fields };
-        this.dimMetaCache[dimId] = meta;
-        this._hierCache[dimId] = hierRows;
-        return meta;
-    },
+    // Descarga (si hace falta) y parsea el .lkml del cubo. Lanza si el
+    // cubo no tiene modelo semántico generado (solo se genera para
+    // proyectos con BigQuery activo, ver SemanticModel.generateAndSave).
+    async getLkmlModel(cuboId) {
+        if (this.lkmlCache[cuboId]) return this.lkmlCache[cuboId];
+        const cube = this.cubes.find(c => c.CUBO_ID === cuboId);
+        const path = this.lkmlPathFor(cube);
+        if (!path) {
+            throw new Error(`El cubo "${cube ? cube.CUBOS : cuboId}" todavía no tiene un modelo semántico (.lkml) generado. Guárdalo de nuevo con BigQuery como proveedor activo.`);
+        }
+        if (typeof GithubRepo === "undefined") throw new Error("js/github-repo.js no está cargado.");
+        if (typeof LkmlParse === "undefined") throw new Error("js/lkml-parse.js no está cargado.");
 
-    levelsFor(meta, hierarchyId) {
-        const flatLevel = [{ colId: meta.keyColId, label: meta.row.DIMENSION }];
-        if (!hierarchyId) return flatLevel;
-        const hiers = this._hierCache[meta.row.DIMENSION_ID] || [];
-        const hier = hiers.find(h => h.JERARQUIA_ID === hierarchyId);
-        if (!hier) return flatLevel;
-        let levelColIds;
-        try { levelColIds = JSON.parse(hier.NIVELES_JSON || "[]"); } catch (e) { levelColIds = []; }
-        if (!levelColIds.length) return flatLevel;
-        return levelColIds.map(colId => {
-            const f = meta.fields.find(ff => Provider.toIdentifier(ff.name) === colId);
-            return { colId, label: f ? f.name : colId };
-        });
+        const text = await GithubRepo.getFile(path);
+        if (text === null) throw new Error(`No se encontró ${path} en el repositorio configurado.`);
+
+        const model = LkmlParse.parse(text);
+        this.lkmlCache[cuboId] = model;
+        return model;
     },
 
     // ------------------------------------------------------------
-    // Panel lateral: cubo, ribbon, filtros, zonas de arrastre, campos
+    // Niveles de un eje: la jerarquía elegida, un único atributo plano,
+    // o la clave de la dimensión si no se ha elegido nada más específico.
+    // ------------------------------------------------------------
+    levelsFor(dim, field) {
+        if (!dim) return [];
+        if (!field || !field.ref) return [{ colId: dim.keyColumn, label: dim.id }];
+        if (field.kind === "hierarchy") {
+            const hier = dim.hierarchies.find(h => h.name === field.ref);
+            if (!hier || !hier.levels.length) return [{ colId: dim.keyColumn, label: dim.id }];
+            return hier.levels.map(l => ({ colId: l.colId, label: l.label }));
+        }
+        // atributo plano: un único nivel
+        return [{ colId: field.ref, label: field.label || field.ref }];
+    },
+
+    // ------------------------------------------------------------
+    // Panel: fields-section (izquierda) + zones-section (derecha),
+    // igual que taskpane.html
     // ------------------------------------------------------------
     renderPanel() {
         const report = this.ensureReport();
-        const cube = this.cubes.find(c => c.CUBO_ID === report.cuboId) || null;
-        const spec = cube ? this.parseCubeSpec(cube) : { dimensions: [], measures: [] };
+        const model = report.cuboId ? this.lkmlCache[report.cuboId] : null;
 
         this.panelEl.innerHTML = `
-            <div class="wtp-panel">
-                <div class="wtp-section">
-                    <label class="wtp-label">Cubo</label>
-                    <select id="wtpCubeSelect" class="wtp-select">
-                        <option value="">— Elige un cubo —</option>
-                        ${this.cubes.map(c => `<option value="${c.CUBO_ID}" ${c.CUBO_ID === report.cuboId ? "selected" : ""}>${UI.escapeHtml(c.CUBOS)}</option>`).join("")}
+            <div class="taskpane-container wtp-embedded">
+                <div class="taskpane-body">
+                <section class="fields-section">
+                    <select id="wtpCubeSelect" title="Modelo semántico" class="wtp-select">
+                        <option value="">— Sin modelos semánticos —</option>
+                        ${this.cubes.map(c => `<option value="${c.CUBO_ID}" ${c.CUBO_ID === report.cuboId ? "selected" : ""}>${UI.escapeHtml(c.CUBOS)}${c.MODELO_YAML_PATH ? "" : " (sin .lkml)"}</option>`).join("")}
                     </select>
-                </div>
-                <div class="wtp-ribbon">
-                    <button class="wtp-ribbon-btn${report.memberRecognition ? " active" : ""}" id="wtpRecognition" title="Al confirmar un valor tecleado en la cabecera de filas, lo busca entre los miembros reales de la dimensión">🔎 Reconocimiento</button>
-                    <button class="wtp-ribbon-btn" id="wtpRefresh" title="Ejecuta la consulta y repinta el informe en la celda seleccionada">⟳ Actualizar</button>
-                    <button class="wtp-ribbon-btn" id="wtpAddFilter" title="Añade un filtro por miembros de una dimensión del cubo">▽ Filtro</button>
-                </div>
-                ${report.filters.length ? `
-                    <div class="wtp-section">
-                        <label class="wtp-label">Filtros</label>
-                        <div class="wtp-chip-list">
-                            ${report.filters.map((f, i) => `
-                                <span class="wtp-chip">${UI.escapeHtml(f.dimName)}: ${f.values.length} miembro(s)
-                                    <button class="wtp-chip-x" data-del-filter="${i}" title="Quitar filtro">&times;</button>
-                                </span>`).join("")}
+                    <div class="search-input-wrapper">
+                        <svg class="search-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M11.742 10.344a6.5 6.5 0 10-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 001.415-1.414l-3.85-3.85a1.007 1.007 0 00-.115-.1zM12 6.5a5.5 5.5 0 11-11 0 5.5 5.5 0 0111 0z"/>
+                        </svg>
+                        <input type="text" id="wtpFieldSearch" placeholder="Buscar campo..." autocomplete="off">
+                    </div>
+                    <div id="wtpFieldsTree" class="fields-tree">
+                        ${model ? this.fieldsTreeHtml(model) : `<div class="field-options-empty">Elige un modelo semántico.</div>`}
+                    </div>
+                </section>
+
+                <section class="zones-section">
+                    <div class="zone-card" data-zone="filters">
+                        <div class="zone-header">
+                            <div class="zone-title-group">
+                                <svg class="zone-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 1.5A.5.5 0 012 1h12a.5.5 0 01.354.854L9.5 6.707V13.5a.5.5 0 01-.757.429l-2-1.25A.5.5 0 016.5 12.25V6.707L1.146 1.854A.5.5 0 011.5 1.5z"/></svg>
+                                <span>Filtros</span>
+                            </div>
                         </div>
-                    </div>` : ""}
-                <div class="wtp-dropzone" data-zone="rows">
-                    <label class="wtp-label">Filas</label>
-                    <div class="wtp-zone-body" id="wtpRowsZone">${this.fieldChipHtml("rows", report, spec)}</div>
+                        <div class="dropzone-content" id="wtpZoneFilters">${this.filtersChipsHtml(report)}</div>
+                    </div>
+
+                    <div class="zone-card" data-zone="rows">
+                        <div class="zone-header">
+                            <div class="zone-title-group">
+                                <svg class="zone-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M2 3h12a1 1 0 011 1v2a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1zm0 6h12a1 1 0 011 1v2a1 1 0 01-1 1H2a1 1 0 01-1-1v-2a1 1 0 011-1z"/></svg>
+                                <span>Filas</span>
+                            </div>
+                        </div>
+                        <div class="dropzone-content" id="wtpZoneRows">${this.axisFieldChipHtml("rows", report)}</div>
+                    </div>
+
+                    <div class="zone-card" data-zone="cols">
+                        <div class="zone-header">
+                            <div class="zone-title-group">
+                                <svg class="zone-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M3 2h2a1 1 0 011 1v10a1 1 0 01-1 1H3a1 1 0 01-1-1V3a1 1 0 011-1zm6 0h2a1 1 0 011 1v10a1 1 0 01-1 1H9a1 1 0 01-1-1V3a1 1 0 011-1z"/></svg>
+                                <span>Columnas</span>
+                            </div>
+                        </div>
+                        <div class="dropzone-content" id="wtpZoneCols">${this.axisFieldChipHtml("cols", report)}</div>
+                    </div>
+
+                    <div class="zone-card" data-zone="values">
+                        <div class="zone-header">
+                            <div class="zone-title-group">
+                                <span>Σ</span>
+                                <span>Valores</span>
+                            </div>
+                        </div>
+                        <div class="dropzone-content" id="wtpZoneValues">${this.valueChipsHtml(report)}</div>
+                    </div>
+                </section>
                 </div>
-                <div class="wtp-dropzone" data-zone="cols">
-                    <label class="wtp-label">Columnas</label>
-                    <div class="wtp-zone-body" id="wtpColsZone">${this.fieldChipHtml("cols", report, spec)}</div>
-                </div>
-                <div class="wtp-dropzone" data-zone="values">
-                    <label class="wtp-label">Valores</label>
-                    <div class="wtp-zone-body" id="wtpValuesZone">${this.valueChipsHtml(report)}</div>
-                </div>
-                <div class="wtp-fieldlist">
-                    <label class="wtp-label">Campos del cubo</label>
-                    <div class="wtp-field-group-title">Dimensiones</div>
-                    ${spec.dimensions.map(d => `<div class="wtp-field-pill" draggable="true" data-field-kind="dim" data-dim-id="${d.id}">⊞ ${UI.escapeHtml(d.name)}</div>`).join("") || `<div class="wtp-empty-hint">Sin dimensiones</div>`}
-                    <div class="wtp-field-group-title">Medidas</div>
-                    ${spec.measures.map(m => `<div class="wtp-field-pill" draggable="true" data-field-kind="measure" data-measure-name="${UI.escapeHtml(m.name)}">Σ ${UI.escapeHtml(m.name)}</div>`).join("") || `<div class="wtp-empty-hint">Sin medidas</div>`}
-                </div>
-                ${!cube ? `<div class="wtp-empty-hint">Elige un cubo para ver sus campos.</div>` : ""}
             </div>`;
 
         document.getElementById("wtpCubeSelect").addEventListener("change", (e) => this.onSelectCube(e.target.value || null));
-        document.getElementById("wtpRecognition").addEventListener("click", () => this.toggleRecognition());
-        document.getElementById("wtpRefresh").addEventListener("click", () => this.refresh());
-        document.getElementById("wtpAddFilter").addEventListener("click", () => this.addFilter());
+        document.getElementById("wtpFieldSearch").addEventListener("input", (e) => this.filterFields(e.target.value));
 
         this.panelEl.querySelectorAll("[data-del-filter]").forEach(btn => {
             btn.addEventListener("click", () => {
@@ -188,34 +203,73 @@ const WidgetPivot = {
                 this.refresh();
             });
         });
-
-        this.wireFieldChipRemovals(report);
-        this.wireDragAndDrop(spec);
+        this.panelEl.querySelectorAll("[data-pick-filter]").forEach(btn => {
+            btn.addEventListener("click", () => this.pickFilterValues(parseInt(btn.dataset.pickFilter, 10)));
+        });
+        this.wireFieldChipRemovals(report, model);
+        this.wireDragAndDrop(model);
     },
 
-    fieldChipHtml(zone, report, spec) {
+    filterFields(query) {
+        const q = (query || "").toLowerCase();
+        this.panelEl.querySelectorAll(".field-item").forEach(item => {
+            const label = item.querySelector(".field-label").textContent.toLowerCase();
+            item.style.display = label.includes(q) ? "flex" : "none";
+        });
+    },
+
+    // Árbol de campos: un grupo colapsable por dimensión (jerarquías +
+    // atributos sueltos, ambos arrastrables) + un grupo "Medidas" al
+    // final — igual estructura que ADDIN/src/js/taskpane.js::loadFields.
+    fieldsTreeHtml(model) {
+        const dimGroups = model.dimensions.map(dim => `
+            <div class="dimension-group">
+                <div class="dimension-header" data-group-toggle>
+                    <span class="dimension-caret">▾</span><span>${UI.escapeHtml(dim.id)}</span>
+                </div>
+                ${dim.hierarchies.map(h => this.fieldItemHtml({ kind: "hierarchy", dimId: dim.id, ref: h.name, label: h.name }, "🗂️")).join("")}
+                ${dim.attributes.map(a => this.fieldItemHtml({ kind: "attribute", dimId: dim.id, ref: a.colId, label: a.colId }, "📄")).join("")}
+            </div>`).join("");
+
+        const measureGroup = model.measures.length ? `
+            <div class="dimension-group">
+                <div class="dimension-header" data-group-toggle>
+                    <span class="dimension-caret">▾</span><span>medidas</span>
+                </div>
+                ${model.measures.map(m => this.fieldItemHtml({ kind: "measure", ref: m.column, label: m.name }, "📄")).join("")}
+            </div>` : "";
+
+        return dimGroups + measureGroup;
+    },
+
+    fieldItemHtml(fieldData, icon) {
+        return `<div class="field-item" draggable="true" data-field="${UI.escapeHtml(JSON.stringify(fieldData))}">
+            <span class="field-icon">${icon}</span><span class="field-label">${UI.escapeHtml(fieldData.label)}</span>
+        </div>`;
+    },
+
+    axisFieldChipHtml(zone, report) {
         const field = zone === "rows" ? report.rowField : report.colField;
-        if (!field) return `<div class="wtp-drop-hint">Arrastra aquí una dimensión</div>`;
-        const dim = spec.dimensions.find(d => d.id === field.dimId);
-        const dimName = dim ? dim.name : "(dimensión eliminada)";
-        const hierOptions = this._hierCache[field.dimId] || [];
-        return `
-            <div class="wtp-chip wtp-chip-field">
-                ${UI.escapeHtml(dimName)}
-                <button class="wtp-chip-x" data-remove-field="${zone}" title="Quitar campo">&times;</button>
-                ${hierOptions.length ? `
-                    <select class="wtp-hier-select" data-hier-for="${zone}" title="Jerarquía a usar para expandir">
-                        <option value="">(sin jerarquía)</option>
-                        ${hierOptions.map(h => `<option value="${h.JERARQUIA_ID}" ${field.hierarchyId === h.JERARQUIA_ID ? "selected" : ""}>${UI.escapeHtml(h.JERARQUIA)}</option>`).join("")}
-                    </select>` : ""}
-            </div>`;
+        if (!field) return "";
+        return `<span class="dropped-tag">
+            <span class="dropped-tag-title">${field.kind === "hierarchy" ? "🗂️" : "📄"} ${UI.escapeHtml(field.label || field.ref)}</span>
+            <span class="dropped-tag-remove" data-remove-field="${zone}">&times;</span>
+        </span>`;
     },
 
     valueChipsHtml(report) {
-        if (!report.values.length) return `<div class="wtp-drop-hint">Arrastra aquí una o varias medidas</div>`;
         return report.values.map((v, i) => `
-            <span class="wtp-chip">Σ ${UI.escapeHtml(v.name)}
-                <button class="wtp-chip-x" data-remove-value="${i}" title="Quitar medida">&times;</button>
+            <span class="dropped-tag measure-tag">
+                <span class="dropped-tag-title">Σ ${UI.escapeHtml(v.name)}</span>
+                <span class="dropped-tag-remove" data-remove-value="${i}">&times;</span>
+            </span>`).join("");
+    },
+
+    filtersChipsHtml(report) {
+        return report.filters.map((f, i) => `
+            <span class="dropped-tag">
+                <span class="dropped-tag-title" data-pick-filter="${i}" style="cursor:pointer;">${UI.escapeHtml(f.dimLabel)}: ${f.values.length ? f.values.length + " miembro(s)" : "todos"}</span>
+                <span class="dropped-tag-remove" data-del-filter="${i}">&times;</span>
             </span>`).join("");
     },
 
@@ -234,61 +288,65 @@ const WidgetPivot = {
                 this.renderPanel();
             });
         });
-        this.panelEl.querySelectorAll("[data-hier-for]").forEach(sel => {
-            sel.addEventListener("change", () => {
-                const zone = sel.dataset.hierFor;
-                const field = zone === "rows" ? report.rowField : report.colField;
-                if (!field) return;
-                field.hierarchyId = sel.value || null;
-                if (zone === "rows") report.expandedRows = []; else report.expandedCols = [];
-            });
+        this.panelEl.querySelectorAll("[data-pick-filter]").forEach(el => {
+            el.addEventListener("click", () => this.pickFilterValues(parseInt(el.dataset.pickFilter, 10)));
         });
     },
 
-    wireDragAndDrop(spec) {
-        this.panelEl.querySelectorAll(".wtp-field-pill").forEach(pill => {
-            pill.addEventListener("dragstart", (e) => {
-                e.dataTransfer.setData("text/plain", JSON.stringify({
-                    kind: pill.dataset.fieldKind,
-                    dimId: pill.dataset.dimId || null,
-                    measureName: pill.dataset.measureName || null
-                }));
+    wireDragAndDrop(model) {
+        this.panelEl.querySelectorAll(".dimension-header[data-group-toggle]").forEach(header => {
+            header.addEventListener("click", () => {
+                const group = header.parentElement;
+                const collapsed = group.classList.toggle("collapsed");
+                header.querySelector(".dimension-caret").textContent = collapsed ? "▸" : "▾";
             });
         });
-        this.panelEl.querySelectorAll(".wtp-dropzone").forEach(zoneEl => {
-            zoneEl.addEventListener("dragover", (e) => { e.preventDefault(); zoneEl.classList.add("wtp-drop-over"); });
-            zoneEl.addEventListener("dragleave", () => zoneEl.classList.remove("wtp-drop-over"));
+        this.panelEl.querySelectorAll(".field-item").forEach(item => {
+            item.addEventListener("dragstart", (e) => {
+                item.classList.add("dragging");
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", item.dataset.field);
+            });
+            item.addEventListener("dragend", () => item.classList.remove("dragging"));
+        });
+        this.panelEl.querySelectorAll(".zone-card").forEach(zoneEl => {
+            zoneEl.addEventListener("dragover", (e) => { e.preventDefault(); zoneEl.classList.add("drag-over"); });
+            zoneEl.addEventListener("dragleave", () => zoneEl.classList.remove("drag-over"));
             zoneEl.addEventListener("drop", async (e) => {
                 e.preventDefault();
-                zoneEl.classList.remove("wtp-drop-over");
+                zoneEl.classList.remove("drag-over");
                 let data;
                 try { data = JSON.parse(e.dataTransfer.getData("text/plain")); } catch (err) { return; }
-                await this.onDropField(zoneEl.dataset.zone, data, spec);
+                await this.onDropField(zoneEl.dataset.zone, data, model);
             });
         });
     },
 
-    async onDropField(zone, data, spec) {
+    async onDropField(zone, data, model) {
         const report = this.ensureReport();
+
         if (zone === "values") {
             if (data.kind !== "measure") { UI.toast("En Valores solo se pueden soltar medidas.", "error"); return; }
-            if (report.values.some(v => v.name === data.measureName)) return;
-            const m = spec.measures.find(x => x.name === data.measureName);
-            if (!m) return;
-            report.values.push({ name: m.name, colId: m.colId, agg: "SUM" });
+            if (report.values.some(v => v.column === data.ref)) return;
+            report.values.push({ name: data.label, column: data.ref });
             this.renderPanel();
             return;
         }
-        if (data.kind !== "dim") { UI.toast("En Filas/Columnas solo se pueden soltar dimensiones.", "error"); return; }
-        try {
-            await this.getDimMeta(data.dimId);
-        } catch (err) {
-            UI.toast(err.message, "error");
+
+        if (data.kind === "measure") { UI.toast("Las medidas solo se pueden soltar en Valores.", "error"); return; }
+
+        const dim = model.dimensions.find(d => d.id === data.dimId);
+        if (!dim) return;
+        const field = { dimId: data.dimId, kind: data.kind, ref: data.ref, label: data.label };
+
+        if (zone === "filters") {
+            if (report.filters.some(f => f.dimId === data.dimId && f.colId === (data.kind === "attribute" ? data.ref : dim.keyColumn))) return;
+            report.filters.push({ dimId: data.dimId, dimLabel: dim.id, colId: data.kind === "attribute" ? data.ref : dim.keyColumn, values: [] });
+            this.renderPanel();
             return;
         }
-        const field = { dimId: data.dimId, hierarchyId: null };
         if (zone === "rows") { report.rowField = field; report.expandedRows = []; }
-        else { report.colField = field; report.expandedCols = []; }
+        else if (zone === "cols") { report.colField = field; report.expandedCols = []; }
         this.renderPanel();
     },
 
@@ -306,81 +364,75 @@ const WidgetPivot = {
         this.lastColTree = null;
         this.lastValueMap = null;
         this.renderPanel();
+        if (cuboId) {
+            this.getLkmlModel(cuboId).then(() => this.renderPanel()).catch(err => UI.toast(err.message, "error"));
+        }
     },
 
     toggleRecognition() {
         const report = this.ensureReport();
         report.memberRecognition = !report.memberRecognition;
-        this.renderPanel();
+        this.syncTopButtons();
         UI.toast(`Reconocimiento de miembros ${report.memberRecognition ? "activado" : "desactivado"}.`, "info");
     },
 
     // ------------------------------------------------------------
-    // Filtros
+    // Filtros: elegir miembros reales de la dimensión (SELECT DISTINCT
+    // directamente sobre su tabla física, con la ruta ya resuelta por
+    // el .lkml — no hace falta Provider.qualify).
     // ------------------------------------------------------------
-    async addFilter() {
+    async pickFilterValues(idx) {
         const report = this.ensureReport();
-        if (!report.cuboId) { UI.toast("Elige primero un cubo.", "error"); return; }
-        const cube = this.cubes.find(c => c.CUBO_ID === report.cuboId);
-        const spec = this.parseCubeSpec(cube);
-        if (!spec.dimensions.length) { UI.toast("Este cubo no tiene dimensiones.", "error"); return; }
+        const f = report.filters[idx];
+        if (!f) return;
+        let model;
+        try { model = await this.getLkmlModel(report.cuboId); } catch (err) { UI.toast(err.message, "error"); return; }
+        const dim = model.dimensions.find(d => d.id === f.dimId);
+        if (!dim) return;
 
-        const dimId = await this._choiceModal({
-            title: "Filtrar por dimensión",
-            options: spec.dimensions.map(d => ({ value: d.id, label: d.name })),
-            multi: false
-        });
-        if (!dimId) return;
-        const dim = spec.dimensions.find(d => d.id === dimId);
-
-        let meta;
-        try { meta = await this.getDimMeta(dimId); } catch (err) { UI.toast(err.message, "error"); return; }
-
-        const project = this.editorProject();
-        const dimTable = Provider.qualify(project.DATASET, meta.row.TABLA);
         let rows;
         try {
-            rows = await Provider.runQuery(`SELECT DISTINCT ${meta.keyColId} AS V FROM ${dimTable} ORDER BY V LIMIT 500`);
+            rows = await Provider.runQuery(`SELECT DISTINCT ${f.colId} AS V FROM ${dim.table} ORDER BY V LIMIT 500`);
         } catch (err) {
             UI.toast("Error al leer los miembros: " + err.message, "error");
             return;
         }
 
         const chosen = await this._choiceModal({
-            title: `Miembros de ${dim.name}`,
+            title: `Miembros de ${dim.id}`,
             options: rows.map(r => ({ value: String(r.V), label: String(r.V) })),
-            multi: true
+            multi: true,
+            preselected: f.values
         });
-        if (!chosen || !chosen.length) return;
-
-        report.filters.push({ dimId, dimName: dim.name, colId: meta.keyColId, values: chosen });
+        if (chosen === null) return;
+        f.values = chosen;
         this.renderPanel();
         this.refresh();
     },
 
-    async buildFilterJoinsAndWhere(report, rowMeta, colMeta, project) {
-        const joins = [];
-        const wheres = [];
-        for (let i = 0; i < report.filters.length; i++) {
-            const f = report.filters[i];
-            let alias;
-            if (rowMeta && f.dimId === rowMeta.row.DIMENSION_ID) {
-                alias = "rdim";
-            } else if (colMeta && f.dimId === colMeta.row.DIMENSION_ID) {
-                alias = "cdim";
-            } else {
-                let meta;
-                try { meta = await this.getDimMeta(f.dimId); } catch (err) { continue; }
-                alias = `fdim${i}`;
-                const dimTable = Provider.qualify(project.DATASET, meta.row.TABLA);
-                joins.push(`INNER JOIN ${dimTable} ${alias} ON c.${meta.keyColId} = ${alias}.${meta.keyColId}`);
-            }
-            if (f.values && f.values.length) {
-                const list = f.values.map(v => `'${Provider.esc(v)}'`).join(", ");
-                wheres.push(`${alias}.${f.colId} IN (${list})`);
-            }
+    // Botón "▽ Filtro" de la barra principal: atajo para añadir un filtro
+    // sin arrastrar — elige la dimensión y a continuación sus miembros.
+    async addFilter() {
+        const report = this.ensureReport();
+        if (!report.cuboId) { UI.toast("Elige un modelo semántico para el informe.", "error"); return; }
+        let model;
+        try { model = await this.getLkmlModel(report.cuboId); } catch (err) { UI.toast(err.message, "error"); return; }
+        if (!model.dimensions.length) { UI.toast("Este modelo no tiene dimensiones.", "error"); return; }
+
+        const dimId = await this._choiceModal({
+            title: "Filtrar por dimensión",
+            options: model.dimensions.map(d => ({ value: d.id, label: d.id })),
+            multi: false
+        });
+        if (!dimId) return;
+        const dim = model.dimensions.find(d => d.id === dimId);
+        if (report.filters.some(f => f.dimId === dimId && f.colId === dim.keyColumn)) {
+            UI.toast("Esa dimensión ya tiene un filtro.", "info");
+            return;
         }
-        return { joins, wheres };
+        report.filters.push({ dimId, dimLabel: dim.id, colId: dim.keyColumn, values: [] });
+        this.renderPanel();
+        await this.pickFilterValues(report.filters.length - 1);
     },
 
     // ------------------------------------------------------------
@@ -388,45 +440,40 @@ const WidgetPivot = {
     // ------------------------------------------------------------
     async refresh() {
         const report = this.ensureReport();
-        if (!report.cuboId) { UI.toast("Elige un cubo para el informe.", "error"); return; }
+        if (!report.cuboId) { UI.toast("Elige un modelo semántico para el informe.", "error"); return; }
         if (!report.values.length) { UI.toast("Añade al menos una medida en Valores.", "error"); return; }
-        const cube = this.cubes.find(c => c.CUBO_ID === report.cuboId);
-        if (!cube) { UI.toast("No se encontró el cubo seleccionado.", "error"); return; }
 
-        const project = this.editorProject();
-        const cubeTable = Provider.qualify(project.DATASET, cube.TABLA);
+        let model;
+        try { model = await this.getLkmlModel(report.cuboId); } catch (err) { UI.toast(err.message, "error"); return; }
+        if (!model.factTable) { UI.toast("El modelo semántico no tiene tabla de hechos.", "error"); return; }
 
-        let rowMeta = null, rowLevels = [];
-        if (report.rowField) {
-            try { rowMeta = await this.getDimMeta(report.rowField.dimId); } catch (err) { UI.toast(err.message, "error"); return; }
-            rowLevels = this.levelsFor(rowMeta, report.rowField.hierarchyId);
-        }
-        let colMeta = null, colLevels = [];
-        if (report.colField) {
-            try { colMeta = await this.getDimMeta(report.colField.dimId); } catch (err) { UI.toast(err.message, "error"); return; }
-            colLevels = this.levelsFor(colMeta, report.colField.hierarchyId);
-        }
+        const rowDim = report.rowField ? model.dimensions.find(d => d.id === report.rowField.dimId) : null;
+        const colDim = report.colField ? model.dimensions.find(d => d.id === report.colField.dimId) : null;
+        const rowLevels = rowDim ? this.levelsFor(rowDim, report.rowField) : [];
+        const colLevels = colDim ? this.levelsFor(colDim, report.colField) : [];
 
         const selectParts = [];
         const groupParts = [];
         const joinParts = [];
 
-        if (rowMeta) {
-            const dimTable = Provider.qualify(project.DATASET, rowMeta.row.TABLA);
-            joinParts.push(`INNER JOIN ${dimTable} rdim ON c.${rowMeta.keyColId} = rdim.${rowMeta.keyColId}`);
+        if (rowDim) {
+            const join = model.joins.find(j => j.dimId === rowDim.id);
+            if (!join) { UI.toast(`No se encontró el join de la dimensión "${rowDim.id}" en el explore del .lkml.`, "error"); return; }
+            joinParts.push(`INNER JOIN ${rowDim.table} rdim ON c.${join.fkColumn} = rdim.${join.refColumn}`);
             rowLevels.forEach((lvl, i) => { selectParts.push(`rdim.${lvl.colId} AS RL${i}`); groupParts.push(`rdim.${lvl.colId}`); });
         }
-        if (colMeta) {
-            const dimTable = Provider.qualify(project.DATASET, colMeta.row.TABLA);
-            joinParts.push(`INNER JOIN ${dimTable} cdim ON c.${colMeta.keyColId} = cdim.${colMeta.keyColId}`);
+        if (colDim) {
+            const join = model.joins.find(j => j.dimId === colDim.id);
+            if (!join) { UI.toast(`No se encontró el join de la dimensión "${colDim.id}" en el explore del .lkml.`, "error"); return; }
+            joinParts.push(`INNER JOIN ${colDim.table} cdim ON c.${join.fkColumn} = cdim.${join.refColumn}`);
             colLevels.forEach((lvl, i) => { selectParts.push(`cdim.${lvl.colId} AS CL${i}`); groupParts.push(`cdim.${lvl.colId}`); });
         }
-        report.values.forEach((v, i) => selectParts.push(`SUM(c.${v.colId}) AS V${i}`));
+        report.values.forEach((v, i) => selectParts.push(`SUM(c.${v.column}) AS V${i}`));
 
-        const filterSql = await this.buildFilterJoinsAndWhere(report, rowMeta, colMeta, project);
+        const filterSql = this.buildFilterJoinsAndWhere(report, model, rowDim, colDim);
 
         const sql = `SELECT ${selectParts.join(", ")}
-FROM ${cubeTable} c
+FROM ${model.factTable} c
 ${joinParts.concat(filterSql.joins).join("\n")}
 ${filterSql.wheres.length ? "WHERE " + filterSql.wheres.join(" AND ") : ""}
 ${groupParts.length ? "GROUP BY " + groupParts.join(", ") : ""}`;
@@ -450,6 +497,28 @@ ${groupParts.length ? "GROUP BY " + groupParts.join(", ") : ""}`;
         const originR = editor.selection.r1, originC = editor.selection.c1;
         this.paint(rowTree, colTree, valueMap, report, originR, originC);
         UI.toast("Informe actualizado.", "success");
+    },
+
+    buildFilterJoinsAndWhere(report, model, rowDim, colDim) {
+        const joins = [];
+        const wheres = [];
+        report.filters.forEach((f, i) => {
+            if (!f.values || !f.values.length) return; // sin miembros elegidos = sin restringir
+            let alias;
+            if (rowDim && f.dimId === rowDim.id) alias = "rdim";
+            else if (colDim && f.dimId === colDim.id) alias = "cdim";
+            else {
+                const dim = model.dimensions.find(d => d.id === f.dimId);
+                if (!dim) return;
+                const join = model.joins.find(j => j.dimId === f.dimId);
+                if (!join) return;
+                alias = `fdim${i}`;
+                joins.push(`INNER JOIN ${dim.table} ${alias} ON c.${join.fkColumn} = ${alias}.${join.refColumn}`);
+            }
+            const list = f.values.map(v => `'${Provider.esc(v)}'`).join(", ");
+            wheres.push(`${alias}.${f.colId} IN (${list})`);
+        });
+        return { joins, wheres };
     },
 
     // ------------------------------------------------------------
@@ -612,7 +681,6 @@ ${groupParts.length ? "GROUP BY " + groupParts.join(", ") : ""}`;
         this._lastPaintedW = newW;
         this._lastPaintedH = newH;
 
-        // --- Cabecera de columnas (una fila por nivel de la jerarquía) ---
         if (colTreeRows > 0) {
             const headerRowsByDepth = this.buildColumnHeaderRows(colTree, visibleColLeaves, colTreeRows);
             headerRowsByDepth.forEach((cells, d) => {
@@ -643,12 +711,9 @@ ${groupParts.length ? "GROUP BY " + groupParts.join(", ") : ""}`;
             });
         }
 
-        // --- Esquina superior izquierda ---
-        editor.writeCell(originR, originC, report.rowField ? (this.dimMetaCache[report.rowField.dimId] || {}).row.DIMENSION || "" : "",
-            { b: 1, bg: "#E4E7EC" });
+        editor.writeCell(originR, originC, report.rowField ? report.rowField.dimId : "", { b: 1, bg: "#E4E7EC" });
         for (let d = 1; d < colHeaderRows; d++) editor.writeCell(originR + d, originC, "", { bg: "#E4E7EC" });
 
-        // --- Filas de datos ---
         const dataStartRow = originR + colHeaderRows;
         visibleRowPaths.forEach((path, ri) => {
             const node = rowTree.nodes[path];
@@ -672,7 +737,6 @@ ${groupParts.length ? "GROUP BY " + groupParts.join(", ") : ""}`;
             });
         });
 
-        // --- Total general ---
         {
             const sheetRow = dataStartRow + visibleRowPaths.length;
             editor.writeCell(sheetRow, originC, "Total general", { b: 1, bt: 1, bg: "#F8F9FB" });
@@ -690,8 +754,6 @@ ${groupParts.length ? "GROUP BY " + groupParts.join(", ") : ""}`;
         editor.renderGrid();
     },
 
-    // Clic en el icono ▸/▾ de una celda: alterna expandido/contraído y
-    // repinta con los datos YA cacheados (no vuelve a consultar el motor).
     toggleMember(r, c) {
         const info = this.toggleMap[`${r}_${c}`];
         if (!info || !this.lastRowTree) return;
@@ -703,11 +765,10 @@ ${groupParts.length ? "GROUP BY " + groupParts.join(", ") : ""}`;
     },
 
     // ------------------------------------------------------------
-    // Reconocimiento de miembros: al confirmar texto tecleado a mano en la
-    // columna de cabecera de filas de un informe pintado, se busca entre
-    // los miembros reales de la dimensión (aproximación web al buscador
-    // de miembros del add-in — aquí siempre disparado por una acción
-    // explícita, nunca de forma automática mientras se teclea).
+    // Reconocimiento de miembros (acción explícita, nunca automática
+    // mientras se teclea): al confirmar texto en la columna de cabecera
+    // de filas de un informe pintado, se busca entre los miembros reales
+    // de la dimensión de Filas.
     // ------------------------------------------------------------
     onCellCommitted(r, c) {
         const report = this.ensureReport();
@@ -725,13 +786,14 @@ ${groupParts.length ? "GROUP BY " + groupParts.join(", ") : ""}`;
 
     async recognizeMember(r, c, text) {
         const report = this.ensureReport();
-        let meta;
-        try { meta = await this.getDimMeta(report.rowField.dimId); } catch (err) { return; }
-        const levels = this.levelsFor(meta, report.rowField.hierarchyId);
+        let model;
+        try { model = await this.getLkmlModel(report.cuboId); } catch (err) { return; }
+        const dim = model.dimensions.find(d => d.id === report.rowField.dimId);
+        if (!dim) return;
+        const levels = this.levelsFor(dim, report.rowField);
         const lvl = levels[0];
-        const project = this.editorProject();
-        const dimTable = Provider.qualify(project.DATASET, meta.row.TABLA);
-        const sql = `SELECT DISTINCT ${lvl.colId} AS LBL FROM ${dimTable}
+
+        const sql = `SELECT DISTINCT ${lvl.colId} AS LBL FROM ${dim.table}
                      WHERE UPPER(${lvl.colId}) LIKE UPPER('%${Provider.esc(text)}%') ORDER BY LBL LIMIT 20`;
         let rows;
         try {
@@ -763,10 +825,9 @@ ${groupParts.length ? "GROUP BY " + groupParts.join(", ") : ""}`;
     },
 
     // ------------------------------------------------------------
-    // Modal genérico de selección única/múltiple (elegir dimensión,
-    // elegir miembros de un filtro, resolver el reconocimiento)
+    // Modal genérico de selección única/múltiple
     // ------------------------------------------------------------
-    _choiceModal({ title, options, multi }) {
+    _choiceModal({ title, options, multi, preselected }) {
         return new Promise((resolve) => {
             let overlay = document.getElementById("wtpChoiceModal");
             if (!overlay) {
@@ -775,7 +836,7 @@ ${groupParts.length ? "GROUP BY " + groupParts.join(", ") : ""}`;
                 overlay.id = "wtpChoiceModal";
                 document.body.appendChild(overlay);
             }
-            const selected = new Set();
+            const selected = new Set(preselected || []);
 
             overlay.innerHTML = `
                 <div class="modal-box" style="max-width:420px;">
@@ -818,9 +879,8 @@ ${groupParts.length ? "GROUP BY " + groupParts.join(", ") : ""}`;
             overlay.querySelector("#wtpChoiceClose").onclick = () => cleanup(null);
             overlay.querySelector("#wtpChoiceCancel").onclick = () => cleanup(null);
             overlay.querySelector("#wtpChoiceOk").onclick = () => {
-                if (multi) {
-                    cleanup(Array.from(selected));
-                } else {
+                if (multi) cleanup(Array.from(selected));
+                else {
                     const checked = overlay.querySelector('input[name="wtpChoice"]:checked');
                     cleanup(checked ? checked.value : null);
                 }
