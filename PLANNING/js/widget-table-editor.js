@@ -701,7 +701,7 @@ const WidgetTableEditor = {
             // y con la conexión ya autenticada de esta app (provider-bridge.js).
             const iframe = document.createElement("iframe");
             iframe.className = "wte-taskpane-frame";
-            iframe.src = "widget-taskpane/taskpane.html?v=20260906e";
+            iframe.src = "widget-taskpane/taskpane.html?v=20260906g";
             panel.appendChild(iframe);
             this._taskpaneFrame = iframe;
             if (!resizer._wired) {
@@ -870,7 +870,15 @@ const WidgetTableEditor = {
         let r1 = Infinity, c1 = Infinity, r2 = -1, c2 = -1;
         keys.forEach(k => {
             const cell = this.state.cells[k];
-            if (!cell || (cell.v === undefined || cell.v === null || cell.v === "")) return;
+            if (!cell) return;
+            const hasValue = cell.v !== undefined && cell.v !== null && cell.v !== "";
+            // No solo celdas con texto: una celda vacía pero con color de
+            // fondo/borde (p.ej. la esquina decorativa de un "marco")
+            // también cuenta como parte real del informe — si no, al caer
+            // justo en el borde del rectángulo se recorta a medias en vez
+            // de mostrarse entera como margen.
+            const hasStyle = !!(cell.bg || cell.bt || cell.br || cell.bb || cell.bl || cell.b || cell.i || cell.u);
+            if (!hasValue && !hasStyle) return;
             const [r, c] = k.split("_").map(Number);
             if (r < r1) r1 = r; if (c < c1) c1 = c;
             if (r > r2) r2 = r; if (c > c2) c2 = c;
