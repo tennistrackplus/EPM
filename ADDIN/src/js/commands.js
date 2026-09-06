@@ -2824,9 +2824,22 @@ async function resolveDracoFieldForAxisLevel(context, reportId, axis, level, ind
  * en VBA); Excel.Worksheet solo ofrece onChanged (tras escribir+Enter) y
  * onSelectionChanged (al cambiar de celda seleccionada). Por eso este
  * "reconocimiento" se dispara al escribir un valor (onChanged, fiable al
- * 100%) y, como aproximación al doble clic, también al hacer clic sobre
- * una celda de esos rangos que esté VACÍA (onSelectionChanged) — abre el
- * buscador directamente sin necesidad de escribir nada antes.
+ * 100%). Usa la MISMA lógica multi-informe (con zona de crecimiento) que
+ * el doble clic: encuentra el informe/eje/nivel realmente afectado con
+ * findDracoRowsNamedRangeForCell, sea o no una coincidencia exacta con
+ * el rango con nombre actual, y si el usuario confirma un valor en el
+ * picker, amplía de verdad ese rango (ver openMemberRecognitionPicker).
+ *
+ * Excepciones para no abrir el buscador:
+ *   - Con el "Reconocimiento de miembros" desactivado.
+ *   - Mientras estamos pintando nosotros mismos (DracoSuppressChangeEvents).
+ *   - Si se han modificado VARIAS celdas a la vez (pegado/relleno): el
+ *     address del evento cubre todo el rango modificado, así que basta
+ *     con exigir 1x1.
+ *   - Si el valor escrito/pegado YA es una fórmula EPM_VALUE (por
+ *     ejemplo, porque el propio picker acaba de escribirla, o porque el
+ *     usuario ha pegado una celda de este tipo): así se evita reabrir el
+ *     buscador en bucle.
  */
 async function handleDracoMemberRecognitionChanged(eventArgs) {
     try {
@@ -2838,34 +2851,55 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
 
         let addr = (eventArgs && eventArgs.address) || "";
         if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
-        if (!addr) return;
+        const worksheetId = eventArgs && eventArgs.worksheetId;
+        if (!addr || !worksheetId) return;
         console.log("[Draco] onChanged: reconocimiento de miembros activo, evaluando celda", addr);
 
         let located = null;
+        let fieldLocated = null;
         let currentText = "";
 
         await Excel.run(async (context) => {
-            const resultSheetName = await getDracoResultSheetName(context);
-            const sheet = context.workbook.worksheets.getItem(resultSheetName);
+            // Se usa SIEMPRE la hoja donde ha ocurrido el cambio
+            // (eventArgs.worksheetId), no la del informe "activo" del
+            // taskpane: puede que el usuario esté tecleando en un
+            // informe distinto al seleccionado en el panel.
+            const sheet = context.workbook.worksheets.getItem(worksheetId);
             const cell = sheet.getRange(addr);
             cell.load(["rowCount", "columnCount", "values", "formulas"]);
+            cell.format.load("indentLevel");
             await context.sync();
+            // Varias celdas a la vez (pegado/relleno): se ignora.
             if (cell.rowCount !== 1 || cell.columnCount !== 1) return;
 
             const value = cell.values[0][0];
             const formula = cell.formulas[0][0];
             if (value === "" || value === null || value === undefined) return;
-            // Ya es EPM_VALUE (por ejemplo, porque nosotros mismos la acabamos de
-            // escribir): salir para no reabrir el buscador en bucle.
+            // Ya es EPM_VALUE (tecleada, pegada, o escrita por nosotros
+            // mismos hace un instante): salir para no reabrir el
+            // buscador en bucle.
             if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) return;
 
             currentText = String(value);
-            located = await locateDracoAxisField(context, addr);
+            located = await findDracoRowsNamedRangeForCell(context, worksheetId, addr);
+            if (!located) return;
+
+            fieldLocated = await resolveDracoFieldForAxisLevel(
+                context, located.reportId, located.axis, located.level, cell.format.indentLevel
+            );
         });
 
-        console.log("[Draco] onChanged: resultado de locateDracoAxisField ->", located);
-        if (!located) return;
-        await openMemberRecognitionPicker(addr, located, currentText);
+        console.log("[Draco] onChanged: resultado ->", located, fieldLocated);
+        if (!located || !fieldLocated) return;
+
+        // Igual que en el doble clic: se adjunta el reportId realmente
+        // afectado y, si la celda cae en zona de crecimiento (fuera
+        // todavía del rango con nombre real), la info para ampliarlo de
+        // verdad en cuanto se confirme un valor en el picker.
+        fieldLocated.reportId = located.reportId;
+        fieldLocated.growth = located.growth || null;
+
+        await openMemberRecognitionPicker(addr, fieldLocated, currentText);
     } catch (e) {
         console.error("Error en el reconocimiento de miembros:", e);
     }
@@ -5861,6 +5895,52 @@ async function writeMemberRecognitionFlagToSheet(nowOn) {
     }
 }
 
+/**
+ * Popup pequeño y auto-cierre (recognitionBadge.html) que confirma
+ * visualmente el nuevo estado ON/OFF de "Reconocimiento de miembros" al
+ * pulsar el botón del ribbon. Es "fire and forget": no bloquea al que
+ * llama (no se espera aquí dentro), y si por lo que sea falla al abrir
+ * (host sin soporte de displayDialogAsync, etc.) simplemente no se ve
+ * nada — la etiqueta del propio botón del ribbon ya refleja el estado.
+ */
+function showMemberRecognitionBadge(nowOn) {
+    try {
+        const dialogUrl = new URL(
+            `recognitionBadge.html?state=${nowOn ? "on" : "off"}`,
+            window.location.href
+        ).href;
+
+        Office.context.ui.displayDialogAsync(
+            dialogUrl,
+            { height: 15, width: 20, displayInIframe: false },
+            (asyncResult) => {
+                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                    console.warn(
+                        "[Draco] No se pudo mostrar el badge de Reconocimiento de miembros:",
+                        asyncResult.error && asyncResult.error.message
+                    );
+                    return;
+                }
+                const dialog = asyncResult.value;
+                let closed = false;
+                const closeOnce = () => {
+                    if (closed) return;
+                    closed = true;
+                    try { dialog.close(); } catch (e) { /* ya cerrado */ }
+                };
+                // El propio HTML se auto-cierra pasado un momento (o al
+                // clicarlo) y avisa aquí vía messageParent para que el
+                // host cierre de verdad el diálogo.
+                dialog.addEventHandler(Office.EventType.DialogMessageReceived, closeOnce);
+                // 12006 = el usuario lo cerró él mismo con la X.
+                dialog.addEventHandler(Office.EventType.DialogEventReceived, closeOnce);
+            }
+        );
+    } catch (e) {
+        console.warn("[Draco] Error mostrando el badge de Reconocimiento de miembros:", e);
+    }
+}
+
 async function toggleMemberRecognition(event) {
     try {
         const nowOn = await toggleDracoSetting("draco_memberRecognition");
@@ -5873,6 +5953,8 @@ async function toggleMemberRecognition(event) {
             nowOn ? "Reconocimiento de miembros (ON)" : "Reconocimiento de miembros (OFF)",
             "EdicionGroup"
         );
+
+        showMemberRecognitionBadge(nowOn);
     } catch (error) {
         console.error("Error al alternar 'Reconocimiento de miembros':", error);
     } finally {
