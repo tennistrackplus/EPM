@@ -1,0 +1,649 @@
+/* ==========================================================
+   PANTALLA: DISEÑO DEL INFORME (taskpane.html)
+   ========================================================== */
+
+body {
+    height: 100vh;
+    overflow: hidden;
+    user-select: none;
+}
+
+.taskpane-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+}
+
+/* Barra de herramientas de la vista (bajo la marca) */
+.view-toolbar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: 12px 14px 4px 14px;
+}
+
+.view-toolbar h2 {
+    font-size: var(--fs-lg);
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.icon-button {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    width: 26px;
+    height: 26px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.icon-button:hover {
+    background-color: var(--gray-100);
+    border-color: var(--border-subtle);
+    color: var(--text-primary);
+}
+
+.icon-button:active svg {
+    transform: rotate(45deg);
+}
+
+.icon-button svg {
+    transition: transform var(--transition-base);
+}
+
+.taskpane-instruction {
+    flex-shrink: 0;
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    line-height: 1.4;
+    padding: 0 14px 10px 14px;
+}
+
+/* Body Layout */
+.taskpane-body {
+    display: flex;
+    flex: 1;
+    gap: 10px;
+    min-height: 0;
+    padding: 0 14px 14px 14px;
+}
+
+/* Panel izquierdo: catálogo de campos */
+.fields-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    padding: 8px;
+    min-width: 160px;
+}
+
+.search-input-wrapper {
+    position: relative;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+.search-icon {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.search-input-wrapper input {
+    width: 100%;
+    padding: 6px 8px 6px 26px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-base);
+    outline: none;
+    background-color: var(--surface-sunken);
+    transition: border-color var(--transition-fast), background-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.search-input-wrapper input:hover {
+    border-color: var(--gray-400);
+}
+
+.search-input-wrapper input:focus {
+    border-color: var(--brand-primary);
+    background-color: var(--surface-card);
+    box-shadow: 0 0 0 3px var(--brand-primary-light);
+}
+
+.fields-tree {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.dimension-group {
+    margin-bottom: 10px;
+}
+
+.dimension-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 4px 6px 4px 6px;
+    cursor: pointer;
+    user-select: none;
+    border-radius: var(--radius-sm);
+}
+
+.dimension-header:hover {
+    background-color: var(--brand-primary-light);
+}
+
+.dimension-caret {
+    display: inline-block;
+    width: 10px;
+    font-size: 9px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+/* Dimensión contraída: se ocultan sus atributos/jerarquías, solo queda
+   visible la cabecera con el nombre de la dimensión. */
+.dimension-group.collapsed > .field-item {
+    display: none;
+}
+
+.field-item {
+    display: flex;
+    align-items: center;
+    padding: 6px 8px;
+    margin: 1px 0;
+    border-radius: var(--radius-sm);
+    cursor: grab;
+    background-color: transparent;
+    border: 1px solid transparent;
+    transition: background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.field-item:hover {
+    background-color: var(--brand-primary-light);
+    border-color: #D7E3FC;
+}
+
+.field-item.dragging {
+    opacity: 0.4;
+}
+
+.field-icon {
+    margin-right: 8px;
+    font-size: var(--fs-sm);
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.field-label {
+    font-size: var(--fs-base);
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Panel derecho: ejes / dropzones */
+.zones-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 170px;
+}
+
+.zone-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 74px;
+    overflow: hidden;
+    transition: border-color var(--transition-base), background-color var(--transition-base), box-shadow var(--transition-base);
+}
+
+.zone-card.drag-over {
+    border-color: var(--brand-primary);
+    background-color: var(--brand-primary-light);
+    box-shadow: 0 0 0 3px var(--brand-primary-light);
+}
+
+.zone-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7px 10px;
+    background-color: var(--surface-sunken);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+}
+
+.zone-title-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 700;
+    font-size: var(--fs-sm);
+    color: var(--text-primary);
+    letter-spacing: 0.2px;
+}
+
+.zone-icon {
+    color: var(--brand-primary);
+    flex-shrink: 0;
+}
+
+.asymmetric-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    cursor: pointer;
+    font-weight: 500;
+}
+
+.asymmetric-checkbox input {
+    cursor: pointer;
+    accent-color: var(--brand-primary);
+}
+
+.range-control {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 4px 10px;
+    background-color: var(--surface-card);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+}
+
+.range-address {
+    font-family: monospace;
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+    background: var(--surface-sunken);
+    border-radius: var(--radius-sm);
+    padding: 2px 6px;
+}
+
+.range-arrows {
+    display: flex;
+    gap: 2px;
+}
+
+.range-arrows .icon-button {
+    width: 20px;
+    height: 20px;
+    font-size: 10px;
+    padding: 0;
+}
+
+.dropzone-content {
+    flex: 1;
+    padding: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 5px;
+    overflow-y: auto;
+}
+
+/* Pills / etiquetas arrastradas */
+.dropped-tag {
+    background-color: var(--brand-primary);
+    background-image: linear-gradient(160deg, var(--brand-primary) 0%, var(--brand-primary-hover) 100%);
+    color: var(--text-inverse);
+    padding: 4px 6px 4px 10px;
+    border-radius: var(--radius-pill);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    cursor: grab;
+    box-shadow: var(--shadow-xs);
+    transition: box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+
+.dropped-tag:hover {
+    box-shadow: var(--shadow-sm);
+}
+
+.dropped-tag.dragging {
+    opacity: 0.5;
+}
+
+/* Medidas (pseudo-dimensión MEASURE): color distinto al del resto de
+   campos, para diferenciarlas de un vistazo de las dimensiones. */
+.dropped-tag.measure-tag {
+    background-color: var(--brand-accent);
+    background-image: linear-gradient(160deg, var(--brand-accent) 0%, #0E9C71 100%);
+}
+
+.dropped-tag-title {
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.dropped-tag-remove {
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    opacity: 0.85;
+    transition: background-color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.dropped-tag-remove:hover {
+    opacity: 1;
+    background-color: rgba(255, 255, 255, 0.28);
+}
+
+/* Grupo de medidas dentro de Filas/Columnas: agrupa visualmente todas
+   las medidas del eje (fondo propio + título "Σ Medidas"), para poder
+   distinguirlas del resto de campos, quitarlas u ordenarlas entre sí
+   sin mezclarse con las dimensiones del mismo eje. */
+.measure-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 5px;
+    border: 1px dashed var(--brand-accent);
+    border-radius: var(--radius-sm);
+    background-color: var(--brand-accent-light);
+}
+
+.measure-group-title {
+    font-size: var(--fs-xs);
+    font-weight: 700;
+    letter-spacing: .02em;
+    text-transform: uppercase;
+    color: var(--brand-accent);
+    padding: 0 2px;
+}
+
+.measure-group-content {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.measure-group-content:empty {
+    display: none;
+}
+
+/* Zona con drop rechazado (p.ej. intentar repartir medidas entre Filas
+   y Columnas): breve aviso visual en el borde de la zona. */
+.zone-card.zone-warning {
+    box-shadow: 0 0 0 2px var(--color-danger);
+    transition: box-shadow var(--transition-fast);
+}
+
+/* Estado vacío de una dropzone */
+.dropzone-content:empty::before {
+    content: "Suelta aquí un campo";
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    font-style: normal;
+    padding: 4px 2px;
+}
+
+/* ==========================================================
+   EJE ESTÁTICO: sombreado + drag&drop deshabilitado
+   ========================================================== */
+.zone-card.zone-locked {
+    background-color: var(--gray-50);
+}
+
+.zone-card.zone-locked .zone-header {
+    background-color: var(--gray-100);
+}
+
+.zone-card.zone-locked .dropzone-content {
+    opacity: 0.55;
+    pointer-events: none;
+    filter: grayscale(0.5);
+}
+
+.zone-card.zone-locked .range-control {
+    opacity: 0.55;
+    pointer-events: none;
+}
+
+.zone-card.zone-locked .dropzone-content:empty::before {
+    content: "Eje estático: usa fórmulas EPM_VALUE en la hoja (arrastrar y soltar deshabilitado)";
+}
+
+/* ==========================================================
+   BOTONES DE ICONO CON ESTADO "ACTIVO" (paneles tipo toggle)
+   ========================================================== */
+.icon-button.toggle-active {
+    background-color: var(--brand-primary-light);
+    border-color: var(--brand-primary);
+    color: var(--brand-primary);
+}
+
+/* ==========================================================
+   PANEL DERECHO "OPCIONES DE CAMPO" (solo estético: al mostrarse
+   amplía el ancho del cuerpo del taskpane, al ocultarse lo reduce)
+   ========================================================== */
+.field-options-panel {
+    width: 0;
+    min-width: 0;
+    flex-shrink: 0;
+    overflow: hidden;
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    transition: width var(--transition-base), min-width var(--transition-base), opacity var(--transition-base);
+    opacity: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.taskpane-container.field-options-open .field-options-panel {
+    width: 230px;
+    min-width: 230px;
+    opacity: 1;
+}
+
+.field-options-header {
+    padding: 8px 10px;
+    font-weight: 700;
+    font-size: var(--fs-sm);
+    color: var(--text-primary);
+    background: var(--surface-sunken);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.field-options-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 210px;
+}
+
+.field-options-empty {
+    color: var(--text-muted);
+    font-size: var(--fs-sm);
+    padding: 6px 2px;
+}
+
+.field-options-field-name {
+    font-weight: 700;
+    font-size: var(--fs-sm);
+    color: var(--brand-primary);
+    word-break: break-word;
+}
+
+.field-options-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.field-options-group label {
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+    font-weight: 600;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.field-options-group select,
+.field-options-group input[type="text"],
+.field-options-group input[type="number"] {
+    padding: 5px 6px;
+    font-size: var(--fs-sm);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--surface-card);
+    width: 100%;
+}
+
+.field-options-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-sm);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.field-options-checkbox-row input {
+    accent-color: var(--brand-primary);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+/* Bloque "etiqueta arriba / control abajo" para selects fuera de un
+   checkbox (p.ej. "Ordenar", "Expandir hasta nivel"): antes el <label>
+   envolvía directamente el texto + el <select>, quedando descuadrado. */
+.field-options-field-block {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.field-options-field-label {
+    font-size: var(--fs-xs);
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+/* Filas de "Mostrar niveles": el texto (p.ej. "Nivel 2 — REGION") ya no
+   se parte en 2 líneas centradas dentro del cuadro; se trunca con "…" y
+   el título completo queda disponible como tooltip. */
+.field-options-level-row {
+    align-items: center;
+}
+
+.field-options-level-text {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.field-options-levels {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 120px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 6px;
+    background: var(--surface-sunken);
+}
+
+.field-options-section-title {
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+}
+
+.dropped-tag.clickable-for-options {
+    cursor: pointer;
+    box-shadow: 0 0 0 2px rgba(42, 91, 215, 0.18);
+}
+
+/* ==========================================================
+   MODAL "PROPIEDADES DEL INFORME" (reutiliza .modal-backdrop / .modal-dialog)
+   ========================================================== */
+.properties-form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.properties-form label.form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: var(--fs-sm);
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.properties-form input[type="text"] {
+    padding: 7px 9px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-base);
+}
+
+.properties-checkbox-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-sm);
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.properties-checkbox-row input {
+    accent-color: var(--brand-primary);
+    cursor: pointer;
+}
