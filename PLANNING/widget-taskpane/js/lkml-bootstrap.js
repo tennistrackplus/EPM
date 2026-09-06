@@ -55,7 +55,7 @@
         return { fact, fields };
     }
 
-    async function bootstrap() {
+    async function bootstrapInner() {
         const host = window.parent;
         if (!host || !host.GithubRepo || !host.LkmlParse || !host.Provider || !host.WidgetTableEditor) {
             console.error("lkml-bootstrap: falta GithubRepo/LkmlParse/Provider/WidgetTableEditor en la ventana anfitriona.");
@@ -123,6 +123,21 @@
         // modelos, aparezcan sin recargar nada.
         if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.populateModelSelectorMain) {
             await TaskPaneApp.populateModelSelectorMain();
+        }
+    }
+
+    // bootstrapInner() puede terminar en varios "return" tempranos (falta
+    // algo en el host, falla la consulta de cubos...) — este wrapper
+    // garantiza que, pase lo que pase, se avisa a Office.onReady (ver
+    // host-bridge.js) de que ya puede arrancar taskpane.js/commands.js,
+    // para no dejar el taskpane colgado esperando indefinidamente.
+    async function bootstrap() {
+        try {
+            await bootstrapInner();
+        } catch (err) {
+            console.error("lkml-bootstrap: error inesperado:", err);
+        } finally {
+            if (window.__wteSignalModelsReady) window.__wteSignalModelsReady();
         }
     }
 

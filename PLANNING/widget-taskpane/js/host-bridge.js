@@ -50,6 +50,18 @@
     `;
     document.head.appendChild(style);
 
+    // Promesa que lkml-bootstrap.js resuelve (window.__wteSignalModelsReady())
+    // en cuanto termina de registrar los modelos semánticos — Office.onReady
+    // espera a esto antes de dejar arrancar taskpane.js/commands.js (ver
+    // más abajo). Si por lo que sea nadie la resuelve nunca (p.ej. esta
+    // página no es el taskpane principal, como filterDialog.html/
+    // addFilterRange.html), se cae a los 4s a un timeout de seguridad para
+    // no dejar la página colgada para siempre.
+    window.__wteModelsReadyPromise = new Promise((resolve) => {
+        window.__wteSignalModelsReady = resolve;
+        setTimeout(resolve, 4000);
+    });
+
     // Si esta página se cargó como diálogo hijo (ver displayDialogAsync más
     // abajo), su id viaja en la URL — se lee aquí, de forma síncrona, para
     // que esté disponible ANTES de que corra el Office.onReady del hijo
@@ -213,19 +225,37 @@
                     getItem(edge) {
                         const map = { EdgeTop: "bt", EdgeRight: "br", EdgeBottom: "bb", EdgeLeft: "bl" };
                         const key = map[edge];
-                        // Antes .color/.weight eran valores fijos que no se
-                        // guardaban en ningún sitio: cualquier borde salía
-                        // siempre igual (2px, oscuro), sin importar lo que
-                        // pidiera commands.js — de ahí los "bordes gruesos".
-                        // Ahora cada borde guarda {style,color,weight} por
-                        // celda (ver borderCss() en widget-table-editor.js).
+                        // Clave del bug de los bordes "gruesos"/en rejilla: en
+                        // Excel de verdad, EdgeTop/Bottom/Left/Right sobre un
+                        // RANGO pintan una única línea en el PERÍMETRO exterior
+                        // de ese rango, no en cada celda interior. La versión
+                        // anterior aplicaba el borde a TODAS las celdas del
+                        // rango con forEachCell(), así que un solo "borde
+                        // exterior fino" acababa dibujando una rejilla
+                        // completa por dentro (cada fila/columna interior
+                        // sumaba su propia línea, doblando el grosor visual).
+                        // InsideHorizontal/InsideVertical no están soportados
+                        // (no los usa el flujo principal): no-op seguro.
+                        function boundaryCell() {
+                            if (edge === "EdgeBottom") return { r: r2, c: c1 };
+                            if (edge === "EdgeRight") return { r: r1, c: c2 };
+                            return { r: r1, c: c1 };
+                        }
+                        function forEdgeCells(fn) {
+                            if (edge === "EdgeTop") { for (let c = c1; c <= c2; c++) fn(r1, c); }
+                            else if (edge === "EdgeBottom") { for (let c = c1; c <= c2; c++) fn(r2, c); }
+                            else if (edge === "EdgeLeft") { for (let r = r1; r <= r2; r++) fn(r, c1); }
+                            else if (edge === "EdgeRight") { for (let r = r1; r <= r2; r++) fn(r, c2); }
+                        }
                         function current() {
-                            const b = key && collectStyleFlags()[key];
+                            if (!key) return null;
+                            const bc = boundaryCell();
+                            const b = getCellObj(bc.r, bc.c)[key];
                             return (b && typeof b === "object") ? b : null;
                         }
                         function update(patch) {
                             if (!key) return;
-                            forEachCell((r, c) => {
+                            forEdgeCells((r, c) => {
                                 const existing = getCellObj(r, c)[key];
                                 const base = (existing && typeof existing === "object") ? existing : { style: "continuous", color: "#1a1f2b", weight: "Thin" };
                                 writeCellObj(r, c, undefined, { [key]: Object.assign({}, base, patch) });
@@ -498,8 +528,17 @@
         },
 
         onReady(callback) {
-            Promise.resolve().then(() => callback && callback({ host: "Excel" }));
-            return Promise.resolve({ host: "Excel" });
+            // Espera a que lkml-bootstrap.js termine de registrar los
+            // modelos semánticos (descarga real desde GitHub, tarda más
+            // que esto) ANTES de dejar correr taskpane.js/commands.js. Sin
+            // esto, taskpane.js arranca casi al instante y decide "no hay
+            // modelo/informe activo" antes de que el bootstrap termine,
+            // perdiendo aparentemente el diseño e informe ya guardados.
+            const ready = window.__wteModelsReadyPromise || Promise.resolve();
+            return ready.then(() => {
+                callback && callback({ host: "Excel" });
+                return { host: "Excel" };
+            });
         },
 
         context: {
