@@ -73,6 +73,7 @@ const Widgets = {
                                     <td><span class="col-type">${UI.escapeHtml(w.DESCRIPCION || "—")}</span></td>
                                     <td>
                                         <div class="row-actions">
+                                            ${w.TIPO === "TABLA" ? `<button data-run="${w[this.ID_COL]}" title="Ejecutar">▶</button>` : ""}
                                             <button data-edit="${w[this.ID_COL]}" title="Editar">✎</button>
                                             <button data-del="${w[this.ID_COL]}" class="danger" title="Eliminar">🗑</button>
                                         </div>
@@ -83,6 +84,11 @@ const Widgets = {
                     </table>
                 </div>`;
 
+            wrap.querySelectorAll("[data-run]").forEach(btn =>
+                btn.addEventListener("click", () => {
+                    const row = this.list.find(r => r[this.ID_COL] === btn.dataset.run);
+                    if (row && typeof WidgetTableEditor !== "undefined") WidgetTableEditor.openRunView(row, this.project);
+                }));
             wrap.querySelectorAll("[data-edit]").forEach(btn =>
                 btn.addEventListener("click", () => this.openForm(btn.dataset.edit)));
             wrap.querySelectorAll("[data-del]").forEach(btn =>

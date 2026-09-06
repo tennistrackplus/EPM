@@ -359,6 +359,35 @@ const WTE_EMBEDDED_CSS = `
     background: #fff;
 }
 
+/* Vista "▶ Ejecutar": solo el recorte con datos, sin cabeceras de fila/
+   columna ni cuadrícula por defecto (ver renderCroppedView() /
+   cropCellHtml() en widget-table-editor.js). */
+.wte-crop-scroll {
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    padding: 24px;
+    box-sizing: border-box;
+    background: var(--surface-sunken);
+}
+
+.wte-crop-canvas {
+    position: relative;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.wte-crop-cell {
+    position: absolute;
+    box-sizing: border-box;
+    padding: 3px 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow: hidden;
+    outline: none;
+    background: #ffffff;
+}
+
 .wte-pivot-toggle {
     display: inline-block;
     width: 14px;
@@ -672,7 +701,7 @@ const WidgetTableEditor = {
             // y con la conexión ya autenticada de esta app (provider-bridge.js).
             const iframe = document.createElement("iframe");
             iframe.className = "wte-taskpane-frame";
-            iframe.src = "widget-taskpane/taskpane.html?v=20260906d";
+            iframe.src = "widget-taskpane/taskpane.html?v=20260906e";
             panel.appendChild(iframe);
             this._taskpaneFrame = iframe;
             if (!resizer._wired) {
@@ -724,6 +753,195 @@ const WidgetTableEditor = {
             return;
         }
         win[fnName]({ completed: () => {} });
+    },
+
+    // ------------------------------------------------------------
+    // Vista "▶ Ejecutar" (lista de widgets): abre un modal de 2 pestañas
+    // (Variables / Widget) igual que Functions.startRun() y TableUpdates —
+    // refresca el informe en segundo plano y muestra SOLO el recorte con
+    // datos (sin cabeceras de fila/columna, sin líneas de división),
+    // conservando tamaños/formatos y dejando las celdas editables.
+    // ------------------------------------------------------------
+    async openRunView(widgetRow, project = null) {
+        await this.open(widgetRow, project); // carga this.state con el motor de rejilla normal
+        this.overlay.style.display = "none"; // el editor completo sigue "vivo" pero oculto: lo sigue usando el taskpane
+
+        let runOverlay = document.getElementById("wteRunModal");
+        if (!runOverlay) {
+            runOverlay = document.createElement("div");
+            runOverlay.className = "modal-overlay";
+            runOverlay.id = "wteRunModal";
+            document.body.appendChild(runOverlay);
+        }
+        this.runOverlay = runOverlay;
+        runOverlay.classList.add("visible");
+        runOverlay.innerHTML = `
+            <div class="modal-box modal-full">
+                <div class="modal-header">
+                    <div>
+                        <h3>${UI.escapeHtml(this.widget.name)}</h3>
+                        <span class="modal-subtitle">▶ Ejecutar · Widget de tipo Tabla</span>
+                    </div>
+                    <button class="modal-close" id="wteRunClose">&times;</button>
+                </div>
+                <div class="flow-run-tabs" id="wteRunTabs">
+                    <button type="button" class="flow-run-tab active" id="wteRunTabVars">Variables</button>
+                    <button type="button" class="flow-run-tab" id="wteRunTabWidget">Widget</button>
+                </div>
+                <div class="modal-body modal-body-flush" id="wteRunBody"></div>
+            </div>`;
+
+        document.getElementById("wteRunClose").addEventListener("click", () => this.closeRunView());
+        document.getElementById("wteRunTabVars").addEventListener("click", () => this.switchRunTab("vars"));
+        document.getElementById("wteRunTabWidget").addEventListener("click", () => this.switchRunTab("widget"));
+
+        this.switchRunTab("widget");
+    },
+
+    closeRunView() {
+        if (this.runOverlay) this.runOverlay.classList.remove("visible");
+        this.close(); // libera los listeners globales del editor oculto de verdad
+    },
+
+    switchRunTab(tab) {
+        document.getElementById("wteRunTabVars").classList.toggle("active", tab === "vars");
+        document.getElementById("wteRunTabWidget").classList.toggle("active", tab === "widget");
+        if (tab === "vars") this.renderRunVarsTab();
+        else this.renderRunWidgetTab();
+    },
+
+    renderRunVarsTab() {
+        document.getElementById("wteRunBody").innerHTML = `
+            <div class="module-empty module-empty--inline">No se han definido variables para este widget.</div>`;
+    },
+
+    async renderRunWidgetTab() {
+        const body = document.getElementById("wteRunBody");
+        body.innerHTML = `<div class="module-empty module-empty--inline">Actualizando informe…</div>`;
+
+        try {
+            await this.waitForTaskpaneReady();
+            const win = this._taskpaneFrame.contentWindow;
+            if (typeof win.actualizar === "function") {
+                await win.actualizar({ completed: () => {} });
+            }
+        } catch (err) {
+            console.error("openRunView: no se pudo refrescar el informe automáticamente:", err);
+            // Se sigue adelante y se muestra lo que ya hubiera guardado.
+        }
+
+        this.renderCroppedView(body);
+    },
+
+    // Abre (si hace falta) el taskpane oculto tras el editor y espera a
+    // que termine de cargar del todo (incluye lkml-bootstrap.js, que tarda
+    // en traer los modelos de GitHub) antes de dejar llamar a actualizar().
+    waitForTaskpaneReady() {
+        if (!this._reportPanelOpen) this.toggleReportPanel();
+        const iframe = this._taskpaneFrame;
+        if (iframe._wteReady) return Promise.resolve();
+        return new Promise((resolve) => {
+            const check = () => {
+                const win = iframe.contentWindow;
+                if (win && win.__wteModelsReadyPromise) {
+                    win.__wteModelsReadyPromise.then(() => {
+                        iframe._wteReady = true;
+                        resolve();
+                    });
+                } else {
+                    setTimeout(check, 100);
+                }
+            };
+            check();
+        });
+    },
+
+    // Recorte final: solo la zona con datos, sin cabeceras de fila/columna
+    // ni líneas de división por defecto — igual que se ve "de verdad"
+    // fuera del editor. Reutiliza el mismo modelo de celdas/estilos que el
+    // editor completo (colores, fuentes, bordes reales del informe).
+    renderCroppedView(container) {
+        const keys = Object.keys(this.state.cells);
+        if (!keys.length) {
+            container.innerHTML = `<div class="module-empty module-empty--inline">Este widget todavía no tiene datos. Diséñalo desde "Editar" y pulsa Actualizar.</div>`;
+            return;
+        }
+
+        let r1 = Infinity, c1 = Infinity, r2 = -1, c2 = -1;
+        keys.forEach(k => {
+            const cell = this.state.cells[k];
+            if (!cell || (cell.v === undefined || cell.v === null || cell.v === "")) return;
+            const [r, c] = k.split("_").map(Number);
+            if (r < r1) r1 = r; if (c < c1) c1 = c;
+            if (r > r2) r2 = r; if (c > c2) c2 = c;
+        });
+        if (r2 < 0) {
+            container.innerHTML = `<div class="module-empty module-empty--inline">Este widget todavía no tiene datos. Diséñalo desde "Editar" y pulsa Actualizar.</div>`;
+            return;
+        }
+
+        this.ensureOffsets();
+        const originX = this.colX(c1), originY = this.rowY(r1);
+        const totalW = this.colX(c2) + this.colWidth(c2) - originX;
+        const totalH = this.rowY(r2) + this.rowHeight(r2) - originY;
+
+        let html = `<div class="wte-crop-scroll"><div class="wte-crop-canvas" style="width:${totalW}px;height:${totalH}px;">`;
+        for (let r = r1; r <= r2; r++) {
+            for (let c = c1; c <= c2; c++) {
+                const merge = this.state.merges.find(m => m.r === r && m.c === c);
+                const covered = this.state.merges.some(m => (r > m.r || (r === m.r && c > m.c)) && r < m.r + m.rowSpan && c < m.c + m.colSpan && !(m.r === r && m.c === c));
+                if (covered) continue;
+                const w = merge ? this._colOffsets[merge.c + merge.colSpan] - this._colOffsets[merge.c] : this.colWidth(c);
+                const h = merge ? this._rowOffsets[merge.r + merge.rowSpan] - this._rowOffsets[merge.r] : this.rowHeight(r);
+                html += this.cropCellHtml(r, c, this.colX(c) - originX, this.rowY(r) - originY, w, h);
+            }
+        }
+        html += "</div></div>";
+        container.innerHTML = html;
+
+        container.querySelectorAll(".wte-crop-cell").forEach(div => {
+            div.addEventListener("dblclick", () => this.startCropEditing(div, container));
+        });
+    },
+
+    // Igual que cellHtml(), pero SIN el gris de cuadrícula por defecto
+    // (border 1px #E3E6EC): si la celda no tiene un borde propio, no se
+    // pinta línea ninguna — "solo el trozo de Excel con datos".
+    cropCellHtml(r, c, x, y, w, h) {
+        const cell = this.getCell(r, c);
+        const style = [
+            `left:${x}px`, `top:${y}px`, `width:${w}px`, `height:${h}px`,
+            `font-family:${cell.ff || "inherit"}`,
+            `font-size:${cell.fs || 12}px`,
+            `font-weight:${cell.b ? "700" : "400"}`,
+            `font-style:${cell.i ? "italic" : "normal"}`,
+            `text-decoration:${cell.u ? "underline" : "none"}`,
+            `text-align:${cell.al || "left"}`,
+            `padding-left:${6 + (cell.ind ? cell.ind * 14 : 0)}px`,
+            `color:${cell.col || "inherit"}`,
+            `background-color:${cell.bg || "#ffffff"}`,
+            `border-top:${this.borderCss(cell.bt, true)}`,
+            `border-right:${this.borderCss(cell.br, true)}`,
+            `border-bottom:${this.borderCss(cell.bb, true)}`,
+            `border-left:${this.borderCss(cell.bl, true)}`
+        ].join(";");
+        return `<div class="wte-crop-cell" data-r="${r}" data-c="${c}" style="${style}">${UI.escapeHtml(cell.v || "")}</div>`;
+    },
+
+    startCropEditing(div, container) {
+        const r = parseInt(div.dataset.r, 10), c = parseInt(div.dataset.c, 10);
+        div.contentEditable = "true";
+        div.focus();
+        document.execCommand("selectAll", false, null);
+        const commit = () => {
+            const value = div.innerText.replace(/\n/g, " ").trim();
+            this.writeCell(r, c, value);
+            div.contentEditable = "false";
+        };
+        div.addEventListener("blur", commit, { once: true });
+        div.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); div.blur(); }
+        });
     },
 
     // Escritura directa de una celda (valor + estilo/propiedades extra),
@@ -1278,10 +1496,10 @@ const WidgetTableEditor = {
     // taskpane (objeto {style,color,weight} desde host-bridge.js, con
     // grosor y color reales) y la de los botones "Exterior"/"Todos" de
     // nuestra propia barra de herramientas (1/0, siempre 2px oscuro).
-    borderCss(b) {
-        if (!b) return "1px solid #E3E6EC";
+    borderCss(b, noDefaultGrid) {
+        if (!b) return noDefaultGrid ? "none" : "1px solid #E3E6EC";
         if (typeof b === "object") {
-            if (b.style !== "continuous") return "1px solid #E3E6EC";
+            if (b.style !== "continuous") return noDefaultGrid ? "none" : "1px solid #E3E6EC";
             const px = b.weight === "Thick" ? 3 : (b.weight === "Medium" ? 2 : 1);
             return `${px}px solid ${b.color || "#1a1f2b"}`;
         }
