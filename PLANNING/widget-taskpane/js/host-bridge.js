@@ -10,11 +10,26 @@
  * add-in original: misma lógica de arrastrar y soltar, misma generación de
  * SQL, mismos botones y colores (mismo CSS).
  *
- * Cobertura: se ha acotado a la superficie de la API de Excel realmente
- * usada por commands.js (ver comentario al final del fichero con el grep
- * que se usó para medirla). Si aparece algo no cubierto, se lanza un error
- * explícito ("host-bridge: <método> no implementado") en vez de fallar en
- * silencio, para poder ampliar el shim sobre casos reales.
+ * Dos decisiones de diseño importantes:
+ *
+ * 1) Hojas: el add-in usa varias hojas ocultas de apoyo (EDIT_REPORT,
+ *    CSV_RESULT, MODEL_HIER...) además de la hoja visible con el informe.
+ *    Aquí solo existe UNA hoja "visible" de verdad (la rejilla del widget,
+ *    "Hoja1"); cualquier otro nombre de hoja se respalda con un almacén en
+ *    memoria APARTE (editor.state.hiddenSheets), para que escribir en
+ *    EDIT_REPORT!D1 (bookkeeping interno) no sobreescriba una celda D1 que
+ *    el usuario esté usando de verdad en su informe.
+ *
+ * 2) Repintado: Excel repinta la pantalla mientras hay JS ejecutando
+ *    (los cambios se ven en cuanto se hacen). Nuestra rejilla necesita que
+ *    alguien llame explícitamente a renderGrid(); como el patrón universal
+ *    del add-in es Excel.run(async context => {...}), aquí se repinta
+ *    automáticamente al terminar CADA Excel.run.
+ *
+ * Cobertura: acotada a la superficie de la API de Excel realmente usada
+ * por commands.js/taskpane.js. Si aparece algo no cubierto, se lanza un
+ * error explícito ("host-bridge: <método> no implementado") en vez de
+ * fallar en silencio, para poder ampliar el shim sobre casos reales.
  */
 (function () {
 
@@ -48,7 +63,7 @@
 
     // ------------------------------------------------------------
     // Direcciones A1 -> {r1,c1,r2,c2} (0-based, igual que el estado del
-    // widget). Soporta "A1", "A1:C5" y, por si acaso, "Hoja1!A1:C5".
+    // widget). Soporta "A1", "A1:C5" y, si trae hoja, "Hoja1!A1:C5".
     // ------------------------------------------------------------
     function colLettersToIndex(letters) {
         let n = 0;
@@ -86,35 +101,62 @@
     }
 
     // ------------------------------------------------------------
-    // Rango de Excel (fake) — respaldado por el estado del widget.
+    // Almacén de celdas/fusiones por hoja. "Hoja1" (o sin nombre) usa la
+    // rejilla REAL del widget; cualquier otro nombre (EDIT_REPORT,
+    // CSV_RESULT, MODEL_HIER...) usa un almacén aparte en memoria, para no
+    // pisar el informe pintado con bookkeeping interno del add-in.
     // ------------------------------------------------------------
-    function makeRange(r1, c1, r2, c2) {
+    function isMainSheet(name) { return !name || name === "Hoja1"; }
+
+    function backingCells(name) {
         const editor = host();
+        if (isMainSheet(name)) return editor.state.cells;
+        if (!editor.state.hiddenSheets) editor.state.hiddenSheets = {};
+        if (!editor.state.hiddenSheets[name]) editor.state.hiddenSheets[name] = {};
+        return editor.state.hiddenSheets[name];
+    }
 
-        function collectStyleFlags() {
-            // Devuelve el estilo "predominante" de la primera celda del
-            // rango, que es lo que casi siempre se consulta tras un load().
-            return editor.getCell(r1, c1) || {};
-        }
+    function backingMerges(name) {
+        const editor = host();
+        if (isMainSheet(name)) return editor.state.merges;
+        if (!editor.state.hiddenSheetMerges) editor.state.hiddenSheetMerges = {};
+        if (!editor.state.hiddenSheetMerges[name]) editor.state.hiddenSheetMerges[name] = [];
+        return editor.state.hiddenSheetMerges[name];
+    }
 
-        function forEachCell(fn) {
-            for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) fn(r, c);
+    // ------------------------------------------------------------
+    // Rango de Excel (fake) — respaldado por el almacén de la hoja
+    // correspondiente (ver arriba).
+    // ------------------------------------------------------------
+    function makeRange(r1, c1, r2, c2, sheetName) {
+        sheetName = sheetName || "Hoja1";
+        const cells = backingCells(sheetName);
+
+        function getCellObj(r, c) { return cells[`${r}_${c}`] || {}; }
+        function writeCellObj(r, c, value, extra) {
+            const key = `${r}_${c}`;
+            if (!cells[key]) cells[key] = {};
+            if (value !== undefined) cells[key].v = value;
+            if (extra) Object.assign(cells[key], extra);
         }
+        function clearCellObj(r, c) { delete cells[`${r}_${c}`]; }
+        function collectStyleFlags() { return getCellObj(r1, c1); }
+        function forEachCell(fn) { for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) fn(r, c); }
 
         const range = {
-            address: addressFor(r1, c1, r2, c2),
+            address: `${sheetName}!${addressFor(r1, c1, r2, c2)}`,
             rowIndex: r1,
             columnIndex: c1,
             rowCount: r2 - r1 + 1,
             columnCount: c2 - c1 + 1,
 
-            get worksheet() { return makeWorksheet("Hoja1"); },
+            get worksheet() { return makeWorksheet(sheetName); },
 
             get values() {
                 const out = [];
                 for (let r = r1; r <= r2; r++) {
                     const row = [];
-                    for (let c = c1; c <= c2; c++) row.push(editor.getCell(r, c).v ?? "");
+                    for (let c = c1; c <= c2; c++) row.push(getCellObj(r, c).v ?? "");
                     out.push(row);
                 }
                 return out;
@@ -124,7 +166,7 @@
                 v.forEach((row, ri) => {
                     if (!Array.isArray(row)) return;
                     row.forEach((val, ci) => {
-                        editor.writeCell(r1 + ri, c1 + ci, val === null || val === undefined ? "" : String(val));
+                        writeCellObj(r1 + ri, c1 + ci, val === null || val === undefined ? "" : String(val));
                     });
                 });
             },
@@ -142,20 +184,20 @@
             format: {
                 font: {
                     get bold() { return !!collectStyleFlags().b; },
-                    set bold(v) { forEachCell((r, c) => editor.writeCell(r, c, editor.getCell(r, c).v ?? "", { b: v ? 1 : 0 })); },
+                    set bold(v) { forEachCell((r, c) => writeCellObj(r, c, undefined, { b: v ? 1 : 0 })); },
                     get italic() { return !!collectStyleFlags().i; },
-                    set italic(v) { forEachCell((r, c) => editor.writeCell(r, c, editor.getCell(r, c).v ?? "", { i: v ? 1 : 0 })); },
+                    set italic(v) { forEachCell((r, c) => writeCellObj(r, c, undefined, { i: v ? 1 : 0 })); },
                     get underline() { return collectStyleFlags().u ? "Single" : "None"; },
-                    set underline(v) { forEachCell((r, c) => editor.writeCell(r, c, editor.getCell(r, c).v ?? "", { u: (v && v !== "None") ? 1 : 0 })); },
+                    set underline(v) { forEachCell((r, c) => writeCellObj(r, c, undefined, { u: (v && v !== "None") ? 1 : 0 })); },
                     get color() { return collectStyleFlags().col || "#000000"; },
-                    set color(v) { forEachCell((r, c) => editor.writeCell(r, c, editor.getCell(r, c).v ?? "", { col: v })); },
+                    set color(v) { forEachCell((r, c) => writeCellObj(r, c, undefined, { col: v })); },
                     size: 11,
                     name: "Calibri"
                 },
                 fill: {
                     get color() { return collectStyleFlags().bg || "#FFFFFF"; },
-                    set color(v) { forEachCell((r, c) => editor.writeCell(r, c, editor.getCell(r, c).v ?? "", { bg: v })); },
-                    clear() { forEachCell((r, c) => editor.writeCell(r, c, editor.getCell(r, c).v ?? "", { bg: "#FFFFFF" })); }
+                    set color(v) { forEachCell((r, c) => writeCellObj(r, c, undefined, { bg: v })); },
+                    clear() { forEachCell((r, c) => writeCellObj(r, c, undefined, { bg: "#FFFFFF" })); }
                 },
                 borders: {
                     getItem(edge) {
@@ -163,7 +205,7 @@
                         const key = map[edge];
                         return {
                             get style() { return key && collectStyleFlags()[key] ? "Continuous" : "None"; },
-                            set style(v) { if (key) forEachCell((r, c) => editor.writeCell(r, c, editor.getCell(r, c).v ?? "", { [key]: (v && v !== "None") ? 1 : 0 })); },
+                            set style(v) { if (key) forEachCell((r, c) => writeCellObj(r, c, undefined, { [key]: (v && v !== "None") ? 1 : 0 })); },
                             color: "#000000",
                             weight: "Thin"
                         };
@@ -177,27 +219,28 @@
             },
 
             load() { return range; },
-            clear() { forEachCell((r, c) => editor.clearRegion(r, c, r, c)); return range; },
+            clear() { forEachCell((r, c) => clearCellObj(r, c)); return range; },
             select() { /* no-op: no hay selección de usuario real que mover */ },
 
             merge(across) {
+                const merges = backingMerges(sheetName);
                 if (across) {
-                    for (let r = r1; r <= r2; r++) editor.state.merges.push({ r, c: c1, rowSpan: 1, colSpan: c2 - c1 + 1 });
+                    for (let r = r1; r <= r2; r++) merges.push({ r, c: c1, rowSpan: 1, colSpan: c2 - c1 + 1 });
                 } else {
-                    editor.state.merges.push({ r: r1, c: c1, rowSpan: r2 - r1 + 1, colSpan: c2 - c1 + 1 });
+                    merges.push({ r: r1, c: c1, rowSpan: r2 - r1 + 1, colSpan: c2 - c1 + 1 });
                 }
-                editor.markDirty();
             },
             unmerge() {
-                editor.state.merges = editor.state.merges.filter(m =>
-                    !(m.r >= r1 && m.r <= r2 && m.c >= c1 && m.c <= c2));
-                editor.markDirty();
+                const merges = backingMerges(sheetName);
+                const filtered = merges.filter(m => !(m.r >= r1 && m.r <= r2 && m.c >= c1 && m.c <= c2));
+                merges.length = 0;
+                merges.push(...filtered);
             },
 
             getRangeByIndexes(startRow, startCol, rowCount, colCount) {
-                return makeRange(r1 + startRow, c1 + startCol, r1 + startRow + rowCount - 1, c1 + startCol + colCount - 1);
+                return makeRange(r1 + startRow, c1 + startCol, r1 + startRow + rowCount - 1, c1 + startCol + colCount - 1, sheetName);
             },
-            getCell(rr, cc) { return makeRange(r1 + rr, c1 + cc, r1 + rr, c1 + cc); },
+            getCell(rr, cc) { return makeRange(r1 + rr, c1 + cc, r1 + rr, c1 + cc, sheetName); },
             getEntireColumn: notImplemented("range.getEntireColumn"),
             getEntireRow: notImplemented("range.getEntireRow"),
 
@@ -226,30 +269,33 @@
         getItem(name) {
             const stored = namedRangesStore()[name];
             if (!stored) throw new Error(`host-bridge: nombre definido "${name}" no existe.`);
-            return { getRange: () => makeRange(stored.r1, stored.c1, stored.r2, stored.c2) };
+            return { load() { return this; }, name, getRange: () => makeRange(stored.r1, stored.c1, stored.r2, stored.c2, stored.sheet) };
         },
         getItemOrNullObject(name) {
             const stored = namedRangesStore()[name];
             return {
+                load() { return this; },
+                name,
                 isNullObject: !stored,
-                getRange: () => stored ? makeRange(stored.r1, stored.c1, stored.r2, stored.c2) : null,
+                getRange: () => stored ? makeRange(stored.r1, stored.c1, stored.r2, stored.c2, stored.sheet) : null,
                 delete: () => { delete namedRangesStore()[name]; }
             };
         },
         add(name, range) {
-            namedRangesStore()[name] = { r1: range.rowIndex, c1: range.columnIndex, r2: range.rowIndex + range.rowCount - 1, c2: range.columnIndex + range.columnCount - 1 };
+            namedRangesStore()[name] = {
+                r1: range.rowIndex, c1: range.columnIndex,
+                r2: range.rowIndex + range.rowCount - 1, c2: range.columnIndex + range.columnCount - 1,
+                sheet: (range.address || "").split("!")[0] || "Hoja1"
+            };
         }
     };
 
-    // ------------------------------------------------------------
-    // Hoja de cálculo (fake) — solo hay UNA "hoja", la rejilla del widget.
-    // ------------------------------------------------------------
     // ------------------------------------------------------------
     // Eventos de hoja (onChanged / onSelectionChanged / onSingleClicked).
     // El add-in real los usa para el reconocimiento de miembros (onChanged
     // al confirmar un valor tecleado, onSelectionChanged al entrar en una
     // celda vacía) y para expandir/contraer jerarquías con un clic
-    // (onSingleClicked). Aquí se disparan desde WidgetTableEditor (ver
+    // (onSingleClicked). Se disparan desde WidgetTableEditor (ver
     // fireTaskpaneEvent en widget-table-editor.js) a través de
     // window.__fireExcelEvent, expuesta más abajo.
     // ------------------------------------------------------------
@@ -257,13 +303,13 @@
 
     function makeEventApi(type) {
         return {
-            add(handler) { eventHandlers[type].push(handler); return { remove: () => {} }; },
-            remove(handler) { eventHandlers[type] = eventHandlers[type].filter(h => h !== handler); }
+            add(handler) { if (eventHandlers[type]) eventHandlers[type].push(handler); return { remove: () => {} }; },
+            remove(handler) { if (eventHandlers[type]) eventHandlers[type] = eventHandlers[type].filter(h => h !== handler); }
         };
     }
 
     window.__fireExcelEvent = function (type, r, c) {
-        const address = addressFor(r, c, r, c);
+        const address = `Hoja1!${addressFor(r, c, r, c)}`;
         const args = { address, worksheetId: "Hoja1", source: "Draco" };
         (eventHandlers[type] || []).slice().forEach(handler => {
             try {
@@ -275,34 +321,45 @@
         });
     };
 
+    // ------------------------------------------------------------
+    // Hoja de cálculo (fake). "Hoja1" es la rejilla real y visible;
+    // cualquier otro nombre es una hoja interna oculta (ver backingCells).
+    // ------------------------------------------------------------
     function makeWorksheet(name) {
-        const editor = host();
+        name = name || "Hoja1";
         return {
-            name: name || "Hoja1",
+            name,
             load() { return this; },
             onChanged: makeEventApi("onChanged"),
             onSelectionChanged: makeEventApi("onSelectionChanged"),
             onSingleClicked: makeEventApi("onSingleClicked"),
             comments: { load() {}, items: [] },
             getRange(address) {
-                if (!address) return makeRange(0, 0, editor.state.rows - 1, editor.state.cols - 1);
+                if (!address) {
+                    if (isMainSheet(name)) {
+                        const editor = host();
+                        return makeRange(0, 0, editor.state.rows - 1, editor.state.cols - 1, name);
+                    }
+                    return makeRange(0, 0, 999, 199, name);
+                }
                 const a = parseAddress(address);
-                return makeRange(a.r1, a.c1, a.r2, a.c2);
+                return makeRange(a.r1, a.c1, a.r2, a.c2, name);
             },
             getRangeByIndexes(row, col, rowCount, colCount) {
-                return makeRange(row, col, row + rowCount - 1, col + colCount - 1);
+                return makeRange(row, col, row + rowCount - 1, col + colCount - 1, name);
             },
-            getCell(row, col) { return makeRange(row, col, row, col); },
+            getCell(row, col) { return makeRange(row, col, row, col, name); },
             getUsedRangeOrNullObject() {
-                const keys = Object.keys(editor.state.cells);
-                if (!keys.length) return { isNullObject: true };
+                const cells = backingCells(name);
+                const keys = Object.keys(cells);
+                if (!keys.length) return { isNullObject: true, load() { return this; } };
                 let r1 = Infinity, c1 = Infinity, r2 = -1, c2 = -1;
                 keys.forEach(k => {
                     const [r, c] = k.split("_").map(Number);
                     if (r < r1) r1 = r; if (c < c1) c1 = c;
                     if (r > r2) r2 = r; if (c > c2) c2 = c;
                 });
-                return Object.assign({ isNullObject: false }, makeRange(r1, c1, r2, c2));
+                return Object.assign({ isNullObject: false }, makeRange(r1, c1, r2, c2, name));
             },
             getUsedRange() {
                 const r = this.getUsedRangeOrNullObject();
@@ -315,6 +372,7 @@
     const worksheetsApi = {
         load() { return this; },
         get items() { return [makeWorksheet("Hoja1")]; },
+        onAdded: makeEventApi("onChanged"), // nunca se crean hojas nuevas de verdad: no-op seguro
         getActiveWorksheet() { return makeWorksheet("Hoja1"); },
         getItem(name) { return makeWorksheet(name); },
         getItemOrNullObject(name) { return Object.assign({ isNullObject: false }, makeWorksheet(name)); },
@@ -322,17 +380,33 @@
     };
 
     // ------------------------------------------------------------
-    // Excel.run — sin lote/lote real: cada operación ya se aplica al
-    // vuelo sobre el estado del widget, así que sync() no tiene nada
-    // pendiente que confirmar.
+    // Excel.run — al terminar cada lote se repinta la rejilla real (si
+    // hubo cambios en la hoja principal, se ven inmediatamente).
     // ------------------------------------------------------------
     const fakeContext = {
-        workbook: { worksheets: worksheetsApi, names: namesApi },
+        workbook: {
+            worksheets: worksheetsApi,
+            names: namesApi,
+            getSelectedRange() {
+                const editor = host();
+                const sel = editor.selection || { r1: 0, c1: 0, r2: 0, c2: 0 };
+                const r1 = Math.min(sel.r1, sel.r2), c1 = Math.min(sel.c1, sel.c2);
+                const r2 = Math.max(sel.r1, sel.r2), c2 = Math.max(sel.c1, sel.c2);
+                return makeRange(r1, c1, r2, c2, "Hoja1");
+            }
+        },
         sync() { return Promise.resolve(); }
     };
 
     window.Excel = {
-        run(callback) { return Promise.resolve().then(() => callback(fakeContext)); }
+        run(callback) {
+            return Promise.resolve()
+                .then(() => callback(fakeContext))
+                .then(result => {
+                    try { const editor = host(); editor.markDirty(); editor.renderGrid(); } catch (e) { /* el host puede no estar listo aún */ }
+                    return result;
+                });
+        }
     };
 
     // ------------------------------------------------------------
@@ -365,6 +439,12 @@
             DialogMessageReceived: "DialogMessageReceived",
             DialogEventReceived: "DialogEventReceived",
             DialogParentMessageReceived: "DialogParentMessageReceived"
+        },
+        actions: {
+            // El add-in intenta registrar acciones de la cinta real de
+            // Excel (Office.actions.associate); aquí no hay cinta, así
+            // que se ignoran en silencio en vez de lanzar.
+            associate() {}
         },
 
         onReady(callback) {
@@ -440,13 +520,14 @@
 })();
 
 /**
- * Superficie de la API de Excel usada por commands.js (medida con
- * grep antes de escribir este shim), para saber qué falta si algo
- * lanza "host-bridge: ... no implementado":
+ * Superficie de la API de Excel usada por commands.js (medida con grep
+ * antes de escribir este shim), para saber qué falta si algo lanza
+ * "host-bridge: ... no implementado":
  *   getRange, worksheets.getItem/getItemOrNullObject/getActiveWorksheet/add,
  *   getRangeByIndexes, names.getItem/getItemOrNullObject/add,
  *   format.font (bold/italic/underline/color), format.indentLevel,
  *   format.fill, getUsedRangeOrNullObject, format.borders,
  *   format.autofitColumns, getCell, format.horizontalAlignment,
- *   format.columnWidth.
+ *   format.columnWidth, getSelectedRange, onChanged/onSelectionChanged/
+ *   onSingleClicked.
  */
