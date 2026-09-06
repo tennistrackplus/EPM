@@ -2,15 +2,25 @@
  * lkml-bootstrap.js — sustituye a LkmlOpenBridge/openSemanticModelDialog
  * del add-in (que dejan elegir un .lkml a mano en un repo cualquiera).
  *
- * Aquí, en su lugar: por cada cubo del proyecto con modelo semántico
- * generado, se descarga y parsea su .lkml (GithubRepo + LkmlParse, ya
- * cargados en la página anfitriona) y se registra como un modelo más en
- * SemanticModelStore — exactamente el mismo almacén que ya rellenaba el
- * add-in al importar un fichero a mano, así que el resto (selector
- * "Modelo semántico", ExcelService.readDim2Data, generación de SQL...)
- * funciona sin ningún cambio.
+ * Diseño (v2, mucho más simple que la primera versión): el selector de
+ * "Modelo semántico" del taskpane va asociado 1:1 a los cubos del
+ * proyecto — eso ya lo sabemos sin tocar GitHub para nada, con una sola
+ * consulta a CUBOS. Así que:
  *
- * Se ejecuta una vez, al cargar el taskpane.
+ *   1) Se registra cada cubo como un modelo "vacío" (sin campos) en
+ *      SemanticModelStore — instantáneo, sin red, solo para que aparezca
+ *      en el desplegable.
+ *   2) Si el informe ya tenía un cubo activo (se está reabriendo un
+ *      widget guardado), SU .lkml sí se descarga y parsea ya mismo (una
+ *      sola petición, no todas), para que se vea de inmediato.
+ *   3) Para cualquier OTRO cubo, el .lkml no se descarga hasta que el
+ *      usuario lo elige de verdad en el desplegable — se intercepta
+ *      TaskPaneApp.onModelSelectorChange (sin tocar taskpane.js) para
+ *      resolverlo la primera vez que se selecciona.
+ *
+ * Con esto, abrir el taskpane ya no depende de red salvo, como mucho,
+ * por el cubo activo — nada que ver con la versión anterior, que traía
+ * el .lkml de TODOS los cubos del proyecto por adelantado.
  */
 (function () {
 
@@ -55,6 +65,63 @@
         return { fact, fields };
     }
 
+    function lkmlPathFor(host, project, cube) {
+        if (cube.MODELO_YAML_PATH) return cube.MODELO_YAML_PATH.replace(/\.yaml$/i, ".lkml");
+        if (!host.SemanticModel) return null;
+        const ident = host.Provider.toIdentifier(cube.CUBOS) || cube.CUBO_ID;
+        return host.SemanticModel.buildPath(project, ident).replace(/\.yaml$/i, ".lkml");
+    }
+
+    let repoConfigPromise = null;
+    function getRepoConfig(host) {
+        if (!repoConfigPromise) {
+            repoConfigPromise = (async () => {
+                const cfg = (typeof host.DracoConfig !== "undefined" && host.DracoConfig.semanticModelGithub) || {};
+                const token = await host.BQ.getGithubPatFromSecretManager();
+                return { url: cfg.url, branch: cfg.branch, token };
+            })();
+        }
+        return repoConfigPromise;
+    }
+
+    // cube.CUBOS (nombre, lo que se ve en el selector) -> { host, project, cube, resolved }
+    const pending = {};
+
+    async function resolveModel(name) {
+        const entry = pending[name];
+        if (!entry || entry.resolved) return;
+        entry.resolved = true; // marca como "en curso/hecho" ya, para no lanzar dos descargas si el usuario cambia rápido
+        const { host, project, cube } = entry;
+        try {
+            const path = lkmlPathFor(host, project, cube);
+            if (!path) { console.warn(`lkml-bootstrap: el cubo "${name}" no tiene modelo semántico (.lkml).`); return; }
+            const repoConfig = await getRepoConfig(host);
+            const text = await host.GithubRepo.getFile(path, repoConfig);
+            if (text === null) { console.warn(`lkml-bootstrap: no existe ${path} para el cubo "${name}".`); return; }
+            const lkmlModel = host.LkmlParse.parse(text);
+            const model = lkmlToSemanticModel(lkmlModel);
+            await window.SemanticModelStore.saveModel(name, model);
+        } catch (err) {
+            entry.resolved = false; // si falla, se puede reintentar si lo vuelve a elegir
+            console.error(`lkml-bootstrap: error al leer/parsear el modelo de "${name}":`, err);
+        }
+    }
+
+    // Intercepta el cambio de selector SIN tocar taskpane.js: la búsqueda de
+    // TaskPaneApp.onModelSelectorChange se hace en el momento del evento
+    // (es un método, no una referencia capturada), así que basta con
+    // sustituirlo en cualquier momento después de que taskpane.js se cargue.
+    function patchModelSelectorChange() {
+        if (typeof TaskPaneApp === "undefined" || TaskPaneApp.__wteLkmlPatched) return false;
+        const original = TaskPaneApp.onModelSelectorChange.bind(TaskPaneApp);
+        TaskPaneApp.onModelSelectorChange = async function (modelName) {
+            if (modelName) await resolveModel(modelName);
+            return original(modelName);
+        };
+        TaskPaneApp.__wteLkmlPatched = true;
+        return true;
+    }
+
     async function bootstrapInner() {
         const host = window.parent;
         if (!host || !host.GithubRepo || !host.LkmlParse || !host.Provider || !host.WidgetTableEditor) {
@@ -74,53 +141,25 @@
             return;
         }
 
-        // El PAT de GitHub no vive en DracoConfig.semanticModelGithub.token
-        // (config.js) — se lee de Google Secret Manager, igual que hace
-        // SemanticModel.generateAndPushLkml() justo antes de subir el
-        // .lkml. Se pide una sola vez aquí y se reutiliza para todos los
-        // cubos del bucle.
-        let repoConfig = null;
-        try {
-            const cfg = (typeof host.DracoConfig !== "undefined" && host.DracoConfig.semanticModelGithub) || {};
-            const token = await host.BQ.getGithubPatFromSecretManager();
-            repoConfig = { url: cfg.url, branch: cfg.branch, token };
-        } catch (err) {
-            console.error("lkml-bootstrap: no se pudo obtener el token de GitHub desde Secret Manager:", err);
-            return;
-        }
-
-        const report = host.WidgetTableEditor.state.report || {};
-        let activeName = null;
-
+        // Paso 1: un "modelo" vacío por cubo — instantáneo, sin red, solo
+        // para que el selector los liste. Cero peticiones a GitHub aquí.
         for (const cube of cubes) {
-            let path = cube.MODELO_YAML_PATH ? cube.MODELO_YAML_PATH.replace(/\.yaml$/i, ".lkml") : null;
-            if (!path && host.SemanticModel) {
-                const ident = host.Provider.toIdentifier(cube.CUBOS) || cube.CUBO_ID;
-                path = host.SemanticModel.buildPath(project, ident).replace(/\.yaml$/i, ".lkml");
-            }
-            if (!path) continue;
-
-            try {
-                const text = await host.GithubRepo.getFile(path, repoConfig);
-                if (text === null) { console.warn(`lkml-bootstrap: no existe ${path} para el cubo "${cube.CUBOS}".`); continue; }
-                const lkmlModel = host.LkmlParse.parse(text);
-                const model = lkmlToSemanticModel(lkmlModel);
-                await window.SemanticModelStore.saveModel(cube.CUBOS, model);
-                if (cube.CUBO_ID === report.cuboId) activeName = cube.CUBOS;
-            } catch (err) {
-                console.error(`lkml-bootstrap: error al leer/parsear el modelo de "${cube.CUBOS}":`, err);
-            }
+            pending[cube.CUBOS] = { host, project, cube, resolved: false };
+            await window.SemanticModelStore.saveModel(cube.CUBOS, { fact: {}, fields: [] });
         }
 
-        if (activeName) {
-            await window.SemanticModelStore.setActiveModelName(activeName);
+        patchModelSelectorChange();
+
+        // Paso 2: si el informe ya tenía un cubo elegido (se reabre un
+        // widget guardado), ese SÍ se resuelve ya — es la única petición
+        // de red que hace falta para que se vea de inmediato.
+        const report = host.WidgetTableEditor.state.report || {};
+        const activeCube = cubes.find(c => c.CUBO_ID === report.cuboId);
+        if (activeCube) {
+            await resolveModel(activeCube.CUBOS);
+            await window.SemanticModelStore.setActiveModelName(activeCube.CUBOS);
         }
 
-        // El selector de la izquierda (#semanticModelSelector) ya se
-        // rellena en el propio init de taskpane.js (TaskPaneApp), que muy
-        // probablemente termina ANTES que este bootstrap (que depende de
-        // red). Se vuelve a poblar aquí para que, en cuanto lleguen los
-        // modelos, aparezcan sin recargar nada.
         if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.populateModelSelectorMain) {
             await TaskPaneApp.populateModelSelectorMain();
         }
@@ -130,13 +169,16 @@
     // algo en el host, falla la consulta de cubos...) — este wrapper
     // garantiza que, pase lo que pase, se avisa a Office.onReady (ver
     // host-bridge.js) de que ya puede arrancar taskpane.js/commands.js,
-    // para no dejar el taskpane colgado esperando indefinidamente.
+    // para no dejar el taskpane colgado esperando indefinidamente. Como
+    // ahora bootstrapInner ya no depende de red salvo por, como mucho, UN
+    // cubo, esto debería resolverse siempre muy rápido.
     async function bootstrap() {
         try {
             await bootstrapInner();
         } catch (err) {
             console.error("lkml-bootstrap: error inesperado:", err);
         } finally {
+            patchModelSelectorChange(); // por si bootstrapInner falló antes de llegar a parchear
             if (window.__wteSignalModelsReady) window.__wteSignalModelsReady();
         }
     }

@@ -59,7 +59,7 @@
     // no dejar la página colgada para siempre.
     window.__wteModelsReadyPromise = new Promise((resolve) => {
         window.__wteSignalModelsReady = resolve;
-        setTimeout(resolve, 4000);
+        setTimeout(resolve, 6000); // margen sobrado: como mucho hay UNA petición de red (el cubo ya activo, si lo hay)
     });
 
     // Si esta página se cargó como diálogo hijo (ver displayDialogAsync más
