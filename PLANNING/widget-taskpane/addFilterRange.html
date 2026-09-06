@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Añadir filtro</title>
+    <script src="js/host-bridge.js?v=20260906b"></script>
+    <link rel="stylesheet" href="css/theme.css?v=20260906a">
+    <link rel="stylesheet" href="css/lkmlDialog.css?v=20260906a">
+    <style>
+        #addFilterStatus { font-size: 11.5px; color: #64748b; margin-top: 6px; min-height: 14px; }
+        #addFilterStatus.error { color: #c0392b; }
+    </style>
+</head>
+<body>
+
+    <div class="dialog-page">
+
+        <div class="dialog-header">
+            <h3>Añadir filtro</h3>
+            <span class="dialog-subtitle">Crea un rango con nombre sobre la celda seleccionada en Excel para un filtro de dimensión/jerarquía + informe</span>
+        </div>
+
+        <div class="dialog-body">
+
+            <label class="lkml-field-label" for="addFilterDimension">Dimensión / campo</label>
+            <select class="lkml-select" id="addFilterDimension" disabled>
+                <option value="">Cargando…</option>
+            </select>
+
+            <label class="lkml-field-label" for="addFilterReport">Informe</label>
+            <select class="lkml-select" id="addFilterReport" disabled></select>
+
+            <div id="addFilterStatus"></div>
+        </div>
+
+        <div class="lkml-modal-footer">
+            <button type="button" class="icon-btn" id="btnCancelAddFilterRange">Cancelar</button>
+            <button type="button" class="btn-generate" id="btnConfirmAddFilterRange" disabled>Añadir</button>
+        </div>
+
+    </div>
+
+    <script>
+        /**
+         * Diálogo standalone (Office.context.ui.displayDialogAsync) del botón
+         * de ribbon "Añadir filtro" (ver AnadirFiltroButton en manifest.xml y
+         * abrirAnadirFiltro en js/commands.js). No usa Excel.run ni ninguna
+         * otra API restringida a taskpane/comandos: solo pide al padre
+         * (commands.js, que sí tiene acceso completo a Office.js) la lista de
+         * dimensiones/informes con la que rellenar los <select>, y le
+         * devuelve la elección del usuario para que sea el padre quien cree
+         * el rango con nombre sobre la celda seleccionada. Mismo contrato
+         * ready/apply/cancel que filterDialog.html.
+         */
+        function send(payload) {
+            try {
+                Office.context.ui.messageParent(JSON.stringify(payload));
+            } catch (e) {
+                console.error("[Draco] Añadir filtro: no se pudo comunicar con el add-in:", e);
+            }
+        }
+
+        function updateConfirmState() {
+            const dimSelect = document.getElementById("addFilterDimension");
+            document.getElementById("btnConfirmAddFilterRange").disabled = !dimSelect.value;
+        }
+
+        function populateSelects(dimensions, reports) {
+            const dimSelect = document.getElementById("addFilterDimension");
+            dimSelect.innerHTML = "";
+            (dimensions || []).forEach(dim => {
+                const group = document.createElement("optgroup");
+                group.label = dim.dimension;
+
+                (dim.attributes || []).forEach(attr => {
+                    const opt = document.createElement("option");
+                    opt.value = JSON.stringify({ dim: dim.dimension, name: attr, isHierarchy: false });
+                    opt.textContent = attr;
+                    group.appendChild(opt);
+                });
+                (dim.hierarchies || []).forEach(hier => {
+                    const opt = document.createElement("option");
+                    opt.value = JSON.stringify({ dim: dim.dimension, name: hier, isHierarchy: true });
+                    opt.textContent = `${hier} (jerarquía)`;
+                    group.appendChild(opt);
+                });
+
+                if (group.children.length) dimSelect.appendChild(group);
+            });
+            if (!dimSelect.options.length) {
+                dimSelect.innerHTML = "<option value=\"\">No hay campos disponibles</option>";
+            }
+            dimSelect.disabled = false;
+
+            const reportSelect = document.getElementById("addFilterReport");
+            reportSelect.innerHTML = "";
+            (reports || []).forEach(r => {
+                const opt = document.createElement("option");
+                opt.value = String(r.id);
+                opt.textContent = r.name || `Informe ${r.id}`;
+                reportSelect.appendChild(opt);
+            });
+            const optAll = document.createElement("option");
+            optAll.value = "all";
+            optAll.textContent = "Todos los informes";
+            reportSelect.appendChild(optAll);
+            reportSelect.disabled = false;
+
+            updateConfirmState();
+        }
+
+        function showError(message) {
+            const statusEl = document.getElementById("addFilterStatus");
+            statusEl.textContent = message || "Error al cargar los datos.";
+            statusEl.classList.add("error");
+        }
+
+        function init() {
+            document.getElementById("addFilterDimension").addEventListener("change", updateConfirmState);
+
+            document.getElementById("btnCancelAddFilterRange").addEventListener("click", () => {
+                send({ type: "cancel" });
+            });
+
+            document.getElementById("btnConfirmAddFilterRange").addEventListener("click", () => {
+                const dimSelect = document.getElementById("addFilterDimension");
+                const reportSelect = document.getElementById("addFilterReport");
+                if (!dimSelect.value) return;
+
+                let fieldData;
+                try {
+                    fieldData = JSON.parse(dimSelect.value);
+                } catch (e) {
+                    showError("No se ha podido leer el campo seleccionado.");
+                    return;
+                }
+
+                send({
+                    type: "apply",
+                    fieldData: fieldData,
+                    reportValue: reportSelect ? reportSelect.value : "all"
+                });
+            });
+
+            Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg) => {
+                let payload;
+                try {
+                    payload = JSON.parse(arg.message);
+                } catch (e) {
+                    return;
+                }
+
+                if (payload.type === "data") {
+                    populateSelects(payload.dimensions, payload.reports);
+                } else if (payload.type === "error") {
+                    showError(payload.message);
+                }
+            });
+
+            send({ type: "ready" });
+        }
+
+        Office.onReady(init);
+    </script>
+</body>
+</html>
