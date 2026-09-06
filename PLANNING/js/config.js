@@ -128,3 +128,5 @@ const DracoConfig = {
         token: ""
     }
 };
+
+window.DracoConfig = DracoConfig;

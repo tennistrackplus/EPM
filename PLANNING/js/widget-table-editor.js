@@ -1254,6 +1254,17 @@ const WidgetTableEditor = {
             this.dragging = true;
         }
         this.renderGrid();
+        this.fireTaskpaneEvent("onSelectionChanged", r, c);
+        this.fireTaskpaneEvent("onSingleClicked", r, c);
+    },
+
+    // Dispara, dentro del iframe del taskpane (ver widget-taskpane/js/host-bridge.js),
+    // los eventos de hoja de Excel de los que depende el reconocimiento de
+    // miembros y el expandir/contraer con clic. No hace nada si el panel
+    // "☰ Informe" no está abierto (no hay iframe al que avisar).
+    fireTaskpaneEvent(type, r, c) {
+        const win = this._taskpaneFrame && this._taskpaneFrame.contentWindow;
+        if (win && typeof win.__fireExcelEvent === "function") win.__fireExcelEvent(type, r, c);
     },
 
     onCellMouseEnter(r, c) {
@@ -1293,7 +1304,7 @@ const WidgetTableEditor = {
             this.state.cells[this.cellKey(r, c)].v = "";
         }
         this.editingCell = null;
-        if (typeof WidgetPivot !== "undefined" && WidgetPivot.onCellCommitted) WidgetPivot.onCellCommitted(r, c);
+        this.fireTaskpaneEvent("onChanged", r, c);
         this.renderGrid();
     },
 
@@ -1318,6 +1329,7 @@ const WidgetTableEditor = {
                 this.selection = { r1: anchor.r, c1: anchor.c, r2: anchor.r, c2: anchor.c };
             }
             this.scrollCellIntoView(this.selection.r2, this.selection.c2);
+            this.fireTaskpaneEvent("onSelectionChanged", this.selection.r2, this.selection.c2);
             return;
         }
         if (e.key === "Tab") {

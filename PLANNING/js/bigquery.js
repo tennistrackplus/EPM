@@ -253,3 +253,5 @@ const BQ = {
         return cache.promise;
     }
 };
+
+window.BQ = BQ;
