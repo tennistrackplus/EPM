@@ -320,3 +320,5 @@ const SemanticModel = {
         }
     }
 };
+
+window.SemanticModel = SemanticModel;

@@ -1375,3 +1375,5 @@ const WidgetTableEditor = {
         }
     }
 };
+
+window.WidgetTableEditor = WidgetTableEditor;

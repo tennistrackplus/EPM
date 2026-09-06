@@ -158,3 +158,4 @@ const LkmlParse = {
 };
 
 if (typeof module !== "undefined" && module.exports) module.exports = LkmlParse;
+if (typeof window !== "undefined") window.LkmlParse = LkmlParse;

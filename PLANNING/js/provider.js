@@ -200,3 +200,5 @@ const Provider = {
         return { created: false, added: toAdd.map(f => f.name), dropped: toDrop.map(c => c.name) };
     }
 };
+
+window.Provider = Provider;

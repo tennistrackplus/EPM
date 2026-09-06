@@ -129,3 +129,5 @@ const GithubRepo = {
         return decodeURIComponent(escape(atob(data.content.replace(/\n/g, ""))));
     }
 };
+
+window.GithubRepo = GithubRepo;
