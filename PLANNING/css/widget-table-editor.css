@@ -236,7 +236,8 @@
     cursor: row-resize !important;
 }
 
-#wteToggleReport.active {
+#wteToggleReport.active,
+#wteRecognition.active {
     background: var(--brand-primary-light);
     border-color: var(--brand-primary);
     color: var(--brand-primary-hover);

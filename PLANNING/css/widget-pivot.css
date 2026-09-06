@@ -1,168 +1,271 @@
-/* ---------- Panel de Informe (pivot) del editor de widgets ---------- */
-.wte-report-panel {
-    width: 0;
-    flex-shrink: 0;
-    overflow: hidden;
-    border-left: 1px solid var(--border-default);
-    background: var(--surface-sunken);
-    transition: width 0.15s ease;
-}
-
+/* ==========================================================
+   Panel de Informe — mismas clases que ADDIN/src/css/styles.css
+   (taskpane.html), embebido dentro de wte-report-panel en vez de
+   ocupar toda la ventana.
+   ========================================================== */
 .wte-report-panel.visible {
-    width: 280px;
-    overflow-y: auto;
-}
-
-.wtp-panel {
-    padding: 12px;
+    width: 420px;
     display: flex;
     flex-direction: column;
-    gap: 12px;
 }
 
-.wtp-label {
-    display: block;
-    font-size: var(--fs-sm);
-    font-weight: 600;
-    color: var(--text-secondary);
-    margin-bottom: 4px;
+.wtp-embedded {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.wtp-embedded .taskpane-body {
+    display: flex;
+    flex: 1;
+    gap: 10px;
+    min-height: 0;
+    padding: 10px;
 }
 
 .wtp-select {
     width: 100%;
-    height: 32px;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    padding: 0 6px;
-    background: var(--surface-card);
-    font-size: var(--fs-sm);
-}
-
-.wtp-ribbon {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
-
-.wtp-ribbon-btn {
-    flex: 1;
-    min-width: 78px;
-    border: 1px solid var(--border-subtle);
-    background: var(--surface-card);
-    border-radius: var(--radius-sm);
-    padding: 6px 4px;
-    font-size: 10.5px;
-    cursor: pointer;
-    color: var(--text-secondary);
-}
-
-.wtp-ribbon-btn:hover {
-    background: var(--brand-primary-light);
-    color: var(--brand-primary-hover);
-}
-
-.wtp-ribbon-btn.active {
-    background: var(--brand-primary-light);
-    border-color: var(--brand-primary);
-    color: var(--brand-primary-hover);
-}
-
-.wtp-dropzone {
-    border: 1px dashed var(--border-default);
-    border-radius: var(--radius-sm);
-    padding: 8px;
-    background: var(--surface-card);
-}
-
-.wtp-dropzone.wtp-drop-over {
-    border-color: var(--brand-primary);
-    background: var(--brand-primary-light);
-}
-
-.wtp-zone-body {
-    min-height: 26px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
-
-.wtp-drop-hint,
-.wtp-empty-hint {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-    font-style: italic;
-}
-
-.wtp-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    background: var(--brand-primary-light);
-    color: var(--brand-primary-hover);
-    border-radius: 999px;
-    padding: 3px 8px;
-    font-size: var(--fs-sm);
-    flex-wrap: wrap;
-}
-
-.wtp-chip-field {
-    flex-direction: column;
-    align-items: flex-start;
-    border-radius: var(--radius-sm);
+    margin-bottom: 6px;
     padding: 6px 8px;
+    font-size: var(--fs-sm, 12px);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--surface-card);
+}
+
+/* ---- Panel izquierdo: catálogo de campos (copiado de styles.css) ---- */
+.fields-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    padding: 8px;
+    min-width: 150px;
+}
+
+.search-input-wrapper {
+    position: relative;
+    margin-bottom: 8px;
+    flex-shrink: 0;
+}
+
+.search-icon {
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.search-input-wrapper input {
     width: 100%;
     box-sizing: border-box;
-    gap: 4px;
+    padding: 6px 8px 6px 26px;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    font-size: var(--fs-base, 12.5px);
+    outline: none;
+    background-color: var(--surface-sunken);
 }
 
-.wtp-chip-x {
-    border: none;
-    background: transparent;
-    color: inherit;
+.search-input-wrapper input:focus {
+    border-color: var(--brand-primary);
+    background-color: var(--surface-card);
+    box-shadow: 0 0 0 3px var(--brand-primary-light);
+}
+
+.fields-tree {
+    flex: 1;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.dimension-group {
+    margin-bottom: 10px;
+}
+
+.dimension-header {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 4px 6px;
+    cursor: pointer;
+    user-select: none;
+    border-radius: var(--radius-sm);
+}
+
+.dimension-header:hover {
+    background-color: var(--brand-primary-light);
+}
+
+.dimension-caret {
+    display: inline-block;
+    width: 10px;
+    font-size: 9px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.dimension-group.collapsed > .field-item {
+    display: none;
+}
+
+.field-item {
+    display: flex;
+    align-items: center;
+    padding: 6px 8px;
+    margin: 1px 0;
+    border-radius: var(--radius-sm);
+    cursor: grab;
+    background-color: transparent;
+    border: 1px solid transparent;
+}
+
+.field-item:hover {
+    background-color: var(--brand-primary-light);
+    border-color: #D7E3FC;
+}
+
+.field-item.dragging {
+    opacity: 0.4;
+}
+
+.field-icon {
+    margin-right: 8px;
+    font-size: var(--fs-sm);
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.field-label {
+    font-size: var(--fs-base, 12.5px);
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ---- Panel derecho: ejes / dropzones (copiado de styles.css) ---- */
+.zones-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 160px;
+}
+
+.zone-card {
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 64px;
+    overflow: hidden;
+}
+
+.zone-card.drag-over {
+    border-color: var(--brand-primary);
+    background-color: var(--brand-primary-light);
+    box-shadow: 0 0 0 3px var(--brand-primary-light);
+}
+
+.zone-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 7px 10px;
+    background-color: var(--surface-sunken);
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+}
+
+.zone-title-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-weight: 700;
+    font-size: var(--fs-sm);
+    color: var(--text-primary);
+    letter-spacing: 0.2px;
+}
+
+.zone-icon {
+    color: var(--brand-primary);
+    flex-shrink: 0;
+}
+
+.dropzone-content {
+    flex: 1;
+    padding: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 5px;
+    overflow-y: auto;
+}
+
+.dropzone-content:empty::before {
+    content: "Suelta aquí un campo";
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    padding: 4px 2px;
+}
+
+.dropped-tag {
+    background-color: var(--brand-primary);
+    background-image: linear-gradient(160deg, var(--brand-primary) 0%, var(--brand-primary-hover) 100%);
+    color: var(--text-inverse);
+    padding: 4px 6px 4px 10px;
+    border-radius: var(--radius-pill);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    box-shadow: var(--shadow-xs);
+}
+
+.dropped-tag.measure-tag {
+    background-color: var(--brand-accent);
+    background-image: linear-gradient(160deg, var(--brand-accent) 0%, #0E9C71 100%);
+}
+
+.dropped-tag-title {
+    pointer-events: none;
+    white-space: nowrap;
+}
+
+.dropped-tag-remove {
     cursor: pointer;
     font-size: 13px;
     line-height: 1;
-    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    opacity: 0.85;
 }
 
-.wtp-hier-select {
-    width: 100%;
-    height: 26px;
-    font-size: var(--fs-sm);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    background: var(--surface-card);
+.dropped-tag-remove:hover {
+    opacity: 1;
+    background-color: rgba(255, 255, 255, 0.28);
 }
 
-.wtp-fieldlist {
-    border-top: 1px solid var(--border-default);
-    padding-top: 8px;
-}
-
-.wtp-field-group-title {
-    font-size: var(--fs-sm);
-    font-weight: 600;
-    color: var(--text-muted);
-    margin: 6px 0 4px;
-}
-
-.wtp-field-pill {
-    display: block;
-    padding: 5px 8px;
-    margin-bottom: 4px;
-    background: var(--surface-card);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    font-size: var(--fs-sm);
-    cursor: grab;
-    color: var(--text-secondary);
-}
-
-.wtp-field-pill:hover {
-    border-color: var(--brand-primary);
-    color: var(--brand-primary-hover);
-}
-
+/* ---- Modal de selección (elegir dimensión / miembros de un filtro) ---- */
 .wtp-choice-list {
     max-height: 280px;
     overflow-y: auto;
@@ -181,5 +284,12 @@
 }
 
 .wtp-choice-item:last-child { border-bottom: none; }
-
 .wtp-choice-item:hover { background: var(--surface-sunken); }
+
+.wtp-empty-hint,
+.field-options-empty {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 6px;
+}
