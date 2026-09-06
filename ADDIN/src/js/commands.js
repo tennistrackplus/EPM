@@ -4930,25 +4930,38 @@ async function handleDracoPickerFlagRequest(eventArgs) {
             const targetAddr = String(ctrl.values[0][1] || "").trim();
             const flag = String(ctrl.values[0][2] || "").trim().toUpperCase();
 
+            // Solo se limpia T2:V2 cuando el flag era uno de los que
+            // realmente gestionamos (DC/REC), haya ido bien o mal la
+            // acción. Si el flag no se reconoce (p.ej. todavía no se ha
+            // actualizado el VBA, o alguien ha escrito otra cosa a mano),
+            // NO tocamos nada: se deja tal cual para poder depurarlo.
+            let shouldClear = false;
+
             try {
                 if (sheetName && targetAddr && flag === "DC") {
                     console.log("[Draco] Petición de doble clic simulado desde EDIT_REPORT:", { sheetName, targetAddr });
+                    shouldClear = true;
                     await runDracoSimulatedDoubleClick(context, sheetName, targetAddr);
                 } else if (sheetName && targetAddr && flag === "REC") {
                     console.log("[Draco] Petición de reconocimiento de miembros desde EDIT_REPORT:", { sheetName, targetAddr });
+                    shouldClear = true;
                     await runDracoMemberRecognitionAction(context, sheetName, targetAddr);
                 } else if (flag) {
-                    console.warn("[Draco] EDIT_REPORT!V2 tiene un valor que no es ni \"REC\" ni \"DC\", se ignora y se limpia:", flag);
+                    console.warn("[Draco] EDIT_REPORT!V2 tiene un valor que no es ni \"REC\" ni \"DC\", se ignora SIN limpiar:", flag);
                 }
             } finally {
-                // Se vacía SIEMPRE (haya procedido o no, con o sin error, y
-                // solo cuando el picker -si lo hubo- ya se ha cerrado de
-                // verdad): es lo que evita que el flag se quede puesto.
-                DracoSuppressChangeEvents = true;
-                editReport.getRange(
-                    DRACO_PICKER_SHEET_CELL + ":" + DRACO_PICKER_FLAG_CELL
-                ).clear(Excel.ClearApplyTo.contents);
-                await context.sync();
+                // Se vacía solo si el flag era DC/REC (haya procedido bien
+                // o mal, y solo cuando el picker -si lo hubo- ya se ha
+                // cerrado de verdad): es lo que evita que el flag se quede
+                // puesto tras una petición válida, sin borrar valores que
+                // el add-in no ha llegado a interpretar.
+                if (shouldClear) {
+                    DracoSuppressChangeEvents = true;
+                    editReport.getRange(
+                        DRACO_PICKER_SHEET_CELL + ":" + DRACO_PICKER_FLAG_CELL
+                    ).clear(Excel.ClearApplyTo.contents);
+                    await context.sync();
+                }
             }
         });
     } catch (e) {
