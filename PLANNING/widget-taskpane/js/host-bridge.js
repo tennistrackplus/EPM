@@ -213,11 +213,31 @@
                     getItem(edge) {
                         const map = { EdgeTop: "bt", EdgeRight: "br", EdgeBottom: "bb", EdgeLeft: "bl" };
                         const key = map[edge];
+                        // Antes .color/.weight eran valores fijos que no se
+                        // guardaban en ningún sitio: cualquier borde salía
+                        // siempre igual (2px, oscuro), sin importar lo que
+                        // pidiera commands.js — de ahí los "bordes gruesos".
+                        // Ahora cada borde guarda {style,color,weight} por
+                        // celda (ver borderCss() en widget-table-editor.js).
+                        function current() {
+                            const b = key && collectStyleFlags()[key];
+                            return (b && typeof b === "object") ? b : null;
+                        }
+                        function update(patch) {
+                            if (!key) return;
+                            forEachCell((r, c) => {
+                                const existing = getCellObj(r, c)[key];
+                                const base = (existing && typeof existing === "object") ? existing : { style: "continuous", color: "#1a1f2b", weight: "Thin" };
+                                writeCellObj(r, c, undefined, { [key]: Object.assign({}, base, patch) });
+                            });
+                        }
                         return {
-                            get style() { return key && collectStyleFlags()[key] ? "Continuous" : "None"; },
-                            set style(v) { if (key) forEachCell((r, c) => writeCellObj(r, c, undefined, { [key]: (v && v !== "None") ? 1 : 0 })); },
-                            color: "#000000",
-                            weight: "Thin"
+                            get style() { const b = current(); return b && b.style === "continuous" ? "Continuous" : "None"; },
+                            set style(v) { update({ style: (v && v !== "None") ? "continuous" : "none" }); },
+                            get color() { const b = current(); return (b && b.color) || "#1a1f2b"; },
+                            set color(v) { update({ color: v }); },
+                            get weight() { const b = current(); return (b && b.weight) || "Thin"; },
+                            set weight(v) { update({ weight: v }); }
                         };
                     }
                 },
