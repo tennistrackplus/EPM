@@ -108,6 +108,8 @@
             rowCount: r2 - r1 + 1,
             columnCount: c2 - c1 + 1,
 
+            get worksheet() { return makeWorksheet("Hoja1"); },
+
             get values() {
                 const out = [];
                 for (let r = r1; r <= r2; r++) {
@@ -128,6 +130,14 @@
             },
 
             numberFormat: undefined, // no se usa (los valores ya se formatean como texto antes de escribir)
+
+            get formulas() {
+                // No implementamos fórmulas EPM_VALUE reales: se devuelve el
+                // mismo texto que .values, así el patrón /^=\s*EPM_VALUE\(/i
+                // que usa el add-in para detectar "ya está resuelta" da
+                // siempre falso y el reconocimiento de miembros puede seguir.
+                return range.values;
+            },
 
             format: {
                 font: {
@@ -209,6 +219,10 @@
     }
 
     const namesApi = {
+        load() { return this; },
+        get items() {
+            return Object.keys(namedRangesStore()).map(name => ({ name }));
+        },
         getItem(name) {
             const stored = namedRangesStore()[name];
             if (!stored) throw new Error(`host-bridge: nombre definido "${name}" no existe.`);
@@ -230,10 +244,46 @@
     // ------------------------------------------------------------
     // Hoja de cálculo (fake) — solo hay UNA "hoja", la rejilla del widget.
     // ------------------------------------------------------------
+    // ------------------------------------------------------------
+    // Eventos de hoja (onChanged / onSelectionChanged / onSingleClicked).
+    // El add-in real los usa para el reconocimiento de miembros (onChanged
+    // al confirmar un valor tecleado, onSelectionChanged al entrar en una
+    // celda vacía) y para expandir/contraer jerarquías con un clic
+    // (onSingleClicked). Aquí se disparan desde WidgetTableEditor (ver
+    // fireTaskpaneEvent en widget-table-editor.js) a través de
+    // window.__fireExcelEvent, expuesta más abajo.
+    // ------------------------------------------------------------
+    const eventHandlers = { onChanged: [], onSelectionChanged: [], onSingleClicked: [] };
+
+    function makeEventApi(type) {
+        return {
+            add(handler) { eventHandlers[type].push(handler); return { remove: () => {} }; },
+            remove(handler) { eventHandlers[type] = eventHandlers[type].filter(h => h !== handler); }
+        };
+    }
+
+    window.__fireExcelEvent = function (type, r, c) {
+        const address = addressFor(r, c, r, c);
+        const args = { address, worksheetId: "Hoja1", source: "Draco" };
+        (eventHandlers[type] || []).slice().forEach(handler => {
+            try {
+                const result = handler(args);
+                if (result && typeof result.catch === "function") result.catch(err => console.error(`host-bridge: error en handler de ${type}:`, err));
+            } catch (err) {
+                console.error(`host-bridge: error en handler de ${type}:`, err);
+            }
+        });
+    };
+
     function makeWorksheet(name) {
         const editor = host();
         return {
             name: name || "Hoja1",
+            load() { return this; },
+            onChanged: makeEventApi("onChanged"),
+            onSelectionChanged: makeEventApi("onSelectionChanged"),
+            onSingleClicked: makeEventApi("onSingleClicked"),
+            comments: { load() {}, items: [] },
             getRange(address) {
                 if (!address) return makeRange(0, 0, editor.state.rows - 1, editor.state.cols - 1);
                 const a = parseAddress(address);
@@ -263,6 +313,8 @@
     }
 
     const worksheetsApi = {
+        load() { return this; },
+        get items() { return [makeWorksheet("Hoja1")]; },
         getActiveWorksheet() { return makeWorksheet("Hoja1"); },
         getItem(name) { return makeWorksheet(name); },
         getItemOrNullObject(name) { return Object.assign({ isNullObject: false }, makeWorksheet(name)); },

@@ -74,6 +74,21 @@
             return;
         }
 
+        // El PAT de GitHub no vive en DracoConfig.semanticModelGithub.token
+        // (config.js) — se lee de Google Secret Manager, igual que hace
+        // SemanticModel.generateAndPushLkml() justo antes de subir el
+        // .lkml. Se pide una sola vez aquí y se reutiliza para todos los
+        // cubos del bucle.
+        let repoConfig = null;
+        try {
+            const cfg = (typeof host.DracoConfig !== "undefined" && host.DracoConfig.semanticModelGithub) || {};
+            const token = await host.BQ.getGithubPatFromSecretManager();
+            repoConfig = { url: cfg.url, branch: cfg.branch, token };
+        } catch (err) {
+            console.error("lkml-bootstrap: no se pudo obtener el token de GitHub desde Secret Manager:", err);
+            return;
+        }
+
         const report = host.WidgetTableEditor.state.report || {};
         let activeName = null;
 
@@ -86,7 +101,7 @@
             if (!path) continue;
 
             try {
-                const text = await host.GithubRepo.getFile(path);
+                const text = await host.GithubRepo.getFile(path, repoConfig);
                 if (text === null) { console.warn(`lkml-bootstrap: no existe ${path} para el cubo "${cube.CUBOS}".`); continue; }
                 const lkmlModel = host.LkmlParse.parse(text);
                 const model = lkmlToSemanticModel(lkmlModel);
