@@ -1,4 +1,4 @@
-/* ---------- Editor de widget tipo Tabla (estilo Excel) ---------- */
+/* ---------- Editor de widget tipo Tabla (estilo Excel, virtualizado) ---------- */
 .wte-toolbar {
     display: flex;
     align-items: center;
@@ -31,6 +31,12 @@
 
 .wte-toolbar-spacer { flex: 1; }
 
+.wte-toolbar-hint {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    padding: 0 4px;
+}
+
 .wte-color-label {
     position: relative;
     display: inline-flex;
@@ -53,66 +59,164 @@
     cursor: pointer;
 }
 
+/* ---------- Layout: corner + col headers | row headers + body (scroll) ---------- */
 .wte-grid-wrap {
     flex: 1;
     min-height: 0;
-    overflow: auto;
-    background: var(--gray-50);
-    padding: 12px;
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
+    background: var(--surface-card);
 }
 
-.wte-table {
-    border-collapse: collapse;
-    background: #fff;
+.wte-grid-main {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     user-select: none;
 }
 
-.wte-table th,
-.wte-table td {
-    box-sizing: border-box;
+.wte-headrow {
+    display: flex;
+    flex-shrink: 0;
 }
 
 .wte-corner {
-    width: 40px;
+    flex-shrink: 0;
+    width: 50px;
+    height: 26px;
     background: var(--surface-sunken);
-    border: 1px solid var(--border-default);
+    border-right: 1px solid var(--border-default);
+    border-bottom: 1px solid var(--border-default);
 }
 
-.wte-colhead,
-.wte-rowhead {
+.wte-colhead-clip {
+    flex: 1;
+    min-width: 0;
+    height: 26px;
+    overflow: hidden;
+    position: relative;
     background: var(--surface-sunken);
-    border: 1px solid var(--border-default);
-    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-default);
+}
+
+.wte-colhead-track {
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+}
+
+.wte-colhead-cell {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    box-sizing: border-box;
+    border-right: 1px solid var(--border-default);
+    display: flex;
+    align-items: center;
+    justify-content: center;
     font-size: var(--fs-sm);
     font-weight: 600;
-    text-align: center;
+    color: var(--text-muted);
     cursor: pointer;
-    position: sticky;
-    z-index: 1;
 }
 
-.wte-colhead {
-    top: 0;
-}
-
-.wte-rowhead {
-    left: 0;
-    width: 40px;
-}
-
-.wte-colhead:hover,
-.wte-rowhead:hover {
+.wte-colhead-cell:hover,
+.wte-colhead-cell.wte-head-selected {
     background: var(--brand-primary-light);
     color: var(--brand-primary-hover);
 }
 
+.wte-resize-col {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 3;
+}
+
+.wte-bodyrow {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+}
+
+.wte-rowhead-clip {
+    flex-shrink: 0;
+    width: 50px;
+    overflow: hidden;
+    position: relative;
+    background: var(--surface-sunken);
+    border-right: 1px solid var(--border-default);
+}
+
+.wte-rowhead-track {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+}
+
+.wte-rowhead-cell {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    box-sizing: border-box;
+    border-bottom: 1px solid var(--border-default);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--fs-sm);
+    font-weight: 600;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+
+.wte-rowhead-cell:hover,
+.wte-rowhead-cell.wte-head-selected {
+    background: var(--brand-primary-light);
+    color: var(--brand-primary-hover);
+}
+
+.wte-resize-row {
+    position: absolute;
+    left: 0;
+    bottom: -3px;
+    height: 6px;
+    width: 100%;
+    cursor: row-resize;
+    z-index: 3;
+}
+
+.wte-body-scroll {
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    overflow: auto;
+    position: relative;
+    background: var(--gray-50);
+}
+
+.wte-body-canvas {
+    position: relative;
+}
+
 .wte-cell {
+    position: absolute;
+    box-sizing: border-box;
     padding: 3px 6px;
     white-space: pre-wrap;
     word-break: break-word;
+    overflow: hidden;
     cursor: cell;
     outline: none;
-    vertical-align: middle;
+    background: #ffffff;
 }
 
 .wte-cell-selected {
@@ -121,4 +225,31 @@
 
 .wte-cell-anchor {
     box-shadow: inset 0 0 0 2px var(--brand-primary);
+    z-index: 2;
+}
+
+.wte-resizing {
+    cursor: col-resize !important;
+}
+
+.wte-resizing-row {
+    cursor: row-resize !important;
+}
+
+#wteToggleReport.active {
+    background: var(--brand-primary-light);
+    border-color: var(--brand-primary);
+    color: var(--brand-primary-hover);
+}
+
+.wte-pivot-toggle {
+    display: inline-block;
+    width: 14px;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+.wte-cell-pivot-head {
+    font-weight: 600;
 }
