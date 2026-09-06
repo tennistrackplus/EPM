@@ -2319,10 +2319,83 @@ let DracoSuppressChangeEvents = false; // true mientras jsonTo3Matrices pinta ce
 // true mientras ya hay un diálogo de "buscador de miembros" abierto. Hay
 // DOS sistemas independientes que pueden llegar a abrir este picker para
 // el MISMO clic (handleDracoRowsSingleClick por doble clic, y
-// handleDracoMemberRecognitionSelection por simple selección de una
-// celda vacía con el "reconocimiento de miembros" activado) — este
-// candado evita que se abran dos diálogos a la vez para un mismo clic.
+// handleDracoMemberRecognitionChanged por reconocimiento de miembros al
+// teclear) — este candado evita que se abran dos diálogos a la vez para
+// un mismo clic.
+//
+// OJO: este flag SOLO protege dentro del runtime JS en el que vive esta
+// copia de commands.js. Este complemento no usa Shared Runtime: commands.
+// html (los botones del ribbon, p.ej. "Actualizar") y taskpane.html (el
+// panel) son DOS procesos/motores JS completamente separados, y cada uno
+// carga su PROPIA copia de este fichero con sus PROPIAS variables (ver
+// también el comentario sobre Office.context.document.settings más abajo,
+// en isDracoMemberRecognitionActive). Si el panel está abierto Y el
+// usuario pulsa "Actualizar" en el ribbon, AMBOS runtimes acaban
+// registrando los mismos listeners de la hoja (registerDracoSelectionHandler
+// se llama tanto desde ensureDracoHandlersRegistered — TaskPaneApp.init —
+// como desde el refresco del informe, que corre en el runtime del
+// ribbon), y Excel notifica a los DOS por igual: un mismo cambio de celda
+// dispara handleDracoMemberRecognitionChanged en los dos procesos a la
+// vez, cada uno con su propio DracoMemberPickerOpen en `false`, así que
+// los dos pueden llegar a abrir su propio diálogo. Por eso
+// tryClaimDracoPickerLock/releaseDracoPickerLock (ver más abajo) añaden,
+// ADEMÁS de este flag local, un candado real en la propia hoja
+// (EDIT_REPORT!Z1) que sí es visible para ambos runtimes.
 let DracoMemberPickerOpen = false;
+
+// Candado de apertura del picker visible entre runtimes (ver comentario
+// de arriba): se reserva escribiendo un timestamp en EDIT_REPORT!Z1. Si
+// ya hay un timestamp reciente (menos de DRACO_PICKER_LOCK_TTL_MS) se
+// entiende que OTRO runtime ya está abriendo el picker ahora mismo y esta
+// petición se ignora. El TTL evita que un runtime que muriera a mitad de
+// apertura (p.ej. commands.html descargado por Office tras terminar el
+// comando) deje el candado bloqueado para siempre.
+const DRACO_PICKER_LOCK_CELL = "Z1";
+const DRACO_PICKER_LOCK_TTL_MS = 4000;
+
+async function tryClaimDracoPickerLock() {
+    try {
+        return await Excel.run(async (context) => {
+            const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+            editReport.load("isNullObject");
+            await context.sync();
+            if (editReport.isNullObject) return true; // sin EDIT_REPORT no hay dónde comprobar el candado: se deja pasar
+
+            const cell = editReport.getRange(DRACO_PICKER_LOCK_CELL);
+            cell.load("values");
+            await context.sync();
+
+            const raw = String((cell.values && cell.values[0] && cell.values[0][0]) || "").trim();
+            const prevTs = Number(raw);
+            const now = Date.now();
+            if (raw && !isNaN(prevTs) && (now - prevTs) < DRACO_PICKER_LOCK_TTL_MS) {
+                return false; // otro runtime ya está abriendo el picker ahora mismo
+            }
+
+            cell.values = [[String(now)]];
+            await context.sync();
+            return true;
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo comprobar/reservar el candado cruzado del picker (se continúa sin él):", e);
+        return true; // un fallo aquí no debe bloquear el picker
+    }
+}
+
+async function releaseDracoPickerLock() {
+    try {
+        await Excel.run(async (context) => {
+            const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+            editReport.load("isNullObject");
+            await context.sync();
+            if (editReport.isNullObject) return;
+            editReport.getRange(DRACO_PICKER_LOCK_CELL).values = [[""]];
+            await context.sync();
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo liberar el candado cruzado del picker:", e);
+    }
+}
 
 // Firma del eje = lista de "DIMENSION.ATRIBUTO:NIVEL" de sus campos, en
 // orden. Si cambia (se añade/quita/reordena un campo en ESE eje), se
@@ -2841,30 +2914,6 @@ async function resolveDracoFieldForAxisLevel(context, reportId, axis, level, ind
  *     usuario ha pegado una celda de este tipo): así se evita reabrir el
  *     buscador en bucle.
  */
-// TEMPORAL: traza de depuración en D60 de la propia hoja donde se ha
-// escrito, para poder ver en Excel de escritorio (sin F12) por qué el
-// reconocimiento de miembros no abre el picker al teclear un valor.
-// Escribe SIEMPRE con DracoSuppressChangeEvents activo (para no
-// reprocesar el propio volcado como si fuera un cambio de valor) y nunca
-// deja que un fallo al escribir la traza tumbe la función.
-async function dracoWriteRecognitionTrace(worksheetId, text) {
-    try {
-        DracoSuppressChangeEvents = true;
-        await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItemOrNullObject(worksheetId);
-            sheet.load("isNullObject");
-            await context.sync();
-            if (sheet.isNullObject) return;
-            sheet.getRange("D60").values = [[`[${new Date().toLocaleTimeString()}] ${text}`]];
-            await context.sync();
-        });
-    } catch (e) {
-        console.error("[Draco] No se pudo escribir la traza en D60:", e);
-    } finally {
-        DracoSuppressChangeEvents = false;
-    }
-}
-
 // El botón "Reconocimiento de miembros" corre en el runtime SEPARADO de
 // los comandos del ribbon (este manifest no usa Shared Runtime, es un
 // FunctionFile clásico: commands.html y taskpane.html son dos procesos
@@ -2905,25 +2954,14 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
 
     // Descarta de entrada (sin ni siquiera abrir Excel.run) las celdas de
     // la columna A que usa handleDracoRowsSingleClick para volcar su
-    // traza de depuración (A50:A60), y D60 (la traza de ESTA función, ver
-    // dracoWriteRecognitionTrace): cada clic —doble o no— escribe ahí, y
-    // como es un cambio de celda "de verdad" (no pasa por
-    // DracoSuppressChangeEvents en el caso de A50:A60), sin este filtro
-    // podía interpretarse como un valor tecleado y abrir un SEGUNDO
-    // picker además del que ya abre el propio doble clic.
+    // traza de depuración (A50:A58): cada clic —doble o no— escribe ahí,
+    // y como es un cambio de celda "de verdad" (no pasa por
+    // DracoSuppressChangeEvents), sin este filtro podía interpretarse
+    // como un valor tecleado y abrir un SEGUNDO picker además del que ya
+    // abre el propio doble clic.
     const addrMatch = /^\$?([A-Z]+)\$?(\d+)$/i.exec(addr.split(":")[0]);
-    const isTraceOrLogCell = !!(addrMatch && (
-        (addrMatch[1].toUpperCase() === "A" && Number(addrMatch[2]) >= 50 && Number(addrMatch[2]) <= 60) ||
-        (addrMatch[1].toUpperCase() === "D" && Number(addrMatch[2]) === 60)
-    ));
-
-    // TEMPORAL: traza incondicional de "el handler se ha disparado",
-    // ANTES de comprobar DracoSuppressChangeEvents — así se puede ver en
-    // D60 si onChanged está llegando siquiera a esta función, o si el
-    // problema es que el flag global lleva rato atascado en `true`.
-    if (!isTraceOrLogCell && addr && worksheetId) {
-        await dracoWriteRecognitionTrace(worksheetId, `onChanged disparado en ${addr} | DracoSuppressChangeEvents=${DracoSuppressChangeEvents}`);
-    }
+    const isTraceOrLogCell = !!(addrMatch && addrMatch[1].toUpperCase() === "A"
+        && Number(addrMatch[2]) >= 50 && Number(addrMatch[2]) <= 58);
 
     try {
         if (DracoSuppressChangeEvents) {
@@ -2936,12 +2974,10 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
 
         const recognitionActive = await Excel.run(async (context) => isDracoMemberRecognitionActive(context));
         if (!recognitionActive) {
-            await dracoWriteRecognitionTrace(worksheetId, `Cambio en celda ${addr} | Reconocimiento DESACTIVADO (EDIT_REPORT!B1), se ignora.`);
             return;
         }
 
         console.log("[Draco] onChanged: reconocimiento de miembros activo, evaluando celda", addr);
-        await dracoWriteRecognitionTrace(worksheetId, `Cambio en celda ${addr} | Reconocimiento activo, evaluando...`);
 
         let located = null;
         let fieldLocated = null;
@@ -2993,9 +3029,8 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
             }
         });
 
-        console.log("[Draco] onChanged: resultado ->", located, fieldLocated);
+        console.log("[Draco] onChanged: resultado ->", located, fieldLocated, "| motivo:", motivo);
         if (!located || !fieldLocated) {
-            await dracoWriteRecognitionTrace(worksheetId, `Cambio en celda ${addr} | Reconocimiento activo | NO se abre picker: ${motivo}`);
             return;
         }
 
@@ -3006,16 +3041,10 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
         fieldLocated.reportId = located.reportId;
         fieldLocated.growth = located.growth || null;
 
-        await dracoWriteRecognitionTrace(worksheetId, `Cambio en celda ${addr} | Reconocimiento activo | Abriendo picker (${fieldLocated.dim} / ${fieldLocated.attr})...`);
+        console.log(`[Draco] onChanged: reconocimiento activo, abriendo picker (${fieldLocated.dim} / ${fieldLocated.attr})...`);
         await openMemberRecognitionPicker(addr, fieldLocated, currentText);
     } catch (e) {
         console.error("Error en el reconocimiento de miembros:", e);
-        try {
-            const worksheetId = eventArgs && eventArgs.worksheetId;
-            if (worksheetId) {
-                await dracoWriteRecognitionTrace(worksheetId, `ERROR en el reconocimiento: ${e && e.message ? e.message : e}`);
-            }
-        } catch (e2) { /* no dejar que el volcado de la traza de error rompa nada */ }
     }
 }
 
@@ -4301,10 +4330,23 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
     console.log("[Draco] openMemberRecognitionPicker: iniciando para", addr, located);
 
     if (DracoMemberPickerOpen) {
-        console.log("[Draco] Ya hay un buscador de miembros abierto: se ignora esta petición duplicada para", addr);
+        console.log("[Draco] Ya hay un buscador de miembros abierto (mismo runtime): se ignora esta petición duplicada para", addr);
         return;
     }
     DracoMemberPickerOpen = true;
+
+    // Candado cruzado entre runtimes (ver comentario junto a
+    // DracoMemberPickerOpen más arriba): si el panel y el ribbon han
+    // registrado ambos los listeners para esta hoja, un mismo cambio
+    // puede llegar aquí desde los DOS procesos casi a la vez. Sin esto,
+    // cada uno vería su propio DracoMemberPickerOpen en `false` y los dos
+    // abrirían diálogo.
+    const lockClaimed = await tryClaimDracoPickerLock();
+    if (!lockClaimed) {
+        console.log("[Draco] Ya se está abriendo el buscador de miembros desde otro proceso del complemento: se ignora esta petición duplicada para", addr);
+        DracoMemberPickerOpen = false;
+        return;
+    }
 
     let items = [];
     try {
@@ -4313,6 +4355,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
         if (!sql) {
             console.warn("[Draco] No se ha podido construir el SQL (dim/attr no reconocidos):", located);
             DracoMemberPickerOpen = false;
+            await releaseDracoPickerLock();
             return;
         }
         const json = await window.ExcelService.executeSQL(sql);
@@ -4321,6 +4364,16 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
     } catch (err) {
         console.error("[Draco] Error obteniendo los valores del picker:", err);
         DracoMemberPickerOpen = false;
+        await releaseDracoPickerLock();
+        return;
+    }
+
+    if (!items || items.length === 0) {
+        // Sin elementos que mostrar, no tiene sentido abrir el diálogo
+        // vacío: el usuario no podría elegir nada de todos modos.
+        console.log("[Draco] La búsqueda de valores no ha devuelto ningún elemento: no se abre el buscador de miembros para", addr);
+        DracoMemberPickerOpen = false;
+        await releaseDracoPickerLock();
         return;
     }
 
@@ -4333,6 +4386,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
         // bloquearía CUALQUIER picker futuro, tecleado o por doble clic).
         console.error("[Draco] No se pudo construir la URL del diálogo del picker:", err);
         DracoMemberPickerOpen = false;
+        await releaseDracoPickerLock();
         return;
     }
     console.log("[Draco] Abriendo diálogo del picker en:", dialogUrl);
@@ -4350,6 +4404,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         asyncResult.error && asyncResult.error.message
                     );
                     DracoMemberPickerOpen = false;
+                    releaseDracoPickerLock();
                     resolve();
                     return;
                 }
@@ -4425,6 +4480,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                             DracoSuppressChangeEvents = false;
                         }
                         DracoMemberPickerOpen = false;
+                        await releaseDracoPickerLock();
                         resolve();
                         return;
                     }
@@ -4434,6 +4490,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         settled = true;
                         closeDialog();
                         DracoMemberPickerOpen = false;
+                        await releaseDracoPickerLock();
                         resolve();
                     }
                 });
@@ -4442,6 +4499,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                     // 12006 = el usuario cerró el diálogo con la X.
                     console.warn("[Draco] DialogEventReceived:", arg.error);
                     DracoMemberPickerOpen = false;
+                    releaseDracoPickerLock();
                     if (!settled) resolve();
                 });
             }
@@ -4455,6 +4513,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
         // Y doble clic) hasta recargar el task pane.
         console.error("[Draco] Error inesperado abriendo el diálogo del picker:", err);
         DracoMemberPickerOpen = false;
+        await releaseDracoPickerLock();
     }
 }
 
@@ -4829,32 +4888,6 @@ async function registerEditReportPickerHandler(context) {
 // reconocimiento de miembros se enganchan POR HOJA, no una sola vez para
 // todo el libro — si no, un segundo informe en otra hoja se quedaba sin
 // clic interactivo (nunca se registraba nada ahí).
-// TEMPORAL — DIAGNÓSTICO PURO: sin ninguna condición (ni reconocimiento
-// activo, ni zonas Filas/Columnas, ni DracoSuppressChangeEvents), escribe
-// en D60 en CUALQUIER cambio de celda de la hoja. Sirve solo para
-// comprobar si onChanged está llegando siquiera a esta hoja; quitar en
-// cuanto se confirme el diagnóstico.
-async function dracoDiagAlwaysTrace(eventArgs) {
-    try {
-        let addr = (eventArgs && eventArgs.address) || "";
-        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
-        const worksheetId = eventArgs && eventArgs.worksheetId;
-        if (!addr || !worksheetId) return;
-        if (/^\$?D\$?60$/i.test(addr.split(":")[0])) return; // evita bucle sobre sí misma
-
-        await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItemOrNullObject(worksheetId);
-            sheet.load("isNullObject");
-            await context.sync();
-            if (sheet.isNullObject) return;
-            sheet.getRange("D60").values = [[`[DIAG ${new Date().toLocaleTimeString()}] onChanged SIN CONDICIONES en ${addr}`]];
-            await context.sync();
-        });
-    } catch (e) {
-        console.error("[Draco][DIAG] Error en traza incondicional:", e);
-    }
-}
-
 async function registerDracoSelectionHandler(context, sheet, sheetName) {
     if (DracoHandlerRegisteredSheets.has(sheetName)) return;
 
@@ -4869,7 +4902,6 @@ async function registerDracoSelectionHandler(context, sheet, sheetName) {
     // sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
     sheet.onSelectionChanged.add(handleDracoRibbonLabelSelection);
     sheet.onChanged.add(handleDracoMemberRecognitionChanged);
-    sheet.onChanged.add(dracoDiagAlwaysTrace); // TEMPORAL: ver comentario arriba
 
     // IMPORTANTE: registerEditReportPickerHandler comparte este mismo
     // `context`/lote. Si algo dentro de ella falla (p.ej. EDIT_REPORT no
@@ -4903,27 +4935,7 @@ async function registerDracoSelectionHandler(context, sheet, sheetName) {
  * previo) no hace nada; el refresco la registrará igualmente cuando
  * pinte la primera tabla.
  */
-let DracoDiagWorkbookHandlerRegistered = false; // TEMPORAL: evita registrar dos veces el diagnóstico a nivel de libro
-
 async function ensureDracoHandlersRegistered() {
-    // TEMPORAL — DIAGNÓSTICO PURO: engancha dracoDiagAlwaysTrace a nivel
-    // de LIBRO ENTERO (worksheets.onChanged, evento de colección), así no
-    // importa en qué hoja se escriba: cualquier cambio en cualquier hoja
-    // debería volcar algo en D60 de esa misma hoja. Quitar junto con
-    // dracoDiagAlwaysTrace en cuanto se confirme el diagnóstico.
-    if (!DracoDiagWorkbookHandlerRegistered) {
-        try {
-            await Excel.run(async (context) => {
-                context.workbook.worksheets.onChanged.add(dracoDiagAlwaysTrace);
-                await context.sync();
-            });
-            DracoDiagWorkbookHandlerRegistered = true;
-            console.log("[Draco][DIAG] Listener de diagnóstico registrado a nivel de LIBRO (todas las hojas).");
-        } catch (e) {
-            console.warn("[Draco][DIAG] No se pudo registrar el listener de diagnóstico a nivel de libro:", e);
-        }
-    }
-
     // El picker de EDIT_REPORT!A5 no depende de que exista CSV_RESULT ni de
     // que se haya refrescado nunca: se intenta registrar siempre, aparte.
     try {
