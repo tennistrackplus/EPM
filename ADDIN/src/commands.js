@@ -2866,32 +2866,40 @@ async function dracoWriteRecognitionTrace(worksheetId, text) {
 }
 
 async function handleDracoMemberRecognitionChanged(eventArgs) {
+    let addr = (eventArgs && eventArgs.address) || "";
+    if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+    const worksheetId = eventArgs && eventArgs.worksheetId;
+
+    // Descarta de entrada (sin ni siquiera abrir Excel.run) las celdas de
+    // la columna A que usa handleDracoRowsSingleClick para volcar su
+    // traza de depuración (A50:A60), y D60 (la traza de ESTA función, ver
+    // dracoWriteRecognitionTrace): cada clic —doble o no— escribe ahí, y
+    // como es un cambio de celda "de verdad" (no pasa por
+    // DracoSuppressChangeEvents en el caso de A50:A60), sin este filtro
+    // podía interpretarse como un valor tecleado y abrir un SEGUNDO
+    // picker además del que ya abre el propio doble clic.
+    const addrMatch = /^\$?([A-Z]+)\$?(\d+)$/i.exec(addr.split(":")[0]);
+    const isTraceOrLogCell = !!(addrMatch && (
+        (addrMatch[1].toUpperCase() === "A" && Number(addrMatch[2]) >= 50 && Number(addrMatch[2]) <= 60) ||
+        (addrMatch[1].toUpperCase() === "D" && Number(addrMatch[2]) === 60)
+    ));
+
+    // TEMPORAL: traza incondicional de "el handler se ha disparado",
+    // ANTES de comprobar DracoSuppressChangeEvents — así se puede ver en
+    // D60 si onChanged está llegando siquiera a esta función, o si el
+    // problema es que el flag global lleva rato atascado en `true`.
+    if (!isTraceOrLogCell && addr && worksheetId) {
+        await dracoWriteRecognitionTrace(worksheetId, `onChanged disparado en ${addr} | DracoSuppressChangeEvents=${DracoSuppressChangeEvents}`);
+    }
+
     try {
         if (DracoSuppressChangeEvents) {
             console.log("[Draco] onChanged ignorado: escritura programática en curso (refresco/pintado).");
             return;
         }
 
-        let addr = (eventArgs && eventArgs.address) || "";
-        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
-        const worksheetId = eventArgs && eventArgs.worksheetId;
         if (!addr || !worksheetId) return;
-
-        // Descarta de entrada (sin ni siquiera abrir Excel.run) las
-        // celdas de la columna A que usa handleDracoRowsSingleClick para
-        // volcar su traza de depuración (A50:A60), y D60 (la traza de
-        // ESTA función, ver dracoWriteRecognitionTrace): cada clic —doble
-        // o no— escribe ahí, y como es un cambio de celda "de verdad" (no
-        // pasa por DracoSuppressChangeEvents en el caso de A50:A60), sin
-        // este filtro podía interpretarse como un valor tecleado y abrir
-        // un SEGUNDO picker además del que ya abre el propio doble clic.
-        const addrMatch = /^\$?([A-Z]+)\$?(\d+)$/i.exec(addr.split(":")[0]);
-        if (addrMatch) {
-            const colLetters = addrMatch[1].toUpperCase();
-            const rowNum = Number(addrMatch[2]);
-            if (colLetters === "A" && rowNum >= 50 && rowNum <= 60) return;
-            if (colLetters === "D" && rowNum === 60) return;
-        }
+        if (isTraceOrLogCell) return;
 
         if (!Office.context.document.settings.get("draco_memberRecognition")) {
             await dracoWriteRecognitionTrace(worksheetId, `Cambio en celda ${addr} | Reconocimiento DESACTIVADO, se ignora.`);
@@ -4752,19 +4760,30 @@ async function handleDracoDoubleClickFlagRequest(eventArgs) {
 async function registerEditReportPickerHandler(context) {
     if (DracoEditReportHandlerRegistered) return;
 
-    const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
-    editReport.load("isNullObject");
-    await context.sync();
+    let editReport;
+    try {
+        editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+        editReport.load("isNullObject");
+        await context.sync();
+    } catch (e) {
+        console.error("[Draco] registerEditReportPickerHandler: fallo comprobando si EDIT_REPORT existe:", e);
+        return;
+    }
 
     if (editReport.isNullObject) {
         console.log("[Draco] registerEditReportPickerHandler: EDIT_REPORT no existe todavía.");
         return;
     }
 
-    editReport.onChanged.add(handleEditReportMemberPickerRequest);
-    editReport.onChanged.add(handleDracoEditReportExpandCollapseRequest);
-    editReport.onChanged.add(handleDracoDoubleClickFlagRequest);
-    await context.sync();
+    try {
+        editReport.onChanged.add(handleEditReportMemberPickerRequest);
+        editReport.onChanged.add(handleDracoEditReportExpandCollapseRequest);
+        editReport.onChanged.add(handleDracoDoubleClickFlagRequest);
+        await context.sync();
+    } catch (e) {
+        console.error("[Draco] registerEditReportPickerHandler: fallo registrando los listeners de EDIT_REPORT:", e);
+        return;
+    }
 
     DracoEditReportHandlerRegistered = true;
     console.log("[Draco] Listeners de EDIT_REPORT!A5 (Member Picker), T1:V1 (expandir/contraer) y T2:V2 (doble clic simulado) registrados.");
@@ -4791,8 +4810,22 @@ async function registerDracoSelectionHandler(context, sheet, sheetName) {
     sheet.onSelectionChanged.add(handleDracoRibbonLabelSelection);
     sheet.onChanged.add(handleDracoMemberRecognitionChanged);
 
-    // NUEVO: petición de apertura del Member Picker desde EDIT_REPORT
-    await registerEditReportPickerHandler(context);
+    // IMPORTANTE: registerEditReportPickerHandler comparte este mismo
+    // `context`/lote. Si algo dentro de ella falla (p.ej. EDIT_REPORT no
+    // accesible en ese instante) y no se captura aquí, la excepción sube
+    // y aborta ESTA función ANTES de su propio `context.sync()` de más
+    // abajo — con lo que el `sheet.onChanged.add(handleDracoMemberRecognitionChanged)`
+    // de dos líneas arriba, que solo estaba en cola y aún no se había
+    // enviado a Excel, se perdería sin ningún error visible (y el
+    // reconocimiento de miembros dejaría de abrir el picker sin motivo
+    // aparente). Se aísla con try/catch para que un fallo del listener de
+    // EDIT_REPORT nunca se lleve por delante el registro, ya
+    // independiente, del reconocimiento de miembros.
+    try {
+        await registerEditReportPickerHandler(context);
+    } catch (e) {
+        console.error("[Draco] No se pudo registrar el listener de EDIT_REPORT (T2:V2/T1:V1/A5); el reconocimiento de miembros se registra igualmente:", e);
+    }
 
     await context.sync();
     DracoHandlerRegisteredSheets.add(sheetName);
