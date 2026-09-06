@@ -2865,6 +2865,39 @@ async function dracoWriteRecognitionTrace(worksheetId, text) {
     }
 }
 
+// El botón "Reconocimiento de miembros" corre en el runtime SEPARADO de
+// los comandos del ribbon (este manifest no usa Shared Runtime, es un
+// FunctionFile clásico: commands.html y taskpane.html son dos procesos
+// JS distintos). Office.context.document.settings es una caché LOCAL de
+// cada runtime, así que cuando toggleMemberRecognition hace
+// settings.set(...) en el runtime del ribbon, el runtime del task pane
+// (donde vive este onChanged) sigue viendo el valor antiguo — de ahí que
+// pareciera que el reconocimiento nunca se activaba de verdad.
+//
+// Por eso writeMemberRecognitionFlagToSheet ya escribía "X"/"" en
+// EDIT_REPORT!B1 al hacer toggle: esa celda SÍ es una fuente de verdad
+// compartida entre ambos runtimes (es el propio documento). Esta función
+// lee de ahí en vez de (o además de) Office.context.document.settings.
+async function isDracoMemberRecognitionActive(context) {
+    try {
+        const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+        editReport.load("isNullObject");
+        await context.sync();
+        if (editReport.isNullObject) {
+            // Sin EDIT_REPORT no hay fuente de verdad en la hoja: se cae
+            // al valor cacheado localmente (mejor que nada).
+            return !!Office.context.document.settings.get("draco_memberRecognition");
+        }
+        const flagCell = editReport.getRange("B1");
+        flagCell.load("values");
+        await context.sync();
+        return String((flagCell.values && flagCell.values[0] && flagCell.values[0][0]) || "").trim().toUpperCase() === "X";
+    } catch (e) {
+        console.warn("[Draco] No se pudo leer EDIT_REPORT!B1 (Reconocimiento de miembros), se usa el valor cacheado:", e);
+        return !!Office.context.document.settings.get("draco_memberRecognition");
+    }
+}
+
 async function handleDracoMemberRecognitionChanged(eventArgs) {
     let addr = (eventArgs && eventArgs.address) || "";
     if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
@@ -2901,8 +2934,9 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
         if (!addr || !worksheetId) return;
         if (isTraceOrLogCell) return;
 
-        if (!Office.context.document.settings.get("draco_memberRecognition")) {
-            await dracoWriteRecognitionTrace(worksheetId, `Cambio en celda ${addr} | Reconocimiento DESACTIVADO, se ignora.`);
+        const recognitionActive = await Excel.run(async (context) => isDracoMemberRecognitionActive(context));
+        if (!recognitionActive) {
+            await dracoWriteRecognitionTrace(worksheetId, `Cambio en celda ${addr} | Reconocimiento DESACTIVADO (EDIT_REPORT!B1), se ignora.`);
             return;
         }
 
