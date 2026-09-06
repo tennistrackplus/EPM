@@ -2947,6 +2947,14 @@ async function isDracoMemberRecognitionActive(context) {
     }
 }
 
+/**
+ * DESACTIVADA — ya no se engancha a ningún onChanged (ver
+ * registerDracoSelectionHandler). Se deja definida tal cual por
+ * referencia/histórico; la misma lógica vive ahora, adaptada para
+ * recibir sheetName+addr en vez de un eventArgs de onChanged, en
+ * runDracoMemberRecognitionAction (más abajo), invocada desde
+ * handleDracoPickerFlagRequest cuando EDIT_REPORT!V2 pasa a "REC".
+ */
 async function handleDracoMemberRecognitionChanged(eventArgs) {
     let addr = (eventArgs && eventArgs.address) || "";
     if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
@@ -3984,7 +3992,7 @@ function detectDracoDoubleClick(worksheetId, addr) {
  * runDracoSimulatedDoubleClick, que dispara este mismo camino cuando el
  * VBA del XLAM cancela un doble clic nativo (Workbook_SheetBeforeDoubleClick
  * + Cancel = True) y lo pide en su lugar rellenando EDIT_REPORT!T2:V2 —
- * ver handleDracoDoubleClickFlagRequest más abajo. En ese caso no hay
+ * ver handleDracoPickerFlagRequest más abajo. En ese caso no hay
  * offsetX/offsetY reales (no es un clic físico capturado por Office.js),
  * así que esa parte de handleDracoRowsSingleClick (icono +/-, "Izquierda"/
  * "Derecha"/"Letra") no aplica y no se replica aquí: solo esta rama, que
@@ -4161,7 +4169,7 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 staticCheckEntered = true;
                 // Lógica sin cambios: ahora vive en runDracoDoubleClickAction
                 // (compartida con el doble clic simulado desde
-                // EDIT_REPORT!T2:V2, ver handleDracoDoubleClickFlagRequest).
+                // EDIT_REPORT!T2:V2, ver handleDracoPickerFlagRequest).
                 const doubleClickResult = await runDracoDoubleClickAction(
                     context, addr, located, cell.format.indentLevel, cellText
                 );
@@ -4245,8 +4253,8 @@ async function ensureDracoRowsClickLoggerRegistered() {
                 // flag EDIT_REPORT!V2 que simula el doble clic real capturado
                 // por el XLAM en VBA) y abría el picker de más, o en la
                 // celda/hoja que no tocaba. runDracoDoubleClickAction sigue
-                // viva: la sigue llamando runDracoSimulatedDoubleClick (vía 4,
-                // handleDracoDoubleClickFlagRequest).
+                // viva: la sigue llamando runDracoSimulatedDoubleClick (vía
+                // handleDracoPickerFlagRequest, con V2="DC").
                 // sheet.onSingleClicked.add(handleDracoRowsSingleClick);
                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
             });
@@ -4741,9 +4749,92 @@ async function handleDracoEditReportExpandCollapseRequest(eventArgs) {
 // 3 celdas y aquí se ejecuta EXACTAMENTE la misma acción que ya hacía el
 // doble clic detectado por clics (runDracoDoubleClickAction, sin ningún
 // cambio de lógica: solo se llama desde un sitio más).
-const DRACO_DOUBLECLICK_SHEET_CELL = "T2"; // hoja donde se pulsó (Sh.Name en VBA)
-const DRACO_DOUBLECLICK_TARGET_CELL = "U2"; // celda pulsada (Target.Address)
-const DRACO_DOUBLECLICK_FLAG_CELL = "V2"; // "X" = simular el doble clic sobre esa celda
+const DRACO_PICKER_SHEET_CELL = "T2"; // hoja donde ocurrió (Sh.Name en VBA)
+const DRACO_PICKER_TARGET_CELL = "U2"; // celda afectada (Target.Address)
+const DRACO_PICKER_FLAG_CELL = "V2"; // "REC" = reconocimiento de miembros (tecleado) | "DC" = doble clic
+
+/**
+ * Ejecuta el reconocimiento de miembros (misma lógica que antes tenía
+ * handleDracoMemberRecognitionChanged al detectar un valor tecleado en
+ * una celda de Draco_XXX_Rows/Cols) sobre sheetName!targetAddr. Ya no
+ * hay ningún onChanged enganchado directamente a las hojas de
+ * resultados para esto: la detección de "se ha tecleado algo" la hace
+ * el XLAM en VBA, que rellena EDIT_REPORT!T2:V2 con V2="REC", igual que
+ * ya hacía para el doble clic con V2="DC" (ver
+ * handleDracoPickerFlagRequest, que llama a esta función).
+ */
+async function runDracoMemberRecognitionAction(context, sheetName, targetAddr) {
+    let addr = String(targetAddr || "");
+    if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+    addr = addr.replace(/\$/g, "").toUpperCase();
+    if (!addr) {
+        console.warn("[Draco] Reconocimiento de miembros: sin celda (EDIT_REPORT!U2 vacío).");
+        return;
+    }
+
+    const recognitionActive = await isDracoMemberRecognitionActive(context);
+    if (!recognitionActive) {
+        console.log("[Draco] Reconocimiento de miembros: EDIT_REPORT!B1 desactivado, se ignora la petición para", sheetName, addr);
+        return;
+    }
+
+    const sheet = context.workbook.worksheets.getItemOrNullObject(sheetName);
+    sheet.load(["isNullObject", "id"]);
+    await context.sync();
+    if (sheet.isNullObject) {
+        console.warn("[Draco] Reconocimiento de miembros: la hoja indicada en EDIT_REPORT!T2 no existe:", sheetName);
+        return;
+    }
+
+    const cell = sheet.getRange(addr);
+    cell.load(["rowCount", "columnCount", "values", "formulas"]);
+    cell.format.load("indentLevel");
+    await context.sync();
+
+    // Varias celdas a la vez (pegado/relleno): se ignora.
+    if (cell.rowCount !== 1 || cell.columnCount !== 1) {
+        console.log("[Draco] Reconocimiento de miembros: varias celdas a la vez (pegado/relleno), se ignora:", sheetName, addr);
+        return;
+    }
+
+    const value = cell.values[0][0];
+    const formula = cell.formulas[0][0];
+    if (value === "" || value === null || value === undefined) {
+        console.log("[Draco] Reconocimiento de miembros: valor vacío, se ignora:", sheetName, addr);
+        return;
+    }
+    // Ya es EPM_VALUE (tecleada, pegada, o escrita por nosotros mismos
+    // hace un instante): salir para no reabrir el buscador en bucle.
+    if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) {
+        console.log("[Draco] Reconocimiento de miembros: la celda ya es una fórmula EPM_VALUE, se ignora:", sheetName, addr);
+        return;
+    }
+    const currentText = String(value);
+
+    const located = await findDracoRowsNamedRangeForCell(context, sheet.id, addr);
+    if (!located) {
+        console.log("[Draco] Reconocimiento de miembros: fuera de cualquier Draco_XXX_Rows/Cols:", sheetName, addr);
+        return;
+    }
+
+    const fieldLocated = await resolveDracoFieldForAxisLevel(
+        context, located.reportId, located.axis, located.level, cell.format.indentLevel
+    );
+    if (!fieldLocated) {
+        console.log(`[Draco] Reconocimiento de miembros: informe ${located.reportId}, eje ${located.axis}, nivel ${located.level} sin dim/attr configurado, se ignora.`);
+        return;
+    }
+
+    // Igual que en el doble clic: se adjunta el reportId realmente
+    // afectado y, si la celda cae en zona de crecimiento (fuera todavía
+    // del rango con nombre real), la info para ampliarlo de verdad en
+    // cuanto se confirme un valor en el picker.
+    fieldLocated.reportId = located.reportId;
+    fieldLocated.growth = located.growth || null;
+
+    console.log(`[Draco] Reconocimiento de miembros: abriendo picker (${fieldLocated.dim} / ${fieldLocated.attr}) para ${sheetName}!${addr}...`);
+    await openMemberRecognitionPicker(addr, fieldLocated, currentText);
+}
 
 /**
  * Ejecuta el equivalente de un doble clic "real" (fuera del icono +/-)
@@ -4788,15 +4879,28 @@ async function runDracoSimulatedDoubleClick(context, sheetName, targetAddr) {
 
 /**
  * Se dispara con onChanged de EDIT_REPORT al tocar T2, U2 o V2 (o un
- * rango que las incluya). Solo actúa si V2 vale exactamente "X" (lo que
- * escribe Workbook_SheetBeforeDoubleClick del XLAM justo antes de poner
- * Cancel = True). Al terminar —haya abierto el picker, haya decidido que
- * no procedía, o haya fallado— SIEMPRE deja T2:V2 vacías (con
- * DracoSuppressChangeEvents activo, para no reaccionar a nuestra propia
- * escritura), así el próximo doble clic puede volver a pedirlo sin
- * quedarse "pegado".
+ * rango que las incluya). Actúa según el valor exacto de V2:
+ *   - "DC"  -> simula un doble clic real sobre T2!U2 (lo que escribe
+ *              Workbook_SheetBeforeDoubleClick del XLAM justo antes de
+ *              poner Cancel = True).
+ *   - "REC" -> reconocimiento de miembros: el XLAM ha detectado que se
+ *              ha tecleado un valor en T2!U2 (Worksheet_Change) y pide
+ *              que se compruebe si toca abrir el buscador.
+ *   - cualquier otro valor (o vacío): no hay ningún picker que abrir
+ *     para él, se limpia igualmente.
+ *
+ * En los casos REC/DC se espera (await) a que
+ * runDracoMemberRecognitionAction/runDracoSimulatedDoubleClick
+ * terminen, y éstas a su vez esperan a que se cierre openMemberRecognitionPicker
+ * (aceptar/cancelar/X) — así el `finally` de aquí abajo, que deja
+ * T2:V2 en blanco, SIEMPRE se ejecuta DESPUÉS de que el picker se haya
+ * cerrado de verdad, y si el cierre fue "Aceptar", con la fórmula
+ * EPM_VALUE ya escrita en la celda (openMemberRecognitionPicker la
+ * escribe y solo entonces resuelve su promesa). Se usa
+ * DracoSuppressChangeEvents al limpiar para no reaccionar a nuestra
+ * propia escritura.
  */
-async function handleDracoDoubleClickFlagRequest(eventArgs) {
+async function handleDracoPickerFlagRequest(eventArgs) {
     try {
         if (DracoSuppressChangeEvents) return;
         if (!eventArgs || !eventArgs.address) return;
@@ -4806,7 +4910,7 @@ async function handleDracoDoubleClickFlagRequest(eventArgs) {
         if (!addr) return;
 
         const touchedRange = parseAddressRange(addr);
-        const controlCells = [DRACO_DOUBLECLICK_SHEET_CELL, DRACO_DOUBLECLICK_TARGET_CELL, DRACO_DOUBLECLICK_FLAG_CELL]
+        const controlCells = [DRACO_PICKER_SHEET_CELL, DRACO_PICKER_TARGET_CELL, DRACO_PICKER_FLAG_CELL]
             .map(parseAddress);
         const touchesControlZone = controlCells.some(p =>
             p.row >= touchedRange.r1 && p.row <= touchedRange.r2 &&
@@ -4817,7 +4921,7 @@ async function handleDracoDoubleClickFlagRequest(eventArgs) {
         await Excel.run(async (context) => {
             const editReport = context.workbook.worksheets.getItem("EDIT_REPORT");
             const ctrl = editReport.getRange(
-                DRACO_DOUBLECLICK_SHEET_CELL + ":" + DRACO_DOUBLECLICK_FLAG_CELL
+                DRACO_PICKER_SHEET_CELL + ":" + DRACO_PICKER_FLAG_CELL
             );
             ctrl.load("values");
             await context.sync();
@@ -4827,22 +4931,28 @@ async function handleDracoDoubleClickFlagRequest(eventArgs) {
             const flag = String(ctrl.values[0][2] || "").trim().toUpperCase();
 
             try {
-                if (sheetName && targetAddr && flag === "X") {
+                if (sheetName && targetAddr && flag === "DC") {
                     console.log("[Draco] Petición de doble clic simulado desde EDIT_REPORT:", { sheetName, targetAddr });
                     await runDracoSimulatedDoubleClick(context, sheetName, targetAddr);
+                } else if (sheetName && targetAddr && flag === "REC") {
+                    console.log("[Draco] Petición de reconocimiento de miembros desde EDIT_REPORT:", { sheetName, targetAddr });
+                    await runDracoMemberRecognitionAction(context, sheetName, targetAddr);
+                } else if (flag) {
+                    console.warn("[Draco] EDIT_REPORT!V2 tiene un valor que no es ni \"REC\" ni \"DC\", se ignora y se limpia:", flag);
                 }
             } finally {
-                // Se vacía SIEMPRE (haya procedido o no, con o sin error):
-                // es lo que evita que el flag se quede puesto.
+                // Se vacía SIEMPRE (haya procedido o no, con o sin error, y
+                // solo cuando el picker -si lo hubo- ya se ha cerrado de
+                // verdad): es lo que evita que el flag se quede puesto.
                 DracoSuppressChangeEvents = true;
                 editReport.getRange(
-                    DRACO_DOUBLECLICK_SHEET_CELL + ":" + DRACO_DOUBLECLICK_FLAG_CELL
+                    DRACO_PICKER_SHEET_CELL + ":" + DRACO_PICKER_FLAG_CELL
                 ).clear(Excel.ClearApplyTo.contents);
                 await context.sync();
             }
         });
     } catch (e) {
-        console.error("[Draco] Error al simular el doble clic desde EDIT_REPORT!T2:V2:", e);
+        console.error("[Draco] Error gestionando la petición del picker desde EDIT_REPORT!T2:V2:", e);
     } finally {
         DracoSuppressChangeEvents = false;
     }
@@ -4880,17 +4990,18 @@ async function registerEditReportPickerHandler(context) {
     }
 
     try {
-        // DESACTIVADO (vía 3 de las 4 que abrían el picker): el flag
-        // EDIT_REPORT!A5="X" abría el picker directamente (dim/attr/valor/
-        // dirección leídos de A1:A4), sin pasar por findDracoRowsNamedRangeForCell
-        // ni por nada del resto del JS, y competía con las demás vías. Se
-        // deja solo el reconocimiento de miembros al escribir (vía 1,
-        // handleDracoMemberRecognitionChanged) y el flag V2 que simula el
-        // doble clic real capturado por el XLAM en VBA (vía 4,
-        // handleDracoDoubleClickFlagRequest).
+        // DESACTIVADO (vía 3 de las 4 que abrían el picker originalmente):
+        // el flag EDIT_REPORT!A5="X" abría el picker directamente (dim/
+        // attr/valor/dirección leídos de A1:A4), sin pasar por
+        // findDracoRowsNamedRangeForCell ni por nada del resto del JS, y
+        // competía con las demás vías.
         // editReport.onChanged.add(handleEditReportMemberPickerRequest);
         editReport.onChanged.add(handleDracoEditReportExpandCollapseRequest);
-        editReport.onChanged.add(handleDracoDoubleClickFlagRequest);
+        // Único punto que abre el buscador de miembros: reacciona a
+        // EDIT_REPORT!V2 pasando a "REC" (reconocimiento al escribir) o
+        // "DC" (doble clic), ambos rellenados por el XLAM en VBA en
+        // T2 (hoja) / U2 (celda) / V2 (REC|DC).
+        editReport.onChanged.add(handleDracoPickerFlagRequest);
         await context.sync();
     } catch (e) {
         console.error("[Draco] registerEditReportPickerHandler: fallo registrando los listeners de EDIT_REPORT:", e);
@@ -4898,7 +5009,7 @@ async function registerEditReportPickerHandler(context) {
     }
 
     DracoEditReportHandlerRegistered = true;
-    console.log("[Draco] Listeners de EDIT_REPORT: T1:V1 (expandir/contraer) y T2:V2 (doble clic simulado) registrados. A5 (Member Picker directo) DESACTIVADO.");
+    console.log("[Draco] Listeners de EDIT_REPORT: T1:V1 (expandir/contraer) y T2:V2 (REC/DC, buscador de miembros) registrados. A5 (Member Picker directo) DESACTIVADO.");
 }
 
 // sheetName es el nombre de la hoja de resultados donde vive `sheet`: cada
@@ -4920,7 +5031,19 @@ async function registerDracoSelectionHandler(context, sheet, sheetName) {
     // aparte vía onSingleClicked en ensureDracoRowsClickLoggerRegistered).
     // sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
     sheet.onSelectionChanged.add(handleDracoRibbonLabelSelection);
-    sheet.onChanged.add(handleDracoMemberRecognitionChanged);
+
+    // DESACTIVADO (era la vía 1 de las 4 originales que abrían el
+    // picker): handleDracoMemberRecognitionChanged reaccionaba aquí, por
+    // hoja, a CUALQUIER onChanged de la hoja de resultados para detectar
+    // un valor tecleado. Ahora esa detección la hace el XLAM en VBA
+    // (igual que ya hacía para el doble clic) y avisa rellenando
+    // EDIT_REPORT!T2:V2 con V2="REC"; el único sitio que abre el picker
+    // es handleDracoPickerFlagRequest, enganchado una vez a EDIT_REPORT
+    // (ver registerEditReportPickerHandler), que ahora entiende V2="REC"
+    // (reconocimiento al escribir) y V2="DC" (doble clic). La función
+    // handleDracoMemberRecognitionChanged se deja definida más abajo,
+    // sin usar, por si hiciera falta consultarla o revertir esto.
+    // sheet.onChanged.add(handleDracoMemberRecognitionChanged);
 
     // IMPORTANTE: registerEditReportPickerHandler comparte este mismo
     // `context`/lote. Si algo dentro de ella falla (p.ej. EDIT_REPORT no
