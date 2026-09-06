@@ -2316,6 +2316,14 @@ const DracoHandlerRegisteredSheets = new Set();
 let DracoEditReportHandlerRegistered = false; // evita registrar el listener de EDIT_REPORT!A5 (picker) más de una vez — INDEPENDIENTE de lo anterior: no depende de que exista ninguna hoja de resultados ni de que se haya refrescado nunca
 let DracoSuppressChangeEvents = false; // true mientras jsonTo3Matrices pinta celdas (evita que el reconocimiento de miembros reaccione a nuestras propias escrituras)
 
+// true mientras ya hay un diálogo de "buscador de miembros" abierto. Hay
+// DOS sistemas independientes que pueden llegar a abrir este picker para
+// el MISMO clic (handleDracoRowsSingleClick por doble clic, y
+// handleDracoMemberRecognitionSelection por simple selección de una
+// celda vacía con el "reconocimiento de miembros" activado) — este
+// candado evita que se abran dos diálogos a la vez para un mismo clic.
+let DracoMemberPickerOpen = false;
+
 // Firma del eje = lista de "DIMENSION.ATRIBUTO:NIVEL" de sus campos, en
 // orden. Si cambia (se añade/quita/reordena un campo en ESE eje), se
 // entiende que la jerarquía cambió y se resetea su estado de contraído.
@@ -2867,6 +2875,12 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
  * Aproximación al doble clic (ver comentario anterior): clic sobre una
  * celda VACÍA de Draco_001_Rows/Draco_001_Cols con el reconocimiento
  * activado abre directamente el buscador de miembros.
+ *
+ * DESACTIVADA (ver registerDracoSelectionHandler): ya no se engancha a
+ * onSelectionChanged porque competía con el doble clic real
+ * (handleDracoRowsSingleClick) y llegaban a abrirse dos pickers para un
+ * mismo doble clic. El picker ahora solo debe abrirse por doble clic. Se
+ * deja la función definida por si se quiere reactivar más adelante.
  */
 async function handleDracoMemberRecognitionSelection(eventArgs) {
     try {
@@ -3909,14 +3923,18 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 rowsStaticTrace = rowsStatic;
                 colsStaticTrace = colsStatic;
 
-                // NOTA: en el VBA original esto exigía RowsStatic Y
-                // ColsStatic ambos "X". Se ha quitado esa condición: el
-                // buscador de miembros se abre en doble clic sobre
-                // cualquier celda de Filas/Columnas del informe, esté o
-                // no marcado como Estático en el diseño. rowsStatic/
-                // colsStatic se siguen leyendo y trazando (arriba, en
-                // A56) solo a título informativo.
-                {
+                // El buscador de miembros por doble clic solo se ofrece
+                // si el EJE que se ha clicado está marcado como Estático
+                // en el diseño de ESE informe (RowsStatic para
+                // located.axis==="rows", ColsStatic para "columns"). Si
+                // ese eje no es estático, el doble clic no hace nada
+                // aquí (el informe puede seguir reconociendo valores
+                // tecleados a mano vía el "reconocimiento de miembros").
+                const axisIsStatic = located.axis === "rows" ? rowsStatic : colsStatic;
+
+                if (!axisIsStatic) {
+                    accionTexto = ` | Accion: doble clic ignorado (informe ${located.reportId}, eje ${located.axis} no es Estático)`;
+                } else {
                     const fieldLocated = await resolveDracoFieldForAxisLevel(
                         context, located.reportId, located.axis, located.level, cell.format.indentLevel
                     );
@@ -4099,12 +4117,19 @@ function parseMemberJsonTree(json) {
 async function openMemberRecognitionPicker(addr, located, initialSearch) {
     console.log("[Draco] openMemberRecognitionPicker: iniciando para", addr, located);
 
+    if (DracoMemberPickerOpen) {
+        console.log("[Draco] Ya hay un buscador de miembros abierto: se ignora esta petición duplicada para", addr);
+        return;
+    }
+    DracoMemberPickerOpen = true;
+
     let items = [];
     try {
         const sql = await window.ExcelService.buildFilterValuesSQL(located.dim, located.attr);
         console.log("[Draco] SQL de valores construida:", sql);
         if (!sql) {
             console.warn("[Draco] No se ha podido construir el SQL (dim/attr no reconocidos):", located);
+            DracoMemberPickerOpen = false;
             return;
         }
         const json = await window.ExcelService.executeSQL(sql);
@@ -4112,6 +4137,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
         console.log("[Draco] Nº de items recibidos para el picker:", items.length);
     } catch (err) {
         console.error("[Draco] Error obteniendo los valores del picker:", err);
+        DracoMemberPickerOpen = false;
         return;
     }
 
@@ -4129,6 +4155,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         asyncResult.error && asyncResult.error.code,
                         asyncResult.error && asyncResult.error.message
                     );
+                    DracoMemberPickerOpen = false;
                     resolve();
                     return;
                 }
@@ -4193,6 +4220,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         } catch (err) {
                             console.error("[Draco] Error escribiendo la fórmula EPM_VALUE:", err);
                         }
+                        DracoMemberPickerOpen = false;
                         resolve();
                         return;
                     }
@@ -4201,6 +4229,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         console.log("[Draco] Selección cancelada por el usuario.");
                         settled = true;
                         closeDialog();
+                        DracoMemberPickerOpen = false;
                         resolve();
                     }
                 });
@@ -4208,6 +4237,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                 dialog.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
                     // 12006 = el usuario cerró el diálogo con la X.
                     console.warn("[Draco] DialogEventReceived:", arg.error);
+                    DracoMemberPickerOpen = false;
                     if (!settled) resolve();
                 });
             }
@@ -4461,7 +4491,15 @@ async function registerEditReportPickerHandler(context) {
 async function registerDracoSelectionHandler(context, sheet, sheetName) {
     if (DracoHandlerRegisteredSheets.has(sheetName)) return;
 
-    sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
+    // DESACTIVADO: handleDracoMemberRecognitionSelection abría el
+    // buscador de miembros con solo SELECCIONAR una celda vacía de
+    // Filas/Columnas (con el pulsador de "Reconocimiento de miembros"
+    // activado). Como un doble clic también dispara onSelectionChanged,
+    // esto competía con handleDracoRowsSingleClick y llegaban a abrirse
+    // dos pickers para el mismo doble clic. Ahora el picker SOLO debe
+    // aparecer por doble clic (handleDracoRowsSingleClick, enganchado
+    // aparte vía onSingleClicked en ensureDracoRowsClickLoggerRegistered).
+    // sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
     sheet.onSelectionChanged.add(handleDracoRibbonLabelSelection);
     sheet.onChanged.add(handleDracoMemberRecognitionChanged);
 
