@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>Filtrar campo</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/modal.css">
+
+    <style>
+        /* Estructura propia de esta ventana (el diálogo NO tiene backdrop:
+           ya es su propia ventana, así que aquí no se reutiliza
+           .modal-backdrop/.modal-dialog, solo los controles internos de
+           modal.css: segmented-control, filter-chips, modal-items-list...). */
+        html, body {
+            margin: 0; padding: 0; height: 100%;
+            font-family: var(--font-family, 'Segoe UI', Arial, sans-serif);
+            background: var(--surface-card, #fff);
+            color: var(--text-primary, #1A2233);
+            display: flex; flex-direction: column;
+        }
+
+        .dialog-header {
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border-subtle);
+            background: var(--surface-sunken);
+            display: flex; justify-content: space-between; align-items: center;
+            flex-shrink: 0;
+        }
+        .dialog-header h1 {
+            font-size: var(--fs-lg, 15px);
+            margin: 0;
+            font-weight: 700;
+        }
+        .dialog-close-btn {
+            background: none; border: none; font-size: 20px; line-height: 1;
+            color: var(--text-muted); cursor: pointer;
+            width: 28px; height: 28px; border-radius: var(--radius-sm);
+            /* Centrado exacto de la "×": sin flex, un <button> alinea el
+               texto según la tipografía y quedaba visiblemente descentrada. */
+            display: flex; align-items: center; justify-content: center;
+            padding: 0;
+        }
+        .dialog-close-btn:hover { background: var(--gray-100); color: var(--text-primary); }
+
+        .dialog-body {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        /* Columna principal (izquierda): un único panel visible a la vez
+           (Valores o Rango), según el "Modo" del panel lateral — como en
+           el diseño original, pero ahora cada panel AÑADE entradas a una
+           selección compartida en vez de sustituir un filtro único. */
+        .dialog-main {
+            flex: 1 1 62%;
+            padding: 14px 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            border-right: 1px solid var(--border-subtle);
+        }
+
+        /* Panel auxiliar (derecha): modo y selección actual (chips) */
+        .dialog-side {
+            flex: 1 1 38%;
+            padding: 14px 16px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            background: var(--surface-sunken);
+        }
+
+        .side-section-title {
+            font-size: var(--fs-xs);
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-muted);
+            margin: 0 0 6px;
+        }
+
+        .filter-chips {
+            max-height: none;
+            flex: 1;
+            display: flex;
+            flex-wrap: wrap;
+            align-content: flex-start;
+            gap: 6px;
+        }
+
+        /* Cabecera de cada panel (Valores / Rango), con su propio
+           incluir/excluir: decide bajo qué lista (incluidos/excluidos)
+           cae lo que se marque o añada MIENTRAS esté activo, sin tocar lo
+           que ya se hubiera añadido antes con el otro ajuste. */
+        .filter-condition-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        .filter-condition-row .side-section-title { margin: 0; }
+        .segmented-control.compact { padding: 1px; }
+        .segmented-control.compact .segmented-option { padding: 3px 9px; font-size: var(--fs-xs); }
+
+        .range-controls-row {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+        }
+        .range-controls-row .range-controls { flex: 1; }
+        #btnAddRange { flex-shrink: 0; }
+
+        /* Chips: azul (estilo por defecto de .filter-chip) = incluir; rojo
+           del propio tema = excluir. Se reutiliza var(--color-danger) /
+           var(--color-danger-light), las mismas variables de aviso que ya
+           usa theme.css, en vez de un rojo inventado, para que el código
+           de color sea coherente con el resto del add-in. */
+        .filter-chip.exclude-mode {
+            background: var(--color-danger-light);
+            color: var(--color-danger);
+            border-color: var(--color-danger);
+        }
+        .filter-chip.exclude-mode .chip-remove { color: var(--color-danger); }
+
+        /* Centrado exacto de la "×" de cada chip (mismo ajuste que en
+           dialog-close-btn, antes también quedaba descentrada). */
+        .filter-chip .chip-remove {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+            padding: 0;
+            width: 16px;
+            height: 16px;
+            font-size: 14px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            color: inherit;
+        }
+
+        .dialog-footer {
+            padding: 12px 18px;
+            border-top: 1px solid var(--border-subtle);
+            background: var(--surface-sunken);
+            display: flex; justify-content: flex-end; align-items: center; gap: 8px;
+            flex-shrink: 0;
+        }
+
+        .loading, .error { padding: 14px; color: var(--text-muted); }
+        .error { color: var(--color-danger); }
+    </style>
+</head>
+<body>
+    <div class="dialog-header">
+        <h1 id="dialogTitle">Filtrar campo</h1>
+        <button id="btnCloseDialog" class="dialog-close-btn" title="Cancelar">&times;</button>
+    </div>
+
+    <div class="dialog-body">
+        <!-- Columna principal: un único panel visible según el Modo
+             (Valores o Rango). Cada uno tiene su propio Incluir/Excluir,
+             que decide en qué lista (incluidos/excluidos) cae lo que se
+             marque o añada mientras esté activo. -->
+        <div class="dialog-main">
+            <div id="filterValuesPanel" class="filter-panel">
+                <div class="modal-toolbar">
+                    <input type="text" id="modalSearchInput" placeholder="Buscar en la lista..." autocomplete="off">
+                    <button type="button" id="btnSelectAllVisible" class="link-btn">Todo</button>
+                    <button type="button" id="btnClearSelection" class="link-btn">Ninguno</button>
+                </div>
+
+                <div class="filter-condition-row">
+                    <p class="side-section-title">Valores seleccionados</p>
+                    <div class="segmented-control include-toggle compact js-include-toggle" role="tablist">
+                        <button type="button" class="segmented-option include-option active" data-include="true">✓ Incluir</button>
+                        <button type="button" class="segmented-option exclude-option" data-include="false">✕ Excluir</button>
+                    </div>
+                </div>
+
+                <div id="modalItemsContainer" class="modal-items-list">
+                    <div class="loading">Esperando datos…</div>
+                </div>
+            </div>
+
+            <div id="filterRangePanel" class="filter-panel range-selection-box" style="display:none;">
+                <div class="filter-condition-row">
+                    <span class="range-title" style="margin-bottom:0;">Rango de valores</span>
+                    <div class="segmented-control include-toggle compact js-include-toggle" role="tablist">
+                        <button type="button" class="segmented-option include-option active" data-include="true">✓ Incluir</button>
+                        <button type="button" class="segmented-option exclude-option" data-include="false">✕ Excluir</button>
+                    </div>
+                </div>
+                <div class="range-controls-row">
+                    <div class="range-controls">
+                        <label>Desde
+                            <input type="text" id="modalRangeFrom" placeholder="mínimo">
+                        </label>
+                        <label>Hasta
+                            <input type="text" id="modalRangeTo" placeholder="máximo">
+                        </label>
+                    </div>
+                    <button type="button" id="btnAddRange" class="btn-secondary">+ Añadir</button>
+                </div>
+                <p class="filter-range-hint">Ambos límites incluidos. Puedes añadir varios rangos y combinarlos con valores sueltos: se cumple el filtro con que se satisfaga cualquiera de los incluidos, sin caer en ninguno de los excluidos.</p>
+            </div>
+        </div>
+
+        <!-- Panel auxiliar de la derecha: Modo (qué panel se edita ahora)
+             y la selección actual completa (valores y rangos, incluidos y
+             excluidos) como una única lista de chips. -->
+        <div class="dialog-side">
+            <div>
+                <p class="side-section-title">Modo</p>
+                <div id="filterModeTabs" class="segmented-control" role="tablist" style="width:100%;">
+                    <button type="button" class="segmented-option active" data-mode="values" style="flex:1;">☰ Valores</button>
+                    <button type="button" class="segmented-option" data-mode="range" style="flex:1;">↔ Rango</button>
+                </div>
+            </div>
+
+            <div style="display:flex; flex-direction:column; flex:1; min-height:0;">
+                <p class="side-section-title">Selección actual</p>
+                <div id="modalSelectedChips" class="filter-chips" style="display:none;"></div>
+            </div>
+
+            <span id="modalSelectionCount" class="filter-selection-count"></span>
+        </div>
+    </div>
+
+    <div class="dialog-footer">
+        <button id="btnCancelModal" class="btn-secondary">Cancelar</button>
+        <button id="btnApplyModal" class="btn-primary">Aceptar</button>
+    </div>
+
+    <script src="js/filterDialog.js"></script>
+</body>
+</html>
