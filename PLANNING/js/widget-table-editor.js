@@ -296,21 +296,59 @@ const WTE_EMBEDDED_CSS = `
     color: var(--brand-primary-hover);
 }
 
+/* El body del modal pasa a ser una fila: columna izquierda (toolbar +
+   rejilla) + separador arrastrable + panel de informe, así el panel ocupa
+   TODA la altura del modal (antes se quedaba solo a la altura de la
+   rejilla, dejando un hueco vacío junto a la toolbar). Se usan dos clases
+   (mayor especificidad) para no afectar a .modal-body-flush en otros
+   modales de la aplicación. */
+.wte-modal-body {
+    display: flex !important;
+    flex-direction: row !important;
+    padding: 0 !important;
+    overflow: hidden;
+}
+
+.wte-left-column {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.wte-panel-resizer {
+    width: 6px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: var(--border-default);
+    display: none;
+}
+
+.wte-panel-resizer.visible {
+    display: block;
+}
+
+.wte-panel-resizer:hover,
+.wte-panel-resizer.dragging {
+    background: var(--brand-primary);
+}
+
 /* Panel de informe: el taskpane real del add-in, en un iframe propio.
-   Colapsado por defecto (width:0); al abrirse (☰ Informe) se expande. */
+   Colapsado por defecto (width:0); al abrirse (☰ Informe) se expande.
+   El ancho se puede arrastrar con .wte-panel-resizer (ver widget-table-editor.js). */
 .wte-report-panel {
     width: 0;
     flex-shrink: 0;
     overflow: hidden;
-    border-left: 1px solid var(--border-default);
     background: var(--surface-sunken);
-    transition: width 0.15s ease;
     display: flex;
     flex-direction: column;
 }
 
 .wte-report-panel.visible {
-    width: 380px;
+    width: 420px;
 }
 
 .wte-taskpane-frame {
@@ -428,7 +466,12 @@ const WidgetTableEditor = {
     parseConfig(raw) {
         try {
             const parsed = JSON.parse(raw || "{}");
-            return {
+            // Object.assign en vez de reconstruir el objeto a mano: así se
+            // conserva CUALQUIER clave adicional que el taskpane (host-bridge.js,
+            // reportStore.js, etc.) haya ido guardando dentro del estado
+            // (taskpaneSettings, hiddenSheets, hiddenSheetMerges, namedRanges...),
+            // en vez de descartarla silenciosamente al recargar el widget.
+            return Object.assign({}, parsed, {
                 rows: parsed.rows || this.DEFAULT_ROWS,
                 cols: parsed.cols || this.DEFAULT_COLS,
                 cells: parsed.cells || {},
@@ -436,7 +479,7 @@ const WidgetTableEditor = {
                 colWidths: parsed.colWidths || {},
                 rowHeights: parsed.rowHeights || {},
                 report: parsed.report || this.defaultReport()
-            };
+            });
         } catch (e) {
             return this.blankState();
         }
@@ -466,27 +509,30 @@ const WidgetTableEditor = {
                         <button class="modal-close" id="wteClose">&times;</button>
                     </div>
                 </div>
-                <div class="modal-body modal-body-flush">
-                    <div class="wte-toolbar" id="wteToolbar"></div>
-                    <div class="wte-grid-wrap" id="wteGridWrap">
-                        <div class="wte-grid-main" id="wteGridMain">
-                            <div class="wte-headrow">
-                                <div class="wte-corner" id="wteCorner"></div>
-                                <div class="wte-colhead-clip" id="wteColHeadClip">
-                                    <div class="wte-colhead-track" id="wteColHeadTrack"></div>
+                <div class="modal-body modal-body-flush wte-modal-body">
+                    <div class="wte-left-column">
+                        <div class="wte-toolbar" id="wteToolbar"></div>
+                        <div class="wte-grid-wrap" id="wteGridWrap">
+                            <div class="wte-grid-main" id="wteGridMain">
+                                <div class="wte-headrow">
+                                    <div class="wte-corner" id="wteCorner"></div>
+                                    <div class="wte-colhead-clip" id="wteColHeadClip">
+                                        <div class="wte-colhead-track" id="wteColHeadTrack"></div>
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="wte-bodyrow">
-                                <div class="wte-rowhead-clip" id="wteRowHeadClip">
-                                    <div class="wte-rowhead-track" id="wteRowHeadTrack"></div>
-                                </div>
-                                <div class="wte-body-scroll" id="wteBodyScroll">
-                                    <div class="wte-body-canvas" id="wteBodyCanvas"></div>
+                                <div class="wte-bodyrow">
+                                    <div class="wte-rowhead-clip" id="wteRowHeadClip">
+                                        <div class="wte-rowhead-track" id="wteRowHeadTrack"></div>
+                                    </div>
+                                    <div class="wte-body-scroll" id="wteBodyScroll">
+                                        <div class="wte-body-canvas" id="wteBodyCanvas"></div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                        <div class="wte-report-panel" id="wteReportPanel"></div>
                     </div>
+                    <div class="wte-panel-resizer" id="wtePanelResizer"></div>
+                    <div class="wte-report-panel" id="wteReportPanel"></div>
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" id="wteCancel">Cancelar</button>
@@ -613,8 +659,10 @@ const WidgetTableEditor = {
     // ------------------------------------------------------------
     toggleReportPanel() {
         const panel = document.getElementById("wteReportPanel");
+        const resizer = document.getElementById("wtePanelResizer");
         this._reportPanelOpen = !this._reportPanelOpen;
         panel.classList.toggle("visible", this._reportPanelOpen);
+        resizer.classList.toggle("visible", this._reportPanelOpen);
         document.getElementById("wteToggleReport").classList.toggle("active", this._reportPanelOpen);
         if (this._reportPanelOpen && !panel.querySelector("iframe")) {
             // El taskpane real del add-in (ADDIN/src), copiado tal cual en
@@ -624,12 +672,45 @@ const WidgetTableEditor = {
             // y con la conexión ya autenticada de esta app (provider-bridge.js).
             const iframe = document.createElement("iframe");
             iframe.className = "wte-taskpane-frame";
-            iframe.src = "widget-taskpane/taskpane.html?v=20260906a";
+            iframe.src = "widget-taskpane/taskpane.html?v=20260906b";
             panel.appendChild(iframe);
             this._taskpaneFrame = iframe;
+            if (!resizer._wired) {
+                resizer._wired = true;
+                resizer.addEventListener("mousedown", (e) => this.startPanelResize(e));
+            }
         }
         // El área del cuerpo cambia de ancho: recalcula el viewport visible.
         requestAnimationFrame(() => this.renderGrid());
+    },
+
+    // Arrastrar el separador entre la rejilla y el panel del taskpane
+    // (pedido explícitamente: poder mover el reparto de espacio entre
+    // Excel y el iframe para que quepa todo).
+    startPanelResize(e) {
+        e.preventDefault();
+        const panel = document.getElementById("wteReportPanel");
+        const resizer = document.getElementById("wtePanelResizer");
+        const startX = e.clientX;
+        const startWidth = panel.getBoundingClientRect().width;
+        resizer.classList.add("dragging");
+        document.body.style.userSelect = "none";
+
+        const onMove = (ev) => {
+            // El separador queda a la IZQUIERDA del panel: arrastrar hacia
+            // la izquierda debe ENSANCHAR el panel (y viceversa).
+            const newWidth = Math.max(280, Math.min(window.innerWidth - 320, startWidth - (ev.clientX - startX)));
+            panel.style.width = newWidth + "px";
+            requestAnimationFrame(() => this.renderGrid());
+        };
+        const onUp = () => {
+            resizer.classList.remove("dragging");
+            document.body.style.userSelect = "";
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+        };
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
     },
 
     // Llama a una función de comando del taskpane (commands.js) dentro del
