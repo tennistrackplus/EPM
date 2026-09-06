@@ -34,7 +34,7 @@
                 relDataset: dimParts.dataset,
                 relTable: dimParts.table,
                 attributes: dim.attributes.map(a => ({
-                    name: a.colId, alias: a.colId, dataType: "STRING", isKey: !!a.isKey, enabled: true
+                    name: a.colId, alias: a.colId, dataType: a.type || "STRING", isKey: !!a.isKey, enabled: true
                 })),
                 hierarchies: dim.hierarchies.map(h => ({
                     name: h.name, levels: h.levels.map(l => ({ attribute: l.colId }))

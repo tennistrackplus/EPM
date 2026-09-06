@@ -50,6 +50,16 @@
     `;
     document.head.appendChild(style);
 
+    // Si esta página se cargó como diálogo hijo (ver displayDialogAsync más
+    // abajo), su id viaja en la URL — se lee aquí, de forma síncrona, para
+    // que esté disponible ANTES de que corra el Office.onReady del hijo
+    // (que es una microtarea y se dispara antes que el evento "load" del
+    // iframe en el padre).
+    try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.has("wteDialogId")) window.__wteDialogId = parseInt(params.get("wteDialogId"), 10);
+    } catch (e) { /* no debería fallar nunca */ }
+
     function host() {
         if (!window.parent || !window.parent.WidgetTableEditor) {
             throw new Error("host-bridge: no se encuentra WidgetTableEditor en la ventana padre.");
@@ -211,8 +221,20 @@
                         };
                     }
                 },
-                indentLevel: 0,
-                horizontalAlignment: "General",
+                get indentLevel() { return collectStyleFlags().ind || 0; },
+                set indentLevel(v) { forEachCell((r, c) => writeCellObj(r, c, undefined, { ind: v || 0 })); },
+                get horizontalAlignment() {
+                    const al = collectStyleFlags().al;
+                    if (al === "center") return "Center";
+                    if (al === "right") return "Right";
+                    if (al === "left") return "Left";
+                    return "General";
+                },
+                set horizontalAlignment(v) {
+                    const map = { Center: "center", Left: "left", Right: "right", General: "" };
+                    const al = Object.prototype.hasOwnProperty.call(map, v) ? map[v] : "";
+                    forEachCell((r, c) => writeCellObj(r, c, undefined, { al }));
+                },
                 columnWidth: undefined,
                 autofitColumns() { /* nuestra rejilla ya usa un ancho por columna razonable; no-op */ },
                 autofitRows() { /* no-op */ }
@@ -399,6 +421,14 @@
     };
 
     window.Excel = {
+        HorizontalAlignment: { general: "General", left: "Left", center: "Center", right: "Right" },
+        BorderIndex: {
+            edgeTop: "EdgeTop", edgeBottom: "EdgeBottom", edgeLeft: "EdgeLeft", edgeRight: "EdgeRight",
+            insideHorizontal: "InsideHorizontal", insideVertical: "InsideVertical"
+        },
+        BorderLineStyle: { continuous: "Continuous", none: "None" },
+        BorderWeight: { thin: "Thin", medium: "Medium", thick: "Thick" },
+        ClearApplyTo: { all: "All", contents: "Contents", formats: "Formats" },
         run(callback) {
             return Promise.resolve()
                 .then(() => callback(fakeContext))
@@ -472,17 +502,20 @@
                 // (addEventHandler, messageChild, close) se mantiene igual.
                 displayDialogAsync(url, options, callback) {
                     const id = ++dialogSeq;
+                    // El id se pasa por la URL (no basta con asignarlo tras
+                    // el evento "load" del iframe): Office.onReady del hijo
+                    // se dispara en una microtarea, ANTES de que "load"
+                    // llegue a ejecutarse, así que el hijo mandaba "ready"
+                    // sin saber todavía su propio id y el padre lo descartaba.
+                    const sep = url.includes("?") ? "&" : "?";
+                    const framedUrl = `${url}${sep}wteDialogId=${id}`;
                     const overlay = document.createElement("div");
                     overlay.className = "wte-dialog-overlay";
-                    overlay.innerHTML = `<iframe class="wte-dialog-frame" src="${url}"></iframe>`;
+                    overlay.innerHTML = `<iframe class="wte-dialog-frame" src="${framedUrl}"></iframe>`;
                     document.body.appendChild(overlay);
                     const frame = overlay.querySelector("iframe");
 
                     openDialogs[id] = { overlay, frame, handlers: {} };
-
-                    frame.addEventListener("load", () => {
-                        try { frame.contentWindow.__wteDialogId = id; } catch (e) { /* cross-origin, no debería pasar (mismo origen) */ }
-                    });
 
                     const dialog = {
                         close() {
