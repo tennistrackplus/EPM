@@ -243,21 +243,59 @@
     color: var(--brand-primary-hover);
 }
 
+/* El body del modal pasa a ser una fila: columna izquierda (toolbar +
+   rejilla) + separador arrastrable + panel de informe, así el panel ocupa
+   TODA la altura del modal (antes se quedaba solo a la altura de la
+   rejilla, dejando un hueco vacío junto a la toolbar). Se usan dos clases
+   (mayor especificidad) para no afectar a .modal-body-flush en otros
+   modales de la aplicación. */
+.wte-modal-body {
+    display: flex !important;
+    flex-direction: row !important;
+    padding: 0 !important;
+    overflow: hidden;
+}
+
+.wte-left-column {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.wte-panel-resizer {
+    width: 6px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: var(--border-default);
+    display: none;
+}
+
+.wte-panel-resizer.visible {
+    display: block;
+}
+
+.wte-panel-resizer:hover,
+.wte-panel-resizer.dragging {
+    background: var(--brand-primary);
+}
+
 /* Panel de informe: el taskpane real del add-in, en un iframe propio.
-   Colapsado por defecto (width:0); al abrirse (☰ Informe) se expande. */
+   Colapsado por defecto (width:0); al abrirse (☰ Informe) se expande.
+   El ancho se puede arrastrar con .wte-panel-resizer (ver widget-table-editor.js). */
 .wte-report-panel {
     width: 0;
     flex-shrink: 0;
     overflow: hidden;
-    border-left: 1px solid var(--border-default);
     background: var(--surface-sunken);
-    transition: width 0.15s ease;
     display: flex;
     flex-direction: column;
 }
 
 .wte-report-panel.visible {
-    width: 380px;
+    width: 420px;
 }
 
 .wte-taskpane-frame {
