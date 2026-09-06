@@ -236,9 +236,19 @@ const SemanticModel = {
 
             try {
                 await this.ensureColumns();
+                // IMPORTANTE: para BigQuery el YAML no se sube a ningún stage
+                // (uploaded se queda en false, esa rama es solo Snowflake),
+                // pero el .lkml SÍ se sube a GitHub un poco más abajo
+                // (generateAndPushLkml) en esta misma ruta (con extensión
+                // .lkml en vez de .yaml). Si aquí solo se registrara la ruta
+                // cuando uploaded=true, CUBOS.MODELO_YAML_PATH se quedaría
+                // vacío para todo cubo de BigQuery aunque el .lkml exista y
+                // funcione perfectamente en GitHub — que es justo el bug que
+                // hacía que el widget de informe dijera "no existe".
+                const pathToRecord = (Provider.key() === "snowflake") ? (uploaded ? path : "") : path;
                 await Provider.runQuery(`
                     UPDATE ${Provider.qualifyControl("CUBOS")}
-                    SET MODELO_YAML_PATH = '${Provider.esc(uploaded ? path : "")}',
+                    SET MODELO_YAML_PATH = '${Provider.esc(pathToRecord)}',
                         MODELO_YAML_FECHA = CURRENT_TIMESTAMP()
                     WHERE ${Cubes.ID_COL} = '${Provider.esc(cuboInfo.id)}'`);
             } catch (regErr) {

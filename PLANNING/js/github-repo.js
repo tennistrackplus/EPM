@@ -102,7 +102,7 @@ const GithubRepo = {
      * Lee el contenido de `path` dentro del repositorio configurado (texto
      * UTF-8 decodificado). Devuelve null si el fichero no existe (404).
      * Se usa para volver a abrir el .lkml que generó SemanticModel al
-     * guardar un cubo (ver js/widget-pivot.js).
+     * guardar un cubo (ver widget-taskpane/js/lkml-bootstrap.js).
      */
     async getFile(path, repoConfig) {
         const cfg = repoConfig || (typeof DracoConfig !== "undefined" && DracoConfig.semanticModelGithub) || {};

@@ -45,7 +45,7 @@
 // Estilos del editor incrustados directamente desde JS: así el motor de
 // rejilla (posiciones absolutas, virtualización) funciona aunque el HTML
 // que incluye este script no tenga bien enlazados (o cacheados) los
-// ficheros css/widget-table-editor.css y css/widget-pivot.css. Sin esta
+// ficheros css/widget-table-editor.css. Sin esta
 // red de seguridad, si el <link> no carga, TODAS las celdas caen a
 // position:static y se apilan verticalmente, y la virtualización pierde
 // el límite de viewport real (el scroller ya no tiene overflow:auto),
@@ -296,6 +296,31 @@ const WTE_EMBEDDED_CSS = `
     color: var(--brand-primary-hover);
 }
 
+/* Panel de informe: el taskpane real del add-in, en un iframe propio.
+   Colapsado por defecto (width:0); al abrirse (☰ Informe) se expande. */
+.wte-report-panel {
+    width: 0;
+    flex-shrink: 0;
+    overflow: hidden;
+    border-left: 1px solid var(--border-default);
+    background: var(--surface-sunken);
+    transition: width 0.15s ease;
+    display: flex;
+    flex-direction: column;
+}
+
+.wte-report-panel.visible {
+    width: 380px;
+}
+
+.wte-taskpane-frame {
+    flex: 1;
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: #fff;
+}
+
 .wte-pivot-toggle {
     display: inline-block;
     width: 14px;
@@ -306,301 +331,6 @@ const WTE_EMBEDDED_CSS = `
 
 .wte-cell-pivot-head {
     font-weight: 600;
-}
-/* ==========================================================
-   Panel de Informe — mismas clases que ADDIN/src/css/styles.css
-   (taskpane.html), embebido dentro de wte-report-panel en vez de
-   ocupar toda la ventana.
-   ========================================================== */
-.wte-report-panel.visible {
-    width: 420px;
-    display: flex;
-    flex-direction: column;
-}
-
-.wtp-embedded {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-}
-
-.wtp-embedded .taskpane-body {
-    display: flex;
-    flex: 1;
-    gap: 10px;
-    min-height: 0;
-    padding: 10px;
-}
-
-.wtp-select {
-    width: 100%;
-    margin-bottom: 6px;
-    padding: 6px 8px;
-    font-size: var(--fs-sm, 12px);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-    background: var(--surface-card);
-}
-
-/* ---- Panel izquierdo: catálogo de campos (copiado de styles.css) ---- */
-.fields-section {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    background: var(--surface-card);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-xs);
-    padding: 8px;
-    min-width: 150px;
-}
-
-.search-input-wrapper {
-    position: relative;
-    margin-bottom: 8px;
-    flex-shrink: 0;
-}
-
-.search-icon {
-    position: absolute;
-    left: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-    color: var(--text-muted);
-    pointer-events: none;
-}
-
-.search-input-wrapper input {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 6px 8px 6px 26px;
-    border: 1px solid var(--border-default);
-    border-radius: var(--radius-sm);
-    font-size: var(--fs-base, 12.5px);
-    outline: none;
-    background-color: var(--surface-sunken);
-}
-
-.search-input-wrapper input:focus {
-    border-color: var(--brand-primary);
-    background-color: var(--surface-card);
-    box-shadow: 0 0 0 3px var(--brand-primary-light);
-}
-
-.fields-tree {
-    flex: 1;
-    overflow-y: auto;
-    padding-right: 2px;
-}
-
-.dimension-group {
-    margin-bottom: 10px;
-}
-
-.dimension-header {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 10px;
-    font-weight: 700;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 4px 6px;
-    cursor: pointer;
-    user-select: none;
-    border-radius: var(--radius-sm);
-}
-
-.dimension-header:hover {
-    background-color: var(--brand-primary-light);
-}
-
-.dimension-caret {
-    display: inline-block;
-    width: 10px;
-    font-size: 9px;
-    text-align: center;
-    flex-shrink: 0;
-}
-
-.dimension-group.collapsed > .field-item {
-    display: none;
-}
-
-.field-item {
-    display: flex;
-    align-items: center;
-    padding: 6px 8px;
-    margin: 1px 0;
-    border-radius: var(--radius-sm);
-    cursor: grab;
-    background-color: transparent;
-    border: 1px solid transparent;
-}
-
-.field-item:hover {
-    background-color: var(--brand-primary-light);
-    border-color: #D7E3FC;
-}
-
-.field-item.dragging {
-    opacity: 0.4;
-}
-
-.field-icon {
-    margin-right: 8px;
-    font-size: var(--fs-sm);
-    line-height: 1;
-    flex-shrink: 0;
-}
-
-.field-label {
-    font-size: var(--fs-base, 12.5px);
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-/* ---- Panel derecho: ejes / dropzones (copiado de styles.css) ---- */
-.zones-section {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-width: 160px;
-}
-
-.zone-card {
-    background: var(--surface-card);
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-xs);
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 64px;
-    overflow: hidden;
-}
-
-.zone-card.drag-over {
-    border-color: var(--brand-primary);
-    background-color: var(--brand-primary-light);
-    box-shadow: 0 0 0 3px var(--brand-primary-light);
-}
-
-.zone-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 7px 10px;
-    background-color: var(--surface-sunken);
-    border-bottom: 1px solid var(--border-subtle);
-    flex-shrink: 0;
-}
-
-.zone-title-group {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-weight: 700;
-    font-size: var(--fs-sm);
-    color: var(--text-primary);
-    letter-spacing: 0.2px;
-}
-
-.zone-icon {
-    color: var(--brand-primary);
-    flex-shrink: 0;
-}
-
-.dropzone-content {
-    flex: 1;
-    padding: 8px;
-    display: flex;
-    flex-wrap: wrap;
-    align-content: flex-start;
-    gap: 5px;
-    overflow-y: auto;
-}
-
-.dropzone-content:empty::before {
-    content: "Suelta aquí un campo";
-    font-size: var(--fs-xs);
-    color: var(--text-muted);
-    padding: 4px 2px;
-}
-
-.dropped-tag {
-    background-color: var(--brand-primary);
-    background-image: linear-gradient(160deg, var(--brand-primary) 0%, var(--brand-primary-hover) 100%);
-    color: var(--text-inverse);
-    padding: 4px 6px 4px 10px;
-    border-radius: var(--radius-pill);
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: var(--fs-sm);
-    font-weight: 600;
-    box-shadow: var(--shadow-xs);
-}
-
-.dropped-tag.measure-tag {
-    background-color: var(--brand-accent);
-    background-image: linear-gradient(160deg, var(--brand-accent) 0%, #0E9C71 100%);
-}
-
-.dropped-tag-title {
-    pointer-events: none;
-    white-space: nowrap;
-}
-
-.dropped-tag-remove {
-    cursor: pointer;
-    font-size: 13px;
-    line-height: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 15px;
-    height: 15px;
-    border-radius: 50%;
-    opacity: 0.85;
-}
-
-.dropped-tag-remove:hover {
-    opacity: 1;
-    background-color: rgba(255, 255, 255, 0.28);
-}
-
-/* ---- Modal de selección (elegir dimensión / miembros de un filtro) ---- */
-.wtp-choice-list {
-    max-height: 280px;
-    overflow-y: auto;
-    border: 1px solid var(--border-subtle);
-    border-radius: var(--radius-sm);
-}
-
-.wtp-choice-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    font-size: var(--fs-sm);
-    border-bottom: 1px solid var(--border-subtle);
-    cursor: pointer;
-}
-
-.wtp-choice-item:last-child { border-bottom: none; }
-.wtp-choice-item:hover { background: var(--surface-sunken); }
-
-.wtp-empty-hint,
-.field-options-empty {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-    font-style: italic;
-    padding: 6px;
 }
 
 `;
@@ -854,9 +584,9 @@ const WidgetTableEditor = {
         document.getElementById("wteMerge").addEventListener("click", () => this.mergeSelection());
         document.getElementById("wteUnmerge").addEventListener("click", () => this.unmergeSelection());
         document.getElementById("wteToggleReport").addEventListener("click", () => this.toggleReportPanel());
-        document.getElementById("wteRecognition").addEventListener("click", () => { if (typeof WidgetPivot !== "undefined") WidgetPivot.toggleRecognition(); });
-        document.getElementById("wteRefreshReport").addEventListener("click", () => { if (typeof WidgetPivot !== "undefined") WidgetPivot.refresh(); });
-        document.getElementById("wteAddFilterTop").addEventListener("click", () => { if (typeof WidgetPivot !== "undefined") WidgetPivot.addFilter(); });
+        document.getElementById("wteRecognition").addEventListener("click", () => this.callTaskpaneCommand("toggleMemberRecognition"));
+        document.getElementById("wteRefreshReport").addEventListener("click", () => this.callTaskpaneCommand("actualizar"));
+        document.getElementById("wteAddFilterTop").addEventListener("click", () => this.callTaskpaneCommand("abrirAnadirFiltro"));
         document.getElementById("wteAddRow").addEventListener("click", () => this.insertRow());
         document.getElementById("wteDelRow").addEventListener("click", () => this.deleteRow());
         document.getElementById("wteAddCol").addEventListener("click", () => this.insertCol());
@@ -878,18 +608,41 @@ const WidgetTableEditor = {
     },
 
     // ------------------------------------------------------------
-    // Panel de informe (pivot sobre un cubo) — ver js/widget-pivot.js
+    // Panel de informe: taskpane real del add-in en un iframe — ver
+    // widget-taskpane/taskpane.html y js/toggleReportPanel más abajo.
     // ------------------------------------------------------------
     toggleReportPanel() {
         const panel = document.getElementById("wteReportPanel");
         this._reportPanelOpen = !this._reportPanelOpen;
         panel.classList.toggle("visible", this._reportPanelOpen);
         document.getElementById("wteToggleReport").classList.toggle("active", this._reportPanelOpen);
-        if (this._reportPanelOpen && typeof WidgetPivot !== "undefined") {
-            WidgetPivot.render(panel, this);
+        if (this._reportPanelOpen && !panel.querySelector("iframe")) {
+            // El taskpane real del add-in (ADDIN/src), copiado tal cual en
+            // /widget-taskpane, corriendo en un iframe propio. Solo cambia
+            // lo que en el add-in hablaba con Excel real o autenticaba su
+            // propia conexión: aquí habla con esta rejilla (host-bridge.js)
+            // y con la conexión ya autenticada de esta app (provider-bridge.js).
+            const iframe = document.createElement("iframe");
+            iframe.className = "wte-taskpane-frame";
+            iframe.src = "widget-taskpane/taskpane.html";
+            panel.appendChild(iframe);
+            this._taskpaneFrame = iframe;
         }
         // El área del cuerpo cambia de ancho: recalcula el viewport visible.
         requestAnimationFrame(() => this.renderGrid());
+    },
+
+    // Llama a una función de comando del taskpane (commands.js) dentro del
+    // iframe, con el mismo "event" con .completed() que espera un botón de
+    // la cinta real de Excel.
+    callTaskpaneCommand(fnName) {
+        if (!this._reportPanelOpen) this.toggleReportPanel();
+        const win = this._taskpaneFrame && this._taskpaneFrame.contentWindow;
+        if (!win || typeof win[fnName] !== "function") {
+            UI.toast("El panel de informe todavía se está cargando, espera un segundo y vuelve a intentarlo.", "info");
+            return;
+        }
+        win[fnName]({ completed: () => {} });
     },
 
     // Escritura directa de una celda (valor + estilo/propiedades extra),
