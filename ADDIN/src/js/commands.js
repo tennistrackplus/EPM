@@ -4151,33 +4151,17 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 accionTexto = toggled
                     ? " | Accion: expandir/contraer ejecutado"
                     : " | Accion: sin indicador +/- valido en esa celda";
-            } else if (isDoubleClick) {
-                // Doble clic "real" fuera del icono +/-: equivalente a
-                // Workbook_SheetBeforeDoubleClick + GetDimAttrRows/
-                // GetDimAttrCols + Helpvalue del VBA. Allí Helpvalue
-                // escribía dimname/attr/valor/dirección en
-                // EDIT_REPORT!A1:A5 y algo aguas abajo leía esas celdas
-                // para abrir el buscador de miembros. Aquí se hace lo
-                // mismo pero sin pasar por ninguna celda física: se
-                // resuelve el campo con resolveDracoFieldForAxisLevel a
-                // partir del informe/eje/nivel que YA localizó
-                // findDracoRowsNamedRangeForCell más arriba (`located`),
-                // que es el informe realmente clicado —no necesariamente
-                // el informe "activo" del taskpane— y que puede caer en
-                // la zona de crecimiento de ese informe (fuera todavía
-                // de su rango con nombre actual, ver `located.growth`).
-                staticCheckEntered = true;
-                // Lógica sin cambios: ahora vive en runDracoDoubleClickAction
-                // (compartida con el doble clic simulado desde
-                // EDIT_REPORT!T2:V2, ver handleDracoPickerFlagRequest).
-                const doubleClickResult = await runDracoDoubleClickAction(
-                    context, addr, located, cell.format.indentLevel, cellText
-                );
-                rowsStaticTrace = doubleClickResult.rowsStatic;
-                colsStaticTrace = doubleClickResult.colsStatic;
-                fieldLocatedTrace = doubleClickResult.fieldLocated;
-                accionTexto = doubleClickResult.accionTexto;
             }
+            // NOTA: la rama que aquí había para "isDoubleClick" (doble clic
+            // real fuera del icono +/-, vía runDracoDoubleClickAction) se ha
+            // quitado a propósito: esa detección y esa acción las hace ahora
+            // el VBA del XLAM (Workbook_SheetBeforeDoubleClick rellenando
+            // EDIT_REPORT!T2:V2 con V2="DC", ver handleDracoPickerFlagRequest
+            // más abajo). Mantenerla aquí también volvía a abrir el picker
+            // por partida doble o en la celda/hoja que no tocaba. Esta
+            // función SOLO debe reaccionar ya al clic sobre el icono de
+            // jerarquía; `isDoubleClick`/`clickInfo` se conservan únicamente
+            // para la traza de depuración (A53/A54/A55:A58) más abajo.
 
             console.log(
                 `[Draco] Clic en ${located.rangeName} (nivel ${located.level}) -> offsetX=${offsetX.toFixed(2)}pt | ` +
@@ -4247,15 +4231,16 @@ async function ensureDracoRowsClickLoggerRegistered() {
 
             sheets.items.forEach(sheet => {
                 if (DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) return;
-                // DESACTIVADO (vía 2 de las 4 que abrían el picker): el doble
-                // clic "detectado por JS" vía onSingleClicked competía con las
-                // otras vías (reconocimiento de miembros al escribir, y el
-                // flag EDIT_REPORT!V2 que simula el doble clic real capturado
-                // por el XLAM en VBA) y abría el picker de más, o en la
-                // celda/hoja que no tocaba. runDracoDoubleClickAction sigue
-                // viva: la sigue llamando runDracoSimulatedDoubleClick (vía
-                // handleDracoPickerFlagRequest, con V2="DC").
-                // sheet.onSingleClicked.add(handleDracoRowsSingleClick);
+                // REACTIVADO, pero solo para la parte de handleDracoRowsSingleClick
+                // que gestiona el clic sobre el icono ▾/▸ de expandir/contraer
+                // la jerarquía. La detección de "doble clic real" que antes
+                // vivía en esta misma función se ha quitado de ahí (ver
+                // handleDracoRowsSingleClick): esa vía la lleva el VBA del
+                // XLAM rellenando EDIT_REPORT!T2:V2 con V2="DC", gestionado
+                // por handleDracoPickerFlagRequest -> runDracoSimulatedDoubleClick.
+                // Con esto ya no compiten entre sí: cada camino cubre una
+                // interacción distinta (icono vs. doble clic).
+                sheet.onSingleClicked.add(handleDracoRowsSingleClick);
                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
             });
 
@@ -4267,10 +4252,11 @@ async function ensureDracoRowsClickLoggerRegistered() {
                             sheet.load("name");
                             await ctx.sync();
                             if (!DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) {
-                                // DESACTIVADO junto con el registro inicial de
-                                // más arriba (vía 2 de las 4, ver comentario
-                                // allí): ya no se engancha onSingleClicked.
-                                // sheet.onSingleClicked.add(handleDracoRowsSingleClick);
+                                // REACTIVADO junto con el registro inicial de
+                                // más arriba (ver comentario allí): mismo
+                                // engorde, para hojas añadidas después de
+                                // cargar el add-in.
+                                sheet.onSingleClicked.add(handleDracoRowsSingleClick);
                                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
                                 await ctx.sync();
                             }
