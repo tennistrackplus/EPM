@@ -4239,7 +4239,15 @@ async function ensureDracoRowsClickLoggerRegistered() {
 
             sheets.items.forEach(sheet => {
                 if (DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) return;
-                sheet.onSingleClicked.add(handleDracoRowsSingleClick);
+                // DESACTIVADO (vía 2 de las 4 que abrían el picker): el doble
+                // clic "detectado por JS" vía onSingleClicked competía con las
+                // otras vías (reconocimiento de miembros al escribir, y el
+                // flag EDIT_REPORT!V2 que simula el doble clic real capturado
+                // por el XLAM en VBA) y abría el picker de más, o en la
+                // celda/hoja que no tocaba. runDracoDoubleClickAction sigue
+                // viva: la sigue llamando runDracoSimulatedDoubleClick (vía 4,
+                // handleDracoDoubleClickFlagRequest).
+                // sheet.onSingleClicked.add(handleDracoRowsSingleClick);
                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
             });
 
@@ -4251,7 +4259,10 @@ async function ensureDracoRowsClickLoggerRegistered() {
                             sheet.load("name");
                             await ctx.sync();
                             if (!DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) {
-                                sheet.onSingleClicked.add(handleDracoRowsSingleClick);
+                                // DESACTIVADO junto con el registro inicial de
+                                // más arriba (vía 2 de las 4, ver comentario
+                                // allí): ya no se engancha onSingleClicked.
+                                // sheet.onSingleClicked.add(handleDracoRowsSingleClick);
                                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
                                 await ctx.sync();
                             }
@@ -4869,7 +4880,15 @@ async function registerEditReportPickerHandler(context) {
     }
 
     try {
-        editReport.onChanged.add(handleEditReportMemberPickerRequest);
+        // DESACTIVADO (vía 3 de las 4 que abrían el picker): el flag
+        // EDIT_REPORT!A5="X" abría el picker directamente (dim/attr/valor/
+        // dirección leídos de A1:A4), sin pasar por findDracoRowsNamedRangeForCell
+        // ni por nada del resto del JS, y competía con las demás vías. Se
+        // deja solo el reconocimiento de miembros al escribir (vía 1,
+        // handleDracoMemberRecognitionChanged) y el flag V2 que simula el
+        // doble clic real capturado por el XLAM en VBA (vía 4,
+        // handleDracoDoubleClickFlagRequest).
+        // editReport.onChanged.add(handleEditReportMemberPickerRequest);
         editReport.onChanged.add(handleDracoEditReportExpandCollapseRequest);
         editReport.onChanged.add(handleDracoDoubleClickFlagRequest);
         await context.sync();
@@ -4879,7 +4898,7 @@ async function registerEditReportPickerHandler(context) {
     }
 
     DracoEditReportHandlerRegistered = true;
-    console.log("[Draco] Listeners de EDIT_REPORT!A5 (Member Picker), T1:V1 (expandir/contraer) y T2:V2 (doble clic simulado) registrados.");
+    console.log("[Draco] Listeners de EDIT_REPORT: T1:V1 (expandir/contraer) y T2:V2 (doble clic simulado) registrados. A5 (Member Picker directo) DESACTIVADO.");
 }
 
 // sheetName es el nombre de la hoja de resultados donde vive `sheet`: cada
