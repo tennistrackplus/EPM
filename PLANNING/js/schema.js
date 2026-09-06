@@ -356,6 +356,24 @@ const DracoSchema = {
                     USUARIO STRING,
                     FECHA_INICIO TIMESTAMP,
                     FECHA_FIN TIMESTAMP
+                )`,
+            // Widgets: piezas visuales reutilizables (Filtro / Tabla / Gráfico).
+            // El contenido específico de cada widget (celdas y formato del
+            // editor tipo Excel, definición del informe sobre el modelo
+            // semántico, configuración del gráfico...) se guarda íntegro en
+            // CONFIG_JSON. Ver js/widgets.js y js/widget-table-editor.js.
+            WIDGETS: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    WIDGET_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    WIDGET STRING NOT NULL,
+                    TIPO STRING NOT NULL,        -- FILTRO | TABLA | GRAFICO
+                    DESCRIPCION STRING,
+                    CUBO_ID STRING,              -- FK -> CUBOS.CUBO_ID (opcional, según tipo)
+                    CONFIG_JSON STRING,
+                    USUARIO STRING,
+                    FECHA_CREACION TIMESTAMP,
+                    FECHA_MODIFICACION TIMESTAMP
                 )`
         };
         return ddl[table];
@@ -368,7 +386,7 @@ const DracoSchema = {
              "WORKFLOWS", "WORKFLOWS_PASOS", "WORKFLOWS_PASOS_DRIVER_VALORES", "WORKFLOWS_PASOS_VARIABLES",
              "WORKFLOWS_PASOS_BLOQUES", "WORKFLOWS_PASOS_TAREAS", "WORKFLOWS_PASOS_TAREAS_VALORES",
              "WORKFLOWS_RUNS", "WORKFLOWS_RUNS_INSTANCIAS", "WORKFLOWS_RUNS_VARIABLES",
-             "ACTUALIZACIONES", "FUNCIONES", "FUNCIONES_RUNS"],
+             "ACTUALIZACIONES", "FUNCIONES", "FUNCIONES_RUNS", "WIDGETS"],
 
     /**
      * Comprobación ligera para la puerta de instalación (usada hoy solo

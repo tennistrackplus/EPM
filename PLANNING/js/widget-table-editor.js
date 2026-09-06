@@ -3,9 +3,11 @@
  *
  * Estado del widget (se serializa completo en WIDGETS.CONFIG_JSON):
  *   {
- *     rows, cols,                     // dimensiones de la rejilla
+ *     rows, cols,                     // dimensiones de la rejilla (por defecto 1000 x 200)
  *     cells: { "r_c": CellStyle },    // solo celdas con contenido/formato != por defecto
- *     merges: [{ r, c, rowSpan, colSpan }]   // r,c = celda ancla (arriba-izq.)
+ *     merges: [{ r, c, rowSpan, colSpan }],  // r,c = celda ancla (arriba-izq.)
+ *     colWidths: { "c": px },         // solo columnas cuyo ancho difiere del por defecto
+ *     rowHeights: { "r": px }         // solo filas cuya altura difiere de la por defecto
  *   }
  *
  * CellStyle: { v, b, i, u, al, ff, fs, col, bg, bt, br, bb, bl }
@@ -13,27 +15,52 @@
  *   ff=familia de fuente, fs=tamaño (px), col=color texto, bg=color fondo,
  *   bt/br/bb/bl = borde arriba/derecha/abajo/izquierda (1/0)
  *
- * La selección es siempre un rectángulo {r1,c1,r2,c2} (normalizado). Un
- * clic simple selecciona una celda; con Shift se extiende el rectángulo
- * desde el ancla; arrastrando con el ratón (mousedown + mousemove) también
- * selecciona un rango. Doble clic (o Enter/F2, o teclear directamente)
- * entra en modo edición de contenido de la celda activa.
+ * La selección es siempre un rectángulo {r1,c1,r2,c2} (r1,c1 = celda ancla
+ * donde empezó el clic; r2,c2 = esquina "activa", la que se mueve al
+ * arrastrar o con flechas+Shift). Un clic simple selecciona una celda; con
+ * Shift se extiende el rectángulo desde el ancla; arrastrando con el ratón
+ * también selecciona un rango. Doble clic (o Enter/F2, o teclear
+ * directamente) entra en modo edición de contenido de la celda activa.
+ *
+ * ------------------------------------------------------------------
+ * Motor de rejilla (virtualizado)
+ * ------------------------------------------------------------------
+ * Con 1000 filas x 200 columnas por defecto (200.000 celdas posibles) no se
+ * puede pintar un <table> completo: solo se crean nodos DOM para las
+ * celdas realmente visibles en el viewport (+ un margen de buffer), tanto
+ * para el cuerpo como para las cabeceras de fila/columna. La posición de
+ * cada celda se calcula a partir de sumas acumuladas de anchos/altos
+ * (this._colOffsets / this._rowOffsets), que se reconstruyen solo cuando
+ * cambia la estructura (nº de filas/columnas, o el ancho/alto de alguna),
+ * marcado con markDirty(). El scroll es nativo (overflow:auto) sobre
+ * #wteBodyScroll; las cabeceras viven en paneles aparte y se desplazan con
+ * un transform que sigue al scroll del cuerpo, para quedar siempre fijas.
+ *
+ * Anchos y altos están ligados al ÍNDICE de fila/columna, igual que las
+ * celdas: insertar/eliminar una fila o columna reindexa colWidths/
+ * rowHeights exactamente igual que reindexa cells, así que el resto de
+ * columnas/filas conservan su tamaño (no se recalculan ni se "corren" los
+ * anchos al borrar).
  */
 const WidgetTableEditor = {
-    DEFAULT_ROWS: 15,
-    DEFAULT_COLS: 8,
-    COL_WIDTH: 96,
-    ROW_HEIGHT: 26,
+    DEFAULT_ROWS: 1000,
+    DEFAULT_COLS: 200,
+    DEFAULT_COL_WIDTH: 96,
+    DEFAULT_ROW_HEIGHT: 26,
+    MIN_COL_WIDTH: 32,
+    MIN_ROW_HEIGHT: 18,
+    BUFFER_PX: 200,
 
     FONTS: ["Arial", "Calibri", "Georgia", "Courier New", "Verdana", "Tahoma"],
     SIZES: [9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36],
 
-    async open(widgetRow) {
+    async open(widgetRow, project = null) {
         this.widget = {
             id: widgetRow.WIDGET_ID,
             name: widgetRow.WIDGET,
             description: widgetRow.DESCRIPCION || ""
         };
+        this.project = project || this.project;
 
         let configRaw = "{}";
         try {
@@ -50,11 +77,46 @@ const WidgetTableEditor = {
         this.editingCell = null;
         this.dragging = false;
 
+        // Estado interno del motor de rejilla (se reconstruye en cada open()).
+        this._colOffsets = null;
+        this._rowOffsets = null;
+        this._totalWidth = 0;
+        this._totalHeight = 0;
+        this._offsetsDirty = true;
+        this._rafPending = false;
+        this._resizeCleanup = null;
+
+        // Panel de informe (pivot): se crea perezosamente al pulsar "☰ Informe".
+        this._reportPanelOpen = false;
+
         this.renderModal();
+
+        if (typeof WidgetPivot !== "undefined") WidgetPivot.onWidgetOpened();
     },
 
     blankState() {
-        return { rows: this.DEFAULT_ROWS, cols: this.DEFAULT_COLS, cells: {}, merges: [] };
+        return {
+            rows: this.DEFAULT_ROWS,
+            cols: this.DEFAULT_COLS,
+            cells: {},
+            merges: [],
+            colWidths: {},
+            rowHeights: {},
+            report: this.defaultReport()
+        };
+    },
+
+    defaultReport() {
+        return {
+            cuboId: null,
+            rowField: null,   // { dimId, hierarchyId|null }
+            colField: null,   // { dimId, hierarchyId|null }
+            values: [],       // [{ name, colId, agg:"SUM" }]
+            filters: [],      // [{ dimId, dimName, colId, values:[...] }]
+            expandedRows: [], // rutas "valNivel0|valNivel1|..." expandidas
+            expandedCols: [],
+            memberRecognition: false
+        };
     },
 
     parseConfig(raw) {
@@ -64,7 +126,10 @@ const WidgetTableEditor = {
                 rows: parsed.rows || this.DEFAULT_ROWS,
                 cols: parsed.cols || this.DEFAULT_COLS,
                 cells: parsed.cells || {},
-                merges: parsed.merges || []
+                merges: parsed.merges || [],
+                colWidths: parsed.colWidths || {},
+                rowHeights: parsed.rowHeights || {},
+                report: parsed.report || this.defaultReport()
             };
         } catch (e) {
             return this.blankState();
@@ -97,7 +162,25 @@ const WidgetTableEditor = {
                 </div>
                 <div class="modal-body modal-body-flush">
                     <div class="wte-toolbar" id="wteToolbar"></div>
-                    <div class="wte-grid-wrap" id="wteGridWrap"></div>
+                    <div class="wte-grid-wrap" id="wteGridWrap">
+                        <div class="wte-grid-main" id="wteGridMain">
+                            <div class="wte-headrow">
+                                <div class="wte-corner" id="wteCorner"></div>
+                                <div class="wte-colhead-clip" id="wteColHeadClip">
+                                    <div class="wte-colhead-track" id="wteColHeadTrack"></div>
+                                </div>
+                            </div>
+                            <div class="wte-bodyrow">
+                                <div class="wte-rowhead-clip" id="wteRowHeadClip">
+                                    <div class="wte-rowhead-track" id="wteRowHeadTrack"></div>
+                                </div>
+                                <div class="wte-body-scroll" id="wteBodyScroll">
+                                    <div class="wte-body-canvas" id="wteBodyCanvas"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="wte-report-panel" id="wteReportPanel"></div>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" id="wteCancel">Cancelar</button>
@@ -123,13 +206,14 @@ const WidgetTableEditor = {
         overlay.classList.add("visible");
 
         this.renderToolbar();
-        this.renderGrid();
+        this.initGrid();
 
         document.addEventListener("keydown", this._keydownHandler = (e) => this.onGlobalKeydown(e));
         document.addEventListener("mouseup", this._mouseupHandler = () => { this.dragging = false; });
     },
 
     close() {
+        if (this._resizeCleanup) { this._resizeCleanup(); this._resizeCleanup = null; }
         if (this.overlay) this.overlay.classList.remove("visible");
         document.removeEventListener("keydown", this._keydownHandler);
         document.removeEventListener("mouseup", this._mouseupHandler);
@@ -165,7 +249,10 @@ const WidgetTableEditor = {
             <span class="wte-toolbar-sep"></span>
             <button class="btn btn-secondary btn-sm" id="wteMerge" title="Combinar celdas seleccionadas">⛭ Combinar</button>
             <button class="btn btn-secondary btn-sm" id="wteUnmerge" title="Separar celdas">⛝ Separar</button>
+            <span class="wte-toolbar-sep"></span>
+            <button class="btn btn-secondary btn-sm" id="wteToggleReport" title="Diseñar informe sobre un cubo">☰ Informe</button>
             <span class="wte-toolbar-spacer"></span>
+            <span class="wte-toolbar-hint" id="wteDimHint"></span>
             <button class="btn btn-secondary btn-sm" id="wteAddRow" title="Añadir fila">+ Fila</button>
             <button class="btn btn-secondary btn-sm" id="wteDelRow" title="Eliminar fila seleccionada">− Fila</button>
             <button class="btn btn-secondary btn-sm" id="wteAddCol" title="Añadir columna">+ Columna</button>
@@ -187,6 +274,7 @@ const WidgetTableEditor = {
         document.getElementById("wteBorderClear").addEventListener("click", () => this.applyBorder("clear"));
         document.getElementById("wteMerge").addEventListener("click", () => this.mergeSelection());
         document.getElementById("wteUnmerge").addEventListener("click", () => this.unmergeSelection());
+        document.getElementById("wteToggleReport").addEventListener("click", () => this.toggleReportPanel());
         document.getElementById("wteAddRow").addEventListener("click", () => this.insertRow());
         document.getElementById("wteDelRow").addEventListener("click", () => this.deleteRow());
         document.getElementById("wteAddCol").addEventListener("click", () => this.insertCol());
@@ -194,7 +282,8 @@ const WidgetTableEditor = {
     },
 
     syncToolbar() {
-        const cell = this.getCell(this.selection.r1, this.selection.c1);
+        const anchor = this.anchorFor(this.selection.r1, this.selection.c1);
+        const cell = this.getCell(anchor.r, anchor.c);
         document.getElementById("wteFont").value = cell.ff || this.FONTS[0];
         document.getElementById("wteSize").value = cell.fs || 12;
         document.getElementById("wteColor").value = cell.col || "#1a1f2b";
@@ -202,6 +291,42 @@ const WidgetTableEditor = {
         document.getElementById("wteBold").classList.toggle("active", !!cell.b);
         document.getElementById("wteItalic").classList.toggle("active", !!cell.i);
         document.getElementById("wteUnderline").classList.toggle("active", !!cell.u);
+        const hint = document.getElementById("wteDimHint");
+        if (hint) hint.textContent = `${this.state.rows} filas × ${this.state.cols} columnas`;
+    },
+
+    // ------------------------------------------------------------
+    // Panel de informe (pivot sobre un cubo) — ver js/widget-pivot.js
+    // ------------------------------------------------------------
+    toggleReportPanel() {
+        const panel = document.getElementById("wteReportPanel");
+        this._reportPanelOpen = !this._reportPanelOpen;
+        panel.classList.toggle("visible", this._reportPanelOpen);
+        document.getElementById("wteToggleReport").classList.toggle("active", this._reportPanelOpen);
+        if (this._reportPanelOpen && typeof WidgetPivot !== "undefined") {
+            WidgetPivot.render(panel, this);
+        }
+        // El área del cuerpo cambia de ancho: recalcula el viewport visible.
+        requestAnimationFrame(() => this.renderGrid());
+    },
+
+    // Escritura directa de una celda (valor + estilo/propiedades extra),
+    // usada por WidgetPivot para pintar el resultado del informe.
+    writeCell(r, c, value, extra = null) {
+        const cell = this.ensureCell(r, c);
+        cell.v = value;
+        if (extra) Object.assign(cell, extra);
+    },
+
+    // Vacía por completo un rectángulo de celdas (contenido y estilo),
+    // usado antes de repintar un informe para no dejar restos de una
+    // ejecución anterior más grande.
+    clearRegion(r1, c1, r2, c2) {
+        for (let r = r1; r <= r2; r++) {
+            for (let c = c1; c <= c2; c++) {
+                delete this.state.cells[this.cellKey(r, c)];
+            }
+        }
     },
 
     // ------------------------------------------------------------
@@ -218,6 +343,9 @@ const WidgetTableEditor = {
         if (!this.state.cells[key]) this.state.cells[key] = {};
         return this.state.cells[key];
     },
+
+    colWidth(c) { return this.state.colWidths[c] || this.DEFAULT_COL_WIDTH; },
+    rowHeight(r) { return this.state.rowHeights[r] || this.DEFAULT_ROW_HEIGHT; },
 
     // Celda ancla que "cubre" (r,c): ella misma, o el ancla de la fusión
     // a la que pertenece.
@@ -321,13 +449,10 @@ const WidgetTableEditor = {
             UI.toast("Selecciona más de una celda para combinar.", "error");
             return;
         }
-        // Disuelve cualquier fusión existente que se solape con la selección.
         this.state.merges = this.state.merges.filter(m => {
             const overlaps = m.r <= sel.r2 && m.r + m.rowSpan - 1 >= sel.r1 && m.c <= sel.c2 && m.c + m.colSpan - 1 >= sel.c1;
             return !overlaps;
         });
-        // Conserva solo el contenido de la celda superior-izquierda; el resto
-        // de celdas del rango se vacían (quedan cubiertas por la fusión).
         for (let r = sel.r1; r <= sel.r2; r++) {
             for (let c = sel.c1; c <= sel.c2; c++) {
                 if (r === sel.r1 && c === sel.c1) continue;
@@ -355,9 +480,11 @@ const WidgetTableEditor = {
 
     // ------------------------------------------------------------
     // Insertar / eliminar filas y columnas
+    // (colWidths/rowHeights se reindexan igual que cells, para que el
+    // resto de columnas/filas conserven su tamaño intacto)
     // ------------------------------------------------------------
     insertRow() {
-        const idx = Math.min(this.selection.r1, this.selection.r2) + 1; // debajo de la selección
+        const idx = Math.min(this.selection.r1, this.selection.r2) + 1;
         this.unmergeCrossing("row", idx);
 
         const newCells = {};
@@ -367,12 +494,20 @@ const WidgetTableEditor = {
         });
         this.state.cells = newCells;
 
+        const newHeights = {};
+        Object.keys(this.state.rowHeights).forEach(key => {
+            const r = Number(key);
+            newHeights[r >= idx ? r + 1 : r] = this.state.rowHeights[key];
+        });
+        this.state.rowHeights = newHeights;
+
         this.state.merges.forEach(m => {
             if (idx <= m.r) m.r += 1;
             else if (idx > m.r && idx < m.r + m.rowSpan) m.rowSpan += 1;
         });
 
         this.state.rows += 1;
+        this.markDirty();
         this.renderGrid();
     },
 
@@ -389,10 +524,19 @@ const WidgetTableEditor = {
         });
         this.state.cells = newCells;
 
+        const newHeights = {};
+        Object.keys(this.state.rowHeights).forEach(key => {
+            const r = Number(key);
+            if (r === idx) return;
+            newHeights[r > idx ? r - 1 : r] = this.state.rowHeights[key];
+        });
+        this.state.rowHeights = newHeights;
+
         this.state.merges.forEach(m => { if (idx < m.r) m.r -= 1; });
 
         this.state.rows -= 1;
         this.selection = { r1: 0, c1: 0, r2: 0, c2: 0 };
+        this.markDirty();
         this.renderGrid();
     },
 
@@ -407,12 +551,20 @@ const WidgetTableEditor = {
         });
         this.state.cells = newCells;
 
+        const newWidths = {};
+        Object.keys(this.state.colWidths).forEach(key => {
+            const c = Number(key);
+            newWidths[c >= idx ? c + 1 : c] = this.state.colWidths[key];
+        });
+        this.state.colWidths = newWidths;
+
         this.state.merges.forEach(m => {
             if (idx <= m.c) m.c += 1;
             else if (idx > m.c && idx < m.c + m.colSpan) m.colSpan += 1;
         });
 
         this.state.cols += 1;
+        this.markDirty();
         this.renderGrid();
     },
 
@@ -429,10 +581,19 @@ const WidgetTableEditor = {
         });
         this.state.cells = newCells;
 
+        const newWidths = {};
+        Object.keys(this.state.colWidths).forEach(key => {
+            const c = Number(key);
+            if (c === idx) return;
+            newWidths[c > idx ? c - 1 : c] = this.state.colWidths[key];
+        });
+        this.state.colWidths = newWidths;
+
         this.state.merges.forEach(m => { if (idx < m.c) m.c -= 1; });
 
         this.state.cols -= 1;
         this.selection = { r1: 0, c1: 0, r2: 0, c2: 0 };
+        this.markDirty();
         this.renderGrid();
     },
 
@@ -456,78 +617,98 @@ const WidgetTableEditor = {
     },
 
     // ------------------------------------------------------------
-    // Render de la rejilla
+    // Motor de rejilla: offsets acumulados, búsqueda binaria y
+    // render virtualizado (solo el rango visible + buffer)
     // ------------------------------------------------------------
-    renderGrid() {
-        const wrap = document.getElementById("wteGridWrap");
-        const covered = this.coveredMap();
-        const sel = this.normalizedSelection();
+    markDirty() { this._offsetsDirty = true; },
 
-        let html = `<table class="wte-table"><thead><tr><th class="wte-corner"></th>`;
-        for (let c = 0; c < this.state.cols; c++) {
-            html += `<th class="wte-colhead" data-colhead="${c}" style="width:${this.COL_WIDTH}px;">${this.colLabel(c)}</th>`;
+    buildOffsets() {
+        const colOffsets = new Array(this.state.cols + 1);
+        let acc = 0;
+        for (let c = 0; c < this.state.cols; c++) { colOffsets[c] = acc; acc += this.colWidth(c); }
+        colOffsets[this.state.cols] = acc;
+        this._colOffsets = colOffsets;
+        this._totalWidth = acc;
+
+        const rowOffsets = new Array(this.state.rows + 1);
+        acc = 0;
+        for (let r = 0; r < this.state.rows; r++) { rowOffsets[r] = acc; acc += this.rowHeight(r); }
+        rowOffsets[this.state.rows] = acc;
+        this._rowOffsets = rowOffsets;
+        this._totalHeight = acc;
+
+        this._offsetsDirty = false;
+    },
+
+    ensureOffsets() {
+        if (this._offsetsDirty || !this._colOffsets) this.buildOffsets();
+    },
+
+    colX(c) { return this._colOffsets[c]; },
+    rowY(r) { return this._rowOffsets[r]; },
+
+    // Índice i (0-based, < count) tal que offsets[i] <= pos < offsets[i+1].
+    findIndex(offsets, count, pos) {
+        if (count <= 0) return 0;
+        if (pos <= offsets[0]) return 0;
+        if (pos >= offsets[count - 1]) return count - 1;
+        let lo = 0, hi = count - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (offsets[mid] <= pos) lo = mid; else hi = mid - 1;
         }
-        html += `</tr></thead><tbody>`;
+        return lo;
+    },
 
-        for (let r = 0; r < this.state.rows; r++) {
-            html += `<tr><th class="wte-rowhead" data-rowhead="${r}" style="height:${this.ROW_HEIGHT}px;">${r + 1}</th>`;
-            for (let c = 0; c < this.state.cols; c++) {
-                if (covered[this.cellKey(r, c)]) continue;
+    initGrid() {
+        const scroller = document.getElementById("wteBodyScroll");
+        scroller.scrollTop = 0;
+        scroller.scrollLeft = 0;
+        scroller.addEventListener("scroll", () => this.scheduleRender());
 
-                const merge = this.state.merges.find(m => m.r === r && m.c === c);
-                const rowSpan = merge ? merge.rowSpan : 1;
-                const colSpan = merge ? merge.colSpan : 1;
-                const cell = this.getCell(r, c);
-                const isSelected = r >= sel.r1 && r <= sel.r2 && c >= sel.c1 && c <= sel.c2;
-                const isAnchorSel = r === Math.min(this.selection.r1, this.selection.r2) && c === Math.min(this.selection.c1, this.selection.c2);
-
-                const style = [
-                    `font-family:${cell.ff || "inherit"}`,
-                    `font-size:${cell.fs || 12}px`,
-                    `font-weight:${cell.b ? "700" : "400"}`,
-                    `font-style:${cell.i ? "italic" : "normal"}`,
-                    `text-decoration:${cell.u ? "underline" : "none"}`,
-                    `text-align:${cell.al || "left"}`,
-                    `color:${cell.col || "inherit"}`,
-                    `background-color:${cell.bg || "#ffffff"}`,
-                    `border-top:${cell.bt ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`,
-                    `border-right:${cell.br ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`,
-                    `border-bottom:${cell.bb ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`,
-                    `border-left:${cell.bl ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`
-                ].join(";");
-
-                html += `<td class="wte-cell${isSelected ? " wte-cell-selected" : ""}${isAnchorSel ? " wte-cell-anchor" : ""}"
-                    data-r="${r}" data-c="${c}" rowspan="${rowSpan}" colspan="${colSpan}"
-                    style="${style}">${UI.escapeHtml(cell.v || "")}</td>`;
-            }
-            html += `</tr>`;
-        }
-        html += `</tbody></table>`;
-        wrap.innerHTML = html;
-
-        wrap.querySelectorAll(".wte-cell").forEach(td => {
-            const r = parseInt(td.dataset.r, 10), c = parseInt(td.dataset.c, 10);
-            td.addEventListener("mousedown", (e) => this.onCellMouseDown(e, r, c));
-            td.addEventListener("mouseenter", () => this.onCellMouseEnter(r, c));
-            td.addEventListener("dblclick", () => this.startEditing(r, c));
-        });
-        wrap.querySelectorAll("[data-colhead]").forEach(th => {
-            th.addEventListener("click", () => {
-                const c = parseInt(th.dataset.colhead, 10);
-                this.selection = { r1: 0, c1: c, r2: this.state.rows - 1, c2: c };
-                this.renderGrid();
-                this.syncToolbar();
-            });
-        });
-        wrap.querySelectorAll("[data-rowhead]").forEach(th => {
-            th.addEventListener("click", () => {
-                const r = parseInt(th.dataset.rowhead, 10);
-                this.selection = { r1: r, c1: 0, r2: r, c2: this.state.cols - 1 };
-                this.renderGrid();
-                this.syncToolbar();
-            });
+        // Rueda del ratón sobre las cabeceras: se reenvía al scroll del cuerpo.
+        ["wteColHeadClip", "wteRowHeadClip", "wteCorner"].forEach(id => {
+            const el = document.getElementById(id);
+            el.addEventListener("wheel", (e) => {
+                e.preventDefault();
+                scroller.scrollTop += e.deltaY;
+                scroller.scrollLeft += e.deltaX;
+            }, { passive: false });
         });
 
+        this.markDirty();
+        this.renderGrid();
+    },
+
+    scheduleRender() {
+        if (this._rafPending) return;
+        this._rafPending = true;
+        requestAnimationFrame(() => { this._rafPending = false; this.renderViewport(); });
+    },
+
+    // Punto de entrada usado por el resto del editor (selección, estilos,
+    // insertar/eliminar filas y columnas...). Nombre conservado por
+    // compatibilidad con el resto del código.
+    renderGrid() { this.renderViewport(); },
+
+    renderViewport() {
+        this.ensureOffsets();
+        const scroller = document.getElementById("wteBodyScroll");
+        if (!scroller) return;
+        const scrollLeft = scroller.scrollLeft, scrollTop = scroller.scrollTop;
+        const viewW = scroller.clientWidth || 800, viewH = scroller.clientHeight || 400;
+
+        document.getElementById("wteColHeadTrack").style.transform = `translateX(${-scrollLeft}px)`;
+        document.getElementById("wteRowHeadTrack").style.transform = `translateY(${-scrollTop}px)`;
+
+        const c1 = this.findIndex(this._colOffsets, this.state.cols, Math.max(0, scrollLeft - this.BUFFER_PX));
+        const c2 = this.findIndex(this._colOffsets, this.state.cols, scrollLeft + viewW + this.BUFFER_PX);
+        const r1 = this.findIndex(this._rowOffsets, this.state.rows, Math.max(0, scrollTop - this.BUFFER_PX));
+        const r2 = this.findIndex(this._rowOffsets, this.state.rows, scrollTop + viewH + this.BUFFER_PX);
+
+        this.renderColHeaders(c1, c2);
+        this.renderRowHeaders(r1, r2);
+        this.renderCells(r1, r2, c1, c2);
         this.syncToolbar();
     },
 
@@ -540,6 +721,185 @@ const WidgetTableEditor = {
             c = Math.floor((c - 1) / 26);
         }
         return label;
+    },
+
+    renderColHeaders(c1, c2) {
+        const track = document.getElementById("wteColHeadTrack");
+        track.style.width = this._totalWidth + "px";
+        const sel = this.normalizedSelection();
+        let html = "";
+        for (let c = c1; c <= c2; c++) {
+            const isSel = c >= sel.c1 && c <= sel.c2;
+            html += `<div class="wte-colhead-cell${isSel ? " wte-head-selected" : ""}" data-colhead="${c}" style="left:${this.colX(c)}px;width:${this.colWidth(c)}px;">${this.colLabel(c)}<div class="wte-resize-col" data-resizecol="${c}"></div></div>`;
+        }
+        track.innerHTML = html;
+        track.querySelectorAll(".wte-colhead-cell").forEach(el => {
+            const c = parseInt(el.dataset.colhead, 10);
+            el.addEventListener("mousedown", (e) => {
+                if (e.target.closest("[data-resizecol]")) {
+                    e.preventDefault();
+                    this.startColResize(c, e.clientX);
+                    return;
+                }
+                this.selection = { r1: 0, c1: c, r2: this.state.rows - 1, c2: c };
+                this.renderGrid();
+            });
+        });
+    },
+
+    renderRowHeaders(r1, r2) {
+        const track = document.getElementById("wteRowHeadTrack");
+        track.style.height = this._totalHeight + "px";
+        const sel = this.normalizedSelection();
+        let html = "";
+        for (let r = r1; r <= r2; r++) {
+            const isSel = r >= sel.r1 && r <= sel.r2;
+            html += `<div class="wte-rowhead-cell${isSel ? " wte-head-selected" : ""}" data-rowhead="${r}" style="top:${this.rowY(r)}px;height:${this.rowHeight(r)}px;">${r + 1}<div class="wte-resize-row" data-resizerow="${r}"></div></div>`;
+        }
+        track.innerHTML = html;
+        track.querySelectorAll(".wte-rowhead-cell").forEach(el => {
+            const r = parseInt(el.dataset.rowhead, 10);
+            el.addEventListener("mousedown", (e) => {
+                if (e.target.closest("[data-resizerow]")) {
+                    e.preventDefault();
+                    this.startRowResize(r, e.clientY);
+                    return;
+                }
+                this.selection = { r1: r, c1: 0, r2: r, c2: this.state.cols - 1 };
+                this.renderGrid();
+            });
+        });
+    },
+
+    startColResize(c, startX) {
+        const startWidth = this.colWidth(c);
+        document.body.classList.add("wte-resizing");
+        const onMove = (e) => {
+            this.state.colWidths[c] = Math.max(this.MIN_COL_WIDTH, startWidth + (e.clientX - startX));
+            this.markDirty();
+            this.renderGrid();
+        };
+        const onUp = () => {
+            document.body.classList.remove("wte-resizing");
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            this._resizeCleanup = null;
+        };
+        this._resizeCleanup = onUp;
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+    },
+
+    startRowResize(r, startY) {
+        const startHeight = this.rowHeight(r);
+        document.body.classList.add("wte-resizing-row");
+        const onMove = (e) => {
+            this.state.rowHeights[r] = Math.max(this.MIN_ROW_HEIGHT, startHeight + (e.clientY - startY));
+            this.markDirty();
+            this.renderGrid();
+        };
+        const onUp = () => {
+            document.body.classList.remove("wte-resizing-row");
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+            this._resizeCleanup = null;
+        };
+        this._resizeCleanup = onUp;
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+    },
+
+    renderCells(r1, r2, c1, c2) {
+        const canvas = document.getElementById("wteBodyCanvas");
+        canvas.style.width = this._totalWidth + "px";
+        canvas.style.height = this._totalHeight + "px";
+
+        const sel = this.normalizedSelection();
+        const renderedAnchors = new Set();
+        let html = "";
+
+        // 1) Fusiones que se solapan con el rectángulo visible, aunque su
+        // ancla quede fuera del rango (celda combinada parcialmente scrolleada).
+        this.state.merges.forEach(m => {
+            const overlaps = m.r <= r2 && m.r + m.rowSpan - 1 >= r1 && m.c <= c2 && m.c + m.colSpan - 1 >= c1;
+            if (!overlaps) return;
+            renderedAnchors.add(this.cellKey(m.r, m.c));
+            const w = this._colOffsets[m.c + m.colSpan] - this._colOffsets[m.c];
+            const h = this._rowOffsets[m.r + m.rowSpan] - this._rowOffsets[m.r];
+            html += this.cellHtml(m.r, m.c, this.colX(m.c), this.rowY(m.r), w, h, sel);
+        });
+
+        // 2) Celdas normales del rango visible (sin cubrir, sin ya renderizada).
+        const covered = this.coveredMap();
+        for (let r = r1; r <= r2; r++) {
+            const y = this.rowY(r), h = this.rowHeight(r);
+            for (let c = c1; c <= c2; c++) {
+                const key = this.cellKey(r, c);
+                if (covered[key] || renderedAnchors.has(key)) continue;
+                html += this.cellHtml(r, c, this.colX(c), y, this.colWidth(c), h, sel);
+            }
+        }
+
+        canvas.innerHTML = html;
+        canvas.querySelectorAll(".wte-cell").forEach(div => {
+            const r = parseInt(div.dataset.r, 10), c = parseInt(div.dataset.c, 10);
+            div.addEventListener("mousedown", (e) => this.onCellMouseDown(e, r, c));
+            div.addEventListener("mouseenter", () => this.onCellMouseEnter(r, c));
+            div.addEventListener("dblclick", () => this.startEditing(r, c));
+        });
+        canvas.querySelectorAll(".wte-pivot-toggle").forEach(span => {
+            span.addEventListener("mousedown", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (typeof WidgetPivot !== "undefined") {
+                    WidgetPivot.toggleMember(parseInt(span.dataset.toggleR, 10), parseInt(span.dataset.toggleC, 10));
+                }
+            });
+        });
+    },
+
+    cellHtml(r, c, x, y, w, h, sel) {
+        const cell = this.getCell(r, c);
+        const isSelected = r >= sel.r1 && r <= sel.r2 && c >= sel.c1 && c <= sel.c2;
+        const isAnchorSel = r === Math.min(this.selection.r1, this.selection.r2) && c === Math.min(this.selection.c1, this.selection.c2);
+
+        const style = [
+            `left:${x}px`, `top:${y}px`, `width:${w}px`, `height:${h}px`,
+            `font-family:${cell.ff || "inherit"}`,
+            `font-size:${cell.fs || 12}px`,
+            `font-weight:${cell.b ? "700" : "400"}`,
+            `font-style:${cell.i ? "italic" : "normal"}`,
+            `text-decoration:${cell.u ? "underline" : "none"}`,
+            `text-align:${cell.al || "left"}`,
+            `color:${cell.col || "inherit"}`,
+            `background-color:${cell.bg || "#ffffff"}`,
+            `border-top:${cell.bt ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`,
+            `border-right:${cell.br ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`,
+            `border-bottom:${cell.bb ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`,
+            `border-left:${cell.bl ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`
+        ].join(";");
+
+        // Celdas de cabecera de un informe (jerarquía): icono ▸/▾ clicable
+        // en vez de un listener de hover, tal y como se pidió. El icono es
+        // un <span> propio para poder distinguir su clic del de la celda.
+        const inner = cell.tg
+            ? `<span class="wte-pivot-toggle" data-toggle-r="${r}" data-toggle-c="${c}">${cell.tg.expanded ? "▾" : "▸"}</span>${UI.escapeHtml(cell.v || "")}`
+            : UI.escapeHtml(cell.v || "");
+
+        return `<div class="wte-cell${isSelected ? " wte-cell-selected" : ""}${isAnchorSel ? " wte-cell-anchor" : ""}${cell.tg ? " wte-cell-pivot-head" : ""}"
+            data-r="${r}" data-c="${c}" style="${style}">${inner}</div>`;
+    },
+
+    scrollCellIntoView(r, c) {
+        this.ensureOffsets();
+        const scroller = document.getElementById("wteBodyScroll");
+        const x = this.colX(c), w = this.colWidth(c);
+        const y = this.rowY(r), h = this.rowHeight(r);
+        if (x < scroller.scrollLeft) scroller.scrollLeft = x;
+        else if (x + w > scroller.scrollLeft + scroller.clientWidth) scroller.scrollLeft = x + w - scroller.clientWidth;
+        if (y < scroller.scrollTop) scroller.scrollTop = y;
+        else if (y + h > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = y + h - scroller.clientHeight;
+        this.renderViewport();
     },
 
     // ------------------------------------------------------------
@@ -572,7 +932,7 @@ const WidgetTableEditor = {
         const anchor = this.anchorFor(r, c);
         this.selection = { r1: anchor.r, c1: anchor.c, r2: anchor.r, c2: anchor.c };
         this.editingCell = { r: anchor.r, c: anchor.c };
-        this.renderGrid();
+        this.scrollCellIntoView(anchor.r, anchor.c);
 
         const td = document.querySelector(`.wte-cell[data-r="${anchor.r}"][data-c="${anchor.c}"]`);
         if (!td) return;
@@ -598,16 +958,41 @@ const WidgetTableEditor = {
             this.state.cells[this.cellKey(r, c)].v = "";
         }
         this.editingCell = null;
+        if (typeof WidgetPivot !== "undefined" && WidgetPivot.onCellCommitted) WidgetPivot.onCellCommitted(r, c);
         this.renderGrid();
     },
 
     onGlobalKeydown(e) {
         if (!this.overlay || !this.overlay.classList.contains("visible")) return;
-        if (this.editingCell) return; // se gestiona en el propio td
+        if (this.editingCell) return; // se gestiona en el propio div
 
         const active = document.activeElement;
         if (active && active.id === "wteTitle") return;
 
+        const moveKeys = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] };
+        if (moveKeys[e.key]) {
+            e.preventDefault();
+            const [dr, dc] = moveKeys[e.key];
+            if (e.shiftKey) {
+                this.selection.r2 = Math.max(0, Math.min(this.state.rows - 1, this.selection.r2 + dr));
+                this.selection.c2 = Math.max(0, Math.min(this.state.cols - 1, this.selection.c2 + dc));
+            } else {
+                const r = Math.max(0, Math.min(this.state.rows - 1, this.selection.r1 + dr));
+                const c = Math.max(0, Math.min(this.state.cols - 1, this.selection.c1 + dc));
+                const anchor = this.anchorFor(r, c);
+                this.selection = { r1: anchor.r, c1: anchor.c, r2: anchor.r, c2: anchor.c };
+            }
+            this.scrollCellIntoView(this.selection.r2, this.selection.c2);
+            return;
+        }
+        if (e.key === "Tab") {
+            e.preventDefault();
+            const c = Math.max(0, Math.min(this.state.cols - 1, this.selection.c1 + (e.shiftKey ? -1 : 1)));
+            const anchor = this.anchorFor(this.selection.r1, c);
+            this.selection = { r1: anchor.r, c1: anchor.c, r2: anchor.r, c2: anchor.c };
+            this.scrollCellIntoView(this.selection.r2, this.selection.c2);
+            return;
+        }
         if (e.key === "Enter" || e.key === "F2") {
             e.preventDefault();
             this.startEditing(this.selection.r1, this.selection.c1);

@@ -175,7 +175,7 @@ const Widgets = {
         if (result.type === "TABLA" && typeof WidgetTableEditor !== "undefined") {
             const row = this.list.find(w => w[this.ID_COL] === savedId) ||
                 { [this.ID_COL]: savedId, [this.NAME_COL]: result.name, DESCRIPCION: result.description };
-            await WidgetTableEditor.open(row);
+            await WidgetTableEditor.open(row, this.project);
             return;
         }
 
