@@ -1241,8 +1241,12 @@ const TaskPaneApp = {
                 // Una medida se reordena SOLO dentro de su propio grupo
                 // "Σ Medidas" (no se compara su posición con las tags de
                 // dimensiones sueltas del mismo eje); el resto de campos se
-                // reordena entre sí, directamente en la dropzone.
-                const container = this.isMeasureField(dragged.data)
+                // reordena entre sí, directamente en la dropzone. El grupo
+                // "Σ Medidas" solo existe en Filas/Columnas: una medida
+                // suelta en Filtros se reordena directamente en la dropzone,
+                // igual que cualquier otro campo de esa zona.
+                const isGroupedZone = zoneId === "rows" || zoneId === "columns";
+                const container = (this.isMeasureField(dragged.data) && isGroupedZone)
                     ? this.ensureMeasureGroup(dropzoneContent, zoneId)
                     : dropzoneContent;
                 const afterElement = this.getDragAfterElement(container, e.clientY);
@@ -1324,6 +1328,29 @@ const TaskPaneApp = {
         return remaining.length > 0;
     },
 
+    // Regla para soltar una medida en Filtros (nueva zona de destino para
+    // medidas, aparte de Filas/Columnas):
+    //  - Si viene arrastrada desde Filas o Columnas: solo se permite si esa
+    //    medida es la ÚNICA del grupo "Σ Medidas" de ese eje (si hubiera más
+    //    de una, movería solo una parte del grupo, dejando el resto atrás,
+    //    lo cual no tiene sentido: hay que reducir el eje a una sola medida
+    //    primero).
+    //  - Si viene arrastrada directamente desde el panel de Dimensiones (o
+    //    de cualquier sitio sin zona de origen, sourceZone === null): solo
+    //    se permite si esa medida no está ya colocada en Filas o en
+    //    Columnas (para no duplicar el mismo campo en dos sitios a la vez).
+    canMoveMeasureToFilters(data, sourceZone) {
+        if (sourceZone === "rows" || sourceZone === "columns") {
+            const measuresInZone = this.listForZone(sourceZone)
+                .filter(entry => String(entry.dimension).toUpperCase() === "MEASURE");
+            return measuresInZone.length === 1; // la que se está arrastrando es la única
+        }
+        const isSameMeasure = (entry) => String(entry.dimension).toUpperCase() === "MEASURE" && entry.name === data.name;
+        const yaEnFilas = this.state.rows.some(isSameMeasure);
+        const yaEnColumnas = this.state.columns.some(isSameMeasure);
+        return !yaEnFilas && !yaEnColumnas;
+    },
+
     // Aviso visual breve (borde rojo + texto en el estado de autoguardado)
     // cuando se rechaza un drop por la regla anterior.
     flashZoneWarning(zoneId, message) {
@@ -1386,6 +1413,18 @@ const TaskPaneApp = {
         // dejaría alguna medida en el eje contrario, se rechaza el drop.
         if (this.wouldSplitMeasuresAcrossAxes(zoneId, data, sourceZone)) {
             this.flashZoneWarning(zoneId, "Todas las medidas deben ir en el mismo eje (Filas o Columnas).");
+            this.draggedElementData = null;
+            return;
+        }
+
+        // Regla nueva: una medida solo puede soltarse en Filtros si es la
+        // única de su eje de origen (Filas/Columnas), o si viene del panel
+        // de Dimensiones y no está ya colocada en Filas ni en Columnas.
+        if (zoneId === "filters" && this.isMeasureField(data) && !this.canMoveMeasureToFilters(data, sourceZone)) {
+            const msg = (sourceZone === "rows" || sourceZone === "columns")
+                ? "Solo se puede mover a Filtros cuando es la única medida del eje."
+                : "Esa medida ya está en Filas o Columnas: quítala de ahí primero.";
+            this.flashZoneWarning(zoneId, msg);
             this.draggedElementData = null;
             return;
         }
@@ -1525,9 +1564,19 @@ const TaskPaneApp = {
         const filterSummary = zoneId === "filters" && typeof window.describeFilter === "function"
             ? window.describeFilter(entry.filter)
             : "";
-        const titleText = zoneId === "filters"
+        // Una medida en Filtros no se filtra por valor (no tiene miembros
+        // que elegir): no admite doble clic, así que no se le pone el texto
+        // "(vacío · doble clic para elegir)" del resto de filtros. Para
+        // cambiarla hay que eliminarla y arrastrar otra medida.
+        const titleText = (zoneId === "filters" && !isMeasure)
             ? (filterSummary ? `${fieldLabel}: ${filterSummary}` : `${fieldLabel}: (vacío · doble clic para elegir)`)
             : fieldLabel;
+
+        // El tooltip va en el propio tag (no en el span interior, que tiene
+        // pointer-events: none y nunca recibiría el hover para mostrarlo).
+        if (zoneId === "filters" && isMeasure) {
+            tag.title = "Medida movida a Filtros: se sigue calculando en el informe, pero no se pinta como columna/fila. Para cambiarla, elimínala (×) y arrastra otra.";
+        }
 
         tag.innerHTML = `
             <span class="dropped-tag-title">${titleText}</span>
@@ -1548,8 +1597,11 @@ const TaskPaneApp = {
 
         tag.addEventListener("dragend", () => tag.classList.remove("dragging"));
 
-        // Solo los filtros abren el modal de selección de valor (doble clic)
-        if (zoneId === "filters") {
+        // Solo los filtros abren el modal de selección de valor (doble
+        // clic); una MEDIDA en Filtros no tiene valores que elegir, así que
+        // no se le añade el listener: para cambiarla hay que eliminarla y
+        // arrastrar otra (ver flujo de canMoveMeasureToFilters).
+        if (zoneId === "filters" && !isMeasure) {
             tag.addEventListener("dblclick", async () => {
                 if (typeof FilterModal === "undefined" || !FilterModal.open) return;
 

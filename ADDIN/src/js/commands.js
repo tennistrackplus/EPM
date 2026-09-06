@@ -5190,6 +5190,12 @@ function computeAxisPaintPlan(levels) {
 
     for (const level of levels) {
         if (level.isMeasure) {
+            // Medida movida a Filtros desde el taskpane (ver
+            // ReportStore.saveDesign): sigue contando para
+            // ReportState.Measures/MeasureCount (la query no cambia), pero
+            // NO se le reserva fila/columna física ni se pinta su etiqueta,
+            // así que se ignora aquí por completo (no consume iAux).
+            if (level.jerarquia === "HIDDEN_MEASURE") continue;
             if (measureIaux === null) {
                 iAux++;
                 measureIaux = iAux;
@@ -5330,8 +5336,11 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // el eje físico completo una vez (con las filas MEASURE incluidas) y
     // se deriva de ahí tanto la correspondencia {dim, attr, NIVEL} de cada
     // dimensión real como la columna/fila física de cada etiqueta MEASURE.
-    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10);      // H/I/J
-    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16); // N/O/P
+    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10);          // H/I/J
+    // Se pide también la columna Q (jerarquía/17) en Columnas: es donde
+    // ReportStore.saveDesign marca con "HIDDEN_MEASURE" la medida que el
+    // taskpane ha movido a Filtros (ver comentario en computeAxisPaintPlan).
+    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16, 17); // N/O/P/Q
 
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
