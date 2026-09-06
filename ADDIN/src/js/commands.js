@@ -2757,6 +2757,27 @@ async function locateDracoAxisField(context, addr) {
 
     if (!axis) return null;
 
+    const indentLevel = cell.format.indentLevel || 0;
+    return resolveDracoFieldForAxisLevel(context, reportId, axis, level, indentLevel);
+}
+
+/**
+ * Núcleo de locateDracoAxisField, extraído para poder reutilizarlo desde
+ * flujos que YA conocen (reportId, axis, level) por otra vía —por
+ * ejemplo, el clic multi-informe de handleDracoRowsSingleClick, que
+ * puede caer en la "zona de crecimiento" de un informe (fuera todavía
+ * del rango con nombre real), donde el chequeo de pertenencia por rango
+ * de locateDracoAxisField no serviría—.
+ *
+ * `indentLevel` es el format.indentLevel (0-based) de la celda pulsada;
+ * para una celda vacía (típicamente la zona de crecimiento, donde aún no
+ * hay ninguna fila/columna pintada) se puede pasar 0 sin problema: cae
+ * en el primer nivel del campo, que es el comportamiento razonable al
+ * "crear" una fila/columna nueva por ese hueco.
+ * Devuelve {axis, level, dim, attr} o null si ese nivel no corresponde a
+ * ningún campo real del diseño del informe.
+ */
+async function resolveDracoFieldForAxisLevel(context, reportId, axis, level, indentLevel) {
     const editReportGrid = await getEditReportGrid(context, reportId);
     loadReportDefinition(editReportGrid);
     const fieldLevels = buildAxisFieldLevelsTable(editReportGrid, axis);
@@ -2765,7 +2786,7 @@ async function locateDracoAxisField(context, addr) {
     // EDIT_REPORT): antes se usaba siempre el Attr del primer nivel del
     // campo (p.ej. "NIVEL1"), aunque el clic fuera sobre un nodo más
     // profundo de la jerarquía (NIVEL2, NIVEL3...).
-    const flag = (cell.format.indentLevel || 0) + 1;
+    const flag = (indentLevel || 0) + 1;
     const field = resolveAxisFieldForFlag(columnEntry, flag);
     if (!field || !field.dim) return null;
 
@@ -3352,57 +3373,286 @@ async function ensureDracoFilterRangeHandlersRegistered() {
  * ------------------------------------------------------------------- */
 
 /**
- * Busca, entre todos los nombres del libro que cumplan el patrón
- * "Draco_<n>_Rows", cuál (si alguno) contiene la celda indicada EN LA
- * MISMA HOJA del clic. Devuelve {rangeName, reportId, level} o null si el
- * clic no cayó dentro de ninguna tabla de Filas de Draco.
- * `level` es la posición (1-based) de esa columna dentro del eje de
- * Filas (columna 1 = primer nivel de la jerarquía).
+ * Regla de reparto de TODO el eje entre los informes presentes (sin
+ * margen: ni un solo hueco se queda sin dueño):
+ *   - Cada informe es dueño de su rango con nombre actual (coincidencia
+ *     exacta).
+ *   - El hueco entre dos informes consecutivos es SIEMPRE del informe
+ *     ANTERIOR (más arriba/izquierda): puede crecer hacia adelante hasta
+ *     la celda justo antes de donde empieza el siguiente. El informe
+ *     SIGUIENTE nunca crece hacia atrás (hacia ese hueco).
+ *   - Delante del PRIMER informe de un eje, como no hay ningún informe
+ *     anterior que lo reclame, el hueco es del propio PRIMER informe:
+ *     puede crecer hacia atrás (ampliando su inicio) hasta esa celda.
+ *   - El ÚLTIMO informe de un eje en una hoja (el que no tiene otro
+ *     informe después en esa misma familia de columnas/filas) se queda
+ *     con TODO lo que sigue, hasta el final absoluto de la hoja.
  */
-async function findDracoRowsNamedRangeForCell(context, worksheetId, addr) {
-    const sheet = context.workbook.worksheets.getItem(worksheetId);
-    sheet.load("name");
-    const cell = sheet.getRange(addr);
-    cell.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+
+const DRACO_LAST_ROW_INDEX = 1048576 - 1;   // última fila de Excel (0-based)
+const DRACO_LAST_COLUMN_INDEX = 16384 - 1;  // última columna de Excel (0-based)
+
+/**
+ * Devuelve, para una hoja dada, todos los rangos con nombre
+ * "Draco_<n>_<axisSuffix>" ("Rows" o "Cols") definidos en ESA hoja, con
+ * sus límites (rowIndex/columnIndex/rowCount/columnCount, 0-based) ya
+ * cargados.
+ */
+async function collectDracoAxisCandidates(context, sheet, axisSuffix) {
     const names = context.workbook.names;
     names.load("items/name");
     await context.sync();
 
-    if (cell.rowCount !== 1 || cell.columnCount !== 1) return null;
+    const pattern = new RegExp(`^Draco_(\\d+)_${axisSuffix}$`, "i");
+    const matching = names.items.filter(n => pattern.test(n.name));
+    if (matching.length === 0) return [];
 
-    const rowsNames = names.items
-        .map(n => n.name)
-        .filter(n => /^Draco_\d+_Rows$/i.test(n));
-    if (rowsNames.length === 0) return null;
-
-    const candidates = rowsNames.map(name => {
-        const item = context.workbook.names.getItem(name);
-        const range = item.getRange();
+    const loaded = matching.map(n => {
+        const range = context.workbook.names.getItem(n.name).getRange();
         range.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
         const ws = range.worksheet;
         ws.load("name");
-        return { name, range, ws };
+        return { name: n.name, range, ws };
     });
     await context.sync();
 
-    for (const c of candidates) {
-        if (c.ws.name !== sheet.name) continue;
-        const within =
-            cell.rowIndex >= c.range.rowIndex &&
-            cell.rowIndex < c.range.rowIndex + c.range.rowCount &&
-            cell.columnIndex >= c.range.columnIndex &&
-            cell.columnIndex < c.range.columnIndex + c.range.columnCount;
-        if (within) {
-            const m = c.name.match(/^Draco_(\d+)_Rows$/i);
+    return loaded
+        .filter(c => c.ws.name === sheet.name)
+        .map(c => ({
+            name: c.name,
+            reportId: Number(c.name.match(pattern)[1]),
+            rowIndex: c.range.rowIndex,
+            rowCount: c.range.rowCount,
+            columnIndex: c.range.columnIndex,
+            columnCount: c.range.columnCount
+        }));
+}
+
+/**
+ * Localiza a qué informe Draco_<n>_<axisSuffix> pertenece —o PODRÍA
+ * pertenecer, ampliando su rango con nombre (hacia adelante o hacia
+ * atrás, según toque)— una celda concreta, sin invadir jamás el
+ * rango de otro informe (ver la regla de reparto del hueco más arriba).
+ *
+ * axisSuffix: "Rows" (el eje que varía es la FILA; la celda debe caer
+ * dentro de las mismas columnas que el informe) o "Cols" (el eje que
+ * varía es la COLUMNA; la celda debe caer dentro de las mismas filas).
+ *
+ * Devuelve null si la celda no pertenece ni podría llegar a pertenecer a
+ * ningún informe de ese eje en esa hoja. Si pertenece, devuelve:
+ *   {
+ *     rangeName, reportId, sheetName,
+ *     exact,          // true = ya está dentro del rango con nombre actual
+ *     axisStart,      // 0-based: inicio que DEBERÍA tener el rango (si
+ *                     // se crece hacia atrás, es MENOR que el inicio
+ *                     // actual; si no, coincide con el inicio actual)
+ *     axisCount,      // 0-based: tamaño ACTUAL del rango en ese eje
+ *     requiredCount,  // tamaño que DEBERÍA tener el rango para incluir la
+ *                     // celda (== axisCount si exact=true)
+ *     crossIndex, crossCount // límites (0-based) del eje que NO varía
+ *                            // (columnas para _Rows, filas para _Cols)
+ *   }
+ */
+async function findDracoAxisRangeOrGrowthZoneForCell(context, worksheetId, addr, axisSuffix) {
+    const sheet = context.workbook.worksheets.getItem(worksheetId);
+    sheet.load("name");
+    const cell = sheet.getRange(addr);
+    cell.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    await context.sync();
+
+    if (cell.rowCount !== 1 || cell.columnCount !== 1) return null;
+
+    const candidates = await collectDracoAxisCandidates(context, sheet, axisSuffix);
+    if (candidates.length === 0) return null;
+
+    const isRows = axisSuffix.toLowerCase() === "rows";
+    const cellAxisIndex = isRows ? cell.rowIndex : cell.columnIndex;
+    const cellCrossIndex = isRows ? cell.columnIndex : cell.rowIndex;
+
+    // Solo son candidatos "de la misma familia" los que comparten con la
+    // celda pulsada el eje que NO varía (mismas columnas para _Rows,
+    // mismas filas para _Cols) — cada uno con SUS PROPIOS límites, no se
+    // exige que todos los informes tengan exactamente el mismo ancho.
+    const sameFamily = candidates.filter(c => {
+        const crossStart = isRows ? c.columnIndex : c.rowIndex;
+        const crossCount = isRows ? c.columnCount : c.rowCount;
+        return cellCrossIndex >= crossStart && cellCrossIndex < crossStart + crossCount;
+    });
+    if (sameFamily.length === 0) return null;
+
+    // 1) Coincidencia EXACTA: la celda ya está dentro de algún rango.
+    for (const c of sameFamily) {
+        const start = isRows ? c.rowIndex : c.columnIndex;
+        const count = isRows ? c.rowCount : c.columnCount;
+        if (cellAxisIndex >= start && cellAxisIndex < start + count) {
             return {
                 rangeName: c.name,
-                reportId: m ? Number(m[1]) : null,
-                level: (cell.columnIndex - c.range.columnIndex) + 1,
-                sheetName: sheet.name
+                reportId: c.reportId,
+                sheetName: sheet.name,
+                exact: true,
+                axisStart: start,
+                axisCount: count,
+                requiredCount: count,
+                crossIndex: isRows ? c.columnIndex : c.rowIndex,
+                crossCount: isRows ? c.columnCount : c.rowCount,
+                cellCrossIndex
             };
         }
     }
+
+    // 2) Sin coincidencia exacta: se reparte TODO el resto del eje sin
+    //    dejar ningún hueco sin dueño:
+    //      - Antes del PRIMER informe -> es del primer informe (crece
+    //        HACIA ATRÁS, ampliando su inicio).
+    //      - Entre dos informes consecutivos -> es del informe ANTERIOR
+    //        (crece hacia adelante). El siguiente NUNCA crece hacia atrás.
+    //      - Después del ÚLTIMO informe -> es del último informe (crece
+    //        hacia adelante hasta el final absoluto de la hoja).
+    const sorted = sameFamily.slice().sort((a, b) => {
+        const sa = isRows ? a.rowIndex : a.columnIndex;
+        const sb = isRows ? b.rowIndex : b.columnIndex;
+        return sa - sb;
+    });
+    const MAX_AXIS_INDEX = isRows ? DRACO_LAST_ROW_INDEX : DRACO_LAST_COLUMN_INDEX;
+
+    const first = sorted[0];
+    const firstStart = isRows ? first.rowIndex : first.columnIndex;
+
+    if (cellAxisIndex < firstStart) {
+        // Antes del primer informe: crece hacia atrás, ampliando su
+        // inicio hasta la celda pulsada (nadie más puede reclamar este
+        // hueco: no hay ningún informe anterior a él).
+        const firstCount = isRows ? first.rowCount : first.columnCount;
+        const firstEnd = firstStart + firstCount - 1;
+        return {
+            rangeName: first.name,
+            reportId: first.reportId,
+            sheetName: sheet.name,
+            exact: false,
+            axisStart: cellAxisIndex,
+            axisCount: firstCount,
+            requiredCount: (firstEnd - cellAxisIndex) + 1,
+            crossIndex: isRows ? first.columnIndex : first.rowIndex,
+            crossCount: isRows ? first.columnCount : first.rowCount,
+            cellCrossIndex
+        };
+    }
+
+    for (let i = 0; i < sorted.length; i++) {
+        const cur = sorted[i];
+        const start = isRows ? cur.rowIndex : cur.columnIndex;
+        const count = isRows ? cur.rowCount : cur.columnCount;
+        const end = start + count - 1; // último índice (0-based) ya ocupado por este informe
+
+        // Si la celda está a la altura de este informe o antes de él, no
+        // le pertenece a ÉL (o ya habría salido en el paso 1 si estaba
+        // dentro): seguimos mirando el siguiente informe de la lista.
+        if (cellAxisIndex <= end) continue;
+
+        const next = sorted[i + 1];
+        const isLast = !next;
+        // Sin margen: todo el hueco hasta el siguiente informe (o hasta
+        // el final absoluto de la hoja si es el último) es de "cur".
+        const zoneEnd = isLast
+            ? MAX_AXIS_INDEX
+            : (isRows ? next.rowIndex : next.columnIndex) - 1;
+
+        if (cellAxisIndex <= zoneEnd) {
+            return {
+                rangeName: cur.name,
+                reportId: cur.reportId,
+                sheetName: sheet.name,
+                exact: false,
+                axisStart: start,
+                axisCount: count,
+                requiredCount: (cellAxisIndex - start) + 1,
+                crossIndex: isRows ? cur.columnIndex : cur.rowIndex,
+                crossCount: isRows ? cur.columnCount : cur.rowCount,
+                cellCrossIndex
+            };
+        }
+        // No debería llegar aquí (con el reparto sin margen, cualquier
+        // celda posterior a "cur" y anterior al siguiente informe cae
+        // siempre dentro de su zona) — se deja como salvaguarda por si
+        // sameFamily contuviera candidatos con huecos inconsistentes.
+    }
+
     return null;
+}
+
+/**
+ * Amplía (o crea) el rango con nombre `rangeName` para que cubra desde
+ * `axisStart` hasta incluir `requiredCount` filas/columnas en el eje que
+ * varía, conservando intacto el eje que no varía (crossIndex/crossCount).
+ * Sigue el mismo patrón (borrar + volver a crear el nombre) que ya usa
+ * applyDracoNamedRanges al repintar un informe.
+ */
+async function growDracoNamedRange(context, sheetName, rangeName, axisSuffix, axisStart, requiredCount, crossIndex, crossCount) {
+    const isRows = axisSuffix.toLowerCase() === "rows";
+    const sheet = context.workbook.worksheets.getItem(sheetName);
+
+    const newRange = isRows
+        ? sheet.getRangeByIndexes(axisStart, crossIndex, requiredCount, crossCount)
+        : sheet.getRangeByIndexes(crossIndex, axisStart, crossCount, requiredCount);
+
+    const existing = context.workbook.names.getItemOrNullObject(rangeName);
+    existing.load("isNullObject");
+    await context.sync();
+    if (!existing.isNullObject) {
+        existing.delete();
+        await context.sync();
+    }
+    context.workbook.names.add(rangeName, newRange);
+    await context.sync();
+}
+
+/**
+ * Busca, entre todos los nombres del libro que cumplan el patrón
+ * "Draco_<n>_Rows" o "Draco_<n>_Cols", cuál (si alguno) contiene la
+ * celda indicada EN LA MISMA HOJA del clic —o podría llegar a
+ * contenerla ampliando su rango con nombre, sin invadir el hueco de
+ * otro informe (ver findDracoAxisRangeOrGrowthZoneForCell)—.
+ *
+ * Devuelve {rangeName, reportId, axis, level, sheetName, exact, growth}
+ * o null si el clic no cae ni podría llegar a caer en ninguna tabla de
+ * Filas/Columnas de Draco. `axis` es "rows" o "columns" (mismo
+ * vocabulario que locateDracoAxisField). `level` es la posición
+ * (1-based) dentro del eje que NO varía (columna para _Rows, fila para
+ * _Cols). `growth` es null si `exact` es true; si `exact` es false,
+ * trae todo lo necesario para ampliar de verdad el rango con nombre
+ * (ver growDracoNamedRange) en cuanto el usuario confirme un valor en
+ * el picker.
+ */
+async function findDracoRowsNamedRangeForCell(context, worksheetId, addr) {
+    let found = await findDracoAxisRangeOrGrowthZoneForCell(context, worksheetId, addr, "Rows");
+    let axis = "rows";
+    if (!found) {
+        found = await findDracoAxisRangeOrGrowthZoneForCell(context, worksheetId, addr, "Cols");
+        axis = "columns";
+    }
+    if (!found) return null;
+
+    return {
+        rangeName: found.rangeName,
+        reportId: found.reportId,
+        axis,
+        // Posición (1-based) de la celda dentro del eje que NO varía
+        // (columna dentro de _Rows, fila dentro de _Cols) — igual que
+        // antes calculaba el "within" exacto, pero también válido en la
+        // zona de crecimiento (el eje que no varía nunca se amplía).
+        level: (found.cellCrossIndex - found.crossIndex) + 1,
+        sheetName: found.sheetName,
+        exact: found.exact,
+        growth: found.exact ? null : {
+            rangeName: found.rangeName,
+            axisSuffix: axis === "rows" ? "Rows" : "Cols",
+            sheetName: found.sheetName,
+            axisStart: found.axisStart,
+            requiredCount: found.requiredCount,
+            crossIndex: found.crossIndex,
+            crossCount: found.crossCount
+        }
+    };
 }
 
 // Contexto de canvas reutilizado para medir texto (evita crear un
@@ -3563,9 +3813,11 @@ async function handleDracoRowsSingleClick(eventArgs) {
             const located = await findDracoRowsNamedRangeForCell(context, eventArgs.worksheetId, addr);
             if (!located) {
                 // Se detectó el clic (A53/A54 ya actualizadas arriba) pero
-                // cae fuera de cualquier Draco_XXX_Rows: se anota y se sale.
+                // cae fuera de cualquier Draco_XXX_Rows/Cols (y fuera
+                // también de la zona de crecimiento de cualquiera de
+                // ellos): se anota y se sale.
                 sheet.getRange("A55:A58").values = [
-                    [`FUERA DE RANGO: addr=${addr} no pertenece a ningún Draco_XXX_Rows.`],
+                    [`FUERA DE RANGO: addr=${addr} no pertenece (ni podría ampliar) a ningún Draco_XXX_Rows/Cols.`],
                     [""],
                     [""],
                     [""]
@@ -3643,13 +3895,15 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 // EDIT_REPORT!A1:A5 y algo aguas abajo leía esas celdas
                 // para abrir el buscador de miembros. Aquí se hace lo
                 // mismo pero sin pasar por ninguna celda física: se
-                // localiza el campo con locateDracoAxisField (la misma
-                // función que ya usa el "reconocimiento de miembros" de
-                // onChanged/onSelectionChanged) y se abre el picker
-                // directamente con el resultado en memoria.
+                // resuelve el campo con resolveDracoFieldForAxisLevel a
+                // partir del informe/eje/nivel que YA localizó
+                // findDracoRowsNamedRangeForCell más arriba (`located`),
+                // que es el informe realmente clicado —no necesariamente
+                // el informe "activo" del taskpane— y que puede caer en
+                // la zona de crecimiento de ese informe (fuera todavía
+                // de su rango con nombre actual, ver `located.growth`).
                 staticCheckEntered = true;
-                const reportId = activeReportIdOrNull();
-                const editReportGrid = await getEditReportGrid(context, reportId);
+                const editReportGrid = await getEditReportGrid(context, located.reportId);
                 const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
                 const colsStatic = String(cellValue(editReportGrid, 12, 14)).trim().toUpperCase() === "X";
                 rowsStaticTrace = rowsStatic;
@@ -3663,10 +3917,23 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 // colsStatic se siguen leyendo y trazando (arriba, en
                 // A56) solo a título informativo.
                 {
-                    const fieldLocated = await locateDracoAxisField(context, addr);
+                    const fieldLocated = await resolveDracoFieldForAxisLevel(
+                        context, located.reportId, located.axis, located.level, cell.format.indentLevel
+                    );
                     fieldLocatedTrace = fieldLocated;
                     if (fieldLocated) {
-                        accionTexto = " | Accion: buscador de miembros abierto (doble clic)";
+                        // Se adjunta el reportId realmente clicado (no el
+                        // "activo" del taskpane) para que openMemberRecognitionPicker
+                        // escriba en la hoja de resultados correcta, y —si
+                        // el clic cayó en la zona de crecimiento, fuera
+                        // todavía del rango con nombre real— `growth`,
+                        // para ampliar de verdad ese rango con nombre en
+                        // cuanto el usuario confirme un valor en el picker.
+                        fieldLocated.reportId = located.reportId;
+                        fieldLocated.growth = located.growth || null;
+                        accionTexto = located.exact
+                            ? " | Accion: buscador de miembros abierto (doble clic)"
+                            : " | Accion: buscador de miembros abierto (doble clic, ampliará el rango si se confirma un valor)";
                         await openMemberRecognitionPicker(addr, fieldLocated, cellText);
                     } else {
                         accionTexto = " | Accion: doble clic fuera de Filas/Columnas del informe";
@@ -3900,7 +4167,23 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         closeDialog();
                         try {
                             await Excel.run(async (context) => {
-                                const resultSheetName = await getDracoResultSheetName(context);
+                                // Si el clic que abrió este picker cayó en la
+                                // zona de crecimiento de un informe (fuera
+                                // todavía de su rango con nombre actual), hay
+                                // que ampliar de verdad ese rango con nombre
+                                // ANTES de escribir la fórmula, para que la
+                                // celda pase a pertenecer de verdad al
+                                // informe (ver findDracoAxisRangeOrGrowthZoneForCell).
+                                if (located.growth) {
+                                    const g = located.growth;
+                                    console.log("[Draco] Ampliando rango con nombre", g.rangeName, "para incluir", addr);
+                                    await growDracoNamedRange(
+                                        context, g.sheetName, g.rangeName, g.axisSuffix,
+                                        g.axisStart, g.requiredCount, g.crossIndex, g.crossCount
+                                    );
+                                }
+
+                                const resultSheetName = await getDracoResultSheetName(context, located.reportId);
                                 const sheet = context.workbook.worksheets.getItem(resultSheetName);
                                 const cell = sheet.getRange(addr);
                                 cell.values = [[buildEpmValueFormula(located.dim, payload.attribute, payload.value)]];
