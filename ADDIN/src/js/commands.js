@@ -2853,6 +2853,20 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
         if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
         const worksheetId = eventArgs && eventArgs.worksheetId;
         if (!addr || !worksheetId) return;
+
+        // Descarta de entrada (sin ni siquiera abrir Excel.run) las
+        // celdas de la columna A que usa handleDracoRowsSingleClick para
+        // volcar su traza de depuración (A50:A60): cada clic —doble o
+        // no— escribe ahí, y como es un cambio de celda "de verdad" (no
+        // pasa por DracoSuppressChangeEvents), sin este filtro podía
+        // interpretarse como un valor tecleado y abrir un SEGUNDO picker
+        // además del que ya abre el propio doble clic.
+        const addrMatch = /^\$?([A-Z]+)\$?(\d+)$/i.exec(addr.split(":")[0]);
+        if (addrMatch && addrMatch[1].toUpperCase() === "A") {
+            const rowNum = Number(addrMatch[2]);
+            if (rowNum >= 50 && rowNum <= 60) return;
+        }
+
         console.log("[Draco] onChanged: reconocimiento de miembros activo, evaluando celda", addr);
 
         let located = null;
@@ -3828,6 +3842,71 @@ function detectDracoDoubleClick(worksheetId, addr) {
     return info;
 }
 
+/**
+ * Núcleo de la acción de "doble clic real" (fuera del icono +/- de
+ * expandir/contraer): dado el `located` que ya ha resuelto
+ * findDracoRowsNamedRangeForCell (informe/eje/nivel realmente afectado,
+ * exacto o en zona de crecimiento), decide si ese eje es Estático en el
+ * diseño del informe y, si lo es, resuelve el campo (dim/attr) y abre el
+ * buscador de miembros.
+ *
+ * Extraído tal cual de handleDracoRowsSingleClick (misma lógica, sin
+ * ningún cambio de comportamiento) para poder invocarlo TAMBIÉN desde
+ * runDracoSimulatedDoubleClick, que dispara este mismo camino cuando el
+ * VBA del XLAM cancela un doble clic nativo (Workbook_SheetBeforeDoubleClick
+ * + Cancel = True) y lo pide en su lugar rellenando EDIT_REPORT!T2:V2 —
+ * ver handleDracoDoubleClickFlagRequest más abajo. En ese caso no hay
+ * offsetX/offsetY reales (no es un clic físico capturado por Office.js),
+ * así que esa parte de handleDracoRowsSingleClick (icono +/-, "Izquierda"/
+ * "Derecha"/"Letra") no aplica y no se replica aquí: solo esta rama, que
+ * es la única relevante para un doble clic de verdad.
+ *
+ * Devuelve { rowsStatic, colsStatic, axisIsStatic, fieldLocated,
+ * accionTexto } para que quien llame pueda trazarlo igual que antes.
+ */
+async function runDracoDoubleClickAction(context, addr, located, indentLevel, cellText) {
+    const editReportGrid = await getEditReportGrid(context, located.reportId);
+    const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
+    const colsStatic = String(cellValue(editReportGrid, 12, 14)).trim().toUpperCase() === "X";
+
+    // El buscador de miembros por doble clic solo se ofrece si el EJE que
+    // se ha clicado está marcado como Estático en el diseño de ESE
+    // informe (RowsStatic para located.axis==="rows", ColsStatic para
+    // "columns"). Si ese eje no es estático, el doble clic no hace nada
+    // aquí (el informe puede seguir reconociendo valores tecleados a
+    // mano vía el "reconocimiento de miembros").
+    const axisIsStatic = located.axis === "rows" ? rowsStatic : colsStatic;
+
+    let accionTexto;
+    let fieldLocated = null;
+
+    if (!axisIsStatic) {
+        accionTexto = ` | Accion: doble clic ignorado (informe ${located.reportId}, eje ${located.axis} no es Estático)`;
+    } else {
+        fieldLocated = await resolveDracoFieldForAxisLevel(
+            context, located.reportId, located.axis, located.level, indentLevel
+        );
+        if (fieldLocated) {
+            // Se adjunta el reportId realmente clicado (no el "activo" del
+            // taskpane) para que openMemberRecognitionPicker escriba en la
+            // hoja de resultados correcta, y —si el clic cayó en la zona
+            // de crecimiento, fuera todavía del rango con nombre real—
+            // `growth`, para ampliar de verdad ese rango con nombre en
+            // cuanto el usuario confirme un valor en el picker.
+            fieldLocated.reportId = located.reportId;
+            fieldLocated.growth = located.growth || null;
+            accionTexto = located.exact
+                ? " | Accion: buscador de miembros abierto (doble clic)"
+                : " | Accion: buscador de miembros abierto (doble clic, ampliará el rango si se confirma un valor)";
+            await openMemberRecognitionPicker(addr, fieldLocated, cellText);
+        } else {
+            accionTexto = " | Accion: doble clic fuera de Filas/Columnas del informe";
+        }
+    }
+
+    return { rowsStatic, colsStatic, axisIsStatic, fieldLocated, accionTexto };
+}
+
 async function handleDracoRowsSingleClick(eventArgs) {
     try {
         let addr = (eventArgs && eventArgs.address) || "";
@@ -3951,46 +4030,16 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 // la zona de crecimiento de ese informe (fuera todavía
                 // de su rango con nombre actual, ver `located.growth`).
                 staticCheckEntered = true;
-                const editReportGrid = await getEditReportGrid(context, located.reportId);
-                const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
-                const colsStatic = String(cellValue(editReportGrid, 12, 14)).trim().toUpperCase() === "X";
-                rowsStaticTrace = rowsStatic;
-                colsStaticTrace = colsStatic;
-
-                // El buscador de miembros por doble clic solo se ofrece
-                // si el EJE que se ha clicado está marcado como Estático
-                // en el diseño de ESE informe (RowsStatic para
-                // located.axis==="rows", ColsStatic para "columns"). Si
-                // ese eje no es estático, el doble clic no hace nada
-                // aquí (el informe puede seguir reconociendo valores
-                // tecleados a mano vía el "reconocimiento de miembros").
-                const axisIsStatic = located.axis === "rows" ? rowsStatic : colsStatic;
-
-                if (!axisIsStatic) {
-                    accionTexto = ` | Accion: doble clic ignorado (informe ${located.reportId}, eje ${located.axis} no es Estático)`;
-                } else {
-                    const fieldLocated = await resolveDracoFieldForAxisLevel(
-                        context, located.reportId, located.axis, located.level, cell.format.indentLevel
-                    );
-                    fieldLocatedTrace = fieldLocated;
-                    if (fieldLocated) {
-                        // Se adjunta el reportId realmente clicado (no el
-                        // "activo" del taskpane) para que openMemberRecognitionPicker
-                        // escriba en la hoja de resultados correcta, y —si
-                        // el clic cayó en la zona de crecimiento, fuera
-                        // todavía del rango con nombre real— `growth`,
-                        // para ampliar de verdad ese rango con nombre en
-                        // cuanto el usuario confirme un valor en el picker.
-                        fieldLocated.reportId = located.reportId;
-                        fieldLocated.growth = located.growth || null;
-                        accionTexto = located.exact
-                            ? " | Accion: buscador de miembros abierto (doble clic)"
-                            : " | Accion: buscador de miembros abierto (doble clic, ampliará el rango si se confirma un valor)";
-                        await openMemberRecognitionPicker(addr, fieldLocated, cellText);
-                    } else {
-                        accionTexto = " | Accion: doble clic fuera de Filas/Columnas del informe";
-                    }
-                }
+                // Lógica sin cambios: ahora vive en runDracoDoubleClickAction
+                // (compartida con el doble clic simulado desde
+                // EDIT_REPORT!T2:V2, ver handleDracoDoubleClickFlagRequest).
+                const doubleClickResult = await runDracoDoubleClickAction(
+                    context, addr, located, cell.format.indentLevel, cellText
+                );
+                rowsStaticTrace = doubleClickResult.rowsStatic;
+                colsStaticTrace = doubleClickResult.colsStatic;
+                fieldLocatedTrace = doubleClickResult.fieldLocated;
+                accionTexto = doubleClickResult.accionTexto;
             }
 
             console.log(
@@ -4227,6 +4276,14 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         settled = true;
                         closeDialog();
                         try {
+                            // DracoSuppressChangeEvents evita que este
+                            // MISMO escrito reabra el buscador vía
+                            // handleDracoMemberRecognitionChanged (que ya
+                            // se protege también reconociendo la fórmula
+                            // EPM_VALUE, pero esta es una capa extra: así
+                            // ninguna escritura nuestra, sea cual sea,
+                            // puede disparar el reconocimiento).
+                            DracoSuppressChangeEvents = true;
                             await Excel.run(async (context) => {
                                 // Si el clic que abrió este picker cayó en la
                                 // zona de crecimiento de un informe (fuera
@@ -4253,6 +4310,8 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                             console.log("[Draco] Fórmula EPM_VALUE escrita correctamente en", addr);
                         } catch (err) {
                             console.error("[Draco] Error escribiendo la fórmula EPM_VALUE:", err);
+                        } finally {
+                            DracoSuppressChangeEvents = false;
                         }
                         DracoMemberPickerOpen = false;
                         resolve();
@@ -4406,7 +4465,8 @@ async function toggleDracoCollapseAtCell(context, sheetName, targetAddr, flag) {
 // siempre el JSON), reutilizarlas aquí podría chocar con el XLAM si en
 // algún momento vuelve a escribir físicamente ahí. T1/U1/V1 están fuera
 // de cualquier zona ya usada (picker A1:A5, B1, D1/D4/D5/D6/E1/G1, X1/Y1,
-// H10/N10/H12/N12 y toda la fila >=15 de C a S).
+// H10/N10/H12/N12 y toda la fila >=15 de C a S). T2/U2/V2 (ver más abajo,
+// doble clic simulado) siguen el mismo patrón una fila por debajo.
 const DRACO_EXPAND_COLLAPSE_SHEET_CELL = "T1"; // nombre de la pestaña de resultados
 const DRACO_EXPAND_COLLAPSE_TARGET_CELL = "U1"; // celda con el indicador +/- a tocar
 const DRACO_EXPAND_COLLAPSE_FLAG_CELL = "V1"; // "E"/"EXPANDIR" o "C"/"CONTRAER" (opcional)
@@ -4483,6 +4543,121 @@ async function handleDracoEditReportExpandCollapseRequest(eventArgs) {
     }
 }
 
+// Celdas de control de EDIT_REPORT para simular un doble clic "real"
+// cuando el VBA del XLAM ya lo ha cancelado (Workbook_SheetBeforeDoubleClick
+// + Cancel = True): Office.js no reenvía ese segundo clic, así que en vez
+// de detectarlo por tiempo entre clics (ver detectDracoDoubleClick, poco
+// fiable en ese caso porque el 2º clic nunca llega), el VBA rellena estas
+// 3 celdas y aquí se ejecuta EXACTAMENTE la misma acción que ya hacía el
+// doble clic detectado por clics (runDracoDoubleClickAction, sin ningún
+// cambio de lógica: solo se llama desde un sitio más).
+const DRACO_DOUBLECLICK_SHEET_CELL = "T2"; // hoja donde se pulsó (Sh.Name en VBA)
+const DRACO_DOUBLECLICK_TARGET_CELL = "U2"; // celda pulsada (Target.Address)
+const DRACO_DOUBLECLICK_FLAG_CELL = "V2"; // "X" = simular el doble clic sobre esa celda
+
+/**
+ * Ejecuta el equivalente de un doble clic "real" (fuera del icono +/-)
+ * sobre sheetName!targetAddr, llamando a la MISMA lógica que usa el clic
+ * físico (findDracoRowsNamedRangeForCell + runDracoDoubleClickAction). Si
+ * la celda no pertenece (ni podría ampliar) ningún Draco_XXX_Rows/Cols,
+ * simplemente no hace nada (igual que hacía antes el "FUERA DE RANGO" del
+ * doble clic físico) — el VBA solo necesita acertar de forma aproximada,
+ * el filtrado fino se hace aquí.
+ */
+async function runDracoSimulatedDoubleClick(context, sheetName, targetAddr) {
+    let addr = String(targetAddr || "");
+    if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+    addr = addr.replace(/\$/g, "").toUpperCase();
+    if (!addr) {
+        console.warn("[Draco] Doble clic simulado sin celda (EDIT_REPORT!U2 vacío).");
+        return;
+    }
+
+    const sheet = context.workbook.worksheets.getItemOrNullObject(sheetName);
+    sheet.load(["isNullObject", "id"]);
+    await context.sync();
+    if (sheet.isNullObject) {
+        console.warn("[Draco] Doble clic simulado: la hoja indicada en EDIT_REPORT!T2 no existe:", sheetName);
+        return;
+    }
+
+    const located = await findDracoRowsNamedRangeForCell(context, sheet.id, addr);
+    if (!located) {
+        console.log("[Draco] Doble clic simulado fuera de rango:", sheetName, addr);
+        return;
+    }
+
+    const cell = sheet.getRange(addr);
+    cell.load(["values", "format/indentLevel"]);
+    await context.sync();
+    const cellText = String((cell.values && cell.values[0] && cell.values[0][0]) || "");
+
+    const result = await runDracoDoubleClickAction(context, addr, located, cell.format.indentLevel, cellText);
+    console.log(`[Draco] Doble clic simulado en ${sheetName}!${addr} (${located.rangeName}):${result.accionTexto}`);
+}
+
+/**
+ * Se dispara con onChanged de EDIT_REPORT al tocar T2, U2 o V2 (o un
+ * rango que las incluya). Solo actúa si V2 vale exactamente "X" (lo que
+ * escribe Workbook_SheetBeforeDoubleClick del XLAM justo antes de poner
+ * Cancel = True). Al terminar —haya abierto el picker, haya decidido que
+ * no procedía, o haya fallado— SIEMPRE deja T2:V2 vacías (con
+ * DracoSuppressChangeEvents activo, para no reaccionar a nuestra propia
+ * escritura), así el próximo doble clic puede volver a pedirlo sin
+ * quedarse "pegado".
+ */
+async function handleDracoDoubleClickFlagRequest(eventArgs) {
+    try {
+        if (DracoSuppressChangeEvents) return;
+        if (!eventArgs || !eventArgs.address) return;
+
+        let addr = String(eventArgs.address);
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        if (!addr) return;
+
+        const touchedRange = parseAddressRange(addr);
+        const controlCells = [DRACO_DOUBLECLICK_SHEET_CELL, DRACO_DOUBLECLICK_TARGET_CELL, DRACO_DOUBLECLICK_FLAG_CELL]
+            .map(parseAddress);
+        const touchesControlZone = controlCells.some(p =>
+            p.row >= touchedRange.r1 && p.row <= touchedRange.r2 &&
+            p.col >= touchedRange.c1 && p.col <= touchedRange.c2
+        );
+        if (!touchesControlZone) return;
+
+        await Excel.run(async (context) => {
+            const editReport = context.workbook.worksheets.getItem("EDIT_REPORT");
+            const ctrl = editReport.getRange(
+                DRACO_DOUBLECLICK_SHEET_CELL + ":" + DRACO_DOUBLECLICK_FLAG_CELL
+            );
+            ctrl.load("values");
+            await context.sync();
+
+            const sheetName = String(ctrl.values[0][0] || "").trim();
+            const targetAddr = String(ctrl.values[0][1] || "").trim();
+            const flag = String(ctrl.values[0][2] || "").trim().toUpperCase();
+
+            try {
+                if (sheetName && targetAddr && flag === "X") {
+                    console.log("[Draco] Petición de doble clic simulado desde EDIT_REPORT:", { sheetName, targetAddr });
+                    await runDracoSimulatedDoubleClick(context, sheetName, targetAddr);
+                }
+            } finally {
+                // Se vacía SIEMPRE (haya procedido o no, con o sin error):
+                // es lo que evita que el flag se quede puesto.
+                DracoSuppressChangeEvents = true;
+                editReport.getRange(
+                    DRACO_DOUBLECLICK_SHEET_CELL + ":" + DRACO_DOUBLECLICK_FLAG_CELL
+                ).clear(Excel.ClearApplyTo.contents);
+                await context.sync();
+            }
+        });
+    } catch (e) {
+        console.error("[Draco] Error al simular el doble clic desde EDIT_REPORT!T2:V2:", e);
+    } finally {
+        DracoSuppressChangeEvents = false;
+    }
+}
+
 /**
  * Registra (una sola vez) los listeners de EDIT_REPORT que no dependen de
  * que exista ninguna hoja de resultados: el picker de A5 (Member Picker)
@@ -4510,10 +4685,11 @@ async function registerEditReportPickerHandler(context) {
 
     editReport.onChanged.add(handleEditReportMemberPickerRequest);
     editReport.onChanged.add(handleDracoEditReportExpandCollapseRequest);
+    editReport.onChanged.add(handleDracoDoubleClickFlagRequest);
     await context.sync();
 
     DracoEditReportHandlerRegistered = true;
-    console.log("[Draco] Listeners de EDIT_REPORT!A5 (Member Picker) y T1:V1 (expandir/contraer) registrados.");
+    console.log("[Draco] Listeners de EDIT_REPORT!A5 (Member Picker), T1:V1 (expandir/contraer) y T2:V2 (doble clic simulado) registrados.");
 }
 
 // sheetName es el nombre de la hoja de resultados donde vive `sheet`: cada
