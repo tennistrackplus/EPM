@@ -74,10 +74,14 @@ const LkmlParse = {
     },
 
     parseAttributes(dimBody) {
-        return this.splitNamedBlocks(dimBody, "dimension", false).map(b => ({
-            colId: this.sqlColumn(b.body) || b.name,
-            isKey: /primary_key:\s*yes/.test(b.body)
-        }));
+        return this.splitNamedBlocks(dimBody, "dimension", false).map(b => {
+            const typeMatch = b.body.match(/#\s*tipo de origen:\s*(\S+)/);
+            return {
+                colId: this.sqlColumn(b.body) || b.name,
+                isKey: /primary_key:\s*yes/.test(b.body),
+                type: typeMatch ? typeMatch[1] : null
+            };
+        });
     },
 
     // Las jerarquías se documentan como comentario (LookML no tiene un

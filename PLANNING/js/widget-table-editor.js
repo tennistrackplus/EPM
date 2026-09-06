@@ -672,7 +672,7 @@ const WidgetTableEditor = {
             // y con la conexión ya autenticada de esta app (provider-bridge.js).
             const iframe = document.createElement("iframe");
             iframe.className = "wte-taskpane-frame";
-            iframe.src = "widget-taskpane/taskpane.html?v=20260906b";
+            iframe.src = "widget-taskpane/taskpane.html?v=20260906c";
             panel.appendChild(iframe);
             this._taskpaneFrame = iframe;
             if (!resizer._wired) {
@@ -1287,6 +1287,7 @@ const WidgetTableEditor = {
             `font-style:${cell.i ? "italic" : "normal"}`,
             `text-decoration:${cell.u ? "underline" : "none"}`,
             `text-align:${cell.al || "left"}`,
+            `padding-left:${6 + (cell.ind ? cell.ind * 14 : 0)}px`,
             `color:${cell.col || "inherit"}`,
             `background-color:${cell.bg || "#ffffff"}`,
             `border-top:${cell.bt ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`,
