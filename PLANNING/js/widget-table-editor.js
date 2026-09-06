@@ -672,7 +672,7 @@ const WidgetTableEditor = {
             // y con la conexión ya autenticada de esta app (provider-bridge.js).
             const iframe = document.createElement("iframe");
             iframe.className = "wte-taskpane-frame";
-            iframe.src = "widget-taskpane/taskpane.html?v=20260906c";
+            iframe.src = "widget-taskpane/taskpane.html?v=20260906d";
             panel.appendChild(iframe);
             this._taskpaneFrame = iframe;
             if (!resizer._wired) {
@@ -1274,6 +1274,20 @@ const WidgetTableEditor = {
         });
     },
 
+    // Traduce el borde de una celda a CSS. Admite dos formas: la del
+    // taskpane (objeto {style,color,weight} desde host-bridge.js, con
+    // grosor y color reales) y la de los botones "Exterior"/"Todos" de
+    // nuestra propia barra de herramientas (1/0, siempre 2px oscuro).
+    borderCss(b) {
+        if (!b) return "1px solid #E3E6EC";
+        if (typeof b === "object") {
+            if (b.style !== "continuous") return "1px solid #E3E6EC";
+            const px = b.weight === "Thick" ? 3 : (b.weight === "Medium" ? 2 : 1);
+            return `${px}px solid ${b.color || "#1a1f2b"}`;
+        }
+        return "2px solid #1a1f2b";
+    },
+
     cellHtml(r, c, x, y, w, h, sel) {
         const cell = this.getCell(r, c);
         const isSelected = r >= sel.r1 && r <= sel.r2 && c >= sel.c1 && c <= sel.c2;
@@ -1290,10 +1304,10 @@ const WidgetTableEditor = {
             `padding-left:${6 + (cell.ind ? cell.ind * 14 : 0)}px`,
             `color:${cell.col || "inherit"}`,
             `background-color:${cell.bg || "#ffffff"}`,
-            `border-top:${cell.bt ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`,
-            `border-right:${cell.br ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`,
-            `border-bottom:${cell.bb ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`,
-            `border-left:${cell.bl ? "2px solid #1a1f2b" : "1px solid #E3E6EC"}`
+            `border-top:${this.borderCss(cell.bt)}`,
+            `border-right:${this.borderCss(cell.br)}`,
+            `border-bottom:${this.borderCss(cell.bb)}`,
+            `border-left:${this.borderCss(cell.bl)}`
         ].join(";");
 
         // Celdas de cabecera de un informe (jerarquía): icono ▸/▾ clicable
