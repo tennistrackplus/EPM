@@ -163,7 +163,18 @@ function buildHierarchySQL(hierGrid, dimension, hierarchy) {
  * entre los dos ficheros.
  */
 function svcRowsToPseudoBqJson(rows) {
-    let out = '{"rows":[';
+    // A diferencia de snowflakeRowsToPseudoBqJson() (usada para el informe
+    // principal, que solo escanea "v": posicionalmente), loadJsonTree()
+    // del diálogo de filtro SÍ necesita el nombre de cada columna
+    // (regex /"name":\s*"..."/) para etiquetar cada valor — por eso aquí
+    // hace falta además el bloque "schema" con los nombres reales.
+    let schema = '{"fields":[]}';
+    if (rows.length > 0) {
+        const fields = Object.keys(rows[0]).map(name => `{"name": "${name.replace(/"/g, '\\"')}"}`);
+        schema = `{"fields":[${fields.join(",")}]}`;
+    }
+
+    let out = `{"schema":${schema},"rows":[`;
     rows.forEach((row, i) => {
         if (i > 0) out += ",";
         out += '{"f":[';
