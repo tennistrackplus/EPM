@@ -122,6 +122,28 @@
         return true;
     }
 
+    // Señal aparte de "modelos listos": Office.onReady (ver host-bridge.js)
+    // se destrabra en cuanto este bootstrap termina, pero TaskPaneApp.init()
+    // (que fija el informe activo, carga el diseño, etc.) todavía tarda un
+    // poco más en completarse — sin esto, WidgetTableEditor.openRunView()
+    // podía llamar a actualizar() ANTES de que currentReportId estuviera
+    // fijado, y el informe se quedaba sin refrescar SQL ni datos.
+    // TaskPaneApp.init también se busca dinámicamente (Office.onReady(() =>
+    // TaskPaneApp.init())), así que se puede envolver igual que arriba.
+    function patchInitDone() {
+        if (typeof TaskPaneApp === "undefined" || TaskPaneApp.__wteInitPatched) return false;
+        const originalInit = TaskPaneApp.init.bind(TaskPaneApp);
+        let resolveInitDone;
+        window.__wteInitDonePromise = new Promise((resolve) => { resolveInitDone = resolve; });
+        TaskPaneApp.init = async function (...args) {
+            const result = await originalInit(...args);
+            resolveInitDone();
+            return result;
+        };
+        TaskPaneApp.__wteInitPatched = true;
+        return true;
+    }
+
     async function bootstrapInner() {
         const host = window.parent;
         if (!host || !host.GithubRepo || !host.LkmlParse || !host.Provider || !host.WidgetTableEditor) {
@@ -149,15 +171,21 @@
         }
 
         patchModelSelectorChange();
+        patchInitDone();
 
-        // Paso 2: si el informe ya tenía un cubo elegido (se reabre un
-        // widget guardado), ese SÍ se resuelve ya — es la única petición
-        // de red que hace falta para que se vea de inmediato.
-        const report = host.WidgetTableEditor.state.report || {};
-        const activeCube = cubes.find(c => c.CUBO_ID === report.cuboId);
-        if (activeCube) {
-            await resolveModel(activeCube.CUBOS);
-            await window.SemanticModelStore.setActiveModelName(activeCube.CUBOS);
+        // Paso 2: si el informe activo ya tenía un modelo semántico
+        // elegido (se reabre un widget guardado), ese SÍ se resuelve ya —
+        // es la única petición de red que hace falta para que se vea de
+        // inmediato. La selección real vive en ReportStore (report.
+        // semanticModelName, ver reportStore.js) — NO en
+        // WidgetTableEditor.state.report.cuboId, que es un campo del
+        // antiguo panel WidgetPivot que ya no existe y nunca se rellena;
+        // mirar ahí era justo el motivo de que esto nunca se disparase.
+        const activeReport = (window.ReportStore && window.ReportStore.getActiveReport) ? window.ReportStore.getActiveReport() : null;
+        const activeModelName = activeReport ? activeReport.semanticModelName : "";
+        if (activeModelName && pending[activeModelName]) {
+            await resolveModel(activeModelName);
+            await window.SemanticModelStore.setActiveModelName(activeModelName);
         }
 
         if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.populateModelSelectorMain) {
@@ -179,6 +207,7 @@
             console.error("lkml-bootstrap: error inesperado:", err);
         } finally {
             patchModelSelectorChange(); // por si bootstrapInner falló antes de llegar a parchear
+            patchInitDone();
             if (window.__wteSignalModelsReady) window.__wteSignalModelsReady();
         }
     }

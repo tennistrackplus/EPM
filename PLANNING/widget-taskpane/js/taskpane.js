@@ -134,7 +134,8 @@ const TaskPaneApp = {
         suppressZeroCols: false,
         subtotalsOnTop: false,
         overwriteFormats: true,
-        autoFitColumns: true
+        autoFitColumns: true,
+        planningReport: false
     },
 
     // Campo actualmente seleccionado en el panel "Opciones de campo"
@@ -1112,7 +1113,8 @@ const TaskPaneApp = {
                 suppressZeroCols: false,
                 subtotalsOnTop: false,
                 overwriteFormats: true,
-                autoFitColumns: true
+                autoFitColumns: true,
+                planningReport: false
             });
             RangeAxis.loadFromAddresses("", "", "");
 
@@ -1756,6 +1758,7 @@ const TaskPaneApp = {
         document.getElementById("propSubtotalsOnTop").checked = !!this.reportProperties.subtotalsOnTop;
         document.getElementById("propOverwriteFormats").checked = !!this.reportProperties.overwriteFormats;
         document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
+        document.getElementById("propPlanningReport").checked = !!this.reportProperties.planningReport;
 
         modal.style.display = "flex";
         this.updateRibbonToggleLabel("BtnPropiedadesInforme", "Propiedades", true);
@@ -1778,7 +1781,8 @@ const TaskPaneApp = {
             suppressZeroCols: document.getElementById("propSuppressZeroCols").checked,
             subtotalsOnTop: document.getElementById("propSubtotalsOnTop").checked,
             overwriteFormats: document.getElementById("propOverwriteFormats").checked,
-            autoFitColumns: document.getElementById("propAutoFitColumns").checked
+            autoFitColumns: document.getElementById("propAutoFitColumns").checked,
+            planningReport: document.getElementById("propPlanningReport").checked
         };
 
         const btn = document.getElementById("btnSaveProperties");

@@ -653,12 +653,23 @@ function loadFilters(editReportGrid) {
     let R = 15;
 
     while (String(cellValue(editReportGrid, R, 3)).trim() !== "") {
-        ReportState.FilterCount++;
-        ReportState.Filters.push({
-            Dimension: String(cellValue(editReportGrid, R, 3)).trim(),
-            AttributeName: String(cellValue(editReportGrid, R, 4)).trim(),
-            Value: String(cellValue(editReportGrid, R, 5)).trim()
-        });
+        const dimension = String(cellValue(editReportGrid, R, 3)).trim();
+        // Una MEDIDA en la zona "Filtros" no es un filtro de verdad (no hay
+        // una dimensión/tabla real que consultar para sus miembros): se
+        // ignora aquí, igual que loadRows()/loadColumns() ya excluyen las
+        // medidas de Filas/Columnas (las mandan a ReportState.Measures en
+        // vez de a Rows/Cols). Antes esta función no tenía ese mismo "if"
+        // y una medida arrastrada a Filtros se colaba como un filtro
+        // normal, interfiriendo con la fila de medidas del informe (se
+        // comía la primera fila de Valores al refrescar).
+        if (dimension.toUpperCase() !== "MEASURE") {
+            ReportState.FilterCount++;
+            ReportState.Filters.push({
+                Dimension: dimension,
+                AttributeName: String(cellValue(editReportGrid, R, 4)).trim(),
+                Value: String(cellValue(editReportGrid, R, 5)).trim()
+            });
+        }
         R++;
     }
 }
@@ -681,6 +692,7 @@ function appendLockedFilterRangesToState(reportId) {
     for (const rangeName of Object.keys(all)) {
         const meta = all[rangeName];
         if (!meta || !meta.filter) continue;
+        if (String(meta.dim).toUpperCase() === "MEASURE") continue; // ver nota en loadFilters()
 
         const isAll = meta.reportId === null || meta.reportId === undefined;
         const appliesToThisReport = isAll
@@ -3215,6 +3227,28 @@ async function openDracoFilterRangePicker(addr, sheetName, rangeName, meta) {
                         } finally {
                             DracoSuppressChangeEvents = false;
                         }
+                        // Cambiar el valor de un filtro debe refrescar el
+                        // informe automáticamente — antes había que pulsar
+                        // "Actualizar" a mano después de aceptar el diálogo.
+                        // Se llama a actualizarUnInforme() directamente (no
+                        // TaskPaneApp.scheduleAutoUpdate()) porque este
+                        // diálogo también se puede abrir sin el taskpane
+                        // abierto (openDracoFilterRangePicker se usa desde
+                        // el runtime oculto de comandos); si el filtro es
+                        // "para todos los informes" (sin reportId), se
+                        // refrescan todos los que haya en la hoja.
+                        try {
+                            if (meta.reportId) {
+                                await actualizarUnInforme(meta.reportId);
+                            } else if (window.ReportStore && window.ReportStore.listReports) {
+                                const allReports = window.ReportStore.listReports() || [];
+                                for (const r of allReports) {
+                                    await actualizarUnInforme(r.id);
+                                }
+                            }
+                        } catch (err) {
+                            console.error("[Draco] Error al refrescar el informe tras cambiar el filtro:", err);
+                        }
                         // Si el taskpane está abierto (mismo contexto que
                         // commands.js), refresca la zona "Filtros" para que
                         // la etiqueta bloqueada muestre el nuevo resumen sin
@@ -4416,12 +4450,168 @@ async function registerEditReportPickerHandler(context) {
 // reconocimiento de miembros se enganchan POR HOJA, no una sola vez para
 // todo el libro — si no, un segundo informe en otra hoja se quedaba sin
 // clic interactivo (nunca se registraba nada ahí).
+
+/**
+ * Extrae, si es posible, un ÚNICO valor concreto de un filtro (para poder
+ * usarlo como valor fijo de esa dimensión en el INSERT de planificación,
+ * ver guardarPlanificacion). Solo se puede cuando el filtro es una lista
+ * de INCLUSIÓN de exactamente un valor, sin exclusiones ni rango —
+ * cualquier otro caso (varios valores, rango, exclusiones) es ambiguo
+ * para saber CUÁL insertar, así que se deja como null (columna a NULL).
+ */
+function singleValueFromFilter(rawFilterValue) {
+    let filter;
+    try { filter = JSON.parse(rawFilterValue); } catch (e) { return null; }
+    if (!filter || typeof filter !== "object") return null;
+
+    if (filter.mode === "values") {
+        return (filter.values && filter.values.length === 1) ? filter.values[0] : null;
+    }
+    if (filter.mode === "list") {
+        const inc = filter.items ? filter.items.map(it => it.value) : (filter.values || []);
+        const exc = filter.excludeItems ? filter.excludeItems.map(it => it.value) : (filter.excludeValues || []);
+        return (inc.length === 1 && exc.length === 0) ? inc[0] : null;
+    }
+    return null; // range / mixed: ambiguo, no hay un único valor
+}
+
+/**
+ * Captura el formato "real" de una celda (el que tenía antes de que
+ * empezáramos a marcarla en cian), para poder guardarlo en
+ * PlanningChangesStore y devolverlo más tarde (ver restoreCellFormat).
+ */
+async function captureCellFormat(context, cell) {
+    cell.format.load(["fill/color"]);
+    cell.format.font.load(["bold", "italic", "color", "name", "size"]);
+    cell.load(["numberFormat"]);
+    const edges = {
+        top: cell.format.borders.getItem("EdgeTop"),
+        right: cell.format.borders.getItem("EdgeRight"),
+        bottom: cell.format.borders.getItem("EdgeBottom"),
+        left: cell.format.borders.getItem("EdgeLeft")
+    };
+    Object.values(edges).forEach(b => b.load(["style", "color", "weight"]));
+    await context.sync();
+
+    return {
+        fill: cell.format.fill.color || "",
+        fontBold: !!cell.format.font.bold,
+        fontItalic: !!cell.format.font.italic,
+        fontColor: cell.format.font.color || "",
+        fontName: cell.format.font.name || "",
+        fontSize: cell.format.font.size || 11,
+        numberFormat: (cell.numberFormat && cell.numberFormat[0] && cell.numberFormat[0][0]) || "General",
+        borders: {
+            top: { style: edges.top.style, color: edges.top.color, weight: edges.top.weight },
+            right: { style: edges.right.style, color: edges.right.color, weight: edges.right.weight },
+            bottom: { style: edges.bottom.style, color: edges.bottom.color, weight: edges.bottom.weight },
+            left: { style: edges.left.style, color: edges.left.color, weight: edges.left.weight }
+        }
+    };
+}
+
+/** Aplica un formato capturado con captureCellFormat() de vuelta a una celda. */
+function restoreCellFormat(cell, fmt) {
+    if (!fmt) return;
+    cell.format.fill.color = fmt.fill || null;
+    cell.format.font.bold = fmt.fontBold;
+    cell.format.font.italic = fmt.fontItalic;
+    if (fmt.fontColor) cell.format.font.color = fmt.fontColor;
+    if (fmt.fontName) cell.format.font.name = fmt.fontName;
+    if (fmt.fontSize) cell.format.font.size = fmt.fontSize;
+    cell.numberFormat = [[fmt.numberFormat || "General"]];
+    const map = { top: "EdgeTop", right: "EdgeRight", bottom: "EdgeBottom", left: "EdgeLeft" };
+    Object.keys(map).forEach(k => {
+        const b = fmt.borders && fmt.borders[k];
+        if (!b) return;
+        const edge = cell.format.borders.getItem(map[k]);
+        edge.style = b.style || "None";
+        if (b.color) edge.color = b.color;
+        if (b.weight) edge.weight = b.weight;
+    });
+}
+
+/**
+ * onChanged de la hoja de resultados: si la celda cambiada cae dentro del
+ * rango de Valores (Draco_<id>_Values) de un informe con la propiedad
+ * "Informe de planificación" activada, guarda el formato que tenía ANTES
+ * (solo la primera vez, ver PlanningChangesStore.set) y el valor nuevo, y
+ * la resalta en RGB(204,255,255) para que se vea qué celdas están
+ * pendientes de guardar.
+ */
+async function handleDracoPlanningCellChanged(eventArgs) {
+    try {
+        if (DracoSuppressChangeEvents) return;
+        if (!window.ReportStore || !window.PlanningChangesStore) return;
+
+        let addr = (eventArgs && eventArgs.address) || "";
+        let sheetName = "";
+        if (addr.indexOf("!") !== -1) { sheetName = addr.split("!")[0]; addr = addr.split("!").pop(); }
+        if (!addr || !sheetName) return;
+
+        const reports = window.ReportStore.listReports() || [];
+
+        for (const r of reports) {
+            const report = window.ReportStore.getReport(r.id);
+            if (!report || !report.reportProperties || !report.reportProperties.planningReport) continue;
+
+            const rn = dracoRangeNames(r.id);
+            let handled = false;
+
+            await Excel.run(async (context) => {
+                const namedValues = context.workbook.names.getItemOrNullObject(rn.values);
+                namedValues.load("isNullObject");
+                await context.sync();
+                if (namedValues.isNullObject) return;
+
+                const valuesRange = namedValues.getRange();
+                valuesRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+                const valuesSheet = valuesRange.worksheet;
+                valuesSheet.load("name");
+                await context.sync();
+                if (valuesSheet.name !== sheetName) return;
+
+                const cell = context.workbook.worksheets.getItem(sheetName).getRange(addr);
+                cell.load(["rowIndex", "columnIndex", "values"]);
+                await context.sync();
+
+                const withinRows = cell.rowIndex >= valuesRange.rowIndex && cell.rowIndex < valuesRange.rowIndex + valuesRange.rowCount;
+                const withinCols = cell.columnIndex >= valuesRange.columnIndex && cell.columnIndex < valuesRange.columnIndex + valuesRange.columnCount;
+                if (!withinRows || !withinCols) return;
+
+                handled = true;
+
+                const key = `${sheetName}!${addr}`;
+                const already = window.PlanningChangesStore.getAllForReport(r.id)[key];
+                const oldFormat = already ? already.oldFormat : await captureCellFormat(context, cell);
+
+                DracoSuppressChangeEvents = true;
+                try {
+                    await window.PlanningChangesStore.set(r.id, sheetName, addr, {
+                        oldFormat,
+                        newValue: cell.values[0][0]
+                    });
+                    cell.format.fill.color = "#CCFFFF"; // RGB(204,255,255)
+                    await context.sync();
+                } finally {
+                    DracoSuppressChangeEvents = false;
+                }
+            });
+
+            if (handled) break; // una celda solo puede pertenecer a un informe (los rangos Values de distintos informes no se solapan)
+        }
+    } catch (e) {
+        console.error("[Draco] Error en el seguimiento de cambios de planificación:", e);
+    }
+}
+
 async function registerDracoSelectionHandler(context, sheet, sheetName) {
     if (DracoHandlerRegisteredSheets.has(sheetName)) return;
 
     sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
     sheet.onSelectionChanged.add(handleDracoRibbonLabelSelection);
     sheet.onChanged.add(handleDracoMemberRecognitionChanged);
+    sheet.onChanged.add(handleDracoPlanningCellChanged);
 
     // NUEVO: petición de apertura del Member Picker desde EDIT_REPORT
     await registerEditReportPickerHandler(context);
@@ -4833,6 +5023,31 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // así que un informe con overwriteFormats=false igualmente perdía el
     // formato que el usuario hubiera dejado a mano en la ejecución anterior.
     await clearDracoNamedRanges(context, reportId, reportProps.overwriteFormats);
+
+    // Un refresco reemplaza los VALORES por los que traiga la consulta,
+    // así que cualquier cambio a mano que hubiera quedado pendiente de
+    // guardar (celdas marcadas en cian, ver PlanningChangesStore) ya se
+    // pierde de todas formas: se les devuelve su formato original (si el
+    // informe no tiene "Sobrescribir formatos" — con esa opción activada
+    // no hace falta, el propio repintado de más abajo ya las deja bien) y
+    // se limpia el seguimiento de cambios de este informe.
+    if (window.PlanningChangesStore && !reportProps.overwriteFormats) {
+        const pendingChanges = window.PlanningChangesStore.getAllForReport(reportId);
+        const pendingKeys = Object.keys(pendingChanges);
+        if (pendingKeys.length) {
+            pendingKeys.forEach(key => {
+                const change = pendingChanges[key];
+                try {
+                    const cell = context.workbook.worksheets.getItem(change.sheetName).getRange(change.address);
+                    restoreCellFormat(cell, change.oldFormat);
+                } catch (e) {
+                    console.warn("[Draco] No se pudo devolver el formato original de", key, e);
+                }
+            });
+            await context.sync();
+        }
+    }
+    if (window.PlanningChangesStore) await window.PlanningChangesStore.clearForReport(reportId);
 
     // Limpiar cualquier resto de la ejecución anterior que hubiera quedado
     // FUERA de esos rangos con nombre (p.ej. fórmulas EPM_VALUE residuales
@@ -6108,6 +6323,232 @@ async function abrirAnadirFiltro(event) {
 // automáticamente al guardar cambios en el diseñador. Office.actions.associate
 // solo tiene efecto real en el runtime de comandos; se protege con try/catch
 // por si el host no expone esa API fuera de ese contexto.
+/**
+ * Botón de ribbon "Planificación > Guardar": genera el INSERT con los
+ * cambios marcados (celdas de Valores editadas a mano mientras "Informe
+ * de planificación" estaba activo, resaltadas en RGB(204,255,255)) y lo
+ * escribe en EDIT_REPORT!V4 para revisión — TODAVÍA NO se ejecuta contra
+ * el proveedor de datos; eso es un paso posterior, una vez se confirme
+ * que el INSERT generado es correcto.
+ *
+ * Para cada celda cambiada, y para cada dimensión de la tabla de hechos
+ * (MODEL_RELATIONSHIP):
+ *   - Si esa dimensión está en Filas o en Columnas del informe (puede
+ *     haber varias, apiladas en columnas físicas distintas de
+ *     Draco_<id>_Rows / en filas físicas distintas de _Cols — ver
+ *     buildAxisFieldLevelsTable/resolveAxisFieldForFlag, la misma
+ *     correspondencia {dim,attr} por nivel de jerarquía que ya usa la
+ *     conversión a Estático), se usa el texto pintado en esa celda de
+ *     cabecera para la fila/columna de la celda cambiada.
+ *   - Si no está en Filas/Columnas pero SÍ tiene un filtro (global,
+ *     "Añadir filtro", o de la zona "Filtros" del taskpane) con
+ *     exactamente un valor incluido, se usa ese valor.
+ *   - Si no se puede determinar de ninguna forma, la columna va a NULL.
+ * La propia medida editada usa el valor NUEVO de la celda.
+ */
+async function guardarPlanificacion(event) {
+    try {
+        if (!window.ReportStore || !window.PlanningChangesStore) {
+            if (event) event.completed();
+            return;
+        }
+
+        const reports = window.ReportStore.listReports() || [];
+        const sqlBlocks = [];
+        const reportsWithChanges = [];
+
+        for (const r of reports) {
+            const report = window.ReportStore.getReport(r.id);
+            if (!report || !report.reportProperties || !report.reportProperties.planningReport) continue;
+
+            const changes = window.PlanningChangesStore.getAllForReport(r.id);
+            const keys = Object.keys(changes);
+            if (!keys.length) continue;
+            reportsWithChanges.push(r.id);
+
+            await Excel.run(async (context) => {
+                const editReportGrid = await getEditReportGrid(context, r.id);
+                const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
+                const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+
+                loadReportDefinition(editReportGrid, r.id);
+                appendLockedFilterRangesToState(r.id);
+
+                const rowsFieldTable = buildAxisFieldLevelsTable(editReportGrid, "rows");
+                const colsFieldTable = buildAxisFieldLevelsTable(editReportGrid, "columns");
+
+                const filterValueByDim = {};
+                ReportState.Filters.forEach(f => {
+                    const v = singleValueFromFilter(f.Value);
+                    if (v !== null) filterValueByDim[String(f.Dimension).toUpperCase()] = v;
+                });
+
+                const rn = dracoRangeNames(r.id);
+                const namedValues = context.workbook.names.getItemOrNullObject(rn.values);
+                const namedRows = context.workbook.names.getItemOrNullObject(rn.rows);
+                const namedCols = context.workbook.names.getItemOrNullObject(rn.cols);
+                namedValues.load("isNullObject");
+                namedRows.load("isNullObject");
+                namedCols.load("isNullObject");
+                await context.sync();
+                if (namedValues.isNullObject) return;
+
+                const valuesRange = namedValues.getRange();
+                valuesRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+                const valuesSheet = valuesRange.worksheet;
+                valuesSheet.load("name");
+
+                let rowsRange = null, colsRange = null;
+                if (!namedRows.isNullObject) { rowsRange = namedRows.getRange(); rowsRange.load(["values", "rowIndex", "columnCount"]); }
+                if (!namedCols.isNullObject) { colsRange = namedCols.getRange(); colsRange.load(["values", "columnIndex", "rowCount"]); }
+                await context.sync();
+
+                const sheetName = valuesSheet.name;
+
+                let rowsIndent = null, colsIndent = null;
+                if (rowsRange) rowsIndent = await readIndentLevelsForRange(context, rowsRange);
+                if (colsRange) colsIndent = await readIndentLevelsForRange(context, colsRange);
+
+                const measureRow = buscarMedida(measuresGrid, ReportState.Measures[0] ? ReportState.Measures[0].Name : "");
+                const factTable = Provider.qualify(
+                    cellValue(measuresGrid, measureRow, 3),
+                    cellValue(measuresGrid, measureRow, 4),
+                    cellValue(measuresGrid, measureRow, 5)
+                );
+                const measureFactField = String(cellValue(measuresGrid, measureRow, 6) || "").trim();
+
+                const lastRelRow = lastRowInColumnValues(relGrid, 1);
+                const dimColumns = [];
+                for (let R = 2; R <= lastRelRow; R++) {
+                    dimColumns.push({
+                        dimension: String(cellValue(relGrid, R, 2)).trim(),
+                        factColumn: String(cellValue(relGrid, R, 6)).trim()
+                    });
+                }
+
+                // Valores de cada dimensión de Filas/Columnas para una fila o
+                // columna PINTADA concreta, resolviendo el nivel de
+                // jerarquía real de cada celda vía su indentLevel — igual
+                // mecanismo que usa convertAxisStaticFormulas. rowsFieldTable/
+                // colsFieldTable son 1-based (índice 0 vacío).
+                function valuesForRow(relRow) {
+                    const out = {};
+                    if (!rowsRange) return out;
+                    for (let col = 1; col < rowsFieldTable.length; col++) {
+                        const entry = rowsFieldTable[col];
+                        if (!entry) continue;
+                        const indentRow = rowsIndent[relRow];
+                        const flag = (indentRow && typeof indentRow[col - 1] === "number") ? indentRow[col - 1] + 1 : 1;
+                        const field = resolveAxisFieldForFlag(entry, flag);
+                        if (!field) continue;
+                        const raw = rowsRange.values[relRow][col - 1];
+                        const text = String(raw === null || raw === undefined ? "" : raw).replace(/^[▸▾\s]+/, "").trim();
+                        if (text) out[String(field.dim).toUpperCase()] = text;
+                    }
+                    return out;
+                }
+                function valuesForCol(relCol) {
+                    const out = {};
+                    if (!colsRange) return out;
+                    for (let row = 1; row < colsFieldTable.length; row++) {
+                        const entry = colsFieldTable[row];
+                        if (!entry) continue;
+                        const indentRow = colsIndent[row - 1];
+                        const flag = (indentRow && typeof indentRow[relCol] === "number") ? indentRow[relCol] + 1 : 1;
+                        const field = resolveAxisFieldForFlag(entry, flag);
+                        if (!field) continue;
+                        const raw = colsRange.values[row - 1][relCol];
+                        const text = String(raw === null || raw === undefined ? "" : raw).replace(/^[▸▾\s]+/, "").trim();
+                        if (text) out[String(field.dim).toUpperCase()] = text;
+                    }
+                    return out;
+                }
+
+                for (const key of keys) {
+                    const change = changes[key];
+                    if (change.sheetName !== sheetName) continue;
+
+                    const cell = context.workbook.worksheets.getItem(sheetName).getRange(change.address);
+                    cell.load(["rowIndex", "columnIndex"]);
+                    await context.sync();
+
+                    const relRow = cell.rowIndex - valuesRange.rowIndex;
+                    const relCol = cell.columnIndex - valuesRange.columnIndex;
+                    if (relRow < 0 || relCol < 0 || relRow >= valuesRange.rowCount || relCol >= valuesRange.columnCount) continue;
+
+                    const valuesByDim = Object.assign({}, valuesForRow(relRow), valuesForCol(relCol));
+                    Object.keys(filterValueByDim).forEach(d => {
+                        if (!(d in valuesByDim)) valuesByDim[d] = filterValueByDim[d];
+                    });
+
+                    const columnNames = [];
+                    const columnValues = [];
+                    dimColumns.forEach(dc => {
+                        columnNames.push(dc.factColumn);
+                        const v = valuesByDim[dc.dimension.toUpperCase()];
+                        columnValues.push((v === undefined || v === null) ? "NULL" : `'${String(v).replace(/'/g, "''")}'`);
+                    });
+
+                    columnNames.push(measureFactField);
+                    const newVal = change.newValue;
+                    if (newVal === "" || newVal === null || newVal === undefined) {
+                        columnValues.push("NULL");
+                    } else if (!isNaN(Number(newVal))) {
+                        columnValues.push(Number(newVal));
+                    } else {
+                        columnValues.push(`'${String(newVal).replace(/'/g, "''")}'`);
+                    }
+
+                    sqlBlocks.push(`INSERT INTO ${factTable} (${columnNames.join(", ")}) VALUES (${columnValues.join(", ")});`);
+                }
+            });
+        }
+
+        const finalSql = sqlBlocks.length
+            ? sqlBlocks.join("\n")
+            : "-- No hay cambios pendientes de guardar en ningún informe de planificación.";
+
+        await Excel.run(async (context) => {
+            const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+            editReportSheet.getRange("V4").values = [[finalSql]];
+            await context.sync();
+        });
+
+        // Devolver el formato original a las celdas ya volcadas al INSERT
+        // (si el informe no tiene "Sobrescribir formatos"; si lo tiene, el
+        // próximo refresco ya las va a repintar del todo) y limpiar el
+        // seguimiento de cambios de esos informes.
+        for (const reportId of reportsWithChanges) {
+            const report = window.ReportStore.getReport(reportId);
+            const changes = window.PlanningChangesStore.getAllForReport(reportId);
+            const keys = Object.keys(changes);
+
+            if (report && !report.reportProperties.overwriteFormats && keys.length) {
+                await Excel.run(async (context) => {
+                    DracoSuppressChangeEvents = true;
+                    try {
+                        keys.forEach(key => {
+                            const change = changes[key];
+                            const cell = context.workbook.worksheets.getItem(change.sheetName).getRange(change.address);
+                            restoreCellFormat(cell, change.oldFormat);
+                        });
+                        await context.sync();
+                    } finally {
+                        DracoSuppressChangeEvents = false;
+                    }
+                });
+            }
+            await window.PlanningChangesStore.clearForReport(reportId);
+        }
+
+        console.log("[Draco] INSERT de planificación generado en EDIT_REPORT!V4:\n" + finalSql);
+    } catch (error) {
+        console.error("Error al guardar la planificación:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
 try {
     Office.actions.associate("hidePane", hidePane);
     Office.actions.associate("abrirModeloSemantico", abrirModeloSemantico);
@@ -6125,6 +6566,7 @@ try {
     Office.actions.associate("abrirAnadirFiltro", abrirAnadirFiltro);
     Office.actions.associate("guardarExcelEnBucket", guardarExcelEnBucket);
     Office.actions.associate("abrirDesdeBucket", abrirDesdeBucket);
+    Office.actions.associate("guardarPlanificacion", guardarPlanificacion);
 } catch (e) {
     console.warn("Office.actions.associate no disponible en este contexto:", e);
 }

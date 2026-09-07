@@ -193,7 +193,22 @@
                 });
             },
 
-            numberFormat: undefined, // no se usa (los valores ya se formatean como texto antes de escribir)
+            get numberFormat() {
+                const out = [];
+                for (let r = r1; r <= r2; r++) {
+                    const row = [];
+                    for (let c = c1; c <= c2; c++) row.push(getCellObj(r, c).nf || "General");
+                    out.push(row);
+                }
+                return out;
+            },
+            set numberFormat(v) {
+                if (!Array.isArray(v)) return;
+                v.forEach((row, ri) => {
+                    if (!Array.isArray(row)) return;
+                    row.forEach((val, ci) => writeCellObj(r1 + ri, c1 + ci, undefined, { nf: val }));
+                });
+            },
 
             get formulas() {
                 // No implementamos fórmulas EPM_VALUE reales: se devuelve el
