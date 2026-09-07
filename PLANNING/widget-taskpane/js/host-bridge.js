@@ -213,8 +213,10 @@
                     set underline(v) { forEachCell((r, c) => writeCellObj(r, c, undefined, { u: (v && v !== "None") ? 1 : 0 })); },
                     get color() { return collectStyleFlags().col || "#000000"; },
                     set color(v) { forEachCell((r, c) => writeCellObj(r, c, undefined, { col: v })); },
-                    size: 11,
-                    name: "Calibri"
+                    get size() { return collectStyleFlags().fs || 11; },
+                    set size(v) { forEachCell((r, c) => writeCellObj(r, c, undefined, { fs: v })); },
+                    get name() { return collectStyleFlags().ff || "inherit"; },
+                    set name(v) { forEachCell((r, c) => writeCellObj(r, c, undefined, { ff: v })); }
                 },
                 fill: {
                     get color() { return collectStyleFlags().bg || "#FFFFFF"; },
