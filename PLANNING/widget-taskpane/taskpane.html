@@ -6,7 +6,7 @@
     <title>EPM Data Studio · Diseño del informe</title>
 
     <!-- Librería JavaScript de Microsoft Office (Requerida en el HEAD) -->
-    <script src="js/host-bridge.js?v=20260906j"></script>
+    <script src="js/host-bridge.js?v=20260907a"></script>
     <script src="js/provider-bridge.js?v=20260906a"></script>
 
     <link rel="stylesheet" href="css/theme.css?v=20260906a">
@@ -319,6 +319,10 @@
                         <input type="checkbox" id="propAutoFitColumns">
                         Autoajustar ancho de columnas al actualizar
                     </label>
+                    <label class="properties-checkbox-row">
+                        <input type="checkbox" id="propPlanningReport">
+                        Informe de planificación (permite editar celdas de Valores y grabarlas con "Planificación &gt; Guardar")
+                    </label>
                 </div>
             </div>
             <div class="modal-footer">
@@ -367,11 +371,12 @@
     <script src="js/semanticModelStore.js?v=20260906a"></script>
     <script src="js/reportStore.js?v=20260906a"></script>
     <script src="js/filterRangeStore.js?v=20260906a"></script>
+    <script src="js/planningChangesStore.js?v=20260907a"></script>
     <script src="js/excelService.js?v=20260906b"></script>
     <script src="js/filterModal.js?v=20260906a"></script>
     <script src="js/distributeValues.js?v=20260906a"></script>
-    <script src="js/commands.js?v=20260906d"></script>
-    <script src="js/taskpane.js?v=20260906a"></script>
+    <script src="js/commands.js?v=20260907a"></script>
+    <script src="js/taskpane.js?v=20260907a"></script>
     <script src="js/lkml-bootstrap.js?v=20260906f"></script>
 </body>
 </html>
