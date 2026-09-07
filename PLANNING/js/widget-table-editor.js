@@ -386,6 +386,12 @@ const WTE_EMBEDDED_CSS = `
     overflow: hidden;
     outline: none;
     background: #ffffff;
+    cursor: cell;
+}
+
+.wte-crop-cell-selected {
+    box-shadow: inset 0 0 0 2px var(--brand-primary);
+    z-index: 2;
 }
 
 .wte-pivot-toggle {
@@ -701,7 +707,7 @@ const WidgetTableEditor = {
             // y con la conexión ya autenticada de esta app (provider-bridge.js).
             const iframe = document.createElement("iframe");
             iframe.className = "wte-taskpane-frame";
-            iframe.src = "widget-taskpane/taskpane.html?v=20260906g";
+            iframe.src = "widget-taskpane/taskpane.html?v=20260906h";
             panel.appendChild(iframe);
             this._taskpaneFrame = iframe;
             if (!resizer._wired) {
@@ -765,6 +771,7 @@ const WidgetTableEditor = {
     async openRunView(widgetRow, project = null) {
         await this.open(widgetRow, project); // carga this.state con el motor de rejilla normal
         this.overlay.style.display = "none"; // el editor completo sigue "vivo" pero oculto: lo sigue usando el taskpane
+        this.cropSelection = null;
 
         let runOverlay = document.getElementById("wteRunModal");
         if (!runOverlay) {
@@ -888,12 +895,41 @@ const WidgetTableEditor = {
             return;
         }
 
+        // Una celda combinada puede empezar dentro del rectángulo pero
+        // extenderse más allá (p.ej. la cabecera de la columna de países,
+        // combinada varias filas hacia abajo) — sin esto se recortaba a
+        // medias. Se repite hasta que ampliar por una fusión ya no haga
+        // falta ampliar por ninguna otra (una fusión nueva incluida podría
+        // a su vez solapar con otra fuera del rango anterior).
+        let expanded = true;
+        while (expanded) {
+            expanded = false;
+            this.state.merges.forEach(m => {
+                const overlaps = m.r <= r2 && m.r + m.rowSpan - 1 >= r1 && m.c <= c2 && m.c + m.colSpan - 1 >= c1;
+                if (!overlaps) return;
+                if (m.r < r1) { r1 = m.r; expanded = true; }
+                if (m.r + m.rowSpan - 1 > r2) { r2 = m.r + m.rowSpan - 1; expanded = true; }
+                if (m.c < c1) { c1 = m.c; expanded = true; }
+                if (m.c + m.colSpan - 1 > c2) { c2 = m.c + m.colSpan - 1; expanded = true; }
+            });
+        }
+
         this.ensureOffsets();
-        const originX = this.colX(c1), originY = this.rowY(r1);
+        const MARGIN = 20; // margen interior del lienzo recortado, para que no quede "apelotonado" contra el borde
+        this._cropBounds = { r1, c1, r2, c2, originX: this.colX(c1), originY: this.rowY(r1), margin: MARGIN };
+        this._cropContainer = container;
+        this.renderCropCanvas();
+    },
+
+    // Repinta el lienzo recortado (celdas + selección) sin recalcular el
+    // rango — se llama tanto la primera vez como al seleccionar/editar.
+    renderCropCanvas() {
+        const container = this._cropContainer;
+        const { r1, c1, r2, c2, originX, originY, margin } = this._cropBounds;
         const totalW = this.colX(c2) + this.colWidth(c2) - originX;
         const totalH = this.rowY(r2) + this.rowHeight(r2) - originY;
 
-        let html = `<div class="wte-crop-scroll"><div class="wte-crop-canvas" style="width:${totalW}px;height:${totalH}px;">`;
+        let html = `<div class="wte-crop-scroll" id="wteCropScroll"><div class="wte-crop-canvas" id="wteCropCanvas" style="width:${totalW + margin * 2}px;height:${totalH + margin * 2}px;">`;
         for (let r = r1; r <= r2; r++) {
             for (let c = c1; c <= c2; c++) {
                 const merge = this.state.merges.find(m => m.r === r && m.c === c);
@@ -901,14 +937,32 @@ const WidgetTableEditor = {
                 if (covered) continue;
                 const w = merge ? this._colOffsets[merge.c + merge.colSpan] - this._colOffsets[merge.c] : this.colWidth(c);
                 const h = merge ? this._rowOffsets[merge.r + merge.rowSpan] - this._rowOffsets[merge.r] : this.rowHeight(r);
-                html += this.cropCellHtml(r, c, this.colX(c) - originX, this.rowY(r) - originY, w, h);
+                html += this.cropCellHtml(r, c, this.colX(c) - originX + margin, this.rowY(r) - originY + margin, w, h);
             }
         }
         html += "</div></div>";
         container.innerHTML = html;
 
+        // Clic fuera de cualquier celda (en el margen/fondo del recorte):
+        // borra la selección azul, igual que en Excel al clicar fuera del
+        // rango con datos.
+        const scrollEl = document.getElementById("wteCropScroll");
+        const canvasEl = document.getElementById("wteCropCanvas");
+        scrollEl.addEventListener("mousedown", (e) => {
+            if (e.target === scrollEl || e.target === canvasEl) {
+                this.cropSelection = null;
+                this.renderCropCanvas();
+            }
+        });
+
         container.querySelectorAll(".wte-crop-cell").forEach(div => {
-            div.addEventListener("dblclick", () => this.startCropEditing(div, container));
+            const r = parseInt(div.dataset.r, 10), c = parseInt(div.dataset.c, 10);
+            div.addEventListener("mousedown", () => {
+                if (div.isContentEditable) return; // ya editando: deja que el clic coloque el cursor
+                this.cropSelection = { r, c };
+                this.renderCropCanvas();
+            });
+            div.addEventListener("dblclick", () => this.startCropEditing(div));
         });
     },
 
@@ -919,7 +973,7 @@ const WidgetTableEditor = {
         const cell = this.getCell(r, c);
         const style = [
             `left:${x}px`, `top:${y}px`, `width:${w}px`, `height:${h}px`,
-            `font-family:${cell.ff || "inherit"}`,
+            `font-family:${cell.ff || "'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Roboto, sans-serif"}`,
             `font-size:${cell.fs || 12}px`,
             `font-weight:${cell.b ? "700" : "400"}`,
             `font-style:${cell.i ? "italic" : "normal"}`,
@@ -928,16 +982,17 @@ const WidgetTableEditor = {
             `padding-left:${6 + (cell.ind ? cell.ind * 14 : 0)}px`,
             `color:${cell.col || "inherit"}`,
             `background-color:${cell.bg || "#ffffff"}`,
-            `border-top:${this.borderCss(cell.bt, true)}`,
+            `border-top:${this.borderCss(this.effectiveBorderTop(cell, r, c), true)}`,
             `border-right:${this.borderCss(cell.br, true)}`,
             `border-bottom:${this.borderCss(cell.bb, true)}`,
-            `border-left:${this.borderCss(cell.bl, true)}`
+            `border-left:${this.borderCss(this.effectiveBorderLeft(cell, r, c), true)}`
         ].join(";");
-        return `<div class="wte-crop-cell" data-r="${r}" data-c="${c}" style="${style}">${UI.escapeHtml(cell.v || "")}</div>`;
+        return `<div class="wte-crop-cell${this.cropSelection && this.cropSelection.r === r && this.cropSelection.c === c ? " wte-crop-cell-selected" : ""}" data-r="${r}" data-c="${c}" style="${style}">${UI.escapeHtml(cell.v || "")}</div>`;
     },
 
-    startCropEditing(div, container) {
+    startCropEditing(div) {
         const r = parseInt(div.dataset.r, 10), c = parseInt(div.dataset.c, 10);
+        this.cropSelection = { r, c };
         div.contentEditable = "true";
         div.focus();
         document.execCommand("selectAll", false, null);
@@ -945,6 +1000,7 @@ const WidgetTableEditor = {
             const value = div.innerText.replace(/\n/g, " ").trim();
             this.writeCell(r, c, value);
             div.contentEditable = "false";
+            this.renderCropCanvas();
         };
         div.addEventListener("blur", commit, { once: true });
         div.addEventListener("keydown", (e) => {
@@ -1514,6 +1570,33 @@ const WidgetTableEditor = {
         return "2px solid #1a1f2b";
     },
 
+    isRealBorder(b) {
+        return !!(b && typeof b === "object" && b.style === "continuous");
+    },
+
+    // Evita bordes dobles entre dos celdas contiguas (p.ej. el borde
+    // derecho de la zona de Filas pegado al izquierdo de la de Valores:
+    // cada una pinta su propio borde exterior y, si ambas caen en la
+    // misma línea, se sumaban). La línea compartida la dibuja SIEMPRE el
+    // lado derecho/inferior; el lado izquierdo/superior se calla si el
+    // vecino ya la está dibujando — igual que hace Excel de verdad, donde
+    // el borde pertenece a la frontera entre celdas, no a cada celda por
+    // separado.
+    effectiveBorderTop(cell, r, c) {
+        if (r > 0) {
+            const above = this.getCell(r - 1, c);
+            if (this.isRealBorder(above.bb)) return null;
+        }
+        return cell.bt;
+    },
+    effectiveBorderLeft(cell, r, c) {
+        if (c > 0) {
+            const left = this.getCell(r, c - 1);
+            if (this.isRealBorder(left.br)) return null;
+        }
+        return cell.bl;
+    },
+
     cellHtml(r, c, x, y, w, h, sel) {
         const cell = this.getCell(r, c);
         const isSelected = r >= sel.r1 && r <= sel.r2 && c >= sel.c1 && c <= sel.c2;
@@ -1521,7 +1604,7 @@ const WidgetTableEditor = {
 
         const style = [
             `left:${x}px`, `top:${y}px`, `width:${w}px`, `height:${h}px`,
-            `font-family:${cell.ff || "inherit"}`,
+            `font-family:${cell.ff || "'Segoe UI', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Roboto, sans-serif"}`,
             `font-size:${cell.fs || 12}px`,
             `font-weight:${cell.b ? "700" : "400"}`,
             `font-style:${cell.i ? "italic" : "normal"}`,
@@ -1530,10 +1613,10 @@ const WidgetTableEditor = {
             `padding-left:${6 + (cell.ind ? cell.ind * 14 : 0)}px`,
             `color:${cell.col || "inherit"}`,
             `background-color:${cell.bg || "#ffffff"}`,
-            `border-top:${this.borderCss(cell.bt)}`,
+            `border-top:${this.borderCss(this.effectiveBorderTop(cell, r, c))}`,
             `border-right:${this.borderCss(cell.br)}`,
             `border-bottom:${this.borderCss(cell.bb)}`,
-            `border-left:${this.borderCss(cell.bl)}`
+            `border-left:${this.borderCss(this.effectiveBorderLeft(cell, r, c))}`
         ].join(";");
 
         // Celdas de cabecera de un informe (jerarquía): icono ▸/▾ clicable
