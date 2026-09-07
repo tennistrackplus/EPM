@@ -31,19 +31,56 @@ Office.onReady(() => {
 });
 
 /**
+ * Asegura que exista la hoja técnica EDIT_REPORT (estado del diseño del
+ * informe: filtros/filas/columnas), igual que ensureCoreModelSheets() en
+ * semantic_model.js — pero ese fichero solo se carga en el taskpane
+ * (semantic_model.html), no en el runtime de comandos del ribbon
+ * (commands.html), así que aquí se repite la misma lógica para que
+ * abrirModeloSemantico() (botón del ribbon) también la cree si hace
+ * falta. Se crea vacía si no existe, salvo D5 y D6 que llevan "X", y se
+ * deja oculta.
+ */
+async function ensureEditReportSheetFromRibbon() {
+    try {
+        await Excel.run(async (context) => {
+            const sheets = context.workbook.worksheets;
+
+            let editSheet = sheets.getItemOrNullObject("EDIT_REPORT");
+            await context.sync();
+
+            if (editSheet.isNullObject) {
+                editSheet = sheets.add("EDIT_REPORT");
+                editSheet.getRange("D5").values = [["X"]];
+                editSheet.getRange("D6").values = [["X"]];
+            }
+
+            editSheet.visibility = Excel.SheetVisibility.hidden;
+            await context.sync();
+        });
+    } catch (e) {
+        console.error("[Draco] No se pudo asegurar la hoja EDIT_REPORT al abrir el modelo semántico:", e);
+    }
+}
+
+/**
  * Botón de ribbon "Abrir modelo semántico" (ModeloAbrirButton).
  * Abre directamente el diálogo independiente de importación LookML
  * (Office.context.ui.displayDialogAsync), sin depender de que el taskpane
  * del modelo semántico esté abierto ni de ningún popup dentro de él.
+ * Antes de abrir el diálogo se asegura la hoja EDIT_REPORT (ver
+ * ensureEditReportSheetFromRibbon), igual que hace el taskpane del
+ * modelo semántico en cuanto se abre.
  * @param {Office.AddinCommands.Event} event
  */
 function abrirModeloSemantico(event) {
     try {
-        // LkmlOpenBridge (js/lkmlOpenBridge.js) abre openSemanticModel.html
-        // y, cuando el usuario elige un fichero y confirma, guarda el
-        // modelo importado en SemanticModelStore desde este mismo runtime
-        // de comandos (que sí tiene acceso a Office.context.document.settings).
-        window.LkmlOpenBridge.openOpenLkmlDialog();
+        ensureEditReportSheetFromRibbon().finally(() => {
+            // LkmlOpenBridge (js/lkmlOpenBridge.js) abre openSemanticModel.html
+            // y, cuando el usuario elige un fichero y confirma, guarda el
+            // modelo importado en SemanticModelStore desde este mismo runtime
+            // de comandos (que sí tiene acceso a Office.context.document.settings).
+            window.LkmlOpenBridge.openOpenLkmlDialog();
+        });
     } catch (error) {
         console.error("Error al abrir el diálogo de apertura de modelo semántico:", error);
     } finally {
@@ -327,7 +364,11 @@ const ReportState = {
     Filters: [],
     Rows: [],
     Columns: [],
-    Measures: []
+    Measures: [],
+    // Medidas arrastradas a la zona "Filtros" (ver loadFilters /
+    // appendLockedFilterRangesToState / applyFilterMeasuresToDynamicReport):
+    // no van en Filters (no afectan al WHERE) ni se cuentan en Rows/Columns.
+    FilterMeasureNames: []
 };
 
 /* ---------------------------------------------------------------------
@@ -649,16 +690,31 @@ function parseAddressRange(addr) {
 function loadFilters(editReportGrid) {
     ReportState.FilterCount = 0;
     ReportState.Filters = [];
+    // Medidas arrastradas a la zona "Filtros": no son un filtro real (no
+    // hay una dimensión/tabla real que consultar para sus miembros, ver
+    // también el cambio en taskpane.js que ya no permite doble clic sobre
+    // ellas), así que NO se añaden a ReportState.Filters — pero tampoco se
+    // descartan sin más: se recogen aquí para que el informe DINÁMICO
+    // (applyFilterMeasuresToDynamicReport, llamado tras
+    // loadReportDefinition) las añada al final de ReportState.Measures,
+    // como si estuvieran en la última posición de Columnas. El modo Fijo
+    // (buildSQLFixed) no las usa en absoluto.
+    ReportState.FilterMeasureNames = [];
 
     let R = 15;
 
     while (String(cellValue(editReportGrid, R, 3)).trim() !== "") {
-        ReportState.FilterCount++;
-        ReportState.Filters.push({
-            Dimension: String(cellValue(editReportGrid, R, 3)).trim(),
-            AttributeName: String(cellValue(editReportGrid, R, 4)).trim(),
-            Value: String(cellValue(editReportGrid, R, 5)).trim()
-        });
+        const dimension = String(cellValue(editReportGrid, R, 3)).trim();
+        if (dimension.toUpperCase() === "MEASURE") {
+            ReportState.FilterMeasureNames.push(String(cellValue(editReportGrid, R, 4)).trim());
+        } else {
+            ReportState.FilterCount++;
+            ReportState.Filters.push({
+                Dimension: dimension,
+                AttributeName: String(cellValue(editReportGrid, R, 4)).trim(),
+                Value: String(cellValue(editReportGrid, R, 5)).trim()
+            });
+        }
         R++;
     }
 }
@@ -686,6 +742,14 @@ function appendLockedFilterRangesToState(reportId) {
         const appliesToThisReport = isAll
             || (reportId !== null && reportId !== undefined && Number(meta.reportId) === Number(reportId));
         if (!appliesToThisReport) continue;
+
+        // Igual que en loadFilters(): una MEDIDA en un filtro "bloqueado"
+        // (creado con "Añadir filtro") tampoco participa del WHERE.
+        if (String(meta.dim).toUpperCase() === "MEASURE") {
+            if (!ReportState.FilterMeasureNames) ReportState.FilterMeasureNames = [];
+            ReportState.FilterMeasureNames.push(meta.name);
+            continue;
+        }
 
         ReportState.Filters.push({
             Dimension: meta.dim,
@@ -783,6 +847,28 @@ function loadReportDefinition(editReportGrid, reportId) {
     appendLockedFilterRangesToState(reportId !== undefined ? reportId : activeReportIdOrNull());
     loadRows(editReportGrid);
     loadColumns(editReportGrid);
+}
+
+/**
+ * SOLO para el informe DINÁMICO (buildSQL/actualizarInformeCore,
+ * actualizarTodosCore): añade al final de ReportState.Measures las
+ * medidas que se hubieran arrastrado a la zona "Filtros" (tanto locales
+ * del taskpane como filtros "bloqueados" de Añadir filtro), recogidas por
+ * loadFilters()/appendLockedFilterRangesToState() en
+ * ReportState.FilterMeasureNames. Se llama DESPUÉS de
+ * loadReportDefinition() (que ya ha corrido loadColumns(), la última
+ * función que toca ReportState.Measures), así que quedan siempre en
+ * última posición — "como si estuvieran en la última posición de
+ * Columnas". No se llama en ningún punto del modo Fijo
+ * (buildSQLFixed/actualizarInformeFixedCore): ese flujo no se toca en
+ * absoluto, tal y como estaba.
+ */
+function applyFilterMeasuresToDynamicReport() {
+    (ReportState.FilterMeasureNames || []).forEach(name => {
+        if (!name) return;
+        ReportState.MeasureCount = (ReportState.MeasureCount || 0) + 1;
+        ReportState.Measures.push({ Name: name });
+    });
 }
 
 /* ---------------------------------------------------------------------
@@ -5164,6 +5250,43 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
 
+    // ---- Medidas arrastradas a la zona "Filtros" (ver loadFilters/
+    // appendLockedFilterRangesToState + applyFilterMeasuresToDynamicReport,
+    // que ya las añadió al FINAL de ReportState.Measures antes de llamar a
+    // buildSQL): siguen reservando su propio hueco físico en el eje de
+    // medidas —igual que cualquier otra medida, con el mismo mIdx que le
+    // toca por su posición en ReportState.Measures— pero NO se pinta ni su
+    // cabecera ni su valor; la celda se queda en blanco. Se tratan como si
+    // estuvieran en la ÚLTIMA posición del eje que YA lleva las medidas
+    // (Filas o Columnas, el que sea: el taskpane garantiza que todas las
+    // medidas reales están en uno solo); si ningún eje tiene todavía
+    // ninguna medida real (todas las medidas del informe están en
+    // Filtros), se usa el eje Columnas por defecto.
+    const filterMeasureNames = ReportState.FilterMeasureNames || [];
+    if (filterMeasureNames.length > 0) {
+        const targetPlan = planFilas.measureLevels.length > 0 ? planFilas : planColumnas;
+        let measureIaux;
+        if (targetPlan.measureLevels.length > 0) {
+            // Ya había medidas reales en este eje: comparten el mismo hueco
+            // físico (iAux) que ya se les asignó en computeAxisPaintPlan.
+            measureIaux = targetPlan.measureLevels[0].iAux;
+        } else {
+            // Ninguna medida real en este eje todavía: se reserva un hueco
+            // físico nuevo al final (mismo criterio que computeAxisPaintPlan
+            // al encontrar la primera fila MEASURE del diseño).
+            targetPlan.totalIaux += 1;
+            measureIaux = targetPlan.totalIaux;
+        }
+        filterMeasureNames.forEach(name => {
+            targetPlan.measureLevels.push({
+                iAux: measureIaux,
+                ordinal: targetPlan.measureLevels.length,
+                label: name,
+                hidden: true // no se pinta ni cabecera ni valor, ver más abajo
+            });
+        });
+    }
+
     // ---- Varias medidas en el MISMO eje (Σ Medidas del taskpane): el
     // taskpane garantiza que todas las medidas están en un único eje
     // (nunca repartidas entre Filas y Columnas), así que como mucho uno de
@@ -5174,6 +5297,15 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const measureCount = Math.max(1, ReportState.Measures.length);
     const measuresOnRowsAxis = planFilas.measureLevels.length > 0;      // eje "Filas" físico (H/I/J)
     const measuresOnColsAxis = planColumnas.measureLevels.length > 0;   // eje "Columnas" físico (N/O/P)
+    // Ordinales (mIdx, 0-based, el mismo índice que recorre el bucle de
+    // ReportState.Measures) de las medidas ocultas (en Filtros) del eje que
+    // realmente lleva las medidas: se usa más abajo para no escribir ni su
+    // valor (celdas de datos) ni su cabecera.
+    const hiddenMeasureOrdinals = new Set(
+        (measuresOnRowsAxis ? planFilas.measureLevels : (measuresOnColsAxis ? planColumnas.measureLevels : []))
+            .filter(m => m.hidden)
+            .map(m => m.ordinal)
+    );
     // Índice (0-based) del primer campo de medida dentro de cada fila del
     // FACT: tras ROW_ID, COLUMN_ID y las dimensiones de ambos ejes, en el
     // mismo orden en que buildSelect/buildFinalSelect las escriben.
@@ -5343,6 +5475,10 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         // físicas consecutivas (misma fila). Con una sola medida, measureCount
         // es 1 y esto se comporta exactamente igual que antes.
         for (let mIdx = 0; mIdx < measureCount; mIdx++) {
+            // Medida en Filtros: se calcula igual (mismo mIdx, mismo hueco
+            // físico reservado), pero no se escribe su valor — la celda se
+            // queda en blanco.
+            if (hiddenMeasureOrdinals.has(mIdx)) continue;
             const physRow = explodeForMeasures(newRowId, measuresOnRowsAxis, mIdx);
             const physCol = explodeForMeasures(newColId, measuresOnColsAxis, mIdx);
             const row = physRow + rowsOffRow;
@@ -5402,6 +5538,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         // en su propia columna física, una por cada medida del grupo, en la
         // fila física que le corresponde a ESA medida (measuresOnRowsAxis).
         for (const m of planFilas.measureLevels) {
+            if (m.hidden) continue; // medida en Filtros: no se pinta su cabecera
             const row = explodeForMeasures(Number(V[0]), measuresOnRowsAxis, m.ordinal) + rowsOffRow;
             const col = m.iAux + rowsOffCol;
             filasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
@@ -5479,6 +5616,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         // (respeta la posición configurada en EDIT_REPORT: por encima o por
         // debajo de ESCENARIO, según dónde esté la fila MEASURE en N/O/P).
         for (const m of planColumnas.measureLevels) {
+            if (m.hidden) continue; // medida en Filtros: no se pinta su cabecera
             const row = m.iAux + colsOffRow;
             const col = explodeForMeasures(Number(V[0]), measuresOnColsAxis, m.ordinal) + colsOffCol;
             columnasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
@@ -5939,6 +6077,7 @@ async function actualizarInformeCore(reportIdOverride) {
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
 
         loadReportDefinition(editReportGrid, reportId);
+        applyFilterMeasuresToDynamicReport();
 
         // EDIT_REPORT!D4 = "Mostrar subtotales arriba" (Propiedades del
         // informe). Solo tiene efecto real cuando además hay algún campo
@@ -6099,6 +6238,7 @@ async function actualizarTodosCore(concurrency) {
                     const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
                     const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
                     loadReportDefinition(editReportGrid, reportId);
+                    applyFilterMeasuresToDynamicReport();
                     const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
                     sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
                 });

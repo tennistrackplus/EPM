@@ -1606,8 +1606,10 @@ const TaskPaneApp = {
 
         tag.addEventListener("dragend", () => tag.classList.remove("dragging"));
 
-        // Solo los filtros abren el modal de selección de valor (doble clic)
-        if (zoneId === "filters") {
+        // Solo los filtros abren el modal de selección de valor (doble clic).
+        // Una MEDIDA en Filtros no tiene miembros que elegir (no es una
+        // dimensión con valores): no se abre el FilterModal para ella.
+        if (zoneId === "filters" && !isMeasure) {
             tag.addEventListener("dblclick", async () => {
                 if (typeof FilterModal === "undefined" || !FilterModal.open) return;
 
