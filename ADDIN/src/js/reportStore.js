@@ -355,26 +355,6 @@
             return out;
         };
 
-        const expandedCols = expandAxis(state.columns || [], "columns", state.fieldOptions);
-
-        // Una MEDIDA colocada en Filtros (y no en Filas ni en Columnas) no
-        // deja de calcularse: de cara al SQL tiene que comportarse EXACTAMENTE
-        // como si estuviera en Columnas, en la última posición (misma
-        // query). Para eso se añade aquí, al final de expandedCols, una
-        // línea MEASURE más marcada como oculta en la columna "jerarquía"
-        // (índice 3, que para una medida nunca se usa: ver el "else" de
-        // expandAxis de arriba) con el valor reservado "HIDDEN_MEASURE".
-        // commands.js (computeAxisPaintPlan) sigue reservándole su columna
-        // física igual que a cualquier otra medida (mismo ancho de rango,
-        // mismo iAux/measureCount: "el rango se genera igual"), pero al
-        // pintar (jsonTo3MatricesCore) omite escribir su celda de cabecera
-        // y sus celdas de valores.
-        (state.filters || []).forEach(f => {
-            if (String(f.dimension).toUpperCase() === "MEASURE") {
-                expandedCols.push([f.dimension, f.name, 1, "HIDDEN_MEASURE", "", ""]);
-            }
-        });
-
         report.design = {
             filters: (state.filters || []).map(f => ({
                 dimension: f.dimension, name: f.name, isHierarchy: f.isHierarchy,
@@ -382,15 +362,13 @@
                 // El filtro (multi-valor / rango / incluir-excluir) se guarda
                 // como JSON en la misma celda "Valor" que antes tenía un
                 // valor simple; commands.js (parseFilterValue) sabe leer
-                // ambos formatos. Una medida en Filtros nunca tiene "filter"
-                // (no se filtra por valor), así que su "value" queda vacío
-                // y buildWhere() la ignora sola.
+                // ambos formatos.
                 value: f.filter ? JSON.stringify(f.filter) : ""
             })),
             rows: (state.rows || []).map(r => ({ dimension: r.dimension, name: r.name, isHierarchy: r.isHierarchy })),
             columns: (state.columns || []).map(c => ({ dimension: c.dimension, name: c.name, isHierarchy: c.isHierarchy })),
             expandedRows: expandAxis(state.rows || [], "rows", state.fieldOptions),
-            expandedCols,
+            expandedCols: expandAxis(state.columns || [], "columns", state.fieldOptions),
             rowsStatic: !!state.rowsStatic,
             colsStatic: !!state.colsStatic,
             rrAddress: state.rrAddress || "",
