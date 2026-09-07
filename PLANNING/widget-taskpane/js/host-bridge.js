@@ -293,7 +293,23 @@
             },
 
             load() { return range; },
-            clear() { forEachCell((r, c) => clearCellObj(r, c)); return range; },
+            // "Contents" (Sobrescribir formatos desactivado, ver
+            // clearDracoNamedRanges en commands.js) solo borra el VALOR y
+            // conserva color/fuente/bordes ya pintados; sin distinguir
+            // esto de "All", se borraba siempre la celda entera pase lo
+            // que pase esa opción.
+            clear(applyTo) {
+                const onlyContents = applyTo === "Contents";
+                forEachCell((r, c) => {
+                    if (onlyContents) {
+                        const obj = getCellObj(r, c);
+                        if (obj && typeof obj === "object") delete obj.v;
+                    } else {
+                        clearCellObj(r, c);
+                    }
+                });
+                return range;
+            },
             select() { /* no-op: no hay selección de usuario real que mover */ },
 
             merge(across) {

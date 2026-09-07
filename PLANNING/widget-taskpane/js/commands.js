@@ -15,6 +15,19 @@ Office.onReady(() => {
     ensureDracoRowsClickLoggerRegistered().catch(e => {
         console.warn("[Draco] No se pudo registrar el listener de Draco_*_Rows desde Office.onReady:", e);
     });
+
+    // Lo mismo para los rangos con nombre de "Añadir filtro"
+    // (Draco_<dim>_<campo>_<sufijo>): antes solo se registraba dentro de
+    // TaskPaneApp.init(), así que si el usuario abría un Excel que YA
+    // tenía un filtro creado y hacía clic en esa celda SIN haber abierto
+    // antes el panel de tareas ni una sola vez en esa sesión, el clic no
+    // se recogía. Al registrarlo aquí también, funciona desde que se abre
+    // el propio archivo, igual que ya pasa con Draco_*_Rows.
+    if (typeof ensureDracoFilterRangeHandlersRegistered === "function") {
+        ensureDracoFilterRangeHandlersRegistered().catch(e => {
+            console.warn("[Draco] No se pudo registrar el listener de 'Añadir filtro' desde Office.onReady:", e);
+        });
+    }
 });
 
 /**
@@ -4808,14 +4821,18 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         }
     }
 
-    // Antes de refrescar: borrar formato Y contenido de los rangos con
-    // nombre Draco_<id>_Rows / Draco_<id>_Cols / Draco_<id>_Values DE ESTE
+    // Antes de refrescar: borrar contenido de los rangos con nombre
+    // Draco_<id>_Rows / Draco_<id>_Cols / Draco_<id>_Values DE ESTE
     // INFORME (y solo de este) de la ejecución anterior (si existen), para
     // no arrastrar colores/bordes de una tabla previa más grande o con
     // otra forma — y, sobre todo, para NO tocar los rangos de otros
     // informes (antes, con un nombre compartido "Draco_001_*", refrescar
-    // un informe borraba lo pintado de otro).
-    await clearDracoNamedRanges(context, reportId);
+    // un informe borraba lo pintado de otro). Si "Sobrescribir formatos"
+    // está desactivado, solo se borra el CONTENIDO (Contents), no el
+    // formato — antes se borraba siempre con "all" sin mirar esta opción,
+    // así que un informe con overwriteFormats=false igualmente perdía el
+    // formato que el usuario hubiera dejado a mano en la ejecución anterior.
+    await clearDracoNamedRanges(context, reportId, reportProps.overwriteFormats);
 
     // Limpiar cualquier resto de la ejecución anterior que hubiera quedado
     // FUERA de esos rangos con nombre (p.ej. fórmulas EPM_VALUE residuales
@@ -4838,7 +4855,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
             sheet.getRangeByIndexes(
                 firstDataRow, prevBounds.left,
                 prevBounds.bottom - firstDataRow, prevBounds.right - prevBounds.left
-            ).clear(Excel.ClearApplyTo.all);
+            ).clear(reportProps.overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents);
         }
     }
     await context.sync();
@@ -5236,17 +5253,29 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
  * Borra (formato + contenido) los rangos de la ejecución anterior a los
  * que apuntaban los nombres Draco_001_Rows/Cols/Values, si existen.
  */
-async function clearDracoNamedRanges(context, reportId) {
+/**
+ * Borra el contenido de los 3 rangos con nombre de un informe
+ * (Rows/Cols/Values) antes de repintarlo. Si overwriteFormats es false
+ * (opción "Sobrescribir formatos" desactivada en las propiedades del
+ * informe), solo se borra el CONTENIDO (Contents) y se respeta el
+ * formato que el usuario haya dejado a mano — igual que el "if" que ya
+ * usa jsonTo3MatricesCore más abajo para decidir si repinta formato o no;
+ * antes esta limpieza no miraba esa opción para nada y borraba "all"
+ * siempre, así que el formato se perdía igualmente en la propia limpieza,
+ * aunque luego no se repintara.
+ */
+async function clearDracoNamedRanges(context, reportId, overwriteFormats) {
     const rn = dracoRangeNames(reportId);
     const names = [rn.rows, rn.cols, rn.values];
     const items = names.map(n => context.workbook.names.getItemOrNullObject(n));
     items.forEach(it => it.load("isNullObject"));
     await context.sync();
 
+    const clearMode = overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents;
     let anyToClear = false;
     for (const it of items) {
         if (!it.isNullObject) {
-            it.getRange().clear(Excel.ClearApplyTo.all);
+            it.getRange().clear(clearMode);
             anyToClear = true;
         }
     }
@@ -5907,7 +5936,23 @@ async function abrirDistribuirValores(event) {
  *     paso 1 (misma lógica que tenía TaskPaneApp.createFilterRangeFromModal)
  *     y lo guarda en FilterRangeStore.
  */
+// Candado contra invocaciones simultáneas: si el botón "Añadir filtro" se
+// dispara dos veces seguidas (doble clic, o el propio host mandando el
+// evento de clic repetido — se ha visto en Excel Online), sin esto se
+// llamaba a displayDialogAsync() dos veces. Office.js solo lleva bien UN
+// diálogo activo a la vez: la segunda llamada concurrente deja el canal de
+// mensajes hecho un lío (de ahí que a veces salieran 2 ventanas, y a veces
+// una de ellas se quedara sin recibir los datos). Con el candado, un
+// segundo clic mientras ya hay uno abierto simplemente se ignora.
+let dracoFilterDialogOpen = false;
+
 async function abrirAnadirFiltro(event) {
+    if (dracoFilterDialogOpen) {
+        console.warn("[Draco] Añadir filtro: ya hay un diálogo abierto; se ignora este segundo clic.");
+        if (event) event.completed();
+        return;
+    }
+    dracoFilterDialogOpen = true;
     try {
         let addr = "";
         let sheetName = "";
@@ -6052,6 +6097,7 @@ async function abrirAnadirFiltro(event) {
     } catch (error) {
         console.error("Error al abrir 'Añadir filtro':", error);
     } finally {
+        dracoFilterDialogOpen = false;
         if (event) event.completed();
     }
 }
