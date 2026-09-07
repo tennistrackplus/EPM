@@ -4671,7 +4671,18 @@ function computeAxisPaintPlan(levels) {
                 iAux++;
                 measureIaux = iAux;
             }
-            measureLevels.push({ iAux: measureIaux, ordinal: measureLevels.length, label: (level.attr || level.dim || "").trim() || "MEASURE" });
+            measureLevels.push({
+                iAux: measureIaux,
+                ordinal: measureLevels.length,
+                label: (level.attr || level.dim || "").trim() || "MEASURE",
+                // Medida movida a Filtros (ver ReportStore.saveDesign, marca
+                // "HIDDEN_MEASURE" en la columna de jerarquía): sigue
+                // reservando su columna/fila física igual que cualquier
+                // otra medida (mismo iAux, mismo totalIaux, mismo ancho de
+                // rango), pero jsonTo3MatricesCore no escribe ni su
+                // cabecera ni sus valores — se queda en blanco.
+                hidden: level.jerarquia === "HIDDEN_MEASURE"
+            });
             continue;
         }
         dimIdx++;
@@ -4817,8 +4828,12 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // el eje físico completo una vez (con las filas MEASURE incluidas) y
     // se deriva de ahí tanto la correspondencia {dim, attr, NIVEL} de cada
     // dimensión real como la columna/fila física de cada etiqueta MEASURE.
-    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10);      // H/I/J
-    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16); // N/O/P
+    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10);          // H/I/J
+    // Se pide también la columna Q (jerarquía/17) en Columnas: es donde
+    // ReportStore.saveDesign marca con "HIDDEN_MEASURE" la medida que se ha
+    // movido a Filtros (ver comentario en computeAxisPaintPlan). Para una
+    // medida esta columna nunca se usa con otro fin (ver expandAxis).
+    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16, 17); // N/O/P/Q
 
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
@@ -4990,6 +5005,16 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
      *    remapean a la numeración compactada 1..N.
      * ----------------------------------------------------------- */
     const factCells = new Map(); // "row_col" -> {row, col, value}
+    // Medidas ocultas (movidas a Filtros, ver ReportStore.saveDesign +
+    // computeAxisPaintPlan): su "ordinal" dentro del grupo de medidas
+    // coincide con el mIdx de más abajo (ambos siguen el mismo orden que
+    // ReportState.Measures), así que basta con mirar la lista de
+    // measureLevels del eje que realmente lleva las medidas.
+    const hiddenMeasureOrdinals = new Set(
+        (measuresOnColsAxis ? planColumnas.measureLevels : (measuresOnRowsAxis ? planFilas.measureLevels : []))
+            .filter(m => m.hidden)
+            .map(m => m.ordinal)
+    );
     for (let i = 0; i < filas; i++) {
         const f = fact[i];
         const newRowId = rowsFilter.idMap.get(Number(f[0]));
@@ -5002,6 +5027,10 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         // físicas consecutivas (misma fila). Con una sola medida, measureCount
         // es 1 y esto se comporta exactamente igual que antes.
         for (let mIdx = 0; mIdx < measureCount; mIdx++) {
+            // Medida en Filtros: se calcula igual (mismo mIdx, mismo hueco
+            // físico reservado), pero no se escribe su valor — la celda se
+            // queda en blanco.
+            if (hiddenMeasureOrdinals.has(mIdx)) continue;
             const physRow = explodeForMeasures(newRowId, measuresOnRowsAxis, mIdx);
             const physCol = explodeForMeasures(newColId, measuresOnColsAxis, mIdx);
             const row = physRow + rowsOffRow;
@@ -5061,6 +5090,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         // en su propia columna física, una por cada medida del grupo, en la
         // fila física que le corresponde a ESA medida (measuresOnRowsAxis).
         for (const m of planFilas.measureLevels) {
+            if (m.hidden) continue; // medida en Filtros: no se pinta su cabecera
             const row = explodeForMeasures(Number(V[0]), measuresOnRowsAxis, m.ordinal) + rowsOffRow;
             const col = m.iAux + rowsOffCol;
             filasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
@@ -5138,6 +5168,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         // (respeta la posición configurada en EDIT_REPORT: por encima o por
         // debajo de ESCENARIO, según dónde esté la fila MEASURE en N/O/P).
         for (const m of planColumnas.measureLevels) {
+            if (m.hidden) continue; // medida en Filtros: no se pinta su cabecera
             const row = m.iAux + colsOffRow;
             const col = explodeForMeasures(Number(V[0]), measuresOnColsAxis, m.ordinal) + colsOffCol;
             columnasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
