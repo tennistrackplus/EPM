@@ -30,6 +30,18 @@
             padding: 14px; color: #605e5c;
         }
         .error { color: #a80000; }
+        .error .errorMsg { margin-bottom: 10px; }
+        .error button {
+            padding: 6px 14px; border: 1px solid #8a8886; background: #fff;
+            border-radius: 2px; cursor: pointer; color: #201f1e;
+        }
+        .error button:hover { background: #f3f2f1; }
+        .spinner {
+            display: inline-block; width: 14px; height: 14px; margin-right: 8px;
+            border: 2px solid #c8c6c4; border-top-color: #605e5c; border-radius: 50%;
+            vertical-align: -2px; animation: draco-spin 0.8s linear infinite;
+        }
+        @keyframes draco-spin { to { transform: rotate(360deg); } }
         .footer {
             padding: 8px 12px; border-top: 1px solid #edebe9; text-align: right;
         }
@@ -45,7 +57,7 @@
         <input type="text" id="searchInput" placeholder="Buscar…" autocomplete="off" />
     </div>
     <div class="items" id="itemsContainer">
-        <div class="loading" id="loadingMsg">Esperando datos…</div>
+        <div class="loading" id="loadingMsg"><span class="spinner"></span>Cargando…</div>
     </div>
     <div class="footer">
         <button id="btnCancel">Cancelar</button>
@@ -59,6 +71,11 @@
         // tiene acceso al modelo de objetos de Excel (no puede llamar a
         // Excel.run por sí mismo).
         let allItems = [];
+
+        // Deshabilitado mientras no haya datos (mientras se ve el
+        // spinner "Cargando…" o el aviso de error): no tiene sentido
+        // dejar buscar sobre una lista vacía.
+        document.getElementById("searchInput").disabled = true;
 
         function log(...args) {
             // Aparece en la consola de ESTA ventana de diálogo (F12 sobre
@@ -93,6 +110,26 @@
             render(filtered);
         }
 
+        function showError(message) {
+            document.getElementById("searchInput").disabled = true;
+            const container = document.getElementById("itemsContainer");
+            container.innerHTML = "";
+            const div = document.createElement("div");
+            div.className = "error";
+            const msg = document.createElement("div");
+            msg.className = "errorMsg";
+            msg.textContent = message;
+            const btn = document.createElement("button");
+            btn.textContent = "Cerrar";
+            btn.addEventListener("click", () => {
+                log("Cerrado tras error por el usuario.");
+                Office.context.ui.messageParent(JSON.stringify({ type: "cancel" }));
+            });
+            div.appendChild(msg);
+            div.appendChild(btn);
+            container.appendChild(div);
+        }
+
         document.getElementById("searchInput").addEventListener("input", (e) => applySearch(e.target.value));
         document.getElementById("btnCancel").addEventListener("click", () => {
             log("Cancelado por el usuario.");
@@ -112,16 +149,30 @@
 
             Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg) => {
                 log("Mensaje recibido del host:", arg.message);
+                let payload;
                 try {
-                    const payload = JSON.parse(arg.message);
+                    payload = JSON.parse(arg.message);
+                } catch (err) {
+                    log("Error parseando mensaje del host:", err);
+                    showError("Error cargando los valores.");
+                    return;
+                }
+
+                // El host manda {type:"data",...} si la consulta fue bien,
+                // o {type:"error", message} si falló (ver
+                // sendPickerResultIfReady en commands.js). Hasta que no
+                // llegue uno de los dos, seguimos en el estado de
+                // "Cargando…" inicial.
+                if (payload.type === "data") {
                     allItems = payload.items || [];
+                    document.getElementById("searchInput").disabled = false;
                     document.getElementById("searchInput").value = payload.initialSearch || "";
                     if (payload.title) document.title = payload.title;
                     applySearch(payload.initialSearch || "");
-                } catch (err) {
-                    log("Error parseando mensaje del host:", err);
-                    document.getElementById("itemsContainer").innerHTML =
-                        "<div class='error'>Error cargando los valores.</div>";
+                } else if (payload.type === "error") {
+                    showError(payload.message || "Error cargando los valores.");
+                } else {
+                    log("Mensaje del host con type desconocido, se ignora:", payload.type);
                 }
             });
         });
