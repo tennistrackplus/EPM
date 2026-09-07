@@ -43,8 +43,7 @@
         suppressZeroCols: false,
         subtotalsOnTop: false,
         overwriteFormats: true,
-        autoFitColumns: true,
-        planningReport: false
+        autoFitColumns: true
     };
 
     /* ---------------------------------------------------------------
