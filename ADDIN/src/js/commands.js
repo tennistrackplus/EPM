@@ -15,6 +15,19 @@ Office.onReady(() => {
     ensureDracoRowsClickLoggerRegistered().catch(e => {
         console.warn("[Draco] No se pudo registrar el listener de Draco_*_Rows desde Office.onReady:", e);
     });
+
+    // Lo mismo para los rangos con nombre de "Añadir filtro"
+    // (Draco_<dim>_<campo>_<sufijo>): antes solo se registraba dentro de
+    // TaskPaneApp.init(), así que si el usuario abría un Excel que YA
+    // tenía un filtro creado y hacía clic en esa celda SIN haber abierto
+    // antes el panel de tareas ni una sola vez en esa sesión, el clic no
+    // se recogía. Al registrarlo aquí también, funciona desde que se abre
+    // el propio archivo, igual que ya pasa con Draco_*_Rows.
+    if (typeof ensureDracoFilterRangeHandlersRegistered === "function") {
+        ensureDracoFilterRangeHandlersRegistered().catch(e => {
+            console.warn("[Draco] No se pudo registrar el listener de 'Añadir filtro' desde Office.onReady:", e);
+        });
+    }
 });
 
 /**
@@ -2316,87 +2329,6 @@ const DracoHandlerRegisteredSheets = new Set();
 let DracoEditReportHandlerRegistered = false; // evita registrar el listener de EDIT_REPORT!A5 (picker) más de una vez — INDEPENDIENTE de lo anterior: no depende de que exista ninguna hoja de resultados ni de que se haya refrescado nunca
 let DracoSuppressChangeEvents = false; // true mientras jsonTo3Matrices pinta celdas (evita que el reconocimiento de miembros reaccione a nuestras propias escrituras)
 
-// true mientras ya hay un diálogo de "buscador de miembros" abierto. Hay
-// DOS sistemas independientes que pueden llegar a abrir este picker para
-// el MISMO clic (handleDracoRowsSingleClick por doble clic, y
-// handleDracoMemberRecognitionChanged por reconocimiento de miembros al
-// teclear) — este candado evita que se abran dos diálogos a la vez para
-// un mismo clic.
-//
-// OJO: este flag SOLO protege dentro del runtime JS en el que vive esta
-// copia de commands.js. Este complemento no usa Shared Runtime: commands.
-// html (los botones del ribbon, p.ej. "Actualizar") y taskpane.html (el
-// panel) son DOS procesos/motores JS completamente separados, y cada uno
-// carga su PROPIA copia de este fichero con sus PROPIAS variables (ver
-// también el comentario sobre Office.context.document.settings más abajo,
-// en isDracoMemberRecognitionActive). Si el panel está abierto Y el
-// usuario pulsa "Actualizar" en el ribbon, AMBOS runtimes acaban
-// registrando los mismos listeners de la hoja (registerDracoSelectionHandler
-// se llama tanto desde ensureDracoHandlersRegistered — TaskPaneApp.init —
-// como desde el refresco del informe, que corre en el runtime del
-// ribbon), y Excel notifica a los DOS por igual: un mismo cambio de celda
-// dispara handleDracoMemberRecognitionChanged en los dos procesos a la
-// vez, cada uno con su propio DracoMemberPickerOpen en `false`, así que
-// los dos pueden llegar a abrir su propio diálogo. Por eso
-// tryClaimDracoPickerLock/releaseDracoPickerLock (ver más abajo) añaden,
-// ADEMÁS de este flag local, un candado real en la propia hoja
-// (EDIT_REPORT!Z1) que sí es visible para ambos runtimes.
-let DracoMemberPickerOpen = false;
-
-// Candado de apertura del picker visible entre runtimes (ver comentario
-// de arriba): se reserva escribiendo un timestamp en EDIT_REPORT!Z1. Si
-// ya hay un timestamp reciente (menos de DRACO_PICKER_LOCK_TTL_MS) se
-// entiende que OTRO runtime ya está abriendo el picker ahora mismo y esta
-// petición se ignora. El TTL evita que un runtime que muriera a mitad de
-// apertura (p.ej. commands.html descargado por Office tras terminar el
-// comando) deje el candado bloqueado para siempre.
-const DRACO_PICKER_LOCK_CELL = "Z1";
-const DRACO_PICKER_LOCK_TTL_MS = 4000;
-
-async function tryClaimDracoPickerLock() {
-    try {
-        return await Excel.run(async (context) => {
-            const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
-            editReport.load("isNullObject");
-            await context.sync();
-            if (editReport.isNullObject) return true; // sin EDIT_REPORT no hay dónde comprobar el candado: se deja pasar
-
-            const cell = editReport.getRange(DRACO_PICKER_LOCK_CELL);
-            cell.load("values");
-            await context.sync();
-
-            const raw = String((cell.values && cell.values[0] && cell.values[0][0]) || "").trim();
-            const prevTs = Number(raw);
-            const now = Date.now();
-            if (raw && !isNaN(prevTs) && (now - prevTs) < DRACO_PICKER_LOCK_TTL_MS) {
-                return false; // otro runtime ya está abriendo el picker ahora mismo
-            }
-
-            cell.values = [[String(now)]];
-            await context.sync();
-            return true;
-        });
-    } catch (e) {
-        console.warn("[Draco] No se pudo comprobar/reservar el candado cruzado del picker (se continúa sin él):", e);
-        return true; // un fallo aquí no debe bloquear el picker
-    }
-}
-
-async function releaseDracoPickerLock() {
-    try {
-        await Excel.run(async (context) => {
-            const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
-            editReport.load("isNullObject");
-            await context.sync();
-            if (editReport.isNullObject) return;
-            editReport.getRange(DRACO_PICKER_LOCK_CELL).values = [[""]];
-            await context.sync();
-        });
-    } catch (e) {
-        console.warn("[Draco] No se pudo liberar el candado cruzado del picker:", e);
-    }
-}
-
 // Firma del eje = lista de "DIMENSION.ATRIBUTO:NIVEL" de sus campos, en
 // orden. Si cambia (se añade/quita/reordena un campo en ESE eje), se
 // entiende que la jerarquía cambió y se resetea su estado de contraído.
@@ -2897,160 +2829,48 @@ async function resolveDracoFieldForAxisLevel(context, reportId, axis, level, ind
  * en VBA); Excel.Worksheet solo ofrece onChanged (tras escribir+Enter) y
  * onSelectionChanged (al cambiar de celda seleccionada). Por eso este
  * "reconocimiento" se dispara al escribir un valor (onChanged, fiable al
- * 100%). Usa la MISMA lógica multi-informe (con zona de crecimiento) que
- * el doble clic: encuentra el informe/eje/nivel realmente afectado con
- * findDracoRowsNamedRangeForCell, sea o no una coincidencia exacta con
- * el rango con nombre actual, y si el usuario confirma un valor en el
- * picker, amplía de verdad ese rango (ver openMemberRecognitionPicker).
- *
- * Excepciones para no abrir el buscador:
- *   - Con el "Reconocimiento de miembros" desactivado.
- *   - Mientras estamos pintando nosotros mismos (DracoSuppressChangeEvents).
- *   - Si se han modificado VARIAS celdas a la vez (pegado/relleno): el
- *     address del evento cubre todo el rango modificado, así que basta
- *     con exigir 1x1.
- *   - Si el valor escrito/pegado YA es una fórmula EPM_VALUE (por
- *     ejemplo, porque el propio picker acaba de escribirla, o porque el
- *     usuario ha pegado una celda de este tipo): así se evita reabrir el
- *     buscador en bucle.
- */
-// El botón "Reconocimiento de miembros" corre en el runtime SEPARADO de
-// los comandos del ribbon (este manifest no usa Shared Runtime, es un
-// FunctionFile clásico: commands.html y taskpane.html son dos procesos
-// JS distintos). Office.context.document.settings es una caché LOCAL de
-// cada runtime, así que cuando toggleMemberRecognition hace
-// settings.set(...) en el runtime del ribbon, el runtime del task pane
-// (donde vive este onChanged) sigue viendo el valor antiguo — de ahí que
-// pareciera que el reconocimiento nunca se activaba de verdad.
-//
-// Por eso writeMemberRecognitionFlagToSheet ya escribía "X"/"" en
-// EDIT_REPORT!B1 al hacer toggle: esa celda SÍ es una fuente de verdad
-// compartida entre ambos runtimes (es el propio documento). Esta función
-// lee de ahí en vez de (o además de) Office.context.document.settings.
-async function isDracoMemberRecognitionActive(context) {
-    try {
-        const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
-        editReport.load("isNullObject");
-        await context.sync();
-        if (editReport.isNullObject) {
-            // Sin EDIT_REPORT no hay fuente de verdad en la hoja: se cae
-            // al valor cacheado localmente (mejor que nada).
-            return !!Office.context.document.settings.get("draco_memberRecognition");
-        }
-        const flagCell = editReport.getRange("B1");
-        flagCell.load("values");
-        await context.sync();
-        return String((flagCell.values && flagCell.values[0] && flagCell.values[0][0]) || "").trim().toUpperCase() === "X";
-    } catch (e) {
-        console.warn("[Draco] No se pudo leer EDIT_REPORT!B1 (Reconocimiento de miembros), se usa el valor cacheado:", e);
-        return !!Office.context.document.settings.get("draco_memberRecognition");
-    }
-}
-
-/**
- * DESACTIVADA — ya no se engancha a ningún onChanged (ver
- * registerDracoSelectionHandler). Se deja definida tal cual por
- * referencia/histórico; la misma lógica vive ahora, adaptada para
- * recibir sheetName+addr en vez de un eventArgs de onChanged, en
- * runDracoMemberRecognitionAction (más abajo), invocada desde
- * handleDracoPickerFlagRequest cuando EDIT_REPORT!V2 pasa a "REC".
+ * 100%) y, como aproximación al doble clic, también al hacer clic sobre
+ * una celda de esos rangos que esté VACÍA (onSelectionChanged) — abre el
+ * buscador directamente sin necesidad de escribir nada antes.
  */
 async function handleDracoMemberRecognitionChanged(eventArgs) {
-    let addr = (eventArgs && eventArgs.address) || "";
-    if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
-    const worksheetId = eventArgs && eventArgs.worksheetId;
-
-    // Descarta de entrada (sin ni siquiera abrir Excel.run) las celdas de
-    // la columna A que usa handleDracoRowsSingleClick para volcar su
-    // traza de depuración (A50:A58): cada clic —doble o no— escribe ahí,
-    // y como es un cambio de celda "de verdad" (no pasa por
-    // DracoSuppressChangeEvents), sin este filtro podía interpretarse
-    // como un valor tecleado y abrir un SEGUNDO picker además del que ya
-    // abre el propio doble clic.
-    const addrMatch = /^\$?([A-Z]+)\$?(\d+)$/i.exec(addr.split(":")[0]);
-    const isTraceOrLogCell = !!(addrMatch && addrMatch[1].toUpperCase() === "A"
-        && Number(addrMatch[2]) >= 50 && Number(addrMatch[2]) <= 58);
-
     try {
         if (DracoSuppressChangeEvents) {
             console.log("[Draco] onChanged ignorado: escritura programática en curso (refresco/pintado).");
             return;
         }
+        if (!Office.context.document.settings.get("draco_memberRecognition")) return;
 
-        if (!addr || !worksheetId) return;
-        if (isTraceOrLogCell) return;
-
-        const recognitionActive = await Excel.run(async (context) => isDracoMemberRecognitionActive(context));
-        if (!recognitionActive) {
-            return;
-        }
-
+        let addr = (eventArgs && eventArgs.address) || "";
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        if (!addr) return;
         console.log("[Draco] onChanged: reconocimiento de miembros activo, evaluando celda", addr);
 
         let located = null;
-        let fieldLocated = null;
         let currentText = "";
-        let motivo = "";
 
         await Excel.run(async (context) => {
-            // Se usa SIEMPRE la hoja donde ha ocurrido el cambio
-            // (eventArgs.worksheetId), no la del informe "activo" del
-            // taskpane: puede que el usuario esté tecleando en un
-            // informe distinto al seleccionado en el panel.
-            const sheet = context.workbook.worksheets.getItem(worksheetId);
+            const resultSheetName = await getDracoResultSheetName(context);
+            const sheet = context.workbook.worksheets.getItem(resultSheetName);
             const cell = sheet.getRange(addr);
             cell.load(["rowCount", "columnCount", "values", "formulas"]);
-            cell.format.load("indentLevel");
             await context.sync();
-            // Varias celdas a la vez (pegado/relleno): se ignora.
-            if (cell.rowCount !== 1 || cell.columnCount !== 1) {
-                motivo = "varias celdas a la vez (pegado/relleno), se ignora";
-                return;
-            }
+            if (cell.rowCount !== 1 || cell.columnCount !== 1) return;
 
             const value = cell.values[0][0];
             const formula = cell.formulas[0][0];
-            if (value === "" || value === null || value === undefined) {
-                motivo = "valor vacío, se ignora";
-                return;
-            }
-            // Ya es EPM_VALUE (tecleada, pegada, o escrita por nosotros
-            // mismos hace un instante): salir para no reabrir el
-            // buscador en bucle.
-            if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) {
-                motivo = "la celda ya es una fórmula EPM_VALUE, se ignora";
-                return;
-            }
+            if (value === "" || value === null || value === undefined) return;
+            // Ya es EPM_VALUE (por ejemplo, porque nosotros mismos la acabamos de
+            // escribir): salir para no reabrir el buscador en bucle.
+            if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) return;
 
             currentText = String(value);
-            located = await findDracoRowsNamedRangeForCell(context, worksheetId, addr);
-            if (!located) {
-                motivo = "fuera de cualquier Draco_XXX_Rows/Cols (findDracoRowsNamedRangeForCell -> null)";
-                return;
-            }
-
-            fieldLocated = await resolveDracoFieldForAxisLevel(
-                context, located.reportId, located.axis, located.level, cell.format.indentLevel
-            );
-            if (!fieldLocated) {
-                motivo = `informe ${located.reportId}, eje ${located.axis}, nivel ${located.level}: resolveDracoFieldForAxisLevel -> null (no hay dim/attr configurado en ese nivel)`;
-            }
+            located = await locateDracoAxisField(context, addr);
         });
 
-        console.log("[Draco] onChanged: resultado ->", located, fieldLocated, "| motivo:", motivo);
-        if (!located || !fieldLocated) {
-            return;
-        }
-
-        // Igual que en el doble clic: se adjunta el reportId realmente
-        // afectado y, si la celda cae en zona de crecimiento (fuera
-        // todavía del rango con nombre real), la info para ampliarlo de
-        // verdad en cuanto se confirme un valor en el picker.
-        fieldLocated.reportId = located.reportId;
-        fieldLocated.growth = located.growth || null;
-
-        console.log(`[Draco] onChanged: reconocimiento activo, abriendo picker (${fieldLocated.dim} / ${fieldLocated.attr})...`);
-        await openMemberRecognitionPicker(addr, fieldLocated, currentText);
+        console.log("[Draco] onChanged: resultado de locateDracoAxisField ->", located);
+        if (!located) return;
+        await openMemberRecognitionPicker(addr, located, currentText);
     } catch (e) {
         console.error("Error en el reconocimiento de miembros:", e);
     }
@@ -3060,12 +2880,6 @@ async function handleDracoMemberRecognitionChanged(eventArgs) {
  * Aproximación al doble clic (ver comentario anterior): clic sobre una
  * celda VACÍA de Draco_001_Rows/Draco_001_Cols con el reconocimiento
  * activado abre directamente el buscador de miembros.
- *
- * DESACTIVADA (ver registerDracoSelectionHandler): ya no se engancha a
- * onSelectionChanged porque competía con el doble clic real
- * (handleDracoRowsSingleClick) y llegaban a abrirse dos pickers para un
- * mismo doble clic. El picker ahora solo debe abrirse por doble clic. Se
- * deja la función definida por si se quiere reactivar más adelante.
  */
 async function handleDracoMemberRecognitionSelection(eventArgs) {
     try {
@@ -3572,17 +3386,13 @@ async function ensureDracoFilterRangeHandlersRegistered() {
  * ------------------------------------------------------------------- */
 
 /**
- * Regla de reparto de TODO el eje entre los informes presentes (sin
- * margen: ni un solo hueco se queda sin dueño):
- *   - Cada informe es dueño de su rango con nombre actual (coincidencia
- *     exacta).
- *   - El hueco entre dos informes consecutivos es SIEMPRE del informe
- *     ANTERIOR (más arriba/izquierda): puede crecer hacia adelante hasta
- *     la celda justo antes de donde empieza el siguiente. El informe
- *     SIGUIENTE nunca crece hacia atrás (hacia ese hueco).
- *   - Delante del PRIMER informe de un eje, como no hay ningún informe
- *     anterior que lo reclame, el hueco es del propio PRIMER informe:
- *     puede crecer hacia atrás (ampliando su inicio) hasta esa celda.
+ * Regla de reparto del hueco entre dos informes consecutivos del mismo
+ * eje (sin margen: todo el hueco es de alguien):
+ *   - El informe ANTERIOR (más arriba/izquierda) se queda con TODO el
+ *     hueco hasta el siguiente informe (hasta la celda justo antes de
+ *     donde empieza el siguiente).
+ *   - El informe SIGUIENTE nunca crece hacia atrás (hacia el hueco).
+ *   - Delante del PRIMER informe de un eje no crece nadie.
  *   - El ÚLTIMO informe de un eje en una hoja (el que no tiene otro
  *     informe después en esa misma familia de columnas/filas) se queda
  *     con TODO lo que sigue, hasta el final absoluto de la hoja.
@@ -3629,9 +3439,9 @@ async function collectDracoAxisCandidates(context, sheet, axisSuffix) {
 
 /**
  * Localiza a qué informe Draco_<n>_<axisSuffix> pertenece —o PODRÍA
- * pertenecer, ampliando su rango con nombre (hacia adelante o hacia
- * atrás, según toque)— una celda concreta, sin invadir jamás el
- * rango de otro informe (ver la regla de reparto del hueco más arriba).
+ * pertenecer, ampliando su rango con nombre— una celda concreta, sin
+ * invadir jamás el hueco/rango de otro informe (ver reglas en
+ * ver comentario sobre el reparto del hueco más arriba).
  *
  * axisSuffix: "Rows" (el eje que varía es la FILA; la celda debe caer
  * dentro de las mismas columnas que el informe) o "Cols" (el eje que
@@ -3642,10 +3452,8 @@ async function collectDracoAxisCandidates(context, sheet, axisSuffix) {
  *   {
  *     rangeName, reportId, sheetName,
  *     exact,          // true = ya está dentro del rango con nombre actual
- *     axisStart,      // 0-based: inicio que DEBERÍA tener el rango (si
- *                     // se crece hacia atrás, es MENOR que el inicio
- *                     // actual; si no, coincide con el inicio actual)
- *     axisCount,      // 0-based: tamaño ACTUAL del rango en ese eje
+ *     axisStart,      // 0-based: inicio actual del rango en el eje que varía
+ *     axisCount,      // 0-based: tamaño actual del rango en ese eje
  *     requiredCount,  // tamaño que DEBERÍA tener el rango para incluir la
  *                     // celda (== axisCount si exact=true)
  *     crossIndex, crossCount // límites (0-based) del eje que NO varía
@@ -3699,43 +3507,16 @@ async function findDracoAxisRangeOrGrowthZoneForCell(context, worksheetId, addr,
         }
     }
 
-    // 2) Sin coincidencia exacta: se reparte TODO el resto del eje sin
-    //    dejar ningún hueco sin dueño:
-    //      - Antes del PRIMER informe -> es del primer informe (crece
-    //        HACIA ATRÁS, ampliando su inicio).
-    //      - Entre dos informes consecutivos -> es del informe ANTERIOR
-    //        (crece hacia adelante). El siguiente NUNCA crece hacia atrás.
-    //      - Después del ÚLTIMO informe -> es del último informe (crece
-    //        hacia adelante hasta el final absoluto de la hoja).
+    // 2) Sin coincidencia exacta: el hueco entre dos informes consecutivos
+    //    (o entre el último informe y el final de la hoja) es SIEMPRE del
+    //    informe ANTERIOR — nunca queda un tramo sin reclamar entre ellos,
+    //    y el informe SIGUIENTE nunca crece hacia atrás.
     const sorted = sameFamily.slice().sort((a, b) => {
         const sa = isRows ? a.rowIndex : a.columnIndex;
         const sb = isRows ? b.rowIndex : b.columnIndex;
         return sa - sb;
     });
     const MAX_AXIS_INDEX = isRows ? DRACO_LAST_ROW_INDEX : DRACO_LAST_COLUMN_INDEX;
-
-    const first = sorted[0];
-    const firstStart = isRows ? first.rowIndex : first.columnIndex;
-
-    if (cellAxisIndex < firstStart) {
-        // Antes del primer informe: crece hacia atrás, ampliando su
-        // inicio hasta la celda pulsada (nadie más puede reclamar este
-        // hueco: no hay ningún informe anterior a él).
-        const firstCount = isRows ? first.rowCount : first.columnCount;
-        const firstEnd = firstStart + firstCount - 1;
-        return {
-            rangeName: first.name,
-            reportId: first.reportId,
-            sheetName: sheet.name,
-            exact: false,
-            axisStart: cellAxisIndex,
-            axisCount: firstCount,
-            requiredCount: (firstEnd - cellAxisIndex) + 1,
-            crossIndex: isRows ? first.columnIndex : first.rowIndex,
-            crossCount: isRows ? first.columnCount : first.rowCount,
-            cellCrossIndex
-        };
-    }
 
     for (let i = 0; i < sorted.length; i++) {
         const cur = sorted[i];
@@ -3979,71 +3760,6 @@ function detectDracoDoubleClick(worksheetId, addr) {
     return info;
 }
 
-/**
- * Núcleo de la acción de "doble clic real" (fuera del icono +/- de
- * expandir/contraer): dado el `located` que ya ha resuelto
- * findDracoRowsNamedRangeForCell (informe/eje/nivel realmente afectado,
- * exacto o en zona de crecimiento), decide si ese eje es Estático en el
- * diseño del informe y, si lo es, resuelve el campo (dim/attr) y abre el
- * buscador de miembros.
- *
- * Extraído tal cual de handleDracoRowsSingleClick (misma lógica, sin
- * ningún cambio de comportamiento) para poder invocarlo TAMBIÉN desde
- * runDracoSimulatedDoubleClick, que dispara este mismo camino cuando el
- * VBA del XLAM cancela un doble clic nativo (Workbook_SheetBeforeDoubleClick
- * + Cancel = True) y lo pide en su lugar rellenando EDIT_REPORT!T2:V2 —
- * ver handleDracoPickerFlagRequest más abajo. En ese caso no hay
- * offsetX/offsetY reales (no es un clic físico capturado por Office.js),
- * así que esa parte de handleDracoRowsSingleClick (icono +/-, "Izquierda"/
- * "Derecha"/"Letra") no aplica y no se replica aquí: solo esta rama, que
- * es la única relevante para un doble clic de verdad.
- *
- * Devuelve { rowsStatic, colsStatic, axisIsStatic, fieldLocated,
- * accionTexto } para que quien llame pueda trazarlo igual que antes.
- */
-async function runDracoDoubleClickAction(context, addr, located, indentLevel, cellText) {
-    const editReportGrid = await getEditReportGrid(context, located.reportId);
-    const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
-    const colsStatic = String(cellValue(editReportGrid, 12, 14)).trim().toUpperCase() === "X";
-
-    // El buscador de miembros por doble clic solo se ofrece si el EJE que
-    // se ha clicado está marcado como Estático en el diseño de ESE
-    // informe (RowsStatic para located.axis==="rows", ColsStatic para
-    // "columns"). Si ese eje no es estático, el doble clic no hace nada
-    // aquí (el informe puede seguir reconociendo valores tecleados a
-    // mano vía el "reconocimiento de miembros").
-    const axisIsStatic = located.axis === "rows" ? rowsStatic : colsStatic;
-
-    let accionTexto;
-    let fieldLocated = null;
-
-    if (!axisIsStatic) {
-        accionTexto = ` | Accion: doble clic ignorado (informe ${located.reportId}, eje ${located.axis} no es Estático)`;
-    } else {
-        fieldLocated = await resolveDracoFieldForAxisLevel(
-            context, located.reportId, located.axis, located.level, indentLevel
-        );
-        if (fieldLocated) {
-            // Se adjunta el reportId realmente clicado (no el "activo" del
-            // taskpane) para que openMemberRecognitionPicker escriba en la
-            // hoja de resultados correcta, y —si el clic cayó en la zona
-            // de crecimiento, fuera todavía del rango con nombre real—
-            // `growth`, para ampliar de verdad ese rango con nombre en
-            // cuanto el usuario confirme un valor en el picker.
-            fieldLocated.reportId = located.reportId;
-            fieldLocated.growth = located.growth || null;
-            accionTexto = located.exact
-                ? " | Accion: buscador de miembros abierto (doble clic)"
-                : " | Accion: buscador de miembros abierto (doble clic, ampliará el rango si se confirma un valor)";
-            await openMemberRecognitionPicker(addr, fieldLocated, cellText);
-        } else {
-            accionTexto = " | Accion: doble clic fuera de Filas/Columnas del informe";
-        }
-    }
-
-    return { rowsStatic, colsStatic, axisIsStatic, fieldLocated, accionTexto };
-}
-
 async function handleDracoRowsSingleClick(eventArgs) {
     try {
         let addr = (eventArgs && eventArgs.address) || "";
@@ -4151,17 +3867,59 @@ async function handleDracoRowsSingleClick(eventArgs) {
                 accionTexto = toggled
                     ? " | Accion: expandir/contraer ejecutado"
                     : " | Accion: sin indicador +/- valido en esa celda";
+            } else if (isDoubleClick) {
+                // Doble clic "real" fuera del icono +/-: equivalente a
+                // Workbook_SheetBeforeDoubleClick + GetDimAttrRows/
+                // GetDimAttrCols + Helpvalue del VBA. Allí Helpvalue
+                // escribía dimname/attr/valor/dirección en
+                // EDIT_REPORT!A1:A5 y algo aguas abajo leía esas celdas
+                // para abrir el buscador de miembros. Aquí se hace lo
+                // mismo pero sin pasar por ninguna celda física: se
+                // resuelve el campo con resolveDracoFieldForAxisLevel a
+                // partir del informe/eje/nivel que YA localizó
+                // findDracoRowsNamedRangeForCell más arriba (`located`),
+                // que es el informe realmente clicado —no necesariamente
+                // el informe "activo" del taskpane— y que puede caer en
+                // la zona de crecimiento de ese informe (fuera todavía
+                // de su rango con nombre actual, ver `located.growth`).
+                staticCheckEntered = true;
+                const editReportGrid = await getEditReportGrid(context, located.reportId);
+                const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
+                const colsStatic = String(cellValue(editReportGrid, 12, 14)).trim().toUpperCase() === "X";
+                rowsStaticTrace = rowsStatic;
+                colsStaticTrace = colsStatic;
+
+                // NOTA: en el VBA original esto exigía RowsStatic Y
+                // ColsStatic ambos "X". Se ha quitado esa condición: el
+                // buscador de miembros se abre en doble clic sobre
+                // cualquier celda de Filas/Columnas del informe, esté o
+                // no marcado como Estático en el diseño. rowsStatic/
+                // colsStatic se siguen leyendo y trazando (arriba, en
+                // A56) solo a título informativo.
+                {
+                    const fieldLocated = await resolveDracoFieldForAxisLevel(
+                        context, located.reportId, located.axis, located.level, cell.format.indentLevel
+                    );
+                    fieldLocatedTrace = fieldLocated;
+                    if (fieldLocated) {
+                        // Se adjunta el reportId realmente clicado (no el
+                        // "activo" del taskpane) para que openMemberRecognitionPicker
+                        // escriba en la hoja de resultados correcta, y —si
+                        // el clic cayó en la zona de crecimiento, fuera
+                        // todavía del rango con nombre real— `growth`,
+                        // para ampliar de verdad ese rango con nombre en
+                        // cuanto el usuario confirme un valor en el picker.
+                        fieldLocated.reportId = located.reportId;
+                        fieldLocated.growth = located.growth || null;
+                        accionTexto = located.exact
+                            ? " | Accion: buscador de miembros abierto (doble clic)"
+                            : " | Accion: buscador de miembros abierto (doble clic, ampliará el rango si se confirma un valor)";
+                        await openMemberRecognitionPicker(addr, fieldLocated, cellText);
+                    } else {
+                        accionTexto = " | Accion: doble clic fuera de Filas/Columnas del informe";
+                    }
+                }
             }
-            // NOTA: la rama que aquí había para "isDoubleClick" (doble clic
-            // real fuera del icono +/-, vía runDracoDoubleClickAction) se ha
-            // quitado a propósito: esa detección y esa acción las hace ahora
-            // el VBA del XLAM (Workbook_SheetBeforeDoubleClick rellenando
-            // EDIT_REPORT!T2:V2 con V2="DC", ver handleDracoPickerFlagRequest
-            // más abajo). Mantenerla aquí también volvía a abrir el picker
-            // por partida doble o en la celda/hoja que no tocaba. Esta
-            // función SOLO debe reaccionar ya al clic sobre el icono de
-            // jerarquía; `isDoubleClick`/`clickInfo` se conservan únicamente
-            // para la traza de depuración (A53/A54/A55:A58) más abajo.
 
             console.log(
                 `[Draco] Clic en ${located.rangeName} (nivel ${located.level}) -> offsetX=${offsetX.toFixed(2)}pt | ` +
@@ -4231,15 +3989,6 @@ async function ensureDracoRowsClickLoggerRegistered() {
 
             sheets.items.forEach(sheet => {
                 if (DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) return;
-                // REACTIVADO, pero solo para la parte de handleDracoRowsSingleClick
-                // que gestiona el clic sobre el icono ▾/▸ de expandir/contraer
-                // la jerarquía. La detección de "doble clic real" que antes
-                // vivía en esta misma función se ha quitado de ahí (ver
-                // handleDracoRowsSingleClick): esa vía la lleva el VBA del
-                // XLAM rellenando EDIT_REPORT!T2:V2 con V2="DC", gestionado
-                // por handleDracoPickerFlagRequest -> runDracoSimulatedDoubleClick.
-                // Con esto ya no compiten entre sí: cada camino cubre una
-                // interacción distinta (icono vs. doble clic).
                 sheet.onSingleClicked.add(handleDracoRowsSingleClick);
                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
             });
@@ -4252,10 +4001,6 @@ async function ensureDracoRowsClickLoggerRegistered() {
                             sheet.load("name");
                             await ctx.sync();
                             if (!DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) {
-                                // REACTIVADO junto con el registro inicial de
-                                // más arriba (ver comentario allí): mismo
-                                // engorde, para hojas añadidas después de
-                                // cargar el add-in.
                                 sheet.onSingleClicked.add(handleDracoRowsSingleClick);
                                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
                                 await ctx.sync();
@@ -4334,33 +4079,12 @@ function parseMemberJsonTree(json) {
 async function openMemberRecognitionPicker(addr, located, initialSearch) {
     console.log("[Draco] openMemberRecognitionPicker: iniciando para", addr, located);
 
-    if (DracoMemberPickerOpen) {
-        console.log("[Draco] Ya hay un buscador de miembros abierto (mismo runtime): se ignora esta petición duplicada para", addr);
-        return;
-    }
-    DracoMemberPickerOpen = true;
-
-    // Candado cruzado entre runtimes (ver comentario junto a
-    // DracoMemberPickerOpen más arriba): si el panel y el ribbon han
-    // registrado ambos los listeners para esta hoja, un mismo cambio
-    // puede llegar aquí desde los DOS procesos casi a la vez. Sin esto,
-    // cada uno vería su propio DracoMemberPickerOpen en `false` y los dos
-    // abrirían diálogo.
-    const lockClaimed = await tryClaimDracoPickerLock();
-    if (!lockClaimed) {
-        console.log("[Draco] Ya se está abriendo el buscador de miembros desde otro proceso del complemento: se ignora esta petición duplicada para", addr);
-        DracoMemberPickerOpen = false;
-        return;
-    }
-
     let items = [];
     try {
         const sql = await window.ExcelService.buildFilterValuesSQL(located.dim, located.attr);
         console.log("[Draco] SQL de valores construida:", sql);
         if (!sql) {
             console.warn("[Draco] No se ha podido construir el SQL (dim/attr no reconocidos):", located);
-            DracoMemberPickerOpen = false;
-            await releaseDracoPickerLock();
             return;
         }
         const json = await window.ExcelService.executeSQL(sql);
@@ -4368,38 +4092,15 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
         console.log("[Draco] Nº de items recibidos para el picker:", items.length);
     } catch (err) {
         console.error("[Draco] Error obteniendo los valores del picker:", err);
-        DracoMemberPickerOpen = false;
-        await releaseDracoPickerLock();
         return;
     }
 
-    if (!items || items.length === 0) {
-        // Sin elementos que mostrar, no tiene sentido abrir el diálogo
-        // vacío: el usuario no podría elegir nada de todos modos.
-        console.log("[Draco] La búsqueda de valores no ha devuelto ningún elemento: no se abre el buscador de miembros para", addr);
-        DracoMemberPickerOpen = false;
-        await releaseDracoPickerLock();
-        return;
-    }
-
-    let dialogUrl;
-    try {
-        dialogUrl = new URL("memberPicker.html", window.location.href).href;
-    } catch (err) {
-        // Si esto fallara (no debería, pero mejor no dejar
-        // DracoMemberPickerOpen pillado en "true" para siempre, lo que
-        // bloquearía CUALQUIER picker futuro, tecleado o por doble clic).
-        console.error("[Draco] No se pudo construir la URL del diálogo del picker:", err);
-        DracoMemberPickerOpen = false;
-        await releaseDracoPickerLock();
-        return;
-    }
+    const dialogUrl = new URL("memberPicker.html", window.location.href).href;
     console.log("[Draco] Abriendo diálogo del picker en:", dialogUrl);
 
-    try {
-        await new Promise((resolve) => {
-            Office.context.ui.displayDialogAsync(
-                dialogUrl,
+    await new Promise((resolve) => {
+        Office.context.ui.displayDialogAsync(
+            dialogUrl,
             { height: 55, width: 28, displayInIframe: false },
             (asyncResult) => {
                 if (asyncResult.status === Office.AsyncResultStatus.Failed) {
@@ -4408,8 +4109,6 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         asyncResult.error && asyncResult.error.code,
                         asyncResult.error && asyncResult.error.message
                     );
-                    DracoMemberPickerOpen = false;
-                    releaseDracoPickerLock();
                     resolve();
                     return;
                 }
@@ -4447,14 +4146,6 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         settled = true;
                         closeDialog();
                         try {
-                            // DracoSuppressChangeEvents evita que este
-                            // MISMO escrito reabra el buscador vía
-                            // handleDracoMemberRecognitionChanged (que ya
-                            // se protege también reconociendo la fórmula
-                            // EPM_VALUE, pero esta es una capa extra: así
-                            // ninguna escritura nuestra, sea cual sea,
-                            // puede disparar el reconocimiento).
-                            DracoSuppressChangeEvents = true;
                             await Excel.run(async (context) => {
                                 // Si el clic que abrió este picker cayó en la
                                 // zona de crecimiento de un informe (fuera
@@ -4481,11 +4172,7 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                             console.log("[Draco] Fórmula EPM_VALUE escrita correctamente en", addr);
                         } catch (err) {
                             console.error("[Draco] Error escribiendo la fórmula EPM_VALUE:", err);
-                        } finally {
-                            DracoSuppressChangeEvents = false;
                         }
-                        DracoMemberPickerOpen = false;
-                        await releaseDracoPickerLock();
                         resolve();
                         return;
                     }
@@ -4494,8 +4181,6 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         console.log("[Draco] Selección cancelada por el usuario.");
                         settled = true;
                         closeDialog();
-                        DracoMemberPickerOpen = false;
-                        await releaseDracoPickerLock();
                         resolve();
                     }
                 });
@@ -4503,23 +4188,11 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                 dialog.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
                     // 12006 = el usuario cerró el diálogo con la X.
                     console.warn("[Draco] DialogEventReceived:", arg.error);
-                    DracoMemberPickerOpen = false;
-                    releaseDracoPickerLock();
                     if (!settled) resolve();
                 });
             }
         );
     });
-    } catch (err) {
-        // Cinturón y tirantes: si displayDialogAsync (o cualquier código
-        // síncrono de este bloque) lanzara una excepción inesperada,
-        // NUNCA debe quedar DracoMemberPickerOpen en "true" — eso
-        // bloquearía silenciosamente todos los pickers futuros (tecleado
-        // Y doble clic) hasta recargar el task pane.
-        console.error("[Draco] Error inesperado abriendo el diálogo del picker:", err);
-        DracoMemberPickerOpen = false;
-        await releaseDracoPickerLock();
-    }
 }
 
 
@@ -4649,8 +4322,7 @@ async function toggleDracoCollapseAtCell(context, sheetName, targetAddr, flag) {
 // siempre el JSON), reutilizarlas aquí podría chocar con el XLAM si en
 // algún momento vuelve a escribir físicamente ahí. T1/U1/V1 están fuera
 // de cualquier zona ya usada (picker A1:A5, B1, D1/D4/D5/D6/E1/G1, X1/Y1,
-// H10/N10/H12/N12 y toda la fila >=15 de C a S). T2/U2/V2 (ver más abajo,
-// doble clic simulado) siguen el mismo patrón una fila por debajo.
+// H10/N10/H12/N12 y toda la fila >=15 de C a S).
 const DRACO_EXPAND_COLLAPSE_SHEET_CELL = "T1"; // nombre de la pestaña de resultados
 const DRACO_EXPAND_COLLAPSE_TARGET_CELL = "U1"; // celda con el indicador +/- a tocar
 const DRACO_EXPAND_COLLAPSE_FLAG_CELL = "V1"; // "E"/"EXPANDIR" o "C"/"CONTRAER" (opcional)
@@ -4727,236 +4399,6 @@ async function handleDracoEditReportExpandCollapseRequest(eventArgs) {
     }
 }
 
-// Celdas de control de EDIT_REPORT para simular un doble clic "real"
-// cuando el VBA del XLAM ya lo ha cancelado (Workbook_SheetBeforeDoubleClick
-// + Cancel = True): Office.js no reenvía ese segundo clic, así que en vez
-// de detectarlo por tiempo entre clics (ver detectDracoDoubleClick, poco
-// fiable en ese caso porque el 2º clic nunca llega), el VBA rellena estas
-// 3 celdas y aquí se ejecuta EXACTAMENTE la misma acción que ya hacía el
-// doble clic detectado por clics (runDracoDoubleClickAction, sin ningún
-// cambio de lógica: solo se llama desde un sitio más).
-const DRACO_PICKER_SHEET_CELL = "T2"; // hoja donde ocurrió (Sh.Name en VBA)
-const DRACO_PICKER_TARGET_CELL = "U2"; // celda afectada (Target.Address)
-const DRACO_PICKER_FLAG_CELL = "V2"; // "REC" = reconocimiento de miembros (tecleado) | "DC" = doble clic
-
-/**
- * Ejecuta el reconocimiento de miembros (misma lógica que antes tenía
- * handleDracoMemberRecognitionChanged al detectar un valor tecleado en
- * una celda de Draco_XXX_Rows/Cols) sobre sheetName!targetAddr. Ya no
- * hay ningún onChanged enganchado directamente a las hojas de
- * resultados para esto: la detección de "se ha tecleado algo" la hace
- * el XLAM en VBA, que rellena EDIT_REPORT!T2:V2 con V2="REC", igual que
- * ya hacía para el doble clic con V2="DC" (ver
- * handleDracoPickerFlagRequest, que llama a esta función).
- */
-async function runDracoMemberRecognitionAction(context, sheetName, targetAddr) {
-    let addr = String(targetAddr || "");
-    if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
-    addr = addr.replace(/\$/g, "").toUpperCase();
-    if (!addr) {
-        console.warn("[Draco] Reconocimiento de miembros: sin celda (EDIT_REPORT!U2 vacío).");
-        return;
-    }
-
-    const recognitionActive = await isDracoMemberRecognitionActive(context);
-    if (!recognitionActive) {
-        console.log("[Draco] Reconocimiento de miembros: EDIT_REPORT!B1 desactivado, se ignora la petición para", sheetName, addr);
-        return;
-    }
-
-    const sheet = context.workbook.worksheets.getItemOrNullObject(sheetName);
-    sheet.load(["isNullObject", "id"]);
-    await context.sync();
-    if (sheet.isNullObject) {
-        console.warn("[Draco] Reconocimiento de miembros: la hoja indicada en EDIT_REPORT!T2 no existe:", sheetName);
-        return;
-    }
-
-    const cell = sheet.getRange(addr);
-    cell.load(["rowCount", "columnCount", "values", "formulas"]);
-    cell.format.load("indentLevel");
-    await context.sync();
-
-    // Varias celdas a la vez (pegado/relleno): se ignora.
-    if (cell.rowCount !== 1 || cell.columnCount !== 1) {
-        console.log("[Draco] Reconocimiento de miembros: varias celdas a la vez (pegado/relleno), se ignora:", sheetName, addr);
-        return;
-    }
-
-    const value = cell.values[0][0];
-    const formula = cell.formulas[0][0];
-    if (value === "" || value === null || value === undefined) {
-        console.log("[Draco] Reconocimiento de miembros: valor vacío, se ignora:", sheetName, addr);
-        return;
-    }
-    // Ya es EPM_VALUE (tecleada, pegada, o escrita por nosotros mismos
-    // hace un instante): salir para no reabrir el buscador en bucle.
-    if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) {
-        console.log("[Draco] Reconocimiento de miembros: la celda ya es una fórmula EPM_VALUE, se ignora:", sheetName, addr);
-        return;
-    }
-    const currentText = String(value);
-
-    const located = await findDracoRowsNamedRangeForCell(context, sheet.id, addr);
-    if (!located) {
-        console.log("[Draco] Reconocimiento de miembros: fuera de cualquier Draco_XXX_Rows/Cols:", sheetName, addr);
-        return;
-    }
-
-    const fieldLocated = await resolveDracoFieldForAxisLevel(
-        context, located.reportId, located.axis, located.level, cell.format.indentLevel
-    );
-    if (!fieldLocated) {
-        console.log(`[Draco] Reconocimiento de miembros: informe ${located.reportId}, eje ${located.axis}, nivel ${located.level} sin dim/attr configurado, se ignora.`);
-        return;
-    }
-
-    // Igual que en el doble clic: se adjunta el reportId realmente
-    // afectado y, si la celda cae en zona de crecimiento (fuera todavía
-    // del rango con nombre real), la info para ampliarlo de verdad en
-    // cuanto se confirme un valor en el picker.
-    fieldLocated.reportId = located.reportId;
-    fieldLocated.growth = located.growth || null;
-
-    console.log(`[Draco] Reconocimiento de miembros: abriendo picker (${fieldLocated.dim} / ${fieldLocated.attr}) para ${sheetName}!${addr}...`);
-    await openMemberRecognitionPicker(addr, fieldLocated, currentText);
-}
-
-/**
- * Ejecuta el equivalente de un doble clic "real" (fuera del icono +/-)
- * sobre sheetName!targetAddr, llamando a la MISMA lógica que usa el clic
- * físico (findDracoRowsNamedRangeForCell + runDracoDoubleClickAction). Si
- * la celda no pertenece (ni podría ampliar) ningún Draco_XXX_Rows/Cols,
- * simplemente no hace nada (igual que hacía antes el "FUERA DE RANGO" del
- * doble clic físico) — el VBA solo necesita acertar de forma aproximada,
- * el filtrado fino se hace aquí.
- */
-async function runDracoSimulatedDoubleClick(context, sheetName, targetAddr) {
-    let addr = String(targetAddr || "");
-    if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
-    addr = addr.replace(/\$/g, "").toUpperCase();
-    if (!addr) {
-        console.warn("[Draco] Doble clic simulado sin celda (EDIT_REPORT!U2 vacío).");
-        return;
-    }
-
-    const sheet = context.workbook.worksheets.getItemOrNullObject(sheetName);
-    sheet.load(["isNullObject", "id"]);
-    await context.sync();
-    if (sheet.isNullObject) {
-        console.warn("[Draco] Doble clic simulado: la hoja indicada en EDIT_REPORT!T2 no existe:", sheetName);
-        return;
-    }
-
-    const located = await findDracoRowsNamedRangeForCell(context, sheet.id, addr);
-    if (!located) {
-        console.log("[Draco] Doble clic simulado fuera de rango:", sheetName, addr);
-        return;
-    }
-
-    const cell = sheet.getRange(addr);
-    cell.load(["values", "format/indentLevel"]);
-    await context.sync();
-    const cellText = String((cell.values && cell.values[0] && cell.values[0][0]) || "");
-
-    const result = await runDracoDoubleClickAction(context, addr, located, cell.format.indentLevel, cellText);
-    console.log(`[Draco] Doble clic simulado en ${sheetName}!${addr} (${located.rangeName}):${result.accionTexto}`);
-}
-
-/**
- * Se dispara con onChanged de EDIT_REPORT al tocar T2, U2 o V2 (o un
- * rango que las incluya). Actúa según el valor exacto de V2:
- *   - "DC"  -> simula un doble clic real sobre T2!U2 (lo que escribe
- *              Workbook_SheetBeforeDoubleClick del XLAM justo antes de
- *              poner Cancel = True).
- *   - "REC" -> reconocimiento de miembros: el XLAM ha detectado que se
- *              ha tecleado un valor en T2!U2 (Worksheet_Change) y pide
- *              que se compruebe si toca abrir el buscador.
- *   - cualquier otro valor (o vacío): no hay ningún picker que abrir
- *     para él, se limpia igualmente.
- *
- * En los casos REC/DC se espera (await) a que
- * runDracoMemberRecognitionAction/runDracoSimulatedDoubleClick
- * terminen, y éstas a su vez esperan a que se cierre openMemberRecognitionPicker
- * (aceptar/cancelar/X) — así el `finally` de aquí abajo, que deja
- * T2:V2 en blanco, SIEMPRE se ejecuta DESPUÉS de que el picker se haya
- * cerrado de verdad, y si el cierre fue "Aceptar", con la fórmula
- * EPM_VALUE ya escrita en la celda (openMemberRecognitionPicker la
- * escribe y solo entonces resuelve su promesa). Se usa
- * DracoSuppressChangeEvents al limpiar para no reaccionar a nuestra
- * propia escritura.
- */
-async function handleDracoPickerFlagRequest(eventArgs) {
-    try {
-        if (DracoSuppressChangeEvents) return;
-        if (!eventArgs || !eventArgs.address) return;
-
-        let addr = String(eventArgs.address);
-        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
-        if (!addr) return;
-
-        const touchedRange = parseAddressRange(addr);
-        const controlCells = [DRACO_PICKER_SHEET_CELL, DRACO_PICKER_TARGET_CELL, DRACO_PICKER_FLAG_CELL]
-            .map(parseAddress);
-        const touchesControlZone = controlCells.some(p =>
-            p.row >= touchedRange.r1 && p.row <= touchedRange.r2 &&
-            p.col >= touchedRange.c1 && p.col <= touchedRange.c2
-        );
-        if (!touchesControlZone) return;
-
-        await Excel.run(async (context) => {
-            const editReport = context.workbook.worksheets.getItem("EDIT_REPORT");
-            const ctrl = editReport.getRange(
-                DRACO_PICKER_SHEET_CELL + ":" + DRACO_PICKER_FLAG_CELL
-            );
-            ctrl.load("values");
-            await context.sync();
-
-            const sheetName = String(ctrl.values[0][0] || "").trim();
-            const targetAddr = String(ctrl.values[0][1] || "").trim();
-            const flag = String(ctrl.values[0][2] || "").trim().toUpperCase();
-
-            // Solo se limpia T2:V2 cuando el flag era uno de los que
-            // realmente gestionamos (DC/REC), haya ido bien o mal la
-            // acción. Si el flag no se reconoce (p.ej. todavía no se ha
-            // actualizado el VBA, o alguien ha escrito otra cosa a mano),
-            // NO tocamos nada: se deja tal cual para poder depurarlo.
-            let shouldClear = false;
-
-            try {
-                if (sheetName && targetAddr && flag === "DC") {
-                    console.log("[Draco] Petición de doble clic simulado desde EDIT_REPORT:", { sheetName, targetAddr });
-                    shouldClear = true;
-                    await runDracoSimulatedDoubleClick(context, sheetName, targetAddr);
-                } else if (sheetName && targetAddr && flag === "REC") {
-                    console.log("[Draco] Petición de reconocimiento de miembros desde EDIT_REPORT:", { sheetName, targetAddr });
-                    shouldClear = true;
-                    await runDracoMemberRecognitionAction(context, sheetName, targetAddr);
-                } else if (flag) {
-                    console.warn("[Draco] EDIT_REPORT!V2 tiene un valor que no es ni \"REC\" ni \"DC\", se ignora SIN limpiar:", flag);
-                }
-            } finally {
-                // Se vacía solo si el flag era DC/REC (haya procedido bien
-                // o mal, y solo cuando el picker -si lo hubo- ya se ha
-                // cerrado de verdad): es lo que evita que el flag se quede
-                // puesto tras una petición válida, sin borrar valores que
-                // el add-in no ha llegado a interpretar.
-                if (shouldClear) {
-                    DracoSuppressChangeEvents = true;
-                    editReport.getRange(
-                        DRACO_PICKER_SHEET_CELL + ":" + DRACO_PICKER_FLAG_CELL
-                    ).clear(Excel.ClearApplyTo.contents);
-                    await context.sync();
-                }
-            }
-        });
-    } catch (e) {
-        console.error("[Draco] Error gestionando la petición del picker desde EDIT_REPORT!T2:V2:", e);
-    } finally {
-        DracoSuppressChangeEvents = false;
-    }
-}
-
 /**
  * Registra (una sola vez) los listeners de EDIT_REPORT que no dependen de
  * que exista ninguna hoja de resultados: el picker de A5 (Member Picker)
@@ -4973,42 +4415,21 @@ async function handleDracoPickerFlagRequest(eventArgs) {
 async function registerEditReportPickerHandler(context) {
     if (DracoEditReportHandlerRegistered) return;
 
-    let editReport;
-    try {
-        editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
-        editReport.load("isNullObject");
-        await context.sync();
-    } catch (e) {
-        console.error("[Draco] registerEditReportPickerHandler: fallo comprobando si EDIT_REPORT existe:", e);
-        return;
-    }
+    const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+    editReport.load("isNullObject");
+    await context.sync();
 
     if (editReport.isNullObject) {
         console.log("[Draco] registerEditReportPickerHandler: EDIT_REPORT no existe todavía.");
         return;
     }
 
-    try {
-        // DESACTIVADO (vía 3 de las 4 que abrían el picker originalmente):
-        // el flag EDIT_REPORT!A5="X" abría el picker directamente (dim/
-        // attr/valor/dirección leídos de A1:A4), sin pasar por
-        // findDracoRowsNamedRangeForCell ni por nada del resto del JS, y
-        // competía con las demás vías.
-        // editReport.onChanged.add(handleEditReportMemberPickerRequest);
-        editReport.onChanged.add(handleDracoEditReportExpandCollapseRequest);
-        // Único punto que abre el buscador de miembros: reacciona a
-        // EDIT_REPORT!V2 pasando a "REC" (reconocimiento al escribir) o
-        // "DC" (doble clic), ambos rellenados por el XLAM en VBA en
-        // T2 (hoja) / U2 (celda) / V2 (REC|DC).
-        editReport.onChanged.add(handleDracoPickerFlagRequest);
-        await context.sync();
-    } catch (e) {
-        console.error("[Draco] registerEditReportPickerHandler: fallo registrando los listeners de EDIT_REPORT:", e);
-        return;
-    }
+    editReport.onChanged.add(handleEditReportMemberPickerRequest);
+    editReport.onChanged.add(handleDracoEditReportExpandCollapseRequest);
+    await context.sync();
 
     DracoEditReportHandlerRegistered = true;
-    console.log("[Draco] Listeners de EDIT_REPORT: T1:V1 (expandir/contraer) y T2:V2 (REC/DC, buscador de miembros) registrados. A5 (Member Picker directo) DESACTIVADO.");
+    console.log("[Draco] Listeners de EDIT_REPORT!A5 (Member Picker) y T1:V1 (expandir/contraer) registrados.");
 }
 
 // sheetName es el nombre de la hoja de resultados donde vive `sheet`: cada
@@ -5020,46 +4441,12 @@ async function registerEditReportPickerHandler(context) {
 async function registerDracoSelectionHandler(context, sheet, sheetName) {
     if (DracoHandlerRegisteredSheets.has(sheetName)) return;
 
-    // DESACTIVADO: handleDracoMemberRecognitionSelection abría el
-    // buscador de miembros con solo SELECCIONAR una celda vacía de
-    // Filas/Columnas (con el pulsador de "Reconocimiento de miembros"
-    // activado). Como un doble clic también dispara onSelectionChanged,
-    // esto competía con handleDracoRowsSingleClick y llegaban a abrirse
-    // dos pickers para el mismo doble clic. Ahora el picker SOLO debe
-    // aparecer por doble clic (handleDracoRowsSingleClick, enganchado
-    // aparte vía onSingleClicked en ensureDracoRowsClickLoggerRegistered).
-    // sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
+    sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
     sheet.onSelectionChanged.add(handleDracoRibbonLabelSelection);
+    sheet.onChanged.add(handleDracoMemberRecognitionChanged);
 
-    // DESACTIVADO (era la vía 1 de las 4 originales que abrían el
-    // picker): handleDracoMemberRecognitionChanged reaccionaba aquí, por
-    // hoja, a CUALQUIER onChanged de la hoja de resultados para detectar
-    // un valor tecleado. Ahora esa detección la hace el XLAM en VBA
-    // (igual que ya hacía para el doble clic) y avisa rellenando
-    // EDIT_REPORT!T2:V2 con V2="REC"; el único sitio que abre el picker
-    // es handleDracoPickerFlagRequest, enganchado una vez a EDIT_REPORT
-    // (ver registerEditReportPickerHandler), que ahora entiende V2="REC"
-    // (reconocimiento al escribir) y V2="DC" (doble clic). La función
-    // handleDracoMemberRecognitionChanged se deja definida más abajo,
-    // sin usar, por si hiciera falta consultarla o revertir esto.
-    // sheet.onChanged.add(handleDracoMemberRecognitionChanged);
-
-    // IMPORTANTE: registerEditReportPickerHandler comparte este mismo
-    // `context`/lote. Si algo dentro de ella falla (p.ej. EDIT_REPORT no
-    // accesible en ese instante) y no se captura aquí, la excepción sube
-    // y aborta ESTA función ANTES de su propio `context.sync()` de más
-    // abajo — con lo que el `sheet.onChanged.add(handleDracoMemberRecognitionChanged)`
-    // de dos líneas arriba, que solo estaba en cola y aún no se había
-    // enviado a Excel, se perdería sin ningún error visible (y el
-    // reconocimiento de miembros dejaría de abrir el picker sin motivo
-    // aparente). Se aísla con try/catch para que un fallo del listener de
-    // EDIT_REPORT nunca se lleve por delante el registro, ya
-    // independiente, del reconocimiento de miembros.
-    try {
-        await registerEditReportPickerHandler(context);
-    } catch (e) {
-        console.error("[Draco] No se pudo registrar el listener de EDIT_REPORT (T2:V2/T1:V1/A5); el reconocimiento de miembros se registra igualmente:", e);
-    }
+    // NUEVO: petición de apertura del Member Picker desde EDIT_REPORT
+    await registerEditReportPickerHandler(context);
 
     await context.sync();
     DracoHandlerRegisteredSheets.add(sheetName);
@@ -5190,12 +4577,6 @@ function computeAxisPaintPlan(levels) {
 
     for (const level of levels) {
         if (level.isMeasure) {
-            // Medida movida a Filtros desde el taskpane (ver
-            // ReportStore.saveDesign): sigue contando para
-            // ReportState.Measures/MeasureCount (la query no cambia), pero
-            // NO se le reserva fila/columna física ni se pinta su etiqueta,
-            // así que se ignora aquí por completo (no consume iAux).
-            if (level.jerarquia === "HIDDEN_MEASURE") continue;
             if (measureIaux === null) {
                 iAux++;
                 measureIaux = iAux;
@@ -5336,11 +4717,8 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // el eje físico completo una vez (con las filas MEASURE incluidas) y
     // se deriva de ahí tanto la correspondencia {dim, attr, NIVEL} de cada
     // dimensión real como la columna/fila física de cada etiqueta MEASURE.
-    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10);          // H/I/J
-    // Se pide también la columna Q (jerarquía/17) en Columnas: es donde
-    // ReportStore.saveDesign marca con "HIDDEN_MEASURE" la medida que el
-    // taskpane ha movido a Filtros (ver comentario en computeAxisPaintPlan).
-    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16, 17); // N/O/P/Q
+    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10);      // H/I/J
+    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16); // N/O/P
 
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
@@ -5465,14 +4843,18 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         }
     }
 
-    // Antes de refrescar: borrar formato Y contenido de los rangos con
-    // nombre Draco_<id>_Rows / Draco_<id>_Cols / Draco_<id>_Values DE ESTE
+    // Antes de refrescar: borrar contenido de los rangos con nombre
+    // Draco_<id>_Rows / Draco_<id>_Cols / Draco_<id>_Values DE ESTE
     // INFORME (y solo de este) de la ejecución anterior (si existen), para
     // no arrastrar colores/bordes de una tabla previa más grande o con
     // otra forma — y, sobre todo, para NO tocar los rangos de otros
     // informes (antes, con un nombre compartido "Draco_001_*", refrescar
-    // un informe borraba lo pintado de otro).
-    await clearDracoNamedRanges(context, reportId);
+    // un informe borraba lo pintado de otro). Si "Sobrescribir formatos"
+    // está desactivado, solo se borra el CONTENIDO (Contents), no el
+    // formato — antes se borraba siempre con "all" sin mirar esta opción,
+    // así que un informe con overwriteFormats=false igualmente perdía el
+    // formato que el usuario hubiera dejado a mano en la ejecución anterior.
+    await clearDracoNamedRanges(context, reportId, reportProps.overwriteFormats);
 
     // Limpiar cualquier resto de la ejecución anterior que hubiera quedado
     // FUERA de esos rangos con nombre (p.ej. fórmulas EPM_VALUE residuales
@@ -5495,7 +4877,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
             sheet.getRangeByIndexes(
                 firstDataRow, prevBounds.left,
                 prevBounds.bottom - firstDataRow, prevBounds.right - prevBounds.left
-            ).clear(Excel.ClearApplyTo.all);
+            ).clear(reportProps.overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents);
         }
     }
     await context.sync();
@@ -5893,17 +5275,29 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
  * Borra (formato + contenido) los rangos de la ejecución anterior a los
  * que apuntaban los nombres Draco_001_Rows/Cols/Values, si existen.
  */
-async function clearDracoNamedRanges(context, reportId) {
+/**
+ * Borra el contenido de los 3 rangos con nombre de un informe
+ * (Rows/Cols/Values) antes de repintarlo. Si overwriteFormats es false
+ * (opción "Sobrescribir formatos" desactivada en las propiedades del
+ * informe), solo se borra el CONTENIDO (Contents) y se respeta el
+ * formato que el usuario haya dejado a mano — igual que el "if" que ya
+ * usa jsonTo3MatricesCore más abajo para decidir si repinta formato o no;
+ * antes esta limpieza no miraba esa opción para nada y borraba "all"
+ * siempre, así que el formato se perdía igualmente en la propia limpieza,
+ * aunque luego no se repintara.
+ */
+async function clearDracoNamedRanges(context, reportId, overwriteFormats) {
     const rn = dracoRangeNames(reportId);
     const names = [rn.rows, rn.cols, rn.values];
     const items = names.map(n => context.workbook.names.getItemOrNullObject(n));
     items.forEach(it => it.load("isNullObject"));
     await context.sync();
 
+    const clearMode = overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents;
     let anyToClear = false;
     for (const it of items) {
         if (!it.isNullObject) {
-            it.getRange().clear(Excel.ClearApplyTo.all);
+            it.getRange().clear(clearMode);
             anyToClear = true;
         }
     }
@@ -6425,52 +5819,6 @@ async function writeMemberRecognitionFlagToSheet(nowOn) {
     }
 }
 
-/**
- * Popup pequeño y auto-cierre (recognitionBadge.html) que confirma
- * visualmente el nuevo estado ON/OFF de "Reconocimiento de miembros" al
- * pulsar el botón del ribbon. Es "fire and forget": no bloquea al que
- * llama (no se espera aquí dentro), y si por lo que sea falla al abrir
- * (host sin soporte de displayDialogAsync, etc.) simplemente no se ve
- * nada — la etiqueta del propio botón del ribbon ya refleja el estado.
- */
-function showMemberRecognitionBadge(nowOn) {
-    try {
-        const dialogUrl = new URL(
-            `recognitionBadge.html?state=${nowOn ? "on" : "off"}`,
-            window.location.href
-        ).href;
-
-        Office.context.ui.displayDialogAsync(
-            dialogUrl,
-            { height: 15, width: 20, displayInIframe: false },
-            (asyncResult) => {
-                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
-                    console.warn(
-                        "[Draco] No se pudo mostrar el badge de Reconocimiento de miembros:",
-                        asyncResult.error && asyncResult.error.message
-                    );
-                    return;
-                }
-                const dialog = asyncResult.value;
-                let closed = false;
-                const closeOnce = () => {
-                    if (closed) return;
-                    closed = true;
-                    try { dialog.close(); } catch (e) { /* ya cerrado */ }
-                };
-                // El propio HTML se auto-cierra pasado un momento (o al
-                // clicarlo) y avisa aquí vía messageParent para que el
-                // host cierre de verdad el diálogo.
-                dialog.addEventHandler(Office.EventType.DialogMessageReceived, closeOnce);
-                // 12006 = el usuario lo cerró él mismo con la X.
-                dialog.addEventHandler(Office.EventType.DialogEventReceived, closeOnce);
-            }
-        );
-    } catch (e) {
-        console.warn("[Draco] Error mostrando el badge de Reconocimiento de miembros:", e);
-    }
-}
-
 async function toggleMemberRecognition(event) {
     try {
         const nowOn = await toggleDracoSetting("draco_memberRecognition");
@@ -6483,8 +5831,6 @@ async function toggleMemberRecognition(event) {
             nowOn ? "Reconocimiento de miembros (ON)" : "Reconocimiento de miembros (OFF)",
             "EdicionGroup"
         );
-
-        showMemberRecognitionBadge(nowOn);
     } catch (error) {
         console.error("Error al alternar 'Reconocimiento de miembros':", error);
     } finally {
@@ -6612,7 +5958,23 @@ async function abrirDistribuirValores(event) {
  *     paso 1 (misma lógica que tenía TaskPaneApp.createFilterRangeFromModal)
  *     y lo guarda en FilterRangeStore.
  */
+// Candado contra invocaciones simultáneas: si el botón "Añadir filtro" se
+// dispara dos veces seguidas (doble clic, o el propio host mandando el
+// evento de clic repetido — se ha visto en Excel Online), sin esto se
+// llamaba a displayDialogAsync() dos veces. Office.js solo lleva bien UN
+// diálogo activo a la vez: la segunda llamada concurrente deja el canal de
+// mensajes hecho un lío (de ahí que a veces salieran 2 ventanas, y a veces
+// una de ellas se quedara sin recibir los datos). Con el candado, un
+// segundo clic mientras ya hay uno abierto simplemente se ignora.
+let dracoFilterDialogOpen = false;
+
 async function abrirAnadirFiltro(event) {
+    if (dracoFilterDialogOpen) {
+        console.warn("[Draco] Añadir filtro: ya hay un diálogo abierto; se ignora este segundo clic.");
+        if (event) event.completed();
+        return;
+    }
+    dracoFilterDialogOpen = true;
     try {
         let addr = "";
         let sheetName = "";
@@ -6757,6 +6119,7 @@ async function abrirAnadirFiltro(event) {
     } catch (error) {
         console.error("Error al abrir 'Añadir filtro':", error);
     } finally {
+        dracoFilterDialogOpen = false;
         if (event) event.completed();
     }
 }
