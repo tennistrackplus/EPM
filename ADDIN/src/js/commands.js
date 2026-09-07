@@ -31,19 +31,56 @@ Office.onReady(() => {
 });
 
 /**
+ * Asegura que exista la hoja técnica EDIT_REPORT (estado del diseño del
+ * informe: filtros/filas/columnas), igual que ensureCoreModelSheets() en
+ * semantic_model.js — pero ese fichero solo se carga en el taskpane
+ * (semantic_model.html), no en el runtime de comandos del ribbon
+ * (commands.html), así que aquí se repite la misma lógica para que
+ * abrirModeloSemantico() (botón del ribbon) también la cree si hace
+ * falta. Se crea vacía si no existe, salvo D5 y D6 que llevan "X", y se
+ * deja oculta.
+ */
+async function ensureEditReportSheetFromRibbon() {
+    try {
+        await Excel.run(async (context) => {
+            const sheets = context.workbook.worksheets;
+
+            let editSheet = sheets.getItemOrNullObject("EDIT_REPORT");
+            await context.sync();
+
+            if (editSheet.isNullObject) {
+                editSheet = sheets.add("EDIT_REPORT");
+                editSheet.getRange("D5").values = [["X"]];
+                editSheet.getRange("D6").values = [["X"]];
+            }
+
+            editSheet.visibility = Excel.SheetVisibility.hidden;
+            await context.sync();
+        });
+    } catch (e) {
+        console.error("[Draco] No se pudo asegurar la hoja EDIT_REPORT al abrir el modelo semántico:", e);
+    }
+}
+
+/**
  * Botón de ribbon "Abrir modelo semántico" (ModeloAbrirButton).
  * Abre directamente el diálogo independiente de importación LookML
  * (Office.context.ui.displayDialogAsync), sin depender de que el taskpane
  * del modelo semántico esté abierto ni de ningún popup dentro de él.
+ * Antes de abrir el diálogo se asegura la hoja EDIT_REPORT (ver
+ * ensureEditReportSheetFromRibbon), igual que hace el taskpane del
+ * modelo semántico en cuanto se abre.
  * @param {Office.AddinCommands.Event} event
  */
 function abrirModeloSemantico(event) {
     try {
-        // LkmlOpenBridge (js/lkmlOpenBridge.js) abre openSemanticModel.html
-        // y, cuando el usuario elige un fichero y confirma, guarda el
-        // modelo importado en SemanticModelStore desde este mismo runtime
-        // de comandos (que sí tiene acceso a Office.context.document.settings).
-        window.LkmlOpenBridge.openOpenLkmlDialog();
+        ensureEditReportSheetFromRibbon().finally(() => {
+            // LkmlOpenBridge (js/lkmlOpenBridge.js) abre openSemanticModel.html
+            // y, cuando el usuario elige un fichero y confirma, guarda el
+            // modelo importado en SemanticModelStore desde este mismo runtime
+            // de comandos (que sí tiene acceso a Office.context.document.settings).
+            window.LkmlOpenBridge.openOpenLkmlDialog();
+        });
     } catch (error) {
         console.error("Error al abrir el diálogo de apertura de modelo semántico:", error);
     } finally {
@@ -327,7 +364,11 @@ const ReportState = {
     Filters: [],
     Rows: [],
     Columns: [],
-    Measures: []
+    Measures: [],
+    // Medidas arrastradas a la zona "Filtros" (ver loadFilters /
+    // appendLockedFilterRangesToState / applyFilterMeasuresToDynamicReport):
+    // no van en Filters (no afectan al WHERE) ni se cuentan en Rows/Columns.
+    FilterMeasureNames: []
 };
 
 /* ---------------------------------------------------------------------
@@ -649,16 +690,31 @@ function parseAddressRange(addr) {
 function loadFilters(editReportGrid) {
     ReportState.FilterCount = 0;
     ReportState.Filters = [];
+    // Medidas arrastradas a la zona "Filtros": no son un filtro real (no
+    // hay una dimensión/tabla real que consultar para sus miembros, ver
+    // también el cambio en taskpane.js que ya no permite doble clic sobre
+    // ellas), así que NO se añaden a ReportState.Filters — pero tampoco se
+    // descartan sin más: se recogen aquí para que el informe DINÁMICO
+    // (applyFilterMeasuresToDynamicReport, llamado tras
+    // loadReportDefinition) las añada al final de ReportState.Measures,
+    // como si estuvieran en la última posición de Columnas. El modo Fijo
+    // (buildSQLFixed) no las usa en absoluto.
+    ReportState.FilterMeasureNames = [];
 
     let R = 15;
 
     while (String(cellValue(editReportGrid, R, 3)).trim() !== "") {
-        ReportState.FilterCount++;
-        ReportState.Filters.push({
-            Dimension: String(cellValue(editReportGrid, R, 3)).trim(),
-            AttributeName: String(cellValue(editReportGrid, R, 4)).trim(),
-            Value: String(cellValue(editReportGrid, R, 5)).trim()
-        });
+        const dimension = String(cellValue(editReportGrid, R, 3)).trim();
+        if (dimension.toUpperCase() === "MEASURE") {
+            ReportState.FilterMeasureNames.push(String(cellValue(editReportGrid, R, 4)).trim());
+        } else {
+            ReportState.FilterCount++;
+            ReportState.Filters.push({
+                Dimension: dimension,
+                AttributeName: String(cellValue(editReportGrid, R, 4)).trim(),
+                Value: String(cellValue(editReportGrid, R, 5)).trim()
+            });
+        }
         R++;
     }
 }
@@ -686,6 +742,14 @@ function appendLockedFilterRangesToState(reportId) {
         const appliesToThisReport = isAll
             || (reportId !== null && reportId !== undefined && Number(meta.reportId) === Number(reportId));
         if (!appliesToThisReport) continue;
+
+        // Igual que en loadFilters(): una MEDIDA en un filtro "bloqueado"
+        // (creado con "Añadir filtro") tampoco participa del WHERE.
+        if (String(meta.dim).toUpperCase() === "MEASURE") {
+            if (!ReportState.FilterMeasureNames) ReportState.FilterMeasureNames = [];
+            ReportState.FilterMeasureNames.push(meta.name);
+            continue;
+        }
 
         ReportState.Filters.push({
             Dimension: meta.dim,
@@ -783,6 +847,28 @@ function loadReportDefinition(editReportGrid, reportId) {
     appendLockedFilterRangesToState(reportId !== undefined ? reportId : activeReportIdOrNull());
     loadRows(editReportGrid);
     loadColumns(editReportGrid);
+}
+
+/**
+ * SOLO para el informe DINÁMICO (buildSQL/actualizarInformeCore,
+ * actualizarTodosCore): añade al final de ReportState.Measures las
+ * medidas que se hubieran arrastrado a la zona "Filtros" (tanto locales
+ * del taskpane como filtros "bloqueados" de Añadir filtro), recogidas por
+ * loadFilters()/appendLockedFilterRangesToState() en
+ * ReportState.FilterMeasureNames. Se llama DESPUÉS de
+ * loadReportDefinition() (que ya ha corrido loadColumns(), la última
+ * función que toca ReportState.Measures), así que quedan siempre en
+ * última posición — "como si estuvieran en la última posición de
+ * Columnas". No se llama en ningún punto del modo Fijo
+ * (buildSQLFixed/actualizarInformeFixedCore): ese flujo no se toca en
+ * absoluto, tal y como estaba.
+ */
+function applyFilterMeasuresToDynamicReport() {
+    (ReportState.FilterMeasureNames || []).forEach(name => {
+        if (!name) return;
+        ReportState.MeasureCount = (ReportState.MeasureCount || 0) + 1;
+        ReportState.Measures.push({ Name: name });
+    });
 }
 
 /* ---------------------------------------------------------------------
@@ -1400,6 +1486,21 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
 
+    // PLANIFICACIÓN > "refrescar" hace lo mismo que "Guardar
+    // planificación": vuelca en EDIT_REPORT!A127 y devuelve su color
+    // original a las celdas modificadas a mano pendientes, y vacía el
+    // registro (ver flushDracoPlanningModifiedCells). Se hace ANTES del
+    // refresco porque este va a borrar y repintar entero
+    // Draco_<id>_Values de todas formas.
+    await flushDracoPlanningModifiedCells();
+
+    // Ver comentario junto a DracoSuppressPlanningPaintCount: mientras
+    // dura todo este refresco (que borra y reescribe Draco_<id>_Values),
+    // handleDracoPlanningValueChanged no debe pintar esas celdas como si
+    // fueran una edición manual del usuario.
+    await beginSuppressPlanningPaint();
+    try {
+
     // 1) LoadReportDefinition + BuildSQL_Fixed + escritura de A1
     await Excel.run(async (context) => {
         const editReportGrid = await getEditReportGrid(context, reportId);
@@ -1439,6 +1540,10 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     await Excel.run(async (context) => {
         await jsonPaintValues(context, json, reportId);
     });
+
+    } finally {
+        await endSuppressPlanningPaint();
+    }
 }
 
 /**
@@ -2329,6 +2434,169 @@ const DracoHandlerRegisteredSheets = new Set();
 let DracoEditReportHandlerRegistered = false; // evita registrar el listener de EDIT_REPORT!A5 (picker) más de una vez — INDEPENDIENTE de lo anterior: no depende de que exista ninguna hoja de resultados ni de que se haya refrescado nunca
 let DracoSuppressChangeEvents = false; // true mientras jsonTo3Matrices pinta celdas (evita que el reconocimiento de miembros reaccione a nuestras propias escrituras)
 
+// Candado DEDICADO y COMPLETAMENTE INDEPENDIENTE de DracoSuppressChangeEvents
+// (a propósito: reutilizar ese flag, que ya protege muchas otras cosas —
+// picker, expandir/contraer, etc. — para esto acabó rompiendo otras partes
+// del add-in). Solo lo usa handleDracoPlanningValueChanged (marcar en cian
+// una celda tocada a mano de un informe de planificación).
+//
+// Es un CONTADOR (no un simple booleano) porque "Actualizar todos" envuelve
+// también, uno a uno, a actualizarInformeFixedCore: con un booleano simple,
+// el primer informe fijo procesado lo pondría a "false" en su propio
+// finally y reactivaría el pintado ANTES de que terminaran de refrescarse
+// los siguientes informes de ese mismo "Actualizar todos". Mientras el
+// contador sea > 0, sigue deshabilitado.
+//
+// Y es CRUZADO ENTRE RUNTIMES (como DRACO_PICKER_LOCK_CELL más abajo, ver
+// su comentario): el ribbon (commands.html) y el taskpane (taskpane.html)
+// son dos procesos JS separados, cada uno con su PROPIA copia de esta
+// variable en memoria. Si "Actualizar" se pulsa desde el ribbon, ESE
+// runtime incrementa su contador local, pero el handler
+// handleDracoPlanningValueChanged que reacciona al propio refresco puede
+// estar registrado (y disparado) en el runtime del TASKPANE, que nunca se
+// enteró de que había un refresco en curso — y pintaba en cian TODA la
+// tabla, como si el usuario la hubiera editado a mano. Por eso, además del
+// contador local (atajo rápido, mismo runtime), se lleva un contador
+// espejo en EDIT_REPORT!Z2, visible para ambos procesos.
+let DracoSuppressPlanningPaintCount = 0;
+const DRACO_PLANNING_SUPPRESS_CELL = "Z2";
+
+// PLANIFICACIÓN > registro EN MEMORIA (solo dura la sesión, no se
+// persiste en el libro) de las celdas de Draco_<id>_Values que el
+// usuario ha tocado a mano desde el último "Guardar planificación" o
+// "Actualizar", junto con el color que tenían ANTES de pintarse en cian
+// (ver handleDracoPlanningValueChanged). Se consulta/vacía en
+// flushDracoPlanningModifiedCells, que escribe el listado en
+// EDIT_REPORT!A127, devuelve a cada celda su color original y limpia
+// este registro — se llama tanto desde guardarPlanificacion como desde
+// el arranque de cualquier refresco (actualizarInformeCore/
+// actualizarInformeFixedCore/actualizarTodosCore).
+//
+// Estructura: Map<reportId, Map<direccion, { sheetName, address, color }>>.
+// Se indexa también por reportId (aunque el volcado a A127 es global,
+// de todos los informes a la vez) porque handleDracoPlanningValueChanged
+// ya conoce el reportId de la hoja tocada y así una misma dirección de
+// celda en dos informes/hojas distintos no se pisa entre sí.
+const DracoPlanningModifiedCells = new Map();
+const DRACO_PLANNING_LOG_CELL = "A127";
+
+/**
+ * Vuelca en EDIT_REPORT!A127 (como JSON) todas las celdas de
+ * planificación modificadas a mano registradas en
+ * DracoPlanningModifiedCells, les devuelve el color que tenían antes de
+ * pintarse en cian, y vacía el registro. La llaman tanto
+ * guardarPlanificacion (botón "Guardar") como el arranque de cualquier
+ * refresco (para que un refresco no deje el registro con celdas que ya
+ * no reflejan lo que hay pintado en la hoja).
+ *
+ * No hace nada (ni siquiera toca A127) si no hay ninguna celda
+ * registrada, para no pisar un listado previo si esta función se llama
+ * varias veces seguidas sin cambios de por medio (p.ej. "Actualizar
+ * todos", que internamente vuelve a llamar a esta función una vez por
+ * cada informe en modo "Fijo").
+ */
+async function flushDracoPlanningModifiedCells() {
+    if (DracoPlanningModifiedCells.size === 0) return;
+
+    // Aplanar todo lo registrado (de todos los informes tocados) en una
+    // única lista para el JSON de A127, y agrupar por hoja para repintar
+    // con el mínimo de context.sync().
+    const flat = [];
+    const bySheet = new Map();
+    for (const [reportId, bucket] of DracoPlanningModifiedCells.entries()) {
+        for (const entry of bucket.values()) {
+            flat.push({ reportId, sheet: entry.sheetName, address: entry.address, color: entry.color || "" });
+            if (!bySheet.has(entry.sheetName)) bySheet.set(entry.sheetName, []);
+            bySheet.get(entry.sheetName).push(entry);
+        }
+    }
+
+    try {
+        await Excel.run(async (context) => {
+            const editReportSheet = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+            editReportSheet.load("isNullObject");
+            await context.sync();
+
+            if (!editReportSheet.isNullObject) {
+                const EXCEL_CELL_CHAR_LIMIT = 32000; // límite real de Excel: 32767
+                let jsonForCell = JSON.stringify(flat);
+                if (jsonForCell.length > EXCEL_CELL_CHAR_LIMIT) {
+                    jsonForCell = jsonForCell.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado)";
+                }
+                editReportSheet.getRange(DRACO_PLANNING_LOG_CELL).values = [[jsonForCell]];
+            }
+
+            for (const [sheetName, entries] of bySheet.entries()) {
+                const sheet = context.workbook.worksheets.getItemOrNullObject(sheetName);
+                sheet.load("isNullObject");
+                await context.sync();
+                if (sheet.isNullObject) continue;
+
+                for (const entry of entries) {
+                    const cell = sheet.getRange(entry.address);
+                    if (entry.color) {
+                        cell.format.fill.color = entry.color; // color que tenía antes de marcarse
+                    } else {
+                        cell.format.fill.clear(); // no tenía relleno (color "" / automático)
+                    }
+                }
+                await context.sync();
+            }
+        });
+    } catch (e) {
+        console.error("[Draco] Error volcando en EDIT_REPORT!A127 y/o restaurando el color de las celdas de planificación modificadas:", e);
+    }
+
+    // Vaciar SIEMPRE el registro, incluso si algo ha fallado al escribir
+    // o repintar, para no arrastrar un estado inconsistente a la
+    // siguiente edición del usuario.
+    DracoPlanningModifiedCells.clear();
+}
+
+async function beginSuppressPlanningPaint() {
+    DracoSuppressPlanningPaintCount++;
+    try {
+        await Excel.run(async (context) => {
+            const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+            editReport.load("isNullObject");
+            await context.sync();
+            if (editReport.isNullObject) return;
+
+            const cell = editReport.getRange(DRACO_PLANNING_SUPPRESS_CELL);
+            cell.load("values");
+            await context.sync();
+
+            const current = Number(cell.values && cell.values[0] && cell.values[0][0]) || 0;
+            cell.values = [[String(current + 1)]];
+            await context.sync();
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo incrementar el candado cruzado de planificación (EDIT_REPORT!Z2):", e);
+    }
+}
+
+async function endSuppressPlanningPaint() {
+    DracoSuppressPlanningPaintCount = Math.max(0, DracoSuppressPlanningPaintCount - 1);
+    try {
+        await Excel.run(async (context) => {
+            const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+            editReport.load("isNullObject");
+            await context.sync();
+            if (editReport.isNullObject) return;
+
+            const cell = editReport.getRange(DRACO_PLANNING_SUPPRESS_CELL);
+            cell.load("values");
+            await context.sync();
+
+            const current = Number(cell.values && cell.values[0] && cell.values[0][0]) || 0;
+            cell.values = [[String(Math.max(0, current - 1))]];
+            await context.sync();
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo decrementar el candado cruzado de planificación (EDIT_REPORT!Z2):", e);
+    }
+}
+
 // true mientras ya hay un diálogo de "buscador de miembros" abierto. Hay
 // DOS sistemas independientes que pueden llegar a abrir este picker para
 // el MISMO clic (handleDracoRowsSingleClick por doble clic, y
@@ -2577,7 +2845,8 @@ function getDracoReportProperties() {
         suppressZeroCols: false,
         subtotalsOnTop: false,
         overwriteFormats: true,
-        autoFitColumns: true
+        autoFitColumns: true,
+        planningReport: false
     };
     try {
         if (!window.ReportStore) return defaults;
@@ -4856,6 +5125,137 @@ async function registerEditReportPickerHandler(context) {
     console.log("[Draco] Listeners de EDIT_REPORT: T1:V1 (expandir/contraer) y T2:V2 (REC/DC, buscador de miembros) registrados. A5 (Member Picker directo) DESACTIVADO.");
 }
 
+/**
+ * PLANIFICACIÓN > seguimiento de celdas modificadas a mano en
+ * Draco_<id>_Values (RGB(223,255,255)). Se engancha con onChanged de la
+ * hoja de resultados (una vez por hoja, junto al resto de listeners de
+ * registerDracoSelectionHandler), y SOLO actúa si:
+ *   - DracoSuppressPlanningPaintCount está a 0: mientras un
+ *     "Actualizar" está en curso (desde que se pulsa hasta que termina de
+ *     pintar) se pone a true (ver actualizarInformeCore/
+ *     actualizarInformeFixedCore/actualizarTodosCore) para que el propio
+ *     refresco —que borra y vuelve a escribir TODO Draco_<id>_Values— no
+ *     se interprete como una edición manual del usuario. Candado dedicado,
+ *     independiente de DracoSuppressChangeEvents a propósito (ver
+ *     comentario junto a su declaración).
+ *   - El informe al que pertenece la hoja tocada tiene la propiedad
+ *     "Informe de planificación" activada (reportProperties.planningReport).
+ *   - La celda tocada cae dentro del rango con nombre Draco_<id>_Values de
+ *     ESE informe (no toda la hoja: cabeceras de Filas/Columnas quedan
+ *     fuera).
+ */
+async function handleDracoPlanningValueChanged(eventArgs) {
+    try {
+        if (DracoSuppressPlanningPaintCount > 0) return; // atajo rápido, mismo runtime
+        if (DracoSuppressChangeEvents) return; // por si coincide con otra escritura programática (picker, expandir/contraer...)
+        if (!window.ReportStore) return;
+
+        let addr = (eventArgs && eventArgs.address) || "";
+        const worksheetId = eventArgs && eventArgs.worksheetId;
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        if (!addr || !worksheetId) return;
+
+        await Excel.run(async (context) => {
+            const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+            editReport.load("isNullObject");
+            await context.sync();
+
+            // Candado cruzado entre runtimes (ver comentario junto a
+            // DracoSuppressPlanningPaintCount): puede haber un refresco en
+            // curso lanzado desde OTRO proceso (ribbon vs taskpane), que
+            // este runtime nunca vería si solo mirase su propio contador
+            // en memoria.
+            if (!editReport.isNullObject) {
+                const suppressCell = editReport.getRange(DRACO_PLANNING_SUPPRESS_CELL);
+                suppressCell.load("values");
+                await context.sync();
+                const suppressCount = Number(suppressCell.values && suppressCell.values[0] && suppressCell.values[0][0]) || 0;
+                if (suppressCount > 0) return;
+            }
+
+            const sheet = context.workbook.worksheets.getItem(worksheetId);
+            sheet.load("name");
+            await context.sync();
+
+            const reportId = reportIdForResultSheet(sheet.name);
+            const report = window.ReportStore.getReport ? window.ReportStore.getReport(reportId) : null;
+            if (!report || !report.reportProperties || !report.reportProperties.planningReport) return;
+
+            const rn = dracoRangeNames(reportId);
+            const namedValues = context.workbook.names.getItemOrNullObject(rn.values);
+            namedValues.load("isNullObject");
+            await context.sync();
+            if (namedValues.isNullObject) return; // informe sin tabla pintada todavía: nada que comprobar
+
+            const valuesRange = namedValues.getRange();
+            valuesRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+            const changedRange = sheet.getRange(addr);
+            changedRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+            await context.sync();
+
+            const within =
+                changedRange.rowIndex >= valuesRange.rowIndex &&
+                (changedRange.rowIndex + changedRange.rowCount) <= (valuesRange.rowIndex + valuesRange.rowCount) &&
+                changedRange.columnIndex >= valuesRange.columnIndex &&
+                (changedRange.columnIndex + changedRange.columnCount) <= (valuesRange.columnIndex + valuesRange.columnCount);
+            if (!within) return;
+
+            // PLANIFICACIÓN > antes de pintar en cian, registramos en
+            // memoria (DracoPlanningModifiedCells) el color que tenía
+            // CADA celda tocada (un mismo onChanged puede cubrir varias
+            // celdas a la vez, p.ej. un pegado), para poder devolvérselo
+            // más tarde desde flushDracoPlanningModifiedCells. Vamos
+            // celda a celda (no la propiedad .color del rango completo)
+            // porque celdas con colores de partida distintos harían que
+            // esa propiedad no fuera fiable sobre un rango. Si la celda
+            // ya estaba registrada (el usuario la ha vuelto a tocar antes
+            // de guardar/refrescar) NO se sobrescribe: debe conservarse
+            // el color ORIGINAL real, no el cian de una edición anterior
+            // todavía sin guardar.
+            const reportBucket = DracoPlanningModifiedCells.get(reportId) || new Map();
+            DracoPlanningModifiedCells.set(reportId, reportBucket);
+
+            // Límite defensivo: un pegado enorme no debería iterar miles
+            // de celdas una a una. En ese caso (poco habitual en una
+            // edición manual de planificación) se renuncia a registrar
+            // el color individual y solo se pinta, sin guardar en A127.
+            const DRACO_PLANNING_MAX_CELLS_TO_TRACK = 500;
+            const touchedCellCount = changedRange.rowCount * changedRange.columnCount;
+            if (touchedCellCount <= DRACO_PLANNING_MAX_CELLS_TO_TRACK) {
+                const cellRanges = [];
+                for (let r = 0; r < changedRange.rowCount; r++) {
+                    for (let c = 0; c < changedRange.columnCount; c++) {
+                        const cell = changedRange.getCell(r, c);
+                        cell.load(["address", "format/fill/color"]);
+                        cellRanges.push(cell);
+                    }
+                }
+                await context.sync();
+
+                for (const cell of cellRanges) {
+                    const cellAddr = String(cell.address || "").split("!").pop();
+                    if (!cellAddr) continue;
+                    if (!reportBucket.has(cellAddr)) {
+                        reportBucket.set(cellAddr, {
+                            sheetName: sheet.name,
+                            address: cellAddr,
+                            color: cell.format.fill.color || ""
+                        });
+                    }
+                }
+            } else {
+                console.warn("[Draco] Edición de planificación de " + touchedCellCount + " celdas de golpe: se pinta en cian pero NO se registra su color original (por encima del límite de " + DRACO_PLANNING_MAX_CELLS_TO_TRACK + ").");
+            }
+
+            // RGB(223,255,255)
+            changedRange.format.fill.color = "#DFFFFF";
+            await context.sync();
+        });
+    } catch (e) {
+        console.error("[Draco] Error marcando la celda modificada de planificación:", e);
+    }
+}
+
 // sheetName es el nombre de la hoja de resultados donde vive `sheet`: cada
 // informe puede pintarse en una hoja distinta (ver resultSheetNameFromGrid/
 // getDracoResultSheetName), así que los listeners de clic (+/-) y
@@ -4885,6 +5285,10 @@ async function registerDracoSelectionHandler(context, sheet, sheetName) {
     // es handleDracoPickerFlagRequest, enganchado una vez a EDIT_REPORT
     // (ver registerEditReportPickerHandler), no aquí por cada hoja.
     // sheet.onChanged.add(handleDracoMemberRecognitionChanged);
+
+    // PLANIFICACIÓN: marcar en cian las celdas de Draco_<id>_Values
+    // modificadas a mano (ver handleDracoPlanningValueChanged más arriba).
+    sheet.onChanged.add(handleDracoPlanningValueChanged);
 
     // NUEVO: petición de apertura del Member Picker desde EDIT_REPORT
     await registerEditReportPickerHandler(context);
@@ -5164,6 +5568,48 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
 
+    // ---- Medidas arrastradas a la zona "Filtros" (ver loadFilters/
+    // appendLockedFilterRangesToState + applyFilterMeasuresToDynamicReport,
+    // que ya las añadió al FINAL de ReportState.Measures antes de llamar a
+    // buildSQL): siguen reservando su propio hueco físico en el bloque de
+    // VALORES (measuresOnRowsAxis/measuresOnColsAxis + measureCount, más
+    // abajo, se calculan sobre measureLevels.length y por tanto ya cuentan
+    // con ellas), con el mismo mIdx que le toca por su posición en
+    // ReportState.Measures, y su VALOR se pinta con normalidad (si no, un
+    // informe cuya única medida esté en Filtros se quedaría sin ningún
+    // dato que mostrar). Lo único que NO se pinta es su CABECERA (la
+    // etiqueta con el nombre de la medida), así que no deben sumar una
+    // fila/columna más al bloque de CABECERA (planFilas/planColumnas.
+    // totalIaux, que es lo que fija el alto/ancho de Draco_<id>_Rows/Cols):
+    // si el eje YA tenía alguna medida real, comparten su mismo hueco de
+    // cabecera (ya contado); si el eje no tenía NINGUNA medida real (todas
+    // las medidas del informe están en Filtros), no se reserva ninguna
+    // fila/columna de cabecera para ellas — sencillamente no hay ninguna
+    // etiqueta que pintar ahí. Se tratan como si estuvieran en la ÚLTIMA
+    // posición del eje que YA lleva las medidas (Filas o Columnas, el que
+    // sea: el taskpane garantiza que todas las medidas reales están en uno
+    // solo); si ninguno de los dos ejes tiene medidas reales, se usa
+    // Columnas por defecto (solo a efectos de measuresOnColsAxis/
+    // measureCount; no reserva cabecera, ver arriba).
+    const filterMeasureNames = ReportState.FilterMeasureNames || [];
+    if (filterMeasureNames.length > 0) {
+        const targetPlan = planFilas.measureLevels.length > 0 ? planFilas : planColumnas;
+        // Si ya había medidas reales, se reutiliza su iAux (ya contado en
+        // totalIaux); si no, no hace falta ningún iAux válido: las
+        // entradas "hidden" nunca llegan a leer .iAux (los dos bucles que
+        // pintan CABECERAS de medida las saltan antes de usarlo; el bucle
+        // que pinta VALORES no usa .iAux en absoluto).
+        const measureIaux = targetPlan.measureLevels.length > 0 ? targetPlan.measureLevels[0].iAux : null;
+        filterMeasureNames.forEach(name => {
+            targetPlan.measureLevels.push({
+                iAux: measureIaux,
+                ordinal: targetPlan.measureLevels.length,
+                label: name,
+                hidden: true // no se pinta su cabecera (el VALOR sí se pinta, ver el bucle de factCells más abajo)
+            });
+        });
+    }
+
     // ---- Varias medidas en el MISMO eje (Σ Medidas del taskpane): el
     // taskpane garantiza que todas las medidas están en un único eje
     // (nunca repartidas entre Filas y Columnas), así que como mucho uno de
@@ -5342,6 +5788,13 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         // consecutivas (misma columna); si es el de Columnas, en columnas
         // físicas consecutivas (misma fila). Con una sola medida, measureCount
         // es 1 y esto se comporta exactamente igual que antes.
+        //
+        // Las medidas en Filtros (hidden) SÍ escriben su valor aquí — solo
+        // se omite su CABECERA (label de medida, más abajo): si se omitiera
+        // también el valor, un informe cuya ÚNICA medida está en Filtros
+        // quedaría con la tabla completamente en blanco (sin ningún dato
+        // que mostrar), que no es lo que se pedía — "no pinte esa
+        // fila/columna" se refiere a la etiqueta de cabecera, no al dato.
         for (let mIdx = 0; mIdx < measureCount; mIdx++) {
             const physRow = explodeForMeasures(newRowId, measuresOnRowsAxis, mIdx);
             const physCol = explodeForMeasures(newColId, measuresOnColsAxis, mIdx);
@@ -5402,6 +5855,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         // en su propia columna física, una por cada medida del grupo, en la
         // fila física que le corresponde a ESA medida (measuresOnRowsAxis).
         for (const m of planFilas.measureLevels) {
+            if (m.hidden) continue; // medida en Filtros: no se pinta su cabecera
             const row = explodeForMeasures(Number(V[0]), measuresOnRowsAxis, m.ordinal) + rowsOffRow;
             const col = m.iAux + rowsOffCol;
             filasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
@@ -5479,6 +5933,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         // (respeta la posición configurada en EDIT_REPORT: por encima o por
         // debajo de ESCENARIO, según dónde esté la fila MEASURE en N/O/P).
         for (const m of planColumnas.measureLevels) {
+            if (m.hidden) continue; // medida en Filtros: no se pinta su cabecera
             const row = m.iAux + colsOffRow;
             const col = explodeForMeasures(Number(V[0]), measuresOnColsAxis, m.ordinal) + colsOffCol;
             columnasCells.set(row + "_" + col, { row, col, value: m.label, indent: 0, field: m.iAux, isTotal: false });
@@ -5932,6 +6387,13 @@ async function actualizarInformeCore(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
 
+    // PLANIFICACIÓN > ver comentario igual en actualizarInformeFixedCore.
+    await flushDracoPlanningModifiedCells();
+
+    // Ver comentario junto a DracoSuppressPlanningPaintCount.
+    await beginSuppressPlanningPaint();
+    try {
+
     await Excel.run(async (context) => {
         const editReportGrid = await getEditReportGrid(context, reportId);
         const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
@@ -5939,6 +6401,7 @@ async function actualizarInformeCore(reportIdOverride) {
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
 
         loadReportDefinition(editReportGrid, reportId);
+        applyFilterMeasuresToDynamicReport();
 
         // EDIT_REPORT!D4 = "Mostrar subtotales arriba" (Propiedades del
         // informe). Solo tiene efecto real cuando además hay algún campo
@@ -5976,6 +6439,10 @@ async function actualizarInformeCore(reportIdOverride) {
     await Excel.run(async (context) => {
         await jsonTo3Matrices(context, json, reportId);
     });
+
+    } finally {
+        await endSuppressPlanningPaint();
+    }
 }
 
 /**
@@ -6072,6 +6539,19 @@ async function actualizarTodosCore(concurrency) {
     const reports = window.ReportStore.listReports();
     if (!reports || reports.length === 0) return;
 
+    // PLANIFICACIÓN > ver comentario igual en actualizarInformeFixedCore.
+    // (actualizarInformeFixedCore también lo llama por su cuenta más
+    // abajo, una vez por cada informe "Fijo" de este mismo "Actualizar
+    // todos"; a partir de la primera llamada el registro ya está vacío,
+    // así que esas llamadas repetidas no hacen nada.)
+    await flushDracoPlanningModifiedCells();
+
+    // Ver comentario junto a DracoSuppressPlanningPaintCount: cubre TODO
+    // "Refrescar todos" (dinámicos + fijos, que a su vez llama a
+    // actualizarInformeFixedCore y suma su propia cuenta al contador).
+    await beginSuppressPlanningPaint();
+    try {
+
     const dynamicJobs = [];
     const fixedReports = [];
 
@@ -6099,6 +6579,7 @@ async function actualizarTodosCore(concurrency) {
                     const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
                     const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
                     loadReportDefinition(editReportGrid, reportId);
+                    applyFilterMeasuresToDynamicReport();
                     const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
                     sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
                 });
@@ -6150,6 +6631,10 @@ async function actualizarTodosCore(concurrency) {
         } catch (err) {
             console.error(`[Draco] Error actualizando el informe "${f.reportName}" (modo fijo):`, err);
         }
+    }
+
+    } finally {
+        await endSuppressPlanningPaint();
     }
 }
 
@@ -6203,10 +6688,21 @@ function comingSoon(event) {
  * cambios marcados en el informe de planificación, revisión en
  * EDIT_REPORT!V4 y ejecución) cuando esté lista.
  * ------------------------------------------------------------------- */
-function guardarPlanificacion(event) {
-    console.log("Guardar planificación: todavía no implementado.");
-    if (event) {
-        event.completed();
+async function guardarPlanificacion(event) {
+    try {
+        console.log("Guardar planificación: INSERT real todavía no implementado; se vuelca/limpia el registro de celdas modificadas de planificación.");
+        // Vuelca en EDIT_REPORT!A127 las celdas de Draco_<id>_Values
+        // modificadas a mano desde el último guardado/refresco (junto con
+        // el color que tenían antes de marcarse en cian), les devuelve
+        // ese color original, y vacía el registro en memoria. Ver
+        // handleDracoPlanningValueChanged / flushDracoPlanningModifiedCells.
+        await flushDracoPlanningModifiedCells();
+    } catch (e) {
+        console.error("[Draco] Error en guardarPlanificacion:", e);
+    } finally {
+        if (event) {
+            event.completed();
+        }
     }
 }
 

@@ -134,7 +134,8 @@ const TaskPaneApp = {
         suppressZeroCols: false,
         subtotalsOnTop: false,
         overwriteFormats: true,
-        autoFitColumns: true
+        autoFitColumns: true,
+        planningReport: false
     },
 
     // Campo actualmente seleccionado en el panel "Opciones de campo"
@@ -1170,7 +1171,8 @@ const TaskPaneApp = {
                 suppressZeroCols: false,
                 subtotalsOnTop: false,
                 overwriteFormats: true,
-                autoFitColumns: true
+                autoFitColumns: true,
+                planningReport: false
             });
             RangeAxis.loadFromAddresses("", "", "");
 
@@ -1579,12 +1581,14 @@ const TaskPaneApp = {
         // Filtro sin valor seleccionado todavía: se muestra vacío (no se
         // añade al WHERE de la consulta hasta que el usuario elija algo con
         // doble clic). Si ya hay filtro, se resume (varios valores, rango,
-        // incluir/excluir…) con describeFilter().
-        const filterSummary = zoneId === "filters" && typeof window.describeFilter === "function"
+        // incluir/excluir…) con describeFilter(). Una MEDIDA en Filtros no
+        // tiene doble clic (no hay miembros que elegir, ver más abajo), así
+        // que tampoco muestra el texto "(vacío · doble clic para elegir)".
+        const filterSummary = zoneId === "filters" && !isMeasure && typeof window.describeFilter === "function"
             ? window.describeFilter(entry.filter)
             : "";
         const titleText = zoneId === "filters"
-            ? (filterSummary ? `${fieldLabel}: ${filterSummary}` : `${fieldLabel}: (vacío · doble clic para elegir)`)
+            ? (isMeasure ? fieldLabel : (filterSummary ? `${fieldLabel}: ${filterSummary}` : `${fieldLabel}: (vacío · doble clic para elegir)`))
             : fieldLabel;
 
         tag.innerHTML = `
@@ -1606,8 +1610,10 @@ const TaskPaneApp = {
 
         tag.addEventListener("dragend", () => tag.classList.remove("dragging"));
 
-        // Solo los filtros abren el modal de selección de valor (doble clic)
-        if (zoneId === "filters") {
+        // Solo los filtros abren el modal de selección de valor (doble clic).
+        // Una MEDIDA en Filtros no tiene miembros que elegir (no es una
+        // dimensión con valores): no se abre el FilterModal para ella.
+        if (zoneId === "filters" && !isMeasure) {
             tag.addEventListener("dblclick", async () => {
                 if (typeof FilterModal === "undefined" || !FilterModal.open) return;
 
@@ -1817,6 +1823,7 @@ const TaskPaneApp = {
         document.getElementById("propSubtotalsOnTop").checked = !!this.reportProperties.subtotalsOnTop;
         document.getElementById("propOverwriteFormats").checked = !!this.reportProperties.overwriteFormats;
         document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
+        document.getElementById("propPlanningReport").checked = !!this.reportProperties.planningReport;
 
         modal.style.display = "flex";
         this.updateRibbonToggleLabel("BtnPropiedadesInforme", "Propiedades", true);
@@ -1839,7 +1846,8 @@ const TaskPaneApp = {
             suppressZeroCols: document.getElementById("propSuppressZeroCols").checked,
             subtotalsOnTop: document.getElementById("propSubtotalsOnTop").checked,
             overwriteFormats: document.getElementById("propOverwriteFormats").checked,
-            autoFitColumns: document.getElementById("propAutoFitColumns").checked
+            autoFitColumns: document.getElementById("propAutoFitColumns").checked,
+            planningReport: document.getElementById("propPlanningReport").checked
         };
 
         const btn = document.getElementById("btnSaveProperties");
