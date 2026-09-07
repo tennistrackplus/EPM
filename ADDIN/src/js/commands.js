@@ -649,30 +649,16 @@ function parseAddressRange(addr) {
 function loadFilters(editReportGrid) {
     ReportState.FilterCount = 0;
     ReportState.Filters = [];
-    // Medidas arrastradas a la zona "Filtros": no tiene sentido como
-    // condición WHERE (no hay una dimensión/tabla real que consultar
-    // para sus miembros), así que NO se añaden a ReportState.Filters —
-    // pero tampoco se descartan sin más: se recogen aquí para que el
-    // informe DINÁMICO (actualizarInformeCore/actualizarTodosCore) las
-    // añada al final de ReportState.Measures, justo después de
-    // loadColumns(), como si se hubieran soltado en la última posición
-    // de Columnas. El modo Fijo (buildSQLFixed) no las usa en absoluto.
-    ReportState.FilterMeasureNames = [];
 
     let R = 15;
 
     while (String(cellValue(editReportGrid, R, 3)).trim() !== "") {
-        const dimension = String(cellValue(editReportGrid, R, 3)).trim();
-        if (dimension.toUpperCase() === "MEASURE") {
-            ReportState.FilterMeasureNames.push(String(cellValue(editReportGrid, R, 4)).trim());
-        } else {
-            ReportState.FilterCount++;
-            ReportState.Filters.push({
-                Dimension: dimension,
-                AttributeName: String(cellValue(editReportGrid, R, 4)).trim(),
-                Value: String(cellValue(editReportGrid, R, 5)).trim()
-            });
-        }
+        ReportState.FilterCount++;
+        ReportState.Filters.push({
+            Dimension: String(cellValue(editReportGrid, R, 3)).trim(),
+            AttributeName: String(cellValue(editReportGrid, R, 4)).trim(),
+            Value: String(cellValue(editReportGrid, R, 5)).trim()
+        });
         R++;
     }
 }
@@ -700,15 +686,6 @@ function appendLockedFilterRangesToState(reportId) {
         const appliesToThisReport = isAll
             || (reportId !== null && reportId !== undefined && Number(meta.reportId) === Number(reportId));
         if (!appliesToThisReport) continue;
-
-        // Igual que en loadFilters(): una MEDIDA en un filtro global
-        // ("Añadir filtro") tampoco participa del WHERE — se recoge para
-        // que el informe dinámico la añada al final de Columnas.
-        if (String(meta.dim).toUpperCase() === "MEASURE") {
-            if (!ReportState.FilterMeasureNames) ReportState.FilterMeasureNames = [];
-            ReportState.FilterMeasureNames.push(meta.name);
-            continue;
-        }
 
         ReportState.Filters.push({
             Dimension: meta.dim,
@@ -806,27 +783,6 @@ function loadReportDefinition(editReportGrid, reportId) {
     appendLockedFilterRangesToState(reportId !== undefined ? reportId : activeReportIdOrNull());
     loadRows(editReportGrid);
     loadColumns(editReportGrid);
-}
-
-/**
- * SOLO para el informe DINÁMICO (buildSQL/actualizarInformeCore,
- * actualizarTodosCore): añade al final de ReportState.Measures las
- * medidas que se hubieran arrastrado a la zona "Filtros" (tanto locales
- * como filtros globales "Añadir filtro"), recogidas por loadFilters()/
- * appendLockedFilterRangesToState() en ReportState.FilterMeasureNames.
- * Se llama DESPUÉS de loadReportDefinition() (que ya ha corrido
- * loadColumns(), la última función que toca ReportState.Measures), así
- * que quedan siempre en última posición — "como si estuvieran en la
- * última posición de las columnas". No se llama en ningún punto del
- * modo Fijo (buildSQLFixed/actualizarInformeFixedCore): ese flujo no se
- * toca en absoluto.
- */
-function applyFilterMeasuresToDynamicReport() {
-    (ReportState.FilterMeasureNames || []).forEach(name => {
-        if (!name) return;
-        ReportState.MeasureCount = (ReportState.MeasureCount || 0) + 1;
-        ReportState.Measures.push({ Name: name });
-    });
 }
 
 /* ---------------------------------------------------------------------
@@ -1444,58 +1400,45 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
 
-    // Igual que en actualizarInformeCore: se desactiva el reconocimiento
-    // de "celda modificada a mano" (pintado en azul de Planificación)
-    // durante TODA la operación. Aquí era todavía más importante — este
-    // flujo pinta con jsonPaintValues(), que escribe valores DIRECTAMENTE
-    // sin pasar por jsonTo3Matrices/DracoSuppressChangeEvents: sin este
-    // wrapper, cada refresco de un informe "Fijo" marcaba en azul TODAS
-    // sus celdas (el propio pintado del refresco se confundía con
-    // ediciones manuales del usuario).
-    DracoSuppressChangeEvents = true;
-    try {
-        // 1) LoadReportDefinition + BuildSQL_Fixed + escritura de A1
-        await Excel.run(async (context) => {
-            const editReportGrid = await getEditReportGrid(context, reportId);
-            const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
-            const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
-            const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
-            const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
-            await ensureDracoResultSheetExists(context, resultSheetName);
-            const csvGrid = await getFormulaGrid(context, resultSheetName);
+    // 1) LoadReportDefinition + BuildSQL_Fixed + escritura de A1
+    await Excel.run(async (context) => {
+        const editReportGrid = await getEditReportGrid(context, reportId);
+        const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
+        const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+        const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+        const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
+        await ensureDracoResultSheetExists(context, resultSheetName);
+        const csvGrid = await getFormulaGrid(context, resultSheetName);
 
-            loadReportDefinition(editReportGrid, reportId);
+        loadReportDefinition(editReportGrid, reportId);
 
-            sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
+        sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
 
-            await context.sync();
-        });
+        await context.sync();
+    });
 
-        // 2) ExecuteSQL contra BigQuery
-        const json = await executeSQL(sql);
+    // 2) ExecuteSQL contra BigQuery
+    const json = await executeSQL(sql);
 
-        // [Punto 8] SQL y JSON generados ya NO se escriben en A1/B1 de la hoja
-        // de resultados: se escriben en EDIT_REPORT!X1 (SQL) e Y1 (JSON).
-        await Excel.run(async (context) => {
-            const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-            editReportSheet.getRange("X1").values = [[sql]];
+    // [Punto 8] SQL y JSON generados ya NO se escriben en A1/B1 de la hoja
+    // de resultados: se escriben en EDIT_REPORT!X1 (SQL) e Y1 (JSON).
+    await Excel.run(async (context) => {
+        const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+        editReportSheet.getRange("X1").values = [[sql]];
 
-            const EXCEL_CELL_CHAR_LIMIT = 32000; // límite real de Excel: 32767
-            const jsonForCell = json.length > EXCEL_CELL_CHAR_LIMIT
-                ? json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
-                : json;
-            editReportSheet.getRange("Y1").values = [[jsonForCell]];
+        const EXCEL_CELL_CHAR_LIMIT = 32000; // límite real de Excel: 32767
+        const jsonForCell = json.length > EXCEL_CELL_CHAR_LIMIT
+            ? json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
+            : json;
+        editReportSheet.getRange("Y1").values = [[jsonForCell]];
 
-            await context.sync();
-        });
+        await context.sync();
+    });
 
-        // 3) JSON_PaintValues
-        await Excel.run(async (context) => {
-            await jsonPaintValues(context, json, reportId);
-        });
-    } finally {
-        DracoSuppressChangeEvents = false;
-    }
+    // 3) JSON_PaintValues
+    await Excel.run(async (context) => {
+        await jsonPaintValues(context, json, reportId);
+    });
 }
 
 /**
@@ -2385,95 +2328,6 @@ function getDracoIndicatorMap(reportId) {
 const DracoHandlerRegisteredSheets = new Set();
 let DracoEditReportHandlerRegistered = false; // evita registrar el listener de EDIT_REPORT!A5 (picker) más de una vez — INDEPENDIENTE de lo anterior: no depende de que exista ninguna hoja de resultados ni de que se haya refrescado nunca
 let DracoSuppressChangeEvents = false; // true mientras jsonTo3Matrices pinta celdas (evita que el reconocimiento de miembros reaccione a nuestras propias escrituras)
-
-/* ---------------------------------------------------------------------
- * PLANIFICACIÓN > celdas modificadas a mano en Draco_<id>_Values.
- * Memoria EN CURSO (Map<reportId, Set<dirección>>): se rellena con
- * handleDracoPlanningValueChanged (onChanged de la hoja de resultados) y
- * se vacía al pulsar "Guardar" (guardarPlanificacion), que además vuelca
- * su contenido en EDIT_REPORT!T5. Vive solo mientras dura la sesión del
- * runtime de comandos (no se persiste en Office roaming settings): si se
- * pierde antes de guardar, las celdas siguen en la hoja tal cual las dejó
- * el usuario, solo se pierde el REGISTRO de cuáles cambiaron.
- * Además, handleDracoPlanningValueChanged pinta el fondo de cada celda
- * tocada en RGB(223,255,255) para marcarla visualmente como modificada.
- * ------------------------------------------------------------------- */
-const DracoPlanningEditedCells = new Map();
-
-function dracoPlanningKey(reportId) {
-    return reportId || 0; // mismo criterio que dracoStateKey: 0 = "sin informe activo"
-}
-
-function rememberDracoPlanningEdit(reportId, addr) {
-    const key = dracoPlanningKey(reportId);
-    if (!DracoPlanningEditedCells.has(key)) DracoPlanningEditedCells.set(key, new Set());
-    DracoPlanningEditedCells.get(key).add(addr);
-    console.log("[Draco] Planificación: celda modificada registrada en memoria ->", key, addr);
-}
-
-/**
- * onChanged de la hoja de resultados (registrado junto al resto de
- * listeners en registerDracoSelectionHandler, así que se reengancha en
- * cada hoja de resultados nueva y sigue vivo a través de sucesivos
- * "Actualizar"): si la celda tocada cae dentro de Draco_<id>_Values de
- * ESE informe, se pinta su fondo en RGB(223,255,255) y se apunta su
- * dirección en memoria (rememberDracoPlanningEdit) para que "Guardar"
- * (guardarPlanificacion) la vuelque en EDIT_REPORT!T5. Ignorado mientras
- * DracoSuppressChangeEvents esté activo (nuestro propio pintado del
- * refresco), igual que el resto de listeners de esta hoja.
- */
-async function handleDracoPlanningValueChanged(eventArgs) {
-    try {
-        if (DracoSuppressChangeEvents) {
-            console.log("[Draco] Planificación: onChanged ignorado (escritura programática en curso).");
-            return;
-        }
-
-        let addr = (eventArgs && eventArgs.address) || "";
-        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
-        if (!addr) return;
-
-        await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItem(eventArgs.worksheetId);
-            sheet.load("name");
-            await context.sync();
-
-            const reportId = reportIdForResultSheet(sheet.name);
-            const rn = dracoRangeNames(reportId);
-            const valuesNamed = context.workbook.names.getItemOrNullObject(rn.values);
-            valuesNamed.load("isNullObject");
-            await context.sync();
-            if (valuesNamed.isNullObject) return; // informe sin tabla pintada todavía: nada que comprobar
-
-            const valuesRange = valuesNamed.getRange();
-            const changedRange = sheet.getRange(addr);
-            valuesRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
-            changedRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
-            await context.sync();
-
-            const within =
-                changedRange.rowIndex < valuesRange.rowIndex + valuesRange.rowCount &&
-                changedRange.rowIndex + changedRange.rowCount > valuesRange.rowIndex &&
-                changedRange.columnIndex < valuesRange.columnIndex + valuesRange.columnCount &&
-                changedRange.columnIndex + changedRange.columnCount > valuesRange.columnIndex;
-
-            if (!within) return;
-
-            // Fondo RGB(223,255,255) para marcar visualmente la celda como
-            // modificada por planificación. No hace falta envolverlo en
-            // DracoSuppressChangeEvents: onChanged solo se dispara por
-            // cambios de VALOR/fórmula, no de formato, así que esto no
-            // puede volver a disparar este mismo listener.
-            changedRange.format.fill.color = "#DFFFFF";
-            await context.sync();
-
-            rememberDracoPlanningEdit(reportId, addr);
-        });
-    } catch (e) {
-        console.error("[Draco] Error registrando la celda modificada de planificación:", e);
-    }
-}
-
 
 // Firma del eje = lista de "DIMENSION.ATRIBUTO:NIVEL" de sus campos, en
 // orden. Si cambia (se añade/quita/reordena un campo en ESE eje), se
@@ -4590,7 +4444,6 @@ async function registerDracoSelectionHandler(context, sheet, sheetName) {
     sheet.onSelectionChanged.add(handleDracoMemberRecognitionSelection);
     sheet.onSelectionChanged.add(handleDracoRibbonLabelSelection);
     sheet.onChanged.add(handleDracoMemberRecognitionChanged);
-    sheet.onChanged.add(handleDracoPlanningValueChanged);
 
     // NUEVO: petición de apertura del Member Picker desde EDIT_REPORT
     await registerEditReportPickerHandler(context);
@@ -4767,16 +4620,6 @@ async function jsonTo3Matrices(context, json, reportId) {
 async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     DracoLastJsonByReport.set(dracoStateKey(reportId), json); // cache para poder repintar en un toggle +/- sin re-consultar BigQuery
-
-    // Este repintado va a rehacer Draco_<id>_Values desde cero (tamaño y
-    // contenido pueden cambiar), así que cualquier dirección de celda que
-    // tuviéramos apuntada en memoria de un "onChanged" anterior (ver
-    // handleDracoPlanningValueChanged/DracoPlanningEditedCells) queda
-    // obsoleta: puede que ya ni exista dentro del nuevo rango, o que ahora
-    // apunte a otra celda distinta. Se borra aquí, ANTES de pintar, para
-    // que no se intente escribir en EDIT_REPORT!T5 (guardarPlanificacion)
-    // con direcciones que ya no tienen sentido.
-    DracoPlanningEditedCells.delete(dracoPlanningKey(reportId));
 
     const totalCampos = 2 + ReportState.RowCount + ReportState.ColumnCount + ReportState.MeasureCount;
 
@@ -5648,64 +5491,50 @@ async function actualizarInformeCore(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
 
-    // Se desactiva el reconocimiento de la celda modificada (pintado en
-    // azul de Planificación) durante TODA la operación, no solo durante
-    // el pintado final: antes solo se cubría jsonTo3Matrices, dejando sin
-    // proteger la ejecución de la consulta (executeSQL), que puede tardar
-    // varios segundos — si el usuario tocaba una celda de Valores durante
-    // esa espera, se marcaba como "editada a mano" aunque un instante
-    // después el propio refresco fuera a sobrescribirla igualmente con el
-    // dato nuevo de la consulta.
-    DracoSuppressChangeEvents = true;
-    try {
-        await Excel.run(async (context) => {
-            const editReportGrid = await getEditReportGrid(context, reportId);
-            const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
-            const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
-            const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+    await Excel.run(async (context) => {
+        const editReportGrid = await getEditReportGrid(context, reportId);
+        const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
+        const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+        const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
 
-            loadReportDefinition(editReportGrid, reportId);
-            applyFilterMeasuresToDynamicReport();
+        loadReportDefinition(editReportGrid, reportId);
 
-            // EDIT_REPORT!D4 = "Mostrar subtotales arriba" (Propiedades del
-            // informe). Solo tiene efecto real cuando además hay algún campo
-            // marcado con subtotal en L/R (ver hasAnySubtotalMarked/buildSQL).
-            const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
+        // EDIT_REPORT!D4 = "Mostrar subtotales arriba" (Propiedades del
+        // informe). Solo tiene efecto real cuando además hay algún campo
+        // marcado con subtotal en L/R (ver hasAnySubtotalMarked/buildSQL).
+        const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
 
-            sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
+        sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
 
-            console.log("BuildSQL ->", sql);
+        console.log("BuildSQL ->", sql);
 
-            // [Punto 8] SQL ya no se escribe en A1 de la hoja de resultados:
-            // se escribe en EDIT_REPORT!X1.
-            const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-            editReportSheet.getRange("X1").values = [[sql]];
+        // [Punto 8] SQL ya no se escribe en A1 de la hoja de resultados:
+        // se escribe en EDIT_REPORT!X1.
+        const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+        editReportSheet.getRange("X1").values = [[sql]];
 
-            await context.sync();
-        });
+        await context.sync();
+    });
 
-        const json = await executeSQL(sql);
+    const json = await executeSQL(sql);
 
-        console.log("JSON de BigQuery ->", json);
+    console.log("JSON de BigQuery ->", json);
 
-        await Excel.run(async (context) => {
-            const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-            const EXCEL_CELL_CHAR_LIMIT = 32000; // límite real de Excel: 32767
-            const jsonForCell = json.length > EXCEL_CELL_CHAR_LIMIT
-                ? json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
-                : json;
-            // [Punto 8] JSON ya no se escribe en B1 de la hoja de resultados:
-            // se escribe en EDIT_REPORT!Y1.
-            editReportSheet.getRange("Y1").values = [[jsonForCell]];
-            await context.sync();
-        });
+    await Excel.run(async (context) => {
+        const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+        const EXCEL_CELL_CHAR_LIMIT = 32000; // límite real de Excel: 32767
+        const jsonForCell = json.length > EXCEL_CELL_CHAR_LIMIT
+            ? json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
+            : json;
+        // [Punto 8] JSON ya no se escribe en B1 de la hoja de resultados:
+        // se escribe en EDIT_REPORT!Y1.
+        editReportSheet.getRange("Y1").values = [[jsonForCell]];
+        await context.sync();
+    });
 
-        await Excel.run(async (context) => {
-            await jsonTo3Matrices(context, json, reportId);
-        });
-    } finally {
-        DracoSuppressChangeEvents = false;
-    }
+    await Excel.run(async (context) => {
+        await jsonTo3Matrices(context, json, reportId);
+    });
 }
 
 /**
@@ -5802,18 +5631,6 @@ async function actualizarTodosCore(concurrency) {
     const reports = window.ReportStore.listReports();
     if (!reports || reports.length === 0) return;
 
-    // Igual que en actualizarInformeCore/actualizarInformeFixedCore: cubre
-    // TODA la operación (incluida la fase de consultas en paralelo del
-    // paso 2, la más larga de todas), no solo el pintado de cada informe.
-    DracoSuppressChangeEvents = true;
-    try {
-        await actualizarTodosCoreInner(concurrency, reports);
-    } finally {
-        DracoSuppressChangeEvents = false;
-    }
-}
-
-async function actualizarTodosCoreInner(concurrency, reports) {
     const dynamicJobs = [];
     const fixedReports = [];
 
@@ -5841,7 +5658,6 @@ async function actualizarTodosCoreInner(concurrency, reports) {
                     const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
                     const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
                     loadReportDefinition(editReportGrid, reportId);
-                    applyFilterMeasuresToDynamicReport();
                     const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
                     sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
                 });
@@ -5934,48 +5750,6 @@ function comingSoon(event) {
     console.log("Esta función todavía no está implementada.");
     if (event) {
         event.completed();
-    }
-}
-
-/* ---------------------------------------------------------------------
- * PLANIFICACIÓN > Guardar (botón del ribbon "PlanifGuardarButton").
- * De momento, primer paso: vuelca en EDIT_REPORT!T5 las direcciones (en
- * Draco_<id>_Values del informe activo) que se han ido registrando en
- * memoria desde el último guardado (ver handleDracoPlanningValueChanged /
- * DracoPlanningEditedCells más arriba) y vacía esa memoria.
- * PENDIENTE (no pedido todavía): generar el INSERT a partir de esas
- * celdas, revisión en EDIT_REPORT!V4 y ejecución.
- * ------------------------------------------------------------------- */
-async function guardarPlanificacion(event) {
-    try {
-        const reportId = activeReportIdOrNull();
-        const key = dracoPlanningKey(reportId);
-        const editedCells = DracoPlanningEditedCells.get(key);
-        const addresses = editedCells ? Array.from(editedCells) : [];
-
-        await Excel.run(async (context) => {
-            const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
-            editReport.load("isNullObject");
-            await context.sync();
-            if (editReport.isNullObject) {
-                console.warn("[Draco] guardarPlanificacion: no existe la hoja EDIT_REPORT todavía.");
-                return;
-            }
-
-            editReport.getRange("T5").values = [[addresses.join(",")]];
-            await context.sync();
-        });
-
-        // Una vez volcadas, se borran de memoria (tanto si había alguna
-        // como si la lista estaba vacía: igual se deja limpio el Set).
-        DracoPlanningEditedCells.delete(key);
-        console.log("[Draco] guardarPlanificacion: celdas volcadas en EDIT_REPORT!T5 y memoria vaciada ->", addresses);
-    } catch (e) {
-        console.error("[Draco] Error en guardarPlanificacion:", e);
-    } finally {
-        if (event) {
-            event.completed();
-        }
     }
 }
 
@@ -6371,7 +6145,6 @@ try {
     Office.actions.associate("openFieldOptions", openFieldOptions);
     Office.actions.associate("abrirDistribuirValores", abrirDistribuirValores);
     Office.actions.associate("abrirAnadirFiltro", abrirAnadirFiltro);
-    Office.actions.associate("guardarPlanificacion", guardarPlanificacion);
     Office.actions.associate("guardarExcelEnBucket", guardarExcelEnBucket);
     Office.actions.associate("abrirDesdeBucket", abrirDesdeBucket);
 } catch (e) {
