@@ -134,8 +134,7 @@ const TaskPaneApp = {
         suppressZeroCols: false,
         subtotalsOnTop: false,
         overwriteFormats: true,
-        autoFitColumns: true,
-        planningReport: false
+        autoFitColumns: true
     },
 
     // Campo actualmente seleccionado en el panel "Opciones de campo"
@@ -430,7 +429,6 @@ const TaskPaneApp = {
         await safeStep("bindEvents", () => this.bindEvents());
         await safeStep("initRefreshPauseButton", () => this.initRefreshPauseButton());
         await safeStep("registerPendingRibbonActionListener", () => this.registerPendingRibbonActionListener());
-        await safeStep("loadReportPropertiesFromSettings", () => this.loadReportPropertiesFromSettings());
 
         // Botón del ribbon "Editar informe" (EditarInformeButton -> Show
         // Taskpane -> TaskpaneId="Taskpane"): abrir el taskpane NO cambia
@@ -443,6 +441,16 @@ const TaskPaneApp = {
         // Selector de informes ("Informe") + selector de modelo semántico
         // (justo encima del buscador de campo): determina currentReportId.
         await safeStep("initReportAndModelSelectors", () => this.initReportAndModelSelectors());
+
+        // Propiedades del informe (modal "Propiedades del informe"): hay
+        // que leerlas DESPUÉS de initReportAndModelSelectors(), que es
+        // quien fija this.currentReportId (antes se llamaba aquí mismo
+        // pero justo antes de ese paso, así que su condición
+        // "if (this.currentReportId && ...)" siempre fallaba y nunca
+        // llegaba a leer nada de Office roaming settings: se quedaba todo
+        // el rato con los valores por defecto del código, como si nunca
+        // se hubieran guardado).
+        await safeStep("loadReportPropertiesFromSettings", () => this.loadReportPropertiesFromSettings());
 
         // loadFields() es lo más importante de esta pantalla (el árbol de
         // campos de la izquierda), pero solo tiene sentido si ya hay un
@@ -617,6 +625,55 @@ const TaskPaneApp = {
 
         const btnConfirmAddFilterRange = document.getElementById("btnConfirmAddFilterRange");
         if (btnConfirmAddFilterRange) btnConfirmAddFilterRange.addEventListener("click", () => this.createFilterRangeFromModal());
+
+        // Modal de confirmación genérico (ver showConfirmDialog): los tres
+        // botones solo resuelven la promesa pendiente, guardada en
+        // this._confirmDialogResolve por cada llamada.
+        const btnAcceptConfirmDialog = document.getElementById("btnAcceptConfirmDialog");
+        if (btnAcceptConfirmDialog) btnAcceptConfirmDialog.addEventListener("click", () => this.resolveConfirmDialog(true));
+        const btnCancelConfirmDialog = document.getElementById("btnCancelConfirmDialog");
+        if (btnCancelConfirmDialog) btnCancelConfirmDialog.addEventListener("click", () => this.resolveConfirmDialog(false));
+        const btnCloseConfirmDialog = document.getElementById("closeConfirmDialogBtn");
+        if (btnCloseConfirmDialog) btnCloseConfirmDialog.addEventListener("click", () => this.resolveConfirmDialog(false));
+    },
+
+    /* -------------------------------------------------------------
+     * Sustituto de window.confirm(): Excel bloquea/ignora los diálogos
+     * nativos del navegador dentro del WebView del taskpane, así que un
+     * confirm() ahí nunca llega a resolverse (por eso la "×" de un filtro
+     * global no borraba nada). Este modal hace lo mismo con el mismo
+     * patrón que el resto de modales de la app (modal-backdrop/dialog).
+     * Devuelve una Promise<boolean>: true si el usuario pulsa "Aceptar",
+     * false si cancela, cierra con la "×" o pulsa fuera del diálogo.
+     * ----------------------------------------------------------- */
+    showConfirmDialog(message, options) {
+        const opts = options || {};
+        const modal = document.getElementById("confirmDialogModal");
+        if (!modal) return Promise.resolve(false); // por si el HTML no está (defensivo)
+
+        const titleEl = document.getElementById("confirmDialogTitle");
+        const messageEl = document.getElementById("confirmDialogMessage");
+        const acceptBtn = document.getElementById("btnAcceptConfirmDialog");
+        if (titleEl) titleEl.textContent = opts.title || "Confirmar";
+        if (messageEl) messageEl.textContent = message || "";
+        if (acceptBtn) acceptBtn.textContent = opts.confirmLabel || "Aceptar";
+
+        // Si ya había una confirmación pendiente (no debería, pero por si
+        // acaso), se cancela antes de abrir la nueva para no dejarla colgada.
+        if (this._confirmDialogResolve) this._confirmDialogResolve(false);
+
+        modal.style.display = "flex";
+        return new Promise((resolve) => {
+            this._confirmDialogResolve = resolve;
+        });
+    },
+
+    resolveConfirmDialog(result) {
+        const modal = document.getElementById("confirmDialogModal");
+        if (modal) modal.style.display = "none";
+        const resolve = this._confirmDialogResolve;
+        this._confirmDialogResolve = null;
+        if (resolve) resolve(result);
     },
 
     /* -------------------------------------------------------------
@@ -1113,8 +1170,7 @@ const TaskPaneApp = {
                 suppressZeroCols: false,
                 subtotalsOnTop: false,
                 overwriteFormats: true,
-                autoFitColumns: true,
-                planningReport: false
+                autoFitColumns: true
             });
             RangeAxis.loadFromAddresses("", "", "");
 
@@ -1647,7 +1703,10 @@ const TaskPaneApp = {
 
         tag.querySelector(".dropped-tag-remove").addEventListener("click", async (e) => {
             e.stopPropagation();
-            const ok = confirm(`¿Eliminar el filtro "${fieldLabel}"?\n\nEsto borra también el rango con nombre "${rangeName}" en Excel (no solo la etiqueta).`);
+            const ok = await this.showConfirmDialog(
+                `¿Eliminar el filtro "${fieldLabel}"?\n\nEsto borra también el rango con nombre "${rangeName}" en Excel (no solo la etiqueta).`,
+                { title: "Eliminar filtro", confirmLabel: "Eliminar" }
+            );
             if (!ok) return;
             await this.deleteLockedFilterRange(rangeName);
         });
@@ -1758,7 +1817,6 @@ const TaskPaneApp = {
         document.getElementById("propSubtotalsOnTop").checked = !!this.reportProperties.subtotalsOnTop;
         document.getElementById("propOverwriteFormats").checked = !!this.reportProperties.overwriteFormats;
         document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
-        document.getElementById("propPlanningReport").checked = !!this.reportProperties.planningReport;
 
         modal.style.display = "flex";
         this.updateRibbonToggleLabel("BtnPropiedadesInforme", "Propiedades", true);
@@ -1781,8 +1839,7 @@ const TaskPaneApp = {
             suppressZeroCols: document.getElementById("propSuppressZeroCols").checked,
             subtotalsOnTop: document.getElementById("propSubtotalsOnTop").checked,
             overwriteFormats: document.getElementById("propOverwriteFormats").checked,
-            autoFitColumns: document.getElementById("propAutoFitColumns").checked,
-            planningReport: document.getElementById("propPlanningReport").checked
+            autoFitColumns: document.getElementById("propAutoFitColumns").checked
         };
 
         const btn = document.getElementById("btnSaveProperties");
