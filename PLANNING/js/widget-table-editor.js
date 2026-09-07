@@ -417,7 +417,7 @@ const WidgetTableEditor = {
     MIN_ROW_HEIGHT: 18,
     BUFFER_PX: 200,
 
-    FONTS: ["Arial", "Calibri", "Georgia", "Courier New", "Verdana", "Tahoma"],
+    FONTS: ["Segoe UI", "Arial", "Calibri", "Georgia", "Courier New", "Verdana", "Tahoma", "Times New Roman", "Trebuchet MS"],
     SIZES: [9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36],
 
     async open(widgetRow, project = null) {
@@ -707,7 +707,7 @@ const WidgetTableEditor = {
             // y con la conexión ya autenticada de esta app (provider-bridge.js).
             const iframe = document.createElement("iframe");
             iframe.className = "wte-taskpane-frame";
-            iframe.src = "widget-taskpane/taskpane.html?v=20260906h";
+            iframe.src = "widget-taskpane/taskpane.html?v=20260906j";
             panel.appendChild(iframe);
             this._taskpaneFrame = iframe;
             if (!resizer._wired) {
@@ -751,8 +751,11 @@ const WidgetTableEditor = {
     // Llama a una función de comando del taskpane (commands.js) dentro del
     // iframe, con el mismo "event" con .completed() que espera un botón de
     // la cinta real de Excel.
-    callTaskpaneCommand(fnName) {
+    async callTaskpaneCommand(fnName) {
         if (!this._reportPanelOpen) this.toggleReportPanel();
+        try {
+            await this.waitForTaskpaneReady();
+        } catch (e) { /* sigue igualmente; el chequeo de abajo cubre el caso de que no cargara */ }
         const win = this._taskpaneFrame && this._taskpaneFrame.contentWindow;
         if (!win || typeof win[fnName] !== "function") {
             UI.toast("El panel de informe todavía se está cargando, espera un segundo y vuelve a intentarlo.", "info");
@@ -851,10 +854,19 @@ const WidgetTableEditor = {
             const check = () => {
                 const win = iframe.contentWindow;
                 if (win && win.__wteModelsReadyPromise) {
-                    win.__wteModelsReadyPromise.then(() => {
-                        iframe._wteReady = true;
-                        resolve();
-                    });
+                    // Dos señales encadenadas: primero que los modelos
+                    // semánticos estén listos (deja arrancar Office.onReady),
+                    // y LUEGO que TaskPaneApp.init() haya terminado del todo
+                    // (fija el informe activo, carga su diseño...). Sin
+                    // esperar también a esta segunda, actualizar() podía
+                    // llamarse antes de que hubiera informe activo y se
+                    // quedaba sin refrescar SQL ni datos.
+                    win.__wteModelsReadyPromise
+                        .then(() => win.__wteInitDonePromise || Promise.resolve())
+                        .then(() => {
+                            iframe._wteReady = true;
+                            resolve();
+                        });
                 } else {
                     setTimeout(check, 100);
                 }
