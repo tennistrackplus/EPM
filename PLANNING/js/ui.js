@@ -642,6 +642,120 @@ const UI = {
     },
 
     /**
+     * Selector "Bucket -> fichero .xlsx" para tareas de tipo Plantilla
+     * Excel (ver Workflows.addTask/editTask). El proyecto de Google Cloud
+     * ya se conoce (BQ.getGcpProject()), así que solo hace falta elegir
+     * bucket y fichero — mismo flujo que ADDIN/src/bucketBrowser.html,
+     * sin el selector de proyecto.
+     * Devuelve Promise<{ bucket, name } | null>.
+     */
+    openBucketExcelPickerModal() {
+        return new Promise((resolve) => {
+            let overlay = document.getElementById("bucketXlsxPickerModal");
+            if (!overlay) {
+                overlay = document.createElement("div");
+                overlay.className = "modal-overlay";
+                overlay.id = "bucketXlsxPickerModal";
+                document.body.appendChild(overlay);
+            }
+            document.body.appendChild(overlay);
+
+            overlay.innerHTML = `
+                <div class="modal-box modal-wide">
+                    <div class="modal-header">
+                        <h3>Seleccionar plantilla Excel</h3>
+                        <button class="modal-close" id="bxPickerClose">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <label class="dim-picker-search" style="display:block;margin-bottom:6px;">Bucket</label>
+                        <select id="bxPickerBucket" class="dim-picker-search" style="margin-bottom:12px;">
+                            <option value="">Cargando buckets…</option>
+                        </select>
+                        <div id="bxPickerStatus" style="font-size:12px;color:var(--text-muted,#888);margin-bottom:8px;"></div>
+                        <div class="dim-picker-table-wrap">
+                            <table class="dim-picker-table">
+                                <thead><tr><th>Fichero</th><th>Tamaño</th><th>Modificado</th></tr></thead>
+                                <tbody id="bxPickerRows"><tr><td colspan="3" class="dim-picker-empty">Elige un bucket para ver sus ficheros .xlsx.</td></tr></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>`;
+
+            const bucketSelect = overlay.querySelector("#bxPickerBucket");
+            const statusEl = overlay.querySelector("#bxPickerStatus");
+            const rowsEl = overlay.querySelector("#bxPickerRows");
+
+            const cleanup = (result) => {
+                overlay.classList.remove("visible");
+                resolve(result);
+            };
+
+            function fmtSize(bytes) {
+                const n = Number(bytes) || 0;
+                if (n < 1024) return n + " B";
+                if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+                return (n / (1024 * 1024)).toFixed(1) + " MB";
+            }
+            function fmtDate(iso) {
+                try { return new Date(iso).toLocaleString(); } catch (e) { return iso || ""; }
+            }
+
+            async function loadFiles(bucket) {
+                rowsEl.innerHTML = `<tr><td colspan="3" class="dim-picker-empty">Cargando ficheros…</td></tr>`;
+                statusEl.textContent = "";
+                try {
+                    const items = await GCS.listXlsxObjects(bucket);
+                    if (!items.length) {
+                        rowsEl.innerHTML = `<tr><td colspan="3" class="dim-picker-empty">No hay ficheros .xlsx en este bucket todavía.</td></tr>`;
+                        return;
+                    }
+                    rowsEl.innerHTML = items.map(item => `
+                        <tr data-pick="${UI.escapeHtml(item.name)}">
+                            <td><strong>${UI.escapeHtml(item.name)}</strong></td>
+                            <td>${fmtSize(item.size)}</td>
+                            <td>${fmtDate(item.updated)}</td>
+                        </tr>`).join("");
+                    rowsEl.querySelectorAll("[data-pick]").forEach(tr => {
+                        tr.addEventListener("click", () => cleanup({ bucket, name: tr.dataset.pick }));
+                    });
+                } catch (err) {
+                    rowsEl.innerHTML = "";
+                    statusEl.textContent = "Error al listar el bucket: " + (err.message || err);
+                    statusEl.style.color = "#c0392b";
+                }
+            }
+
+            async function loadBuckets() {
+                try {
+                    const buckets = await GCS.listBuckets();
+                    if (!buckets.length) {
+                        bucketSelect.innerHTML = `<option value="">Este proyecto no tiene buckets</option>`;
+                        statusEl.textContent = "No se encontró ningún bucket en este proyecto (o no tienes permiso para verlos).";
+                        statusEl.style.color = "#c0392b";
+                        return;
+                    }
+                    bucketSelect.innerHTML = `<option value="">Selecciona un bucket…</option>` +
+                        buckets.map(name => `<option value="${UI.escapeHtml(name)}">${UI.escapeHtml(name)}</option>`).join("");
+                } catch (err) {
+                    bucketSelect.innerHTML = `<option value="">Error al cargar buckets</option>`;
+                    statusEl.textContent = "Error al listar buckets: " + (err.message || err);
+                    statusEl.style.color = "#c0392b";
+                }
+            }
+
+            bucketSelect.addEventListener("change", (e) => {
+                if (e.target.value) loadFiles(e.target.value);
+                else rowsEl.innerHTML = `<tr><td colspan="3" class="dim-picker-empty">Elige un bucket para ver sus ficheros .xlsx.</td></tr>`;
+            });
+
+            overlay.classList.add("visible");
+            loadBuckets();
+
+            overlay.querySelector("#bxPickerClose").onclick = () => cleanup(null);
+        });
+    },
+
+    /**
      * Prompt de una sola línea reutilizable (ej. valor de una constante).
      * Devuelve Promise<string|null>.
      */

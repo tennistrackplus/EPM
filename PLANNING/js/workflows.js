@@ -63,7 +63,7 @@ const Workflows = {
         PARAMETRIZACION: { label: "Actualización de tablas", icon: "🗄", catalog: "ACTUALIZACION" },
         FLUJO_MANUAL: { label: "Flujos de carga", icon: "☺", catalog: "FLUJO" },
         MANTENIMIENTO_DIMENSION: { label: "Mantenimiento de dimensiones", icon: "🧩", catalog: "DIMENSION" },
-        PLANTILLA_EXCEL: { label: "Plantillas Excel", icon: "📊" },
+        PLANTILLA_EXCEL: { label: "Plantillas Excel", icon: "📊", catalog: "BUCKET_XLSX" },
         PLANTILLA_WEB: { label: "Plantillas Web", icon: "🌐" },
         FUNCION: { label: "Funciones", icon: "ƒ" },
         HTML: { label: "Páginas HTML", icon: "⌗" },
@@ -1109,7 +1109,18 @@ const Workflows = {
             return;
         }
 
-        // Plantillas Excel/Web, Funciones, Páginas HTML: todavía sin catálogo
+        if (typeInfo.catalog === "BUCKET_XLSX") {
+            const picked = await UI.openBucketExcelPickerModal();
+            if (!picked) return;
+            block.tareas.push({
+                id: Provider.newId(), tipo, nombre: name, descripcion: description,
+                refId: JSON.stringify({ bucket: picked.bucket, name: picked.name }),
+                refNombre: picked.name, valores: []
+            });
+            return;
+        }
+
+        // Plantillas Web, Funciones, Páginas HTML: todavía sin catálogo
         // propio — la referencia es el nombre que se acaba de escribir arriba.
         block.tareas.push({ id: Provider.newId(), tipo, nombre: name, descripcion: description, refId: null, refNombre: name, valores: [] });
     },
@@ -1152,6 +1163,15 @@ const Workflows = {
                 if (dimId) {
                     const dim = this.dimensionById(dimId);
                     task.refId = dimId; task.refNombre = dim ? dim.DIMENSION : "";
+                }
+            }
+        } else if (typeInfo.catalog === "BUCKET_XLSX") {
+            const changeRef = await UI.confirm("Cambiar plantilla Excel", `Referencia actual: <strong>${UI.escapeHtml(task.refNombre || "—")}</strong>.<br>¿Quieres elegir otra plantilla del bucket?`);
+            if (changeRef) {
+                const picked = await UI.openBucketExcelPickerModal();
+                if (picked) {
+                    task.refId = JSON.stringify({ bucket: picked.bucket, name: picked.name });
+                    task.refNombre = picked.name;
                 }
             }
         } else {

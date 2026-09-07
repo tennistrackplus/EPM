@@ -626,7 +626,7 @@ const MyTasks = {
 
     taskCardHtml(task) {
         const typeInfo = Workflows.TASK_TYPES[task.tipo] || { label: task.tipo, icon: "•" };
-        const executable = task.tipo === "PARAMETRIZACION" || task.tipo === "FLUJO_MANUAL" || task.tipo === "MANTENIMIENTO_DIMENSION";
+        const executable = task.tipo === "PARAMETRIZACION" || task.tipo === "FLUJO_MANUAL" || task.tipo === "MANTENIMIENTO_DIMENSION" || task.tipo === "PLANTILLA_EXCEL";
         return `
             <div class="wf-task-card mt-task-card" data-mt-task="${task.id}">
                 <div class="wf-task-card-header">
@@ -686,6 +686,20 @@ const MyTasks = {
                 await DimensionData.render(this.project, rows[0]);
             } catch (err) {
                 UI.toast("Error al abrir el mantenimiento de la dimensión: " + err.message, "error");
+            }
+            return;
+        }
+
+        if (task.tipo === "PLANTILLA_EXCEL") {
+            if (!task.refId) { UI.toast("Esta tarea no tiene una plantilla Excel asignada.", "error"); return; }
+            let ref;
+            try { ref = JSON.parse(task.refId); } catch (e) { ref = null; }
+            if (!ref || !ref.bucket || !ref.name) { UI.toast("La referencia de la plantilla no es válida.", "error"); return; }
+            try {
+                UI.toast(`Descargando "${ref.name}"…`, "info");
+                await GCS.downloadObjectToBrowser(ref.bucket, ref.name);
+            } catch (err) {
+                UI.toast("Error al descargar la plantilla: " + err.message, "error");
             }
             return;
         }
