@@ -363,6 +363,27 @@
         </div>
     </div>
 
+    <!-- Modal de confirmación genérico: sustituye a window.confirm(), que
+         Excel bloquea/ignora en su WebView del taskpane (por eso el botón
+         "×" de un filtro global no llegaba a borrar nada: el confirm()
+         nunca se resolvía). Se reutiliza desde JS con
+         TaskPaneApp.showConfirmDialog(mensaje, {title, confirmLabel}). -->
+    <div id="confirmDialogModal" class="modal-backdrop" style="display: none;">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3 id="confirmDialogTitle">Confirmar</h3>
+                <button id="closeConfirmDialogBtn" class="modal-close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="confirmDialogMessage" style="margin:0; white-space: pre-line;"></p>
+            </div>
+            <div class="modal-footer">
+                <button id="btnCancelConfirmDialog" class="btn-secondary">Cancelar</button>
+                <button id="btnAcceptConfirmDialog" class="btn-primary">Aceptar</button>
+            </div>
+        </div>
+    </div>
+
     <script src="js/config.js"></script>
     <script src="js/bigquery.js"></script>
     <script src="js/gcsExport.js"></script>
