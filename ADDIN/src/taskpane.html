@@ -12,8 +12,1216 @@
     <link rel="stylesheet" href="css/styles.css">
     <link rel="stylesheet" href="css/modal.css">
     <link rel="stylesheet" href="css/distributeValues.css">
+
+    <style>
+        /* ===================================================
+           Vistas de nivel superior fusionadas para Shared
+           Runtime (antes: login.html / semantic_model.html /
+           taskpane.html eran 3 paginas independientes; con
+           Shared Runtime solo puede existir UN task pane, asi
+           que ahora conviven las 3 como bloques ocultables en
+           el mismo documento). Solo una tiene la clase
+           "epm-page-view--active" a la vez; el cambio lo hace
+           mostrarVistaEpm() en js/taskpane.js.
+           ================================================= */
+        .epm-page-view {
+            display: none;
+            height: 100%;
+        }
+        .epm-page-view.epm-page-view--active {
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ---- Estilos propios de la vista "Conexion" (antes login.html) ---- */
+
+        #view-conexion {
+            height: 100%;
+            overflow: hidden;
+        }
+
+        .login-shell {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .login-container {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            padding: 8px 14px 14px;
+        }
+
+        .view {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .view.hidden {
+            display: none;
+        }
+
+        .login-lead {
+            flex-shrink: 0;
+            margin-bottom: 10px;
+        }
+
+        .login-lead h2 {
+            font-size: var(--fs-lg);
+            font-weight: 700;
+            color: var(--text-primary);
+            margin: 0 0 3px 0;
+        }
+
+        .login-lead p {
+            font-size: var(--fs-sm);
+            color: var(--text-muted);
+        }
+
+        /* ---------------------------------------------------- */
+        /* Vista LISTA: conexiones guardadas                     */
+        /* ---------------------------------------------------- */
+        .connections-list {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding-right: 2px;
+            margin-bottom: 10px;
+        }
+
+        .empty-state {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: var(--fs-sm);
+            padding: 20px 10px;
+            gap: 6px;
+        }
+
+        .empty-state strong {
+            color: var(--text-secondary);
+            font-size: var(--fs-base);
+        }
+
+        .conn-card {
+            background: var(--surface-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-xs);
+            padding: 10px 10px 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            cursor: pointer;
+            transition: border-color var(--transition-base), box-shadow var(--transition-base);
+            flex-shrink: 0;
+        }
+
+        .conn-card:hover {
+            border-color: var(--brand-primary);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .conn-card.active {
+            border: 1.5px solid var(--brand-primary);
+            background-color: var(--brand-primary-light);
+        }
+
+        .conn-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .conn-icon {
+            width: 32px;
+            height: 32px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-md);
+            overflow: hidden;
+        }
+
+        .conn-icon img {
+            width: 32px;
+            height: 32px;
+            object-fit: contain;
+            display: block;
+        }
+
+        .conn-details {
+            min-width: 0;
+        }
+
+        .conn-details h3 {
+            font-size: var(--fs-md);
+            font-weight: 600;
+            margin: 0;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .conn-details span {
+            font-size: var(--fs-xs);
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: block;
+        }
+
+        .conn-side {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+
+        .badge-status {
+            flex-shrink: 0;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 3px 9px;
+            border-radius: var(--radius-pill);
+            background-color: var(--gray-100);
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .badge-status.connected {
+            background-color: var(--color-success-light);
+            color: var(--color-success);
+        }
+
+        .btn-icon {
+            width: 24px;
+            height: 24px;
+            flex-shrink: 0;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            border-radius: var(--radius-sm);
+            cursor: pointer;
+            font-size: 14px;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color var(--transition-fast), color var(--transition-fast);
+        }
+
+        .btn-icon:hover {
+            background-color: var(--gray-100);
+            color: var(--text-secondary);
+        }
+
+        .btn-icon.danger:hover {
+            background-color: var(--color-danger-light);
+            color: var(--color-danger);
+        }
+
+        .btn-icon.confirm-danger {
+            background-color: var(--color-danger-light);
+            color: var(--color-danger);
+        }
+
+        /* ---------------------------------------------------- */
+        /* Vista CREAR: nombre + selector de proveedor + campos  */
+        /* ---------------------------------------------------- */
+        .create-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 2px;
+            min-height: 0;
+        }
+
+        .field-group {
+            margin-bottom: 12px;
+        }
+
+        .field-group label {
+            display: block;
+            font-size: var(--fs-xs);
+            font-weight: 600;
+            color: var(--text-muted);
+            margin-bottom: 4px;
+        }
+
+        .field-group input,
+        .field-group select {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-sm);
+            font-size: var(--fs-sm);
+            font-family: var(--font-family);
+            box-sizing: border-box;
+            background: var(--surface-card);
+            color: var(--text-primary);
+        }
+
+        .section-label {
+            font-size: var(--fs-xs);
+            font-weight: 600;
+            color: var(--text-muted);
+            margin: 2px 0 6px;
+        }
+
+        .connectors-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .connector-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .connector-card {
+            background: var(--surface-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-md);
+            box-shadow: var(--shadow-xs);
+            padding: 10px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            transition: border-color var(--transition-base), box-shadow var(--transition-base), background-color var(--transition-base);
+            user-select: none;
+            flex-shrink: 0;
+            position: relative;
+            z-index: 1;
+        }
+
+        .connector-item .connector-card {
+            border-radius: var(--radius-md);
+        }
+
+        .connector-item .connector-card.selected {
+            border-bottom-left-radius: 0;
+            border-bottom-right-radius: 0;
+            border-bottom-color: transparent;
+        }
+
+        .connector-card:hover {
+            border-color: var(--brand-primary);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .connector-card.selected {
+            border: 1.5px solid var(--brand-primary);
+            background-color: var(--brand-primary-light);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .connector-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .connector-icon {
+            width: 34px;
+            height: 34px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-md);
+            overflow: hidden;
+        }
+
+        .connector-icon img {
+            width: 34px;
+            height: 34px;
+            object-fit: contain;
+            display: block;
+        }
+
+        .connector-details {
+            min-width: 0;
+        }
+
+        .connector-details h3 {
+            font-size: var(--fs-md);
+            font-weight: 600;
+            margin: 0;
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .connector-details span {
+            font-size: var(--fs-sm);
+            color: var(--text-muted);
+        }
+
+        .tag-soon {
+            flex-shrink: 0;
+            font-size: 10px;
+            font-weight: 600;
+            padding: 3px 9px;
+            border-radius: var(--radius-pill);
+            background-color: var(--gray-100);
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .toast-message {
+            display: none;
+            padding: 9px 12px;
+            border-radius: var(--radius-md);
+            font-size: var(--fs-sm);
+            margin-bottom: 8px;
+            word-break: break-word;
+            flex-shrink: 0;
+        }
+
+        .toast-message.visible {
+            display: block;
+        }
+
+        .toast-message.info {
+            background-color: var(--color-info-light);
+            color: var(--brand-primary-hover);
+            border: 1px solid #D7E3FC;
+        }
+
+        .toast-message.error {
+            background-color: var(--color-danger-light);
+            color: var(--color-danger);
+            border: 1px solid #F3C9C6;
+        }
+
+        .provider-config-panel {
+            display: none;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 0;
+            overflow: hidden;
+            padding: 0 12px;
+            background: var(--surface-page);
+            border: 1px solid var(--border-subtle);
+            border-top: none;
+            border-bottom-left-radius: var(--radius-md);
+            border-bottom-right-radius: var(--radius-md);
+            transition: max-height var(--transition-base), padding var(--transition-base);
+        }
+
+        .provider-config-panel.visible {
+            display: flex;
+            max-height: 600px;
+            padding: 12px;
+            margin-bottom: 8px;
+        }
+
+        .provider-config-panel label {
+            font-size: var(--fs-xs);
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .provider-config-panel input,
+        .provider-config-panel select {
+            padding: 8px 10px;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-sm);
+            font-size: var(--fs-sm);
+            font-family: var(--font-family);
+            background: var(--surface-card);
+            color: var(--text-primary);
+        }
+
+        .provider-config-panel .hint {
+            font-size: 10px;
+            font-weight: 400;
+            color: var(--text-muted);
+            margin-top: -2px;
+        }
+
+        .action-footer {
+            flex-shrink: 0;
+            padding-top: 10px;
+            border-top: 1px solid var(--border-subtle);
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-action {
+            background-color: var(--brand-primary);
+            color: var(--text-inverse);
+            border: none;
+            padding: 12px;
+            border-radius: var(--radius-md);
+            font-weight: 700;
+            font-size: var(--fs-base);
+            cursor: pointer;
+            width: 100%;
+            transition: background-color var(--transition-fast), box-shadow var(--transition-fast);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .btn-action:hover {
+            background-color: var(--brand-primary-hover);
+        }
+
+        .btn-action.btn-secondary {
+            background-color: var(--gray-100);
+            color: var(--text-secondary);
+            box-shadow: none;
+            flex: 0 0 auto;
+            width: auto;
+            padding-left: 16px;
+            padding-right: 16px;
+        }
+
+        .btn-action.btn-secondary:hover {
+            background-color: var(--gray-200);
+        }
+
+        .btn-action:disabled {
+            background-color: var(--gray-200);
+            color: var(--text-muted);
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+    
+        /* ---- Estilos propios de la vista "Modelo semantico" (antes semantic_model.html) ---- */
+
+        * {
+            box-sizing: border-box;
+        }
+
+        #view-modelo {
+            min-height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f8fafc;
+            color: #0f172a;
+            overflow-y: auto;
+        }
+
+        .page-content {
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            gap: 8px;
+            box-sizing: border-box;
+        }
+
+        h3, h4 {
+            color: var(--text-primary, #0f172a);
+            margin: 0;
+        }
+
+        h3 {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+        }
+
+        h4 {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: var(--text-muted, #64748b);
+            margin: 12px 0 6px 0;
+        }
+
+        .card {
+            background: #ffffff;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 10px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+        }
+
+        .card.compact {
+            padding: 8px 10px;
+        }
+
+        .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+
+        .card-title-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .card-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: #1e293b;
+        }
+
+        .info-icon, .eye-icon {
+            font-size: 13px;
+            color: #64748b;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .form-group {
+            margin-bottom: 8px;
+        }
+
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+
+        label {
+            display: block;
+            font-size: 10px;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin-bottom: 4px;
+        }
+
+        /* ---- Gestión de modelos semánticos y acciones ---- */
+        .model-manager-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .btn-generate {
+            height: 24px;
+            padding: 0 8px;
+            background-color: #2563eb;
+            color: #ffffff;
+            border: none;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background-color 0.15s ease;
+        }
+
+        .btn-generate:hover {
+            background-color: #1d4ed8;
+        }
+
+        .icon-btn {
+            width: 24px;
+            height: 24px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            border: 1px solid #cbd5e1;
+            background-color: #ffffff;
+            color: #334155;
+            font-size: 13px;
+            line-height: 1;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+
+        .icon-btn:hover {
+            background-color: #f1f5f9;
+            color: #0f172a;
+            border-color: #94a3b8;
+        }
+
+        .icon-btn.danger:hover {
+            background-color: #fef2f2;
+            color: #ef4444;
+            border-color: #fca5a5;
+        }
+
+        select, input[type="text"] {
+            width: 100%;
+            height: 30px;
+            padding: 0 8px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            background-color: #ffffff;
+            font-size: 11px;
+            color: #0f172a;
+            outline: none;
+            transition: border-color 0.15s ease;
+        }
+
+        select:focus, input[type="text"]:focus {
+            border-color: #2563eb;
+        }
+
+        #modelSelectorContainer {
+            width: 100%;
+        }
+
+        #modelSelectorContainer select, 
+        #modelSelectorContainer input {
+            width: 100%;
+        }
+
+        /* Estilo de ayuda de búsqueda para Tabla de Hechos */
+        .sap-search-input-group {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .sap-search-input-group .table-icon {
+            position: absolute;
+            left: 8px;
+            font-size: 13px;
+            color: #475569;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .sap-search-input-group input[type="text"] {
+            padding-left: 28px;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            background-color: #ffffff;
+        }
+
+        .sap-search-btn {
+            display: none; /* Mantenido para compatibilidad JS */
+        }
+
+        /* ---- Sección de Campos ---- */
+        .fields-card {
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+        }
+
+        .fields-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-top: 4px;
+        }
+
+        .field-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            height: 34px;
+            padding: 0 2px;
+            border-bottom: 1px solid #f1f5f9;
+            cursor: pointer;
+            box-sizing: border-box;
+        }
+
+        .field-row:last-child {
+            border-bottom: none;
+        }
+
+        .field-enable {
+            width: 14px;
+            height: 14px;
+            margin: 0;
+            flex-shrink: 0;
+            cursor: pointer;
+            accent-color: #2563eb;
+        }
+
+        .field-type {
+            width: 58px;
+            height: 24px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            background-color: #f8fafc;
+            color: #334155;
+            font-size: 9px;
+            font-weight: 700;
+            padding: 0 2px;
+            flex-shrink: 0;
+            text-align: center;
+        }
+
+        .field-info {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            min-width: 0;
+        }
+
+        /* Ocultar el nombre técnico para evitar desalineaciones */
+        .field-name {
+            display: none !important;
+        }
+
+        .field-alias-input {
+            width: 100%;
+            height: 24px;
+            padding: 0 6px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            background: #ffffff;
+            font-size: 11px;
+            font-weight: 600;
+            color: #0f172a;
+            outline: none;
+        }
+
+        .field-alias-input:focus {
+            border-color: #2563eb;
+        }
+
+        .field-arrow {
+            width: 22px;
+            height: 22px;
+            border: 1px solid #cbd5e1;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #64748b;
+            font-size: 12px;
+            flex-shrink: 0;
+            background: #ffffff;
+        }
+
+        /* Botón genérico para modales */
+        .btn {
+            width: 100%;
+            height: 34px;
+            background-color: #2563eb;
+            color: #ffffff;
+            border: none;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background-color 0.15s ease;
+        }
+
+        .btn:hover {
+            background-color: #1d4ed8;
+        }
+
+        /* Modales */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(15, 27, 51, 0.45);
+            backdrop-filter: blur(1px);
+            z-index: 100;
+            overflow-y: auto;
+        }
+
+        #treeModal {
+            z-index: 200;
+        }
+
+        .modal-content {
+            background-color: #ffffff;
+            margin: 24px auto;
+            padding: 16px;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+            border: 1px solid #e2e8f0;
+            width: 90%;
+            max-width: 480px;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #e2e8f0;
+            padding-bottom: 8px;
+            margin-bottom: 12px;
+        }
+
+        .modal-header h3 {
+            margin: 0;
+        }
+
+        .modal-close {
+            color: #64748b;
+            font-size: 18px;
+            font-weight: 400;
+            cursor: pointer;
+            line-height: 1;
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: background-color 0.15s ease;
+        }
+
+        .modal-close:hover {
+            background-color: #f1f5f9;
+            color: #0f172a;
+        }
+
+        .tree-container {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            padding: 8px;
+            background: #f8fafc;
+        }
+
+        /* Los estilos .lkml-* de los antiguos popups "Abrir/Guardar modelo
+           semántico" ahora viven en css/lkmlDialog.css (diálogo
+           independiente, ver openSemanticModel.html / saveSemanticModel.html). */
+
+        .tree-list {
+            list-style: none;
+            padding-left: 14px;
+            margin: 0;
+        }
+
+        .tree-container > .tree-list {
+            padding-left: 0;
+        }
+
+        .tree-item {
+            margin-top: 2px;
+        }
+
+        .tree-header {
+            cursor: pointer;
+            user-select: none;
+            padding: 4px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            display: block;
+            transition: background-color 0.15s ease;
+        }
+
+        .tree-header:hover {
+            background-color: #e2e8f0;
+        }
+
+        .tree-toggle {
+            display: inline-block;
+            width: 12px;
+            font-size: 8px;
+            color: #64748b;
+        }
+
+        .tree-children {
+            display: none;
+        }
+
+        .tree-children.open {
+            display: block;
+        }
+
+        .table-item {
+            color: #2563eb;
+            font-weight: 700;
+        }
+
+        .table-item:hover {
+            background-color: #2563eb;
+            color: #ffffff;
+        }
+
+        .field-key {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+            font-size: 11px;
+            color: #334155;
+            font-weight: 600;
+        }
+
+        .field-key input {
+            margin: 0;
+        }
+
+        /* ---- Jerarquías (lista dentro del modal de dimensión) ---- */
+        .hierarchies-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .hierarchy-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            background: #f8fafc;
+        }
+
+        .hierarchy-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .hierarchy-name {
+            font-size: 11px;
+            font-weight: 700;
+            color: #1e293b;
+        }
+
+        .hierarchy-levels-summary {
+            font-size: 10px;
+            color: #64748b;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .hierarchy-empty {
+            font-size: 11px;
+            color: #94a3b8;
+            padding: 6px 2px;
+        }
+
+        /* ---- Popup editor de jerarquía (drag & drop) ---- */
+        .hierarchy-modal-content {
+            max-width: 640px;
+        }
+
+        .hierarchy-modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 15px;
+        }
+
+        .hierarchy-editor {
+            display: flex;
+            gap: 12px;
+            margin-top: 8px;
+        }
+
+        .hierarchy-pool-col,
+        .hierarchy-levels-col {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .hierarchy-col-label {
+            font-size: 10px;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            margin-bottom: 4px;
+        }
+
+        .hierarchy-pool-list,
+        .hierarchy-levels-list {
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            min-height: 160px;
+            max-height: 260px;
+            overflow-y: auto;
+            padding: 6px;
+            background: #f8fafc;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            transition: background-color 0.15s ease, border-color 0.15s ease;
+        }
+
+        .hierarchy-pool-list.drag-over,
+        .hierarchy-levels-list.drag-over {
+            background: #e0e7ff;
+            border-color: #2563eb;
+        }
+
+        .hierarchy-attr-chip,
+        .hierarchy-level-chip {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 8px;
+            border-radius: 5px;
+            font-size: 11px;
+            cursor: grab;
+            user-select: none;
+        }
+
+        .hierarchy-attr-chip {
+            background: #ffffff;
+            border: 1px solid #cbd5e1;
+            color: #334155;
+            justify-content: space-between;
+        }
+
+        .hierarchy-level-chip {
+            background: #eff6ff;
+            border: 1px solid #bfdbfe;
+            color: #1e3a8a;
+        }
+
+        .hierarchy-attr-chip:active,
+        .hierarchy-level-chip:active {
+            cursor: grabbing;
+        }
+
+        .hierarchy-attr-chip.dragging,
+        .hierarchy-level-chip.dragging {
+            opacity: 0.4;
+        }
+
+        .hierarchy-level-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #2563eb;
+            color: #ffffff;
+            font-size: 9px;
+            font-weight: 700;
+            flex-shrink: 0;
+        }
+
+        .hierarchy-level-name {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .hierarchy-chip-actions {
+            display: flex;
+            gap: 2px;
+            flex-shrink: 0;
+        }
+
+        .hierarchy-chip-btn {
+            width: 18px;
+            height: 18px;
+            border: none;
+            background: transparent;
+            color: #64748b;
+            cursor: pointer;
+            font-size: 11px;
+            line-height: 1;
+            border-radius: 3px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .hierarchy-chip-btn:hover {
+            background: #e2e8f0;
+            color: #0f172a;
+        }
+
+        .hierarchy-chip-btn-remove {
+            width: 13px;
+            height: 13px;
+            font-size: 8px;
+            flex-shrink: 0;
+            color: #94a3b8;
+        }
+
+        .hierarchy-chip-btn-remove:hover {
+            background: #fee2e2;
+            color: #ef4444;
+        }
+
+        .hierarchy-pool-empty,
+        .hierarchy-levels-empty {
+            font-size: 10px;
+            color: #94a3b8;
+            padding: 8px 4px;
+            text-align: center;
+        }
+
+        /* Toast de confirmación / error */
+        #appToastContainer {
+            position: fixed;
+            top: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: center;
+            width: 100%;
+            max-width: 92%;
+            pointer-events: none;
+        }
+
+        .app-toast {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 14px;
+            border-radius: var(--radius-md, 6px);
+            font-size: var(--fs-sm, 11.5px);
+            font-weight: 600;
+            box-shadow: var(--shadow-md, 0 4px 12px rgba(16, 24, 40, 0.10));
+            border: 1px solid transparent;
+            opacity: 0;
+            transform: translateY(-8px);
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            max-width: 100%;
+            word-break: break-word;
+        }
+
+        .app-toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .app-toast.success {
+            background-color: var(--color-success-light, #E4F8F1);
+            color: var(--color-success, #12805C);
+            border-color: #BFEBDC;
+        }
+
+        .app-toast.error {
+            background-color: var(--color-danger-light, #FBEAE9);
+            color: var(--color-danger, #D8342A);
+            border-color: #F3C9C6;
+        }
+    
+    </style>
 </head>
 <body>
+    <div id="view-informes" class="epm-page-view epm-page-view--active">
     <div class="taskpane-container">
 
         <!-- Barra de herramientas de la vista -->
@@ -388,13 +1596,403 @@
         </div>
     </div>
 
+    
+    </div>
+
+    <div id="view-conexion" class="epm-page-view">
+    <div class="login-shell">
+        <div class="login-container">
+
+            <!-- ============================================== -->
+            <!-- VISTA 1: LISTA DE CONEXIONES GUARDADAS           -->
+            <!-- ============================================== -->
+            <div class="view" id="viewList">
+                <div class="login-lead">
+                    <h2>Conexiones</h2>
+                    <p>Elige una conexión guardada para conectarte, o crea una nueva.</p>
+                </div>
+
+                <div id="toastMessageList" class="toast-message"></div>
+
+                <div class="connections-list" id="connectionsContainer">
+                    <!-- Generado dinámicamente por login.js -->
+                </div>
+
+                <div class="action-footer">
+                    <button id="btnNewConnection" class="btn-action">+ Crear conexión</button>
+                </div>
+            </div>
+
+            <!-- ============================================== -->
+            <!-- VISTA 2: CREAR / EDITAR CONEXIÓN                 -->
+            <!-- ============================================== -->
+            <div class="view hidden" id="viewCreate">
+                <div class="login-lead">
+                    <h2 id="createTitle">Nueva conexión</h2>
+                    <p>Ponle un nombre y elige el origen de datos.</p>
+                </div>
+
+                <div id="toastMessageCreate" class="toast-message"></div>
+
+                <div class="create-scroll">
+                    <div class="field-group">
+                        <label for="connName">Nombre de la conexión</label>
+                        <input type="text" id="connName" placeholder="ej. BigQuery Producción">
+                    </div>
+
+                    <div class="section-label">Origen de datos</div>
+                    <div class="connectors-grid" id="connectorsContainer">
+
+                        <!-- BigQuery -->
+                        <div class="connector-item">
+                            <div class="connector-card" data-provider="bigquery">
+                                <div class="connector-info">
+                                    <div class="connector-icon">
+                                        <img src="https://www.vectorlogo.zone/logos/google_bigquery/google_bigquery-icon.svg" alt="BigQuery">
+                                    </div>
+                                    <div class="connector-details">
+                                        <h3>BigQuery</h3>
+                                        <span>Google Cloud Platform</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Campos específicos de BigQuery (acordeón bajo la propia opción) -->
+                            <div class="provider-config-panel" id="bigqueryConfigPanel">
+                                <label for="bqBillingProject">Id. del proyecto de facturación (opcional)</label>
+                                <input type="text" id="bqBillingProject" placeholder="Ejemplo: MyBillingProject">
+                                <span class="hint">Si se deja vacío, se factura sobre el proyecto de los datos consultados.</span>
+
+                                <span class="hint">El bucket de Google Cloud Storage para "Abrir desde bucket" y "Guardar en bucket" ya no se configura aquí: se elige el proyecto y el bucket directamente en esos diálogos (botones del panel/ribbon "Abrir bucket" y "Guardar en bucket"), requiere estar conectado con esta conexión.</span>
+
+                                <label for="bqRepoType" style="margin-top:10px;">Repositorio de modelos semánticos (opcional)</label>
+                                <select id="bqRepoType">
+                                    <option value="">Ninguno</option>
+                                    <option value="github">GitHub</option>
+                                    <option value="gitlab">GitLab</option>
+                                    <option value="azure_devops">Azure DevOps</option>
+                                    <option value="local">Carpeta local</option>
+                                </select>
+                                <input type="text" id="bqRepoUrl" style="margin-top:6px;" placeholder="ej. https://github.com/mi-org/mis-modelos.git">
+                                <input type="text" id="bqRepoBranch" style="margin-top:6px;" placeholder="Rama (por defecto: main)">
+                                <input type="password" id="bqRepoToken" style="margin-top:6px;" placeholder="Personal Access Token (solo repos privados)" autocomplete="off">
+                                <span class="hint">Dónde se guardan/versionan las definiciones del modelo semántico (equivalente a un proyecto LookML). El token solo hace falta para repositorios privados; se usa para listar y leer los ficheros .lkml, igual que la "deploy key"/PAT de Looker.</span>
+                            </div>
+                        </div>
+
+                        <!-- Snowflake -->
+                        <div class="connector-item">
+                            <div class="connector-card" data-provider="snowflake">
+                                <div class="connector-info">
+                                    <div class="connector-icon">
+                                        <img src="https://app.eu.peliqan.io/img/db/snowflake.svg" alt="Snowflake">
+                                    </div>
+                                    <div class="connector-details">
+                                        <h3>Snowflake</h3>
+                                        <span>Cloud Data Platform</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Campos específicos de Snowflake (acordeón bajo la propia opción) -->
+                            <div class="provider-config-panel" id="snowflakeConfigPanel">
+                                <label for="sfAccount">Identificador de cuenta Snowflake</label>
+                                <input type="text" id="sfAccount" placeholder="ej. xy12345.eu-west-1 u orgname-accountname">
+                                <label for="sfWarehouse" style="margin-top:10px;">Warehouse</label>
+                                <input type="text" id="sfWarehouse" placeholder="ej. COMPUTE_WH">
+                                <label for="sfDatabase" style="margin-top:10px;">Base de datos</label>
+                                <input type="text" id="sfDatabase" placeholder="DRACO">
+                                <label for="sfRole" style="margin-top:10px;">Rol (opcional)</label>
+                                <input type="text" id="sfRole" placeholder="ej. SYSADMIN">
+                            </div>
+                        </div>
+
+                        <!-- Amazon -->
+                        <div class="connector-item">
+                        <div class="connector-card" data-provider="amazon">
+                            <div class="connector-info">
+                                <div class="connector-icon">
+                                    <img src="https://www.vectorlogo.zone/logos/amazon_aws/amazon_aws-icon.svg" alt="AWS">
+                                </div>
+                                <div class="connector-details">
+                                    <h3>Amazon</h3>
+                                    <span>AWS Redshift / S3</span>
+                                </div>
+                            </div>
+                            <span class="tag-soon">Próximamente</span>
+                        </div>
+                        </div>
+
+                        <!-- Microsoft Fabric -->
+                        <div class="connector-item">
+                        <div class="connector-card" data-provider="fabric">
+                            <div class="connector-info">
+                                <div class="connector-icon">
+                                    <img src="https://community.fabric.microsoft.com/html/assets/fabric-expo-icon.svg" alt="Microsoft Fabric">
+                                </div>
+                                <div class="connector-details">
+                                    <h3>Microsoft Fabric</h3>
+                                    <span>OneLake / Power BI</span>
+                                </div>
+                            </div>
+                            <span class="tag-soon">Próximamente</span>
+                        </div>
+                        </div>
+
+                        <!-- SAP Datasphere -->
+                        <div class="connector-item">
+                        <div class="connector-card" data-provider="datasphere">
+                            <div class="connector-info">
+                                <div class="connector-icon">
+                                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg" alt="SAP Datasphere">
+                                </div>
+                                <div class="connector-details">
+                                    <h3>SAP Datasphere</h3>
+                                    <span>SAP Business Warehouse</span>
+                                </div>
+                            </div>
+                            <span class="tag-soon">Próximamente</span>
+                        </div>
+                        </div>
+
+                        <!-- CDS de S4 -->
+                        <div class="connector-item">
+                        <div class="connector-card" data-provider="s4cds">
+                            <div class="connector-info">
+                                <div class="connector-icon">
+                                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg" alt="SAP S/4HANA CDS">
+                                </div>
+                                <div class="connector-details">
+                                    <h3>CDS de S4</h3>
+                                    <span>SAP S/4HANA CDS Views</span>
+                                </div>
+                            </div>
+                            <span class="tag-soon">Próximamente</span>
+                        </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <div class="action-footer">
+                    <button id="btnCancelCreate" class="btn-action btn-secondary">Cancelar</button>
+                    <button id="btnSaveConnection" class="btn-action" disabled>Selecciona un origen de datos</button>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    
+    </div>
+
+    <div id="view-modelo" class="epm-page-view">
+    <div id="appToastContainer" aria-live="polite"></div>
+
+    <div class="page-content">
+
+        <!-- CAJA 1: MODELO SEMÁNTICO -->
+        <div class="card compact">
+            <div class="card-header">
+                <span class="card-title">Modelo semántico</span>
+                <div class="model-manager-actions">
+                    <button type="button" class="icon-btn" id="btnOpenLkmlModel" title="Abrir modelo semántico desde LookML (.lkml)" style="display:none;">📂 Abrir</button>
+                    <button type="button" class="icon-btn" id="btnSaveLkmlModel" title="Guardar modelo semántico como LookML (.lkml)" style="display:none;">📤 LookML</button>
+                    <button type="button" class="btn-generate" id="btnGenerateModel" title="Guardar modelo semántico en Excel">💾 Guardar</button>
+                    <button type="button" class="icon-btn" id="btnNewModel" title="Crear nuevo modelo">+</button>
+                    <button type="button" class="icon-btn danger" id="btnDeleteModel" title="Eliminar modelo">🗑</button>
+                </div>
+            </div>
+
+            <div id="modelSelectorContainer">
+                <select id="semanticModelSelect">
+                    <option value="">— Sin modelo seleccionado —</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- CAJA 2: TABLA DE HECHOS (oculta hasta que haya un modelo semántico
+             seleccionado o creado: ver setFactCardVisible() en semantic_model.js) -->
+        <div class="card compact" id="factTableCard" style="display: none;">
+            <div class="card-header">
+                <div class="card-title-group">
+                    <span class="card-title">Tabla de hechos</span>
+                    <span class="info-icon" title="Información">ⓘ</span>
+                </div>
+                <span class="eye-icon" id="btnViewFactData" title="Ver datos (SELECT * LIMIT 500)">👁</span>
+            </div>
+
+            <div class="compact-field-group">
+                <div class="sap-search-input-group">
+                    <span class="table-icon">▦</span>
+                    <input type="text" id="factFullConcat" readonly placeholder="Tabla de hechos (proyecto.dataset.tabla)" aria-label="Tabla de hechos seleccionada" title="Tabla de hechos seleccionada" style="cursor: pointer;" />
+                    <button type="button" class="sap-search-btn" id="sapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
+                </div>
+                <input type="hidden" id="factProject" />
+                <input type="hidden" id="factDataset" />
+                <input type="hidden" id="factTable" />
+            </div>
+        </div>
+
+        <!-- CAJA 3: LISTA DE CAMPOS -->
+        <div class="card fields-card" id="fieldsCard" style="display: none;">
+            <div class="card-header">
+                <span class="card-title">Campos</span>
+            </div>
+
+            <div id="fieldsList" class="fields-list">
+                <!-- Se rellena dinámicamente desde semantic_model.js -->
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Los antiguos popups "Abrir/Guardar modelo semántico (.lkml)" ya no
+         viven aquí dentro del taskpane: ahora son un diálogo independiente
+         (Office.context.ui.displayDialogAsync) — ver openSemanticModel.html
+         y saveSemanticModel.html — que se abre igual desde los botones del
+         ribbon (manifest) que desde "📂 Abrir" / "📤 LookML" de arriba, sin
+         depender de este taskpane. Ver openLkmlDialogFromTaskpane() /
+         openSaveLkmlDialogFromTaskpane() en semantic_model.js. -->
+
+    <!-- MODAL SELECCIÓN JERÁRQUICA DE TABLA -->
+    <div id="treeModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Seleccionar tabla de BigQuery</h3>
+                <span class="modal-close" id="btnCloseTreeModal">&times;</span>
+            </div>
+            <div id="treeContainer" class="tree-container"></div>
+        </div>
+    </div>
+
+    <!-- MODAL CONFIGURACIÓN MEDIDA -->
+    <div id="measureModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Medida: <span id="modalMeasureFieldName"></span></h3>
+                <span class="modal-close" id="btnCloseMeasureModal">&times;</span>
+            </div>
+            <div class="form-group">
+                <label>Alias</label>
+                <input type="text" id="modalMeasureAlias" />
+            </div>
+            <div class="form-group">
+                <label>Agregación</label>
+                <select id="modalMeasureAgg">
+                    <option value="SUM">SUM</option>
+                    <option value="COUNT">COUNT</option>
+                    <option value="AVG">AVG</option>
+                    <option value="MIN">MIN</option>
+                    <option value="MAX">MAX</option>
+                    <option value="COUNT_DISTINCT">COUNT_DISTINCT</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Formato</label>
+                <select id="modalMeasureFormat">
+                    <option value="Auto">Auto</option>
+                    <option value="Currency">Moneda (€)</option>
+                    <option value="Integer">Entero</option>
+                    <option value="Decimal">Decimal</option>
+                    <option value="Percent">Porcentaje (%)</option>
+                </select>
+            </div>
+            <button class="btn" id="btnSaveMeasureModal">Guardar medida</button>
+        </div>
+    </div>
+
+    <!-- MODAL CONFIGURACIÓN DIMENSIÓN -->
+    <div id="dimensionModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Dimensión: <span id="modalDimFieldName"></span></h3>
+                <span class="modal-close" id="btnCloseDimModal">&times;</span>
+            </div>
+            <div class="form-group">
+                <label>Alias</label>
+                <input type="text" id="modalDimAlias" />
+            </div>
+            <h4>Tabla de atributos</h4>
+            <div class="card-header" style="margin-bottom:6px;">
+                <div class="sap-search-input-group" style="flex:1;">
+                    <input type="text" id="dimRelFullConcat" readonly placeholder="Seleccionar tabla de dimensión..." style="cursor: pointer;" />
+                    <button type="button" class="sap-search-btn" id="dimSapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
+                </div>
+                <span class="eye-icon" id="btnViewDimData" title="Ver datos (SELECT * LIMIT 500)" style="margin-left:6px;">👁</span>
+            </div>
+            <input type="hidden" id="dimRelProject" />
+            <input type="hidden" id="dimRelDataset" />
+            <input type="hidden" id="dimRelTable" />
+
+            <div id="attributesContainer" style="display:none; margin-top:15px;">
+                <h4>Atributos</h4>
+                <div id="attributesList" class="fields-list">
+                    <!-- Se rellena dinámicamente -->
+                </div>
+            </div>
+
+            <div id="hierarchiesContainer" style="margin-top:15px;">
+                <div class="card-header" style="margin-bottom:6px;">
+                    <h4 style="margin:0;">Jerarquías</h4>
+                    <button type="button" class="icon-btn" id="btnAddHierarchy" title="Nueva jerarquía">+</button>
+                </div>
+                <div id="hierarchiesList" class="hierarchies-list">
+                    <!-- Se rellena dinámicamente -->
+                </div>
+            </div>
+
+            <button class="btn" id="btnSaveDimModal" style="margin-top: 15px;">Guardar dimensión</button>
+        </div>
+    </div>
+
+    <!-- MODAL EDITOR DE JERARQUÍA (arrastrar y soltar atributos por niveles) -->
+    <div id="hierarchyModal" class="modal">
+        <div class="modal-content hierarchy-modal-content">
+            <div class="modal-header">
+                <h3 id="hierarchyModalTitle">Nueva jerarquía</h3>
+                <span class="modal-close" id="btnCloseHierarchyModal">&times;</span>
+            </div>
+
+            <div class="form-group">
+                <div class="card-header" style="margin-bottom:4px;">
+                    <label style="margin:0;">Nombre de la jerarquía</label>
+                    <span class="eye-icon" id="btnPreviewHierarchy" title="Ver cómo se vería la jerarquía">👁</span>
+                </div>
+                <input type="text" id="hierarchyNameInput" placeholder="Ej. Geografía" />
+            </div>
+
+            <h4 style="margin-top:12px;">Niveles (arrastra los atributos de izquierda a derecha)</h4>
+
+            <div class="hierarchy-editor">
+                <div class="hierarchy-pool-col">
+                    <div class="hierarchy-col-label">Atributos disponibles</div>
+                    <div id="hierarchyPoolList" class="hierarchy-pool-list"></div>
+                </div>
+                <div class="hierarchy-levels-col">
+                    <div class="hierarchy-col-label">Nivel superior → inferior</div>
+                    <div id="hierarchyLevelsList" class="hierarchy-levels-list"></div>
+                </div>
+            </div>
+
+            <div class="hierarchy-modal-footer">
+                <button type="button" class="btn btn-secondary" id="btnCancelHierarchyModal">Cancelar</button>
+                <button type="button" class="btn" id="btnSaveHierarchyModal">Guardar jerarquía</button>
+            </div>
+        </div>
+    </div>
+
+    
+    </div>
+
     <script src="js/config.js"></script>
     <script src="js/bigquery.js"></script>
     <script src="js/gcsExport.js"></script>
     <script src="js/gcsSaveBridge.js"></script>
     <script src="js/snowflake.js"></script>
     <script src="js/provider.js"></script>
+    <script src="js/connections.js"></script>
     <script src="js/semanticModelStore.js"></script>
+    <script src="js/lkmlSaveBridge.js"></script>
+    <script src="js/lkmlOpenBridge.js"></script>
     <script src="js/reportStore.js"></script>
     <script src="js/filterRangeStore.js"></script>
     <script src="js/excelService.js"></script>
@@ -402,5 +2000,19 @@
     <script src="js/distributeValues.js"></script>
     <script src="js/commands.js"></script>
     <script src="js/taskpane.js"></script>
+    <script src="js/login.js"></script>
+    <script src="js/semantic_model.js"></script>
+
+    <script>
+        // Conmutador entre las 3 vistas de nivel superior (fusionadas aquí
+        // por el requisito de Shared Runtime de "un solo task pane").
+        // Llamado desde mostrarVistaInformes/mostrarVistaConexion/
+        // mostrarVistaEditarModelo en commands.js, tras Office.addin.showAsTaskpane().
+        window.mostrarVistaEpm = function (viewId) {
+            document.querySelectorAll(".epm-page-view").forEach((el) => {
+                el.classList.toggle("epm-page-view--active", el.id === viewId);
+            });
+        };
+    </script>
 </body>
 </html>
