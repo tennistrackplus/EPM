@@ -1071,7 +1071,14 @@ async function readColumnDefinitions(context, editReportGrid, csvGrid) {
  * BuildGroupByBase / BuildBaseRow / BuildColumns / BuildSQL_Fixed
  * ------------------------------------------------------------------- */
 
-function buildSelectBase(relGrid, rowsDefs, colDefs) {
+// measureField: nombre real del campo en la tabla de hechos (FACT_FIELD
+// de MODEL_MEASURES) para la medida encontrada — pintada como MEASURE,
+// filtrada, o del diseño de EDIT_REPORT, en ese orden (ver buildSQLFixed).
+// Sin ningún literal por defecto: si no se encuentra ninguna medida en
+// ningún sitio, se deja tal cual venga (SUM(f.) sería un SQL claramente
+// inválido, y así se detecta a simple vista en vez de sumar en silencio
+// un campo que no es).
+function buildSelectBase(relGrid, rowsDefs, colDefs, measureField) {
     const dict = new Map();
 
     for (const v of rowsDefs) {
@@ -1092,13 +1099,20 @@ function buildSelectBase(relGrid, rowsDefs, colDefs) {
     for (const val of dict.values()) {
         sql += "    " + val + "," + CRLF;
     }
-    sql += "    SUM(f.IMPORTE) AS IMPORTE";
+    sql += "    SUM(f." + (measureField || "") + ") AS IMPORTE";
 
     return sql;
 }
 
-function buildFrom(measuresGrid) {
-    const R = buscarMedida(measuresGrid, ReportState.Measures[0].Name);
+// measureNameOverride: nombre de medida a usar para el FROM (ver
+// buildSQLFixed) en vez de ReportState.Measures[0].Name — para que el
+// modo Fijo use la MISMA medida (y por tanto la misma tabla) que la
+// celda MEASURE realmente pintada, no necesariamente la primera del
+// diseño en EDIT_REPORT. Si no se pasa, se mantiene el comportamiento de
+// siempre (usado tal cual por el modo Dinámico).
+function buildFrom(measuresGrid, measureNameOverride) {
+    const measureName = measureNameOverride || ReportState.Measures[0].Name;
+    const R = buscarMedida(measuresGrid, measureName);
 
     return "FROM " +
         Provider.qualify(
@@ -1257,14 +1271,44 @@ function buildIdArray(atributesGrid, defs, idFieldName) {
 }
 
 async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid) {
-    const rowsDefs = await readRowDefinitions(context, editReportGrid, csvGrid);
-    const colDefs = await readColumnDefinitions(context, editReportGrid, csvGrid);
+    const rowsDefsRaw = await readRowDefinitions(context, editReportGrid, csvGrid);
+    const colDefsRaw = await readColumnDefinitions(context, editReportGrid, csvGrid);
 
     // Diagnóstico: abre las herramientas de desarrollador (F12) del panel de
     // tareas / comandos para ver exactamente qué Dimension/Attribute/Value
     // se ha leído de las fórmulas EPM_VALUE de CSV_RESULT.
-    console.log("readRowDefinitions ->", rowsDefs);
-    console.log("readColumnDefinitions ->", colDefs);
+    console.log("readRowDefinitions ->", rowsDefsRaw);
+    console.log("readColumnDefinitions ->", colDefsRaw);
+
+    // La celda MEASURE pintada (Paso 1/2: =EPM_VALUE("MEASURE","<nombre>","","<nombre>"))
+    // no es una condición de filtro para ROW_ID/COLUMN_ID: es el nombre de
+    // la medida a usar en el SELECT. Puede estar en Filas o en Columnas
+    // (nunca en ambas a la vez), así que se busca en las dos; el resto de
+    // rowsDefs/colDefs (los que SÍ son dimensiones reales) se queda igual.
+    const isMeasureDef = (d) => String(d.Dimension).toUpperCase() === "MEASURE";
+    const measureDef = rowsDefsRaw.find(isMeasureDef) || colDefsRaw.find(isMeasureDef);
+    const rowsDefs = rowsDefsRaw.filter((d) => !isMeasureDef(d));
+    const colDefs = colDefsRaw.filter((d) => !isMeasureDef(d));
+
+    // Nombre de la medida, por orden de prioridad:
+    //   1) la celda MEASURE pintada (Filas o Columnas);
+    //   2) una medida arrastrada a la zona "Filtros" (ReportState.
+    //      FilterMeasureNames, ver loadFilters/appendLockedFilterRangesToState
+    //      — no participa del WHERE, pero sigue siendo la medida del
+    //      informe si es la única que hay);
+    //   3) la primera del diseño de EDIT_REPORT (ReportState.Measures[0],
+    //      mismo criterio que ya usaba buildFrom).
+    // Con eso se busca en MODEL_MEASURES el campo REAL de la tabla de
+    // hechos (FACT_FIELD, columna F): el nombre de la medida (p.ej.
+    // "IMPORTE") no tiene por qué coincidir con el nombre físico de la
+    // columna. Si no se encuentra ahí, se usa el propio nombre de medida
+    // tal cual.
+    const measureName = (measureDef && measureDef.AttributeName)
+        || (ReportState.FilterMeasureNames && ReportState.FilterMeasureNames[0])
+        || (ReportState.Measures[0] && ReportState.Measures[0].Name);
+    const measureRow = measureName ? buscarMedida(measuresGrid, measureName) : 0;
+    const measureField = (measureRow && String(cellValue(measuresGrid, measureRow, 6)).trim())
+        || measureName;
 
     const rowIdsArray = buildIdArray(atributesGrid, rowsDefs, "ROW_ID");
     const columnIdsArray = buildIdArray(atributesGrid, colDefs, "COLUMN_ID");
@@ -1273,8 +1317,8 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
 
     // ---- CTE BASE: se escanea la tabla de hechos UNA sola vez ----
     sql += "WITH BASE AS (" + CRLF + CRLF;
-    sql += buildSelectBase(relGrid, rowsDefs, colDefs) + CRLF + CRLF;
-    sql += buildFrom(measuresGrid) + CRLF + CRLF;
+    sql += buildSelectBase(relGrid, rowsDefs, colDefs, measureField) + CRLF + CRLF;
+    sql += buildFrom(measuresGrid, measureName) + CRLF + CRLF;
     sql += buildJoins(relGrid) + CRLF + CRLF;
     sql += buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs) + CRLF + CRLF;
     sql += buildGroupByBase(relGrid, rowsDefs, colDefs) + CRLF;
@@ -2786,10 +2830,15 @@ function getDracoReportProperties() {
 // Construye el literal de fórmula EPM_VALUE("DIM","ATRIBUTO","VALOR","DISPLAY")
 // usado para "congelar" como texto editable las celdas de un eje marcado
 // como Estático (mismo formato que readRowDefinitions/readColumnDefinitions
-// ya saben leer para el flujo Fijo).
-function buildEpmValueFormula(dim, attr, text) {
+// ya saben leer para el flujo Fijo). `display` es opcional: si no se pasa,
+// se usa el mismo texto que `value` (caso normal, Valor === Display). Se
+// pasa distinto solo para la fila/columna MEASURE (ver
+// convertAxisStaticFormulas): una medida no tiene "valor de miembro", así
+// que Valor queda vacío y Display lleva el nombre de la medida.
+function buildEpmValueFormula(dim, attr, value, display) {
     const esc = (s) => String(s === null || s === undefined ? "" : s).replace(/"/g, '""');
-    return '=EPM_VALUE("' + esc(dim) + '","' + esc(attr) + '","' + esc(text) + '","' + esc(text) + '")';
+    const disp = display !== undefined ? display : value;
+    return '=EPM_VALUE("' + esc(dim) + '","' + esc(attr) + '","' + esc(value) + '","' + esc(disp) + '")';
 }
 
 /* ---------------------------------------------------------------------
@@ -2818,14 +2867,40 @@ function buildEpmValueFormula(dim, attr, text) {
 // Ahora se guarda, por columna física, un {dim, attr} POR CADA flag/nivel
 // (byFlag), para poder elegir el correcto según la profundidad real de
 // cada celda pintada (ver resolveAxisFieldForFlag).
+//
+// CORREGIDO (2): las filas/columnas MEASURE ya NO se saltan — antes se
+// dejaban sin entrada en esta tabla ("las filas MEASURE no pintan como
+// Estáticas"), así que la celda con el nombre de la medida (p.ej.
+// "IMPORTE") se quedaba siempre en texto plano. Ahora se les da su propio
+// hueco físico (igual que measureLevels en computeAxisPaintPlan) con
+// {dim:"MEASURE", attr:<nombre de la medida>}, y el bucle de conversión
+// más abajo genera para ellas =EPM_VALUE("MEASURE","<nombre>","","<nombre>")
+// (Valor vacío: una medida no tiene "valor de miembro", solo nombre).
 function buildAxisFieldLevelsTable(editReportGrid, axis) {
     const [dimCol, attrCol, hierCol, jerCol] = axis === "rows" ? [8, 9, 10, 11] : [14, 15, 16, 17];
     const levels = buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol, jerCol);
     const columns = [];
     let iAux = 0;
     let current = null;
+    // Grupo MEASURE: TODAS las filas/columnas MEASURE del eje comparten un
+    // único hueco físico (igual que measureLevels en computeAxisPaintPlan),
+    // en la posición en la que aparezca la PRIMERA de ellas — no
+    // necesariamente la última. attr = nombre de la medida (columna I/O,
+    // ver loadRows/loadColumns), dim = "MEASURE" fijo (no lvl.dim, para no
+    // arrastrar mayúsculas/minúsculas tal y como se haya escrito en la
+    // hoja).
+    let measureIaux = null;
     for (const lvl of levels) {
-        if (lvl.isMeasure) continue; // las filas MEASURE no pintan como Filas/Columnas Estáticas
+        if (lvl.isMeasure) {
+            if (measureIaux === null) {
+                iAux++;
+                measureIaux = iAux;
+                columns[measureIaux] = { byFlag: {}, maxFlag: 0 };
+            }
+            columns[measureIaux].byFlag[1] = { dim: "MEASURE", attr: lvl.attr, jerarquia: "" };
+            columns[measureIaux].maxFlag = 1;
+            continue;
+        }
         const flag = lvl.flag || 1;
         if (flag === 1 || !current) {
             iAux++;
@@ -2941,6 +3016,12 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         const GLYPH_PREFIX = /^[▸▾]\s+/; // indicador +/- fusionado (solo aplica en eje Dinámico)
         const EPM_RE = /^=\s*EPM_VALUE\s*\(/i;
         const EPM_VALOR_RE = /EPM_VALUE\s*\(\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"((?:[^"]|"")*)"/i;
+        // Solo para la fila/columna MEASURE (ver comentario en
+        // buildAxisFieldLevelsTable): su fórmula lleva el Valor (3er
+        // argumento) vacío y el nombre real en el Display (4º argumento),
+        // al revés que un campo normal.
+        const EPM_MEASURE_RE = /^=\s*EPM_VALUE\s*\(\s*"MEASURE"/i;
+        const EPM_DISPLAY_RE = /EPM_VALUE\s*\(\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"((?:[^"]|"")*)"/i;
 
         const newFormulas = [];
         let changed = false;
@@ -2974,14 +3055,22 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
                         continue;
                     }
                     const text = String(currentValue).replace(GLYPH_PREFIX, "");
-                    rowOut.push(buildEpmValueFormula(field.dim, field.attr, text));
+                    if (field.dim === "MEASURE") {
+                        // Una medida no tiene "valor de miembro": Valor
+                        // vacío, Display = nombre de la medida.
+                        rowOut.push(buildEpmValueFormula("MEASURE", field.attr, "", text));
+                    } else {
+                        rowOut.push(buildEpmValueFormula(field.dim, field.attr, text));
+                    }
                     changed = true;
                 } else {
                     if (!isEpmFormula) {
                         rowOut.push(currentFormula);
                         continue;
                     }
-                    const match = currentFormula.match(EPM_VALOR_RE);
+                    const isMeasureFormula = EPM_MEASURE_RE.test(currentFormula);
+                    const re = isMeasureFormula ? EPM_DISPLAY_RE : EPM_VALOR_RE;
+                    const match = currentFormula.match(re);
                     const text = match ? match[1].replace(/""/g, '"') : String(currentValue);
                     rowOut.push(text);
                     changed = true;
