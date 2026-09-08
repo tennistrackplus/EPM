@@ -101,69 +101,76 @@ function guardarModeloSemantico(event) {
 }
 
 /**
- * Botón de ribbon "Conexión" (ConexionButton) y "Editar modelos semántico"
- * (ModeloCrearButton). Antes eran ShowTaskpane (paneles acoplados
- * ConexionPane/ModeloPane); con Shared Runtime solo puede existir UN
- * task pane en todo el manifest (el de "Editar informes"), así que ahora
- * abren login.html/semantic_model.html como diálogos flotantes
- * independientes (Office.context.ui.displayDialogAsync), igual que ya
- * hace memberPicker.html/filterDialog.html. login.html/semantic_model.html
- * y sus .js no necesitan ningún cambio: ya guardan su estado en
- * localStorage (compartido con el resto del add-in) y en el propio libro,
- * no en el panel en sí, así que funcionan igual dentro de un diálogo.
+ * Botones de ribbon "Editar informes" (CrearInformeButton), "Conexión"
+ * (ConexionButton) y "Editar modelos semántico" (ModeloCrearButton).
  *
- * No se espera ningún mensaje de vuelta del diálogo (a diferencia del
- * picker de miembros o "Añadir filtro"): el usuario los cierra cuando
- * termina, sin más.
+ * Antes eran ShowTaskpane (3 paneles acoplados distintos: Taskpane/
+ * ConexionPane/ModeloPane). Con Shared Runtime solo puede existir UN
+ * task pane en todo el manifest — y NINGÚN <Action> del Host con
+ * <Runtimes> debe llevar <TaskpaneId> (documentación oficial: "In the
+ * ancestor <Host> element that has a descendant <Runtime> element that
+ * is set to a long lifetime, none of the descendant <Action> elements
+ * should have a <TaskpaneID> child element"). Así que los 3 son ahora
+ * ExecuteFunction: usan Office.addin.showAsTaskpane() (API que requiere
+ * precisamente Shared Runtime) para asegurar que el panel está visible,
+ * y luego mostrarVistaEpm() (definida en taskpane.html, al final del
+ * body) para enseñar solo la sección correspondiente — login.html,
+ * semantic_model.html y taskpane.html YA NO SON PÁGINAS APARTE: su
+ * contenido vive fusionado dentro de taskpane.html como 3 <div>
+ * ocultables (#view-informes / #view-conexion / #view-modelo).
+ *
+ * IMPORTANTE (probado y descartado): se intentó primero abrir
+ * login.html/semantic_model.html como DIÁLOGOS independientes
+ * (Office.context.ui.displayDialogAsync) en vez de fusionarlos — no
+ * funciona, porque Office.js no permite abrir un diálogo DESDE DENTRO
+ * de otro diálogo, y tanto login.js (el flujo OAuth) como
+ * semantic_model.js (abrir/guardar LookML) abren sus propios diálogos
+ * hijos. Por eso la fusión en un único taskpane es la única vía viable
+ * con Shared Runtime.
  */
-function abrirDialogoConexion(event) {
+function mostrarVistaInformes(event) {
     try {
-        const dialogUrl = new URL("login.html", window.location.href).href;
-        Office.context.ui.displayDialogAsync(
-            dialogUrl,
-            { height: 70, width: 40, displayInIframe: false },
-            (asyncResult) => {
-                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
-                    console.error(
-                        "[Draco] Conexión: displayDialogAsync ha fallado:",
-                        asyncResult.error && asyncResult.error.code,
-                        asyncResult.error && asyncResult.error.message
-                    );
-                }
-            }
-        );
+        Office.addin.showAsTaskpane()
+            .then(() => {
+                if (window.mostrarVistaEpm) window.mostrarVistaEpm("view-informes");
+            })
+            .catch((e) => console.error("[Draco] Error mostrando la vista Editar informes:", e));
     } catch (error) {
-        console.error("Error al abrir el diálogo de Conexión:", error);
+        console.error("Error al mostrar la vista de Editar informes:", error);
     } finally {
         if (event) event.completed();
     }
 }
 
-function abrirDialogoEditarModelo(event) {
+function mostrarVistaConexion(event) {
+    try {
+        Office.addin.showAsTaskpane()
+            .then(() => {
+                if (window.mostrarVistaEpm) window.mostrarVistaEpm("view-conexion");
+            })
+            .catch((e) => console.error("[Draco] Error mostrando la vista Conexión:", e));
+    } catch (error) {
+        console.error("Error al mostrar la vista de Conexión:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+function mostrarVistaEditarModelo(event) {
     try {
         // Misma comprobación/creación de EDIT_REPORT que ya hacía
         // abrirModeloSemantico (botón "Abrir modelo semántico"): antes la
-        // garantizaba semantic_model.js al cargar el panel; como panel ya
-        // no existe hasta que se abra el diálogo, se asegura aquí desde
-        // el ribbon igual que en ese otro botón.
+        // garantizaba semantic_model.js al cargar el panel; se asegura
+        // aquí desde el ribbon igual que en ese otro botón.
         ensureEditReportSheetFromRibbon().finally(() => {
-            const dialogUrl = new URL("semantic_model.html", window.location.href).href;
-            Office.context.ui.displayDialogAsync(
-                dialogUrl,
-                { height: 90, width: 60, displayInIframe: false },
-                (asyncResult) => {
-                    if (asyncResult.status === Office.AsyncResultStatus.Failed) {
-                        console.error(
-                            "[Draco] Editar modelo semántico: displayDialogAsync ha fallado:",
-                            asyncResult.error && asyncResult.error.code,
-                            asyncResult.error && asyncResult.error.message
-                        );
-                    }
-                }
-            );
+            Office.addin.showAsTaskpane()
+                .then(() => {
+                    if (window.mostrarVistaEpm) window.mostrarVistaEpm("view-modelo");
+                })
+                .catch((e) => console.error("[Draco] Error mostrando la vista Editar modelo semántico:", e));
         });
     } catch (error) {
-        console.error("Error al abrir el diálogo de Editar modelo semántico:", error);
+        console.error("Error al mostrar la vista de Editar modelo semántico:", error);
     } finally {
         if (event) event.completed();
     }
@@ -6595,8 +6602,9 @@ try {
     Office.actions.associate("hidePane", hidePane);
     Office.actions.associate("abrirModeloSemantico", abrirModeloSemantico);
     Office.actions.associate("guardarModeloSemantico", guardarModeloSemantico);
-    Office.actions.associate("abrirDialogoConexion", abrirDialogoConexion);
-    Office.actions.associate("abrirDialogoEditarModelo", abrirDialogoEditarModelo);
+    Office.actions.associate("mostrarVistaInformes", mostrarVistaInformes);
+    Office.actions.associate("mostrarVistaConexion", mostrarVistaConexion);
+    Office.actions.associate("mostrarVistaEditarModelo", mostrarVistaEditarModelo);
     Office.actions.associate("writeHolaInA1", writeHolaInA1);
     Office.actions.associate("actualizarInformeFixed", actualizarInformeFixed);
     Office.actions.associate("actualizarInforme", actualizarInforme);
