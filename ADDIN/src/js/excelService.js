@@ -228,12 +228,22 @@ const ExcelService = {
      * semántico activo guardado por SemanticModelStore (por ahora, el
      * primero que exista; ver SemanticModelStore.getActiveModelName).
      */
-    async readDim2Data() {
+    // modelNameOverride: nombre del modelo semántico a leer directamente,
+    // en vez de depender del "modelo activo" global (SemanticModelStore.
+    // getActiveModelName/setActiveModelName) — ese estado compartido
+    // necesita un paso intermedio (populateModelSelectorMain, en
+    // taskpane.js) que lo sincronice con el modelo del informe actual, y
+    // si ese paso no llega a completarse a tiempo, aquí no se sabe qué
+    // modelo leer y las dimensiones salen vacías (con Shared Runtime, al
+    // no depender ya de si el panel llegó a "abrirse" o no, conviene no
+    // fiarse de ese intermediario para esta lectura). Si no se pasa,
+    // se mantiene el comportamiento de siempre (cae al modelo activo).
+    async readDim2Data(modelNameOverride) {
         try {
             {
-                const atribGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
-                const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
-                const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+                const atribGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES", modelNameOverride);
+                const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER", modelNameOverride);
+                const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES", modelNameOverride);
 
                 const order = [];
                 const dimensionsMap = {};

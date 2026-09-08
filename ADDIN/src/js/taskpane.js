@@ -1199,7 +1199,13 @@ const TaskPaneApp = {
         container.innerHTML = "<div style='color: #605e5c; padding: 4px;'>Cargando dimensiones...</div>";
 
         try {
-            const result = await window.ExcelService.readDim2Data();
+            // Modelo del INFORME ACTUAL directamente (ver comentario en
+            // readDim2Data): no depender del "modelo activo" global.
+            const report = (this.currentReportId && window.ReportStore)
+                ? window.ReportStore.getReport(this.currentReportId) : null;
+            const modelName = report ? (report.semanticModelName || "") : "";
+
+            const result = await window.ExcelService.readDim2Data(modelName || undefined);
 
             if (result.error) {
                 container.innerHTML = `<div style='color: #a80000; padding: 4px;'>⚠️ ${result.error}</div>`;
