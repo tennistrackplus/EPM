@@ -3848,6 +3848,36 @@ async function growDracoNamedRange(context, sheetName, rangeName, axisSuffix, ax
 }
 
 /**
+ * Localiza a qué informe pertenece una celda concreta, buscando entre los
+ * rangos con nombre "Draco_<n>_Values" definidos en esa misma hoja (sin
+ * "zona de crecimiento": a diferencia de _Rows/_Cols, un _Values no se
+ * amplía solo, así que basta una comprobación de contención simple).
+ *
+ * Devuelve {reportId, sheetName} o null si la celda no cae dentro de
+ * ningún Draco_XXX_Values de esa hoja. Usada por
+ * handleDracoPlanningValueChanged para saber si una celda tocada a mano
+ * pertenece a un informe (y, si es de planificación, marcarla en cian).
+ */
+async function findDracoValuesRangeForCell(context, worksheetId, addr) {
+    const sheet = context.workbook.worksheets.getItem(worksheetId);
+    sheet.load("name");
+    const cell = sheet.getRange(addr);
+    cell.load(["rowIndex", "columnIndex"]);
+    await context.sync();
+
+    const candidates = await collectDracoAxisCandidates(context, sheet, "Values");
+    if (candidates.length === 0) return null;
+
+    const match = candidates.find(c =>
+        cell.rowIndex >= c.rowIndex && cell.rowIndex < c.rowIndex + c.rowCount &&
+        cell.columnIndex >= c.columnIndex && cell.columnIndex < c.columnIndex + c.columnCount
+    );
+    if (!match) return null;
+
+    return { reportId: match.reportId, sheetName: sheet.name };
+}
+
+/**
  * Busca, entre todos los nombres del libro que cumplan el patrón
  * "Draco_<n>_Rows" o "Draco_<n>_Cols", cuál (si alguno) contiene la
  * celda indicada EN LA MISMA HOJA del clic —o podría llegar a
@@ -4073,14 +4103,107 @@ async function handleDracoRowsSingleClick(eventArgs) {
     }
 }
 
+/**
+ * Se dispara con onChanged en cada hoja de resultados (mismo registro por
+ * hoja que handleDracoRowsSingleClick, ver ensureDracoRowsClickLoggerRegistered
+ * más abajo): si la celda tocada cae dentro de un rango con nombre
+ * Draco_<n>_Values Y ese informe tiene marcada la propiedad "Informe de
+ * planificación" (Propiedades del informe > planningReport), pinta el
+ * fondo de la celda en RGB(223,255,255) — marca visual de "editada a
+ * mano, pendiente de guardar planificación".
+ *
+ * Se ignora sin hacer nada mientras:
+ *   - DracoSuppressChangeEvents esté activo: son nuestras propias
+ *     escrituras (p.ej. la fórmula EPM_VALUE que deja el picker, o el
+ *     propio jsonTo3Matrices pintando la tabla), no una edición manual.
+ *   - DracoSuppressPlanningPaintCount > 0: hay un refresco en curso
+ *     (Actualizar / Actualizar todos / Guardar planificación, ver
+ *     beginSuppressPlanningPaint/endSuppressPlanningPaint) — si no,
+ *     CADA refresco dejaría todo el informe pintado en cian, como si el
+ *     usuario lo hubiera editado a mano entero.
+ *
+ * Con Shared Runtime solo hay un proceso registrando esto (antes, con el
+ * runtime clásico, el ribbon y el panel podían llegar a registrar este
+ * mismo onChanged cada uno por su cuenta, marcando la celda dos veces
+ * seguidas — inofensivo pero redundante). Al ser un único proceso, este
+ * controlador se registra una sola vez, sin duplicados.
+ *
+ * El color que tenía la celda ANTES de pintarse se guarda en
+ * DracoPlanningModifiedCells (si no estaba ya registrada: si el usuario
+ * la toca varias veces seguidas mientras sigue en cian, no se debe
+ * "olvidar" el color original de antes de la primera edición). Esa
+ * misma estructura la vacía/usa flushDracoPlanningModifiedCells, tanto
+ * al guardar planificación como al arrancar cualquier refresco.
+ */
+async function handleDracoPlanningValueChanged(eventArgs) {
+    try {
+        if (DracoSuppressChangeEvents) return;
+        if (DracoSuppressPlanningPaintCount > 0) return;
+        if (!eventArgs || !eventArgs.address) return;
+
+        let addr = String(eventArgs.address);
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        addr = addr.replace(/\$/g, "").toUpperCase();
+        if (!addr) return;
+
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItem(eventArgs.worksheetId);
+            sheet.load("name");
+
+            const cell = sheet.getRange(addr);
+            cell.load(["rowCount", "columnCount", "format/fill/color"]);
+            await context.sync();
+
+            // Varias celdas a la vez (pegado/relleno): no se intenta
+            // resolver un único informe/color para todas juntas. Excel
+            // dispara un evento onChanged por cada bloque pegado, no por
+            // celda, así que un pegado múltiple simplemente no se marca
+            // (igual de conservador que runDracoMemberRecognitionAction
+            // con el reconocimiento de miembros).
+            if (cell.rowCount !== 1 || cell.columnCount !== 1) return;
+
+            const located = await findDracoValuesRangeForCell(context, eventArgs.worksheetId, addr);
+            if (!located) return; // fuera de cualquier Draco_XXX_Values
+
+            const report = window.ReportStore ? window.ReportStore.getReport(located.reportId) : null;
+            const props = report && report.reportProperties ? report.reportProperties : null;
+            if (!props || !props.planningReport) return; // informe no marcado como "de planificación"
+
+            if (!DracoPlanningModifiedCells.has(located.reportId)) {
+                DracoPlanningModifiedCells.set(located.reportId, new Map());
+            }
+            const bucket = DracoPlanningModifiedCells.get(located.reportId);
+            if (!bucket.has(addr)) {
+                bucket.set(addr, {
+                    sheetName: sheet.name,
+                    address: addr,
+                    color: cell.format.fill.color || ""
+                });
+            }
+
+            cell.format.fill.color = "#DFFFFF"; // RGB(223,255,255)
+            await context.sync();
+
+            console.log(`[Draco] Celda de planificación marcada en cian: ${sheet.name}!${addr} (informe ${located.reportId}).`);
+        });
+    } catch (e) {
+        console.error("[Draco] Error marcando en cian la celda de planificación modificada:", e);
+    }
+}
+
 const DracoRowsClickHandlerRegisteredSheets = new Set();
 let DracoRowsClickOnAddedRegistered = false;
 
 /**
- * Engancha handleDracoRowsSingleClick en TODAS las hojas del libro (los
- * rangos Draco_XXX_Rows pueden estar en cualquiera) y en las hojas que se
- * añadan después. Se puede llamar varias veces sin problema (cada hoja
- * solo se engancha una vez).
+ * Engancha, en TODAS las hojas del libro (los rangos Draco_XXX_Rows/Cols/
+ * Values pueden estar en cualquiera) y en las que se añadan después:
+ *   - handleDracoRowsSingleClick (onSingleClicked): clic en el icono +/-
+ *     de jerarquía.
+ *   - handleDracoPlanningValueChanged (onChanged): marca en cian una
+ *     celda de Draco_XXX_Values editada a mano en un informe de
+ *     planificación.
+ * Se puede llamar varias veces sin problema (cada hoja solo se engancha
+ * una vez, para los dos listeners a la vez).
  */
 async function ensureDracoRowsClickLoggerRegistered() {
     try {
@@ -4092,6 +4215,7 @@ async function ensureDracoRowsClickLoggerRegistered() {
             sheets.items.forEach(sheet => {
                 if (DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) return;
                 sheet.onSingleClicked.add(handleDracoRowsSingleClick);
+                sheet.onChanged.add(handleDracoPlanningValueChanged);
                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
             });
 
@@ -4104,6 +4228,7 @@ async function ensureDracoRowsClickLoggerRegistered() {
                             await ctx.sync();
                             if (!DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) {
                                 sheet.onSingleClicked.add(handleDracoRowsSingleClick);
+                                sheet.onChanged.add(handleDracoPlanningValueChanged);
                                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
                                 await ctx.sync();
                             }
@@ -4117,9 +4242,9 @@ async function ensureDracoRowsClickLoggerRegistered() {
 
             await context.sync();
         });
-        console.log("[Draco] Listener de clic en rangos Draco_*_Rows registrado en todas las hojas.");
+        console.log("[Draco] Listeners de clic (Draco_*_Rows) y cambio (Draco_*_Values) registrados en todas las hojas.");
     } catch (e) {
-        console.warn("[Draco] No se pudo registrar el listener de clic en Draco_*_Rows (¿host sin soporte de ExcelApi 1.10?):", e);
+        console.warn("[Draco] No se pudieron registrar los listeners de clic/cambio en Draco_* (¿host sin soporte de ExcelApi 1.10?):", e);
     }
 }
 
@@ -4754,9 +4879,11 @@ async function registerEditReportPickerHandler(context) {
 async function registerDracoSelectionHandler(context, sheet, sheetName) {
     if (DracoHandlerRegisteredSheets.has(sheetName)) return;
 
-    // La detección de "se ha tecleado algo" y el marcado en cian de
-    // planificación (que vivían aquí, por hoja) se han eliminado por
-    // completo. La detección de reconocimiento/doble clic la sigue
+    // El marcado en cian de planificación (handleDracoPlanningValueChanged)
+    // NO se engancha aquí: vive en ensureDracoRowsClickLoggerRegistered,
+    // registrado una vez para TODAS las hojas del libro (no solo la de
+    // resultados de este informe) desde el arranque, junto al clic de
+    // jerarquía. La detección de reconocimiento/doble clic la sigue
     // haciendo el XLAM en VBA, avisando por EDIT_REPORT!T2:V2 (V2="REC"
     // o "DC"); el único sitio que abre el picker es
     // handleDracoPickerFlagRequest, enganchado una vez a EDIT_REPORT
