@@ -2439,17 +2439,16 @@ let DracoSuppressChangeEvents = false; // true mientras jsonTo3Matrices pinta ce
 // los siguientes informes de ese mismo "Actualizar todos". Mientras el
 // contador sea > 0, sigue deshabilitado.
 //
-// Y es CRUZADO ENTRE RUNTIMES (como DRACO_PICKER_LOCK_CELL más abajo, ver
-// su comentario): el ribbon (commands.html) y el taskpane (taskpane.html)
-// son dos procesos JS separados, cada uno con su PROPIA copia de esta
-// variable en memoria. Si "Actualizar" se pulsa desde el ribbon, ESE
-// runtime incrementa su contador local, pero el handler
-// handleDracoPlanningValueChanged que reacciona al propio refresco puede
-// estar registrado (y disparado) en el runtime del TASKPANE, que nunca se
-// enteró de que había un refresco en curso — y pintaba en cian TODA la
-// tabla, como si el usuario la hubiera editado a mano. Por eso, además del
-// contador local (atajo rápido, mismo runtime), se lleva un contador
-// espejo en EDIT_REPORT!Z2, visible para ambos procesos.
+// Y (herencia del runtime clásico, antes de migrar a Shared Runtime) lleva
+// ADEMÁS un contador espejo en EDIT_REPORT!Z2: cuando el ribbon
+// (commands.html) y el taskpane (taskpane.html) eran dos procesos JS
+// separados, cada uno tenía su PROPIA copia de esta variable en memoria,
+// y el contador local por sí solo no bastaba para avisar al otro proceso
+// de que había un refresco en curso. Con Shared Runtime ya no hay dos
+// procesos que sincronizar, así que el contador local ya sería
+// suficiente — se mantiene el espejo en Z2 por ahora porque otros flujos
+// (p.ej. el XLAM en VBA) pueden seguir leyéndolo; revisar si sigue
+// haciendo falta al limpiar EDIT_REPORT.
 let DracoSuppressPlanningPaintCount = 0;
 const DRACO_PLANNING_SUPPRESS_CELL = "Z2";
 
@@ -2594,79 +2593,16 @@ async function endSuppressPlanningPaint() {
 // una misma petición (p.ej. clic sobre el icono de jerarquía y una
 // petición REC/DC de EDIT_REPORT!T2:V2 casi simultáneas).
 //
-// OJO: este flag SOLO protege dentro del runtime JS en el que vive esta
-// copia de commands.js. Este complemento no usa Shared Runtime: commands.
-// html (los botones del ribbon, p.ej. "Actualizar") y taskpane.html (el
-// panel) son DOS procesos/motores JS completamente separados, y cada uno
-// carga su PROPIA copia de este fichero con sus PROPIAS variables (ver
-// también el comentario sobre Office.context.document.settings más abajo,
-// en isDracoMemberRecognitionActive). Si el panel está abierto Y el
-// usuario pulsa "Actualizar" en el ribbon, AMBOS runtimes acaban
-// registrando los mismos listeners de la hoja (registerDracoSelectionHandler
-// se llama tanto desde ensureDracoHandlersRegistered — TaskPaneApp.init —
-// como desde el refresco del informe, que corre en el runtime del
-// ribbon), y Excel notifica a los DOS por igual: una misma petición
-// EDIT_REPORT!T2:V2 puede llegar a los dos procesos a la vez, cada uno
-// con su propio DracoMemberPickerOpen en `false`, así que los dos pueden
-// llegar a abrir su propio diálogo. Por eso
-// tryClaimDracoPickerLock/releaseDracoPickerLock (ver más abajo) añaden,
-// ADEMÁS de este flag local, un candado real en la propia hoja
-// (EDIT_REPORT!Z1) que sí es visible para ambos runtimes.
+// Con Shared Runtime (manifest con <Runtimes>), el panel y el ribbon
+// comparten un único proceso/memoria JS, así que este flag local ya
+// basta: no puede haber un segundo proceso con su propio
+// DracoMemberPickerOpen en `false` compitiendo por abrir otro diálogo.
+// ANTES (runtime clásico, sin <Runtimes> en el manifest) hacía falta
+// ADEMÁS un candado visible entre procesos, escrito en la propia hoja
+// (EDIT_REPORT!Z1, vía tryClaimDracoPickerLock/releaseDracoPickerLock).
+// Se ha quitado al migrar a Shared Runtime: ya no hay dos procesos que
+// sincronizar.
 let DracoMemberPickerOpen = false;
-
-// Candado de apertura del picker visible entre runtimes (ver comentario
-// de arriba): se reserva escribiendo un timestamp en EDIT_REPORT!Z1. Si
-// ya hay un timestamp reciente (menos de DRACO_PICKER_LOCK_TTL_MS) se
-// entiende que OTRO runtime ya está abriendo el picker ahora mismo y esta
-// petición se ignora. El TTL evita que un runtime que muriera a mitad de
-// apertura (p.ej. commands.html descargado por Office tras terminar el
-// comando) deje el candado bloqueado para siempre.
-const DRACO_PICKER_LOCK_CELL = "Z1";
-const DRACO_PICKER_LOCK_TTL_MS = 4000;
-
-async function tryClaimDracoPickerLock() {
-    try {
-        return await Excel.run(async (context) => {
-            const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
-            editReport.load("isNullObject");
-            await context.sync();
-            if (editReport.isNullObject) return true; // sin EDIT_REPORT no hay dónde comprobar el candado: se deja pasar
-
-            const cell = editReport.getRange(DRACO_PICKER_LOCK_CELL);
-            cell.load("values");
-            await context.sync();
-
-            const raw = String((cell.values && cell.values[0] && cell.values[0][0]) || "").trim();
-            const prevTs = Number(raw);
-            const now = Date.now();
-            if (raw && !isNaN(prevTs) && (now - prevTs) < DRACO_PICKER_LOCK_TTL_MS) {
-                return false; // otro runtime ya está abriendo el picker ahora mismo
-            }
-
-            cell.values = [[String(now)]];
-            await context.sync();
-            return true;
-        });
-    } catch (e) {
-        console.warn("[Draco] No se pudo comprobar/reservar el candado cruzado del picker (se continúa sin él):", e);
-        return true; // un fallo aquí no debe bloquear el picker
-    }
-}
-
-async function releaseDracoPickerLock() {
-    try {
-        await Excel.run(async (context) => {
-            const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
-            editReport.load("isNullObject");
-            await context.sync();
-            if (editReport.isNullObject) return;
-            editReport.getRange(DRACO_PICKER_LOCK_CELL).values = [[""]];
-            await context.sync();
-        });
-    } catch (e) {
-        console.warn("[Draco] No se pudo liberar el candado cruzado del picker:", e);
-    }
-}
 
 /**
  * El botón "Reconocimiento de miembros" corre en el runtime SEPARADO de
@@ -3766,6 +3702,36 @@ async function findDracoRowsNamedRangeForCell(context, worksheetId, addr) {
     };
 }
 
+/**
+ * Localiza a qué informe pertenece una celda concreta, buscando entre los
+ * rangos con nombre "Draco_<n>_Values" definidos en esa misma hoja (sin
+ * "zona de crecimiento": a diferencia de _Rows/_Cols, un _Values no se
+ * amplía solo, así que basta una comprobación de contención simple).
+ *
+ * Devuelve {reportId, sheetName} o null si la celda no cae dentro de
+ * ningún Draco_XXX_Values de esa hoja. Usada por
+ * handleDracoPlanningValueChanged para saber si una celda tocada a mano
+ * pertenece a un informe (y, si es de planificación, marcarla en cian).
+ */
+async function findDracoValuesRangeForCell(context, worksheetId, addr) {
+    const sheet = context.workbook.worksheets.getItem(worksheetId);
+    sheet.load("name");
+    const cell = sheet.getRange(addr);
+    cell.load(["rowIndex", "columnIndex"]);
+    await context.sync();
+
+    const candidates = await collectDracoAxisCandidates(context, sheet, "Values");
+    if (candidates.length === 0) return null;
+
+    const match = candidates.find(c =>
+        cell.rowIndex >= c.rowIndex && cell.rowIndex < c.rowIndex + c.rowCount &&
+        cell.columnIndex >= c.columnIndex && cell.columnIndex < c.columnIndex + c.columnCount
+    );
+    if (!match) return null;
+
+    return { reportId: match.reportId, sheetName: sheet.name };
+}
+
 // Contexto de canvas reutilizado para medir texto (evita crear un
 // <canvas> nuevo en cada clic).
 let _a50MeasureCtx = null;
@@ -3943,14 +3909,101 @@ async function handleDracoRowsSingleClick(eventArgs) {
     }
 }
 
+/**
+ * Se dispara con onChanged en cada hoja de resultados (mismo registro por
+ * hoja que handleDracoRowsSingleClick, ver ensureDracoRowsClickLoggerRegistered
+ * más abajo): si la celda tocada cae dentro de un rango con nombre
+ * Draco_<n>_Values Y ese informe tiene marcada la propiedad "Informe de
+ * planificación" (Propiedades del informe > planningReport), pinta el
+ * fondo de la celda en RGB(223,255,255) — marca visual de "editada a
+ * mano, pendiente de guardar planificación".
+ *
+ * Se ignora sin hacer nada mientras:
+ *   - DracoSuppressChangeEvents esté activo: son nuestras propias
+ *     escrituras (p.ej. la fórmula EPM_VALUE que deja el picker, o el
+ *     propio jsonTo3Matrices pintando la tabla), no una edición manual.
+ *   - DracoSuppressPlanningPaintCount > 0: hay un refresco en curso
+ *     (Actualizar / Actualizar todos / Guardar planificación, ver
+ *     beginSuppressPlanningPaint/endSuppressPlanningPaint) — si no,
+ *     CADA refresco dejaría todo el informe pintado en cian, como si el
+ *     usuario lo hubiera editado a mano entero.
+ *
+ * El color que tenía la celda ANTES de pintarse se guarda en
+ * DracoPlanningModifiedCells (si no estaba ya registrada: si el usuario
+ * la toca varias veces seguidas mientras sigue en cian, no se debe
+ * "olvidar" el color original de antes de la primera edición). Esa
+ * misma estructura la vacía/usa flushDracoPlanningModifiedCells, tanto
+ * al guardar planificación como al arrancar cualquier refresco.
+ */
+async function handleDracoPlanningValueChanged(eventArgs) {
+    try {
+        if (DracoSuppressChangeEvents) return;
+        if (DracoSuppressPlanningPaintCount > 0) return;
+        if (!eventArgs || !eventArgs.address) return;
+
+        let addr = String(eventArgs.address);
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        addr = addr.replace(/\$/g, "").toUpperCase();
+        if (!addr) return;
+
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItem(eventArgs.worksheetId);
+            sheet.load("name");
+
+            const cell = sheet.getRange(addr);
+            cell.load(["rowCount", "columnCount", "format/fill/color"]);
+            await context.sync();
+
+            // Varias celdas a la vez (pegado/relleno): no se intenta
+            // resolver un único informe/color para todas juntas. Excel
+            // dispara un evento onChanged por cada bloque pegado, no por
+            // celda, así que un pegado múltiple simplemente no se marca
+            // (igual de conservador que runDracoMemberRecognitionAction
+            // con el reconocimiento de miembros).
+            if (cell.rowCount !== 1 || cell.columnCount !== 1) return;
+
+            const located = await findDracoValuesRangeForCell(context, eventArgs.worksheetId, addr);
+            if (!located) return; // fuera de cualquier Draco_XXX_Values
+
+            const report = window.ReportStore ? window.ReportStore.getReport(located.reportId) : null;
+            const props = report && report.reportProperties ? report.reportProperties : null;
+            if (!props || !props.planningReport) return; // informe no marcado como "de planificación"
+
+            if (!DracoPlanningModifiedCells.has(located.reportId)) {
+                DracoPlanningModifiedCells.set(located.reportId, new Map());
+            }
+            const bucket = DracoPlanningModifiedCells.get(located.reportId);
+            if (!bucket.has(addr)) {
+                bucket.set(addr, {
+                    sheetName: sheet.name,
+                    address: addr,
+                    color: cell.format.fill.color || ""
+                });
+            }
+
+            cell.format.fill.color = "#DFFFFF"; // RGB(223,255,255)
+            await context.sync();
+
+            console.log(`[Draco] Celda de planificación marcada en cian: ${sheet.name}!${addr} (informe ${located.reportId}).`);
+        });
+    } catch (e) {
+        console.error("[Draco] Error marcando en cian la celda de planificación modificada:", e);
+    }
+}
+
 const DracoRowsClickHandlerRegisteredSheets = new Set();
 let DracoRowsClickOnAddedRegistered = false;
 
 /**
- * Engancha handleDracoRowsSingleClick en TODAS las hojas del libro (los
- * rangos Draco_XXX_Rows pueden estar en cualquiera) y en las hojas que se
- * añadan después. Se puede llamar varias veces sin problema (cada hoja
- * solo se engancha una vez).
+ * Engancha, en TODAS las hojas del libro (los rangos Draco_XXX_Rows/Cols/
+ * Values pueden estar en cualquiera) y en las que se añadan después:
+ *   - handleDracoRowsSingleClick (onSingleClicked): clic en el icono +/-
+ *     de jerarquía.
+ *   - handleDracoPlanningValueChanged (onChanged): marca en cian una
+ *     celda de Draco_XXX_Values editada a mano en un informe de
+ *     planificación.
+ * Se puede llamar varias veces sin problema (cada hoja solo se engancha
+ * una vez, para los dos listeners a la vez).
  */
 async function ensureDracoRowsClickLoggerRegistered() {
     try {
@@ -3962,6 +4015,7 @@ async function ensureDracoRowsClickLoggerRegistered() {
             sheets.items.forEach(sheet => {
                 if (DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) return;
                 sheet.onSingleClicked.add(handleDracoRowsSingleClick);
+                sheet.onChanged.add(handleDracoPlanningValueChanged);
                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
             });
 
@@ -3974,6 +4028,7 @@ async function ensureDracoRowsClickLoggerRegistered() {
                             await ctx.sync();
                             if (!DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) {
                                 sheet.onSingleClicked.add(handleDracoRowsSingleClick);
+                                sheet.onChanged.add(handleDracoPlanningValueChanged);
                                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
                                 await ctx.sync();
                             }
@@ -3987,9 +4042,9 @@ async function ensureDracoRowsClickLoggerRegistered() {
 
             await context.sync();
         });
-        console.log("[Draco] Listener de clic en rangos Draco_*_Rows registrado en todas las hojas.");
+        console.log("[Draco] Listeners de clic (Draco_*_Rows) y cambio (Draco_*_Values) registrados en todas las hojas.");
     } catch (e) {
-        console.warn("[Draco] No se pudo registrar el listener de clic en Draco_*_Rows (¿host sin soporte de ExcelApi 1.10?):", e);
+        console.warn("[Draco] No se pudieron registrar los listeners de clic/cambio en Draco_* (¿host sin soporte de ExcelApi 1.10?):", e);
     }
 }
 
@@ -4067,23 +4122,10 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
     console.log("[Draco] openMemberRecognitionPicker: iniciando para", addr, located);
 
     if (DracoMemberPickerOpen) {
-        console.log("[Draco] Ya hay un buscador de miembros abierto (mismo runtime): se ignora esta petición duplicada para", addr);
+        console.log("[Draco] Ya hay un buscador de miembros abierto: se ignora esta petición duplicada para", addr);
         return;
     }
     DracoMemberPickerOpen = true;
-
-    // Candado cruzado entre runtimes (ver comentario junto a
-    // DracoMemberPickerOpen más arriba): si el panel y el ribbon han
-    // registrado ambos los listeners para esta hoja, un mismo cambio
-    // puede llegar aquí desde los DOS procesos casi a la vez. Sin esto,
-    // cada uno vería su propio DracoMemberPickerOpen en `false` y los dos
-    // abrirían diálogo.
-    const lockClaimed = await tryClaimDracoPickerLock();
-    if (!lockClaimed) {
-        console.log("[Draco] Ya se está abriendo el buscador de miembros desde otro proceso del complemento: se ignora esta petición duplicada para", addr);
-        DracoMemberPickerOpen = false;
-        return;
-    }
 
     // Estado compartido entre la carga de valores (en paralelo) y el
     // diálogo (que puede avisar "ready" antes o después de que la SQL
@@ -4150,7 +4192,6 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         asyncResult.error && asyncResult.error.message
                     );
                     DracoMemberPickerOpen = false;
-                    releaseDracoPickerLock();
                     resolve();
                     return;
                 }
@@ -4214,7 +4255,6 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                             console.error("[Draco] Error escribiendo la fórmula EPM_VALUE:", err);
                         }
                         DracoMemberPickerOpen = false;
-                        await releaseDracoPickerLock();
                         resolve();
                         return;
                     }
@@ -4224,7 +4264,6 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         settled = true;
                         closeDialog();
                         DracoMemberPickerOpen = false;
-                        await releaseDracoPickerLock();
                         resolve();
                     }
                 });
@@ -4233,7 +4272,6 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                     // 12006 = el usuario cerró el diálogo con la X.
                     console.warn("[Draco] DialogEventReceived:", arg.error);
                     DracoMemberPickerOpen = false;
-                    releaseDracoPickerLock();
                     if (!settled) resolve();
                 });
             }
@@ -4621,16 +4659,11 @@ async function registerEditReportPickerHandler(context) {
     console.log("[Draco] Listener de EDIT_REPORT registrado: T2:V2 (REC/DC, buscador de miembros).");
 }
 
-// NOTA: aquí existía handleDracoPlanningValueChanged (onChanged de cada
-// hoja de resultados), que marcaba en cian las celdas de
-// Draco_<id>_Values editadas a mano en informes de planificación. Se ha
-// eliminado por completo, junto con su enganche en
-// registerDracoSelectionHandler. El resto de la infraestructura de
-// planificación (DracoPlanningModifiedCells, flushDracoPlanningModifiedCells,
-// beginSuppressPlanningPaint, guardarPlanificacion) se conserva intacta
-// porque la usan otros flujos (guardar planificación / refresco), pero ya
-// no se alimenta automáticamente: ninguna celda se marcará en cian al
-// editarla a mano.
+// NOTA: handleDracoPlanningValueChanged (marca en cian las celdas de
+// Draco_<id>_Values editadas a mano en informes de planificación) vive
+// junto a handleDracoRowsSingleClick, más arriba, y se engancha en el
+// mismo sitio (ensureDracoRowsClickLoggerRegistered) — no en
+// registerDracoSelectionHandler.
 
 // sheetName es el nombre de la hoja de resultados donde vive `sheet`: cada
 // informe puede pintarse en una hoja distinta (ver resultSheetNameFromGrid/
