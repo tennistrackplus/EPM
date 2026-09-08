@@ -101,6 +101,75 @@ function guardarModeloSemantico(event) {
 }
 
 /**
+ * Botón de ribbon "Conexión" (ConexionButton) y "Editar modelos semántico"
+ * (ModeloCrearButton). Antes eran ShowTaskpane (paneles acoplados
+ * ConexionPane/ModeloPane); con Shared Runtime solo puede existir UN
+ * task pane en todo el manifest (el de "Editar informes"), así que ahora
+ * abren login.html/semantic_model.html como diálogos flotantes
+ * independientes (Office.context.ui.displayDialogAsync), igual que ya
+ * hace memberPicker.html/filterDialog.html. login.html/semantic_model.html
+ * y sus .js no necesitan ningún cambio: ya guardan su estado en
+ * localStorage (compartido con el resto del add-in) y en el propio libro,
+ * no en el panel en sí, así que funcionan igual dentro de un diálogo.
+ *
+ * No se espera ningún mensaje de vuelta del diálogo (a diferencia del
+ * picker de miembros o "Añadir filtro"): el usuario los cierra cuando
+ * termina, sin más.
+ */
+function abrirDialogoConexion(event) {
+    try {
+        const dialogUrl = new URL("login.html", window.location.href).href;
+        Office.context.ui.displayDialogAsync(
+            dialogUrl,
+            { height: 70, width: 40, displayInIframe: false },
+            (asyncResult) => {
+                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                    console.error(
+                        "[Draco] Conexión: displayDialogAsync ha fallado:",
+                        asyncResult.error && asyncResult.error.code,
+                        asyncResult.error && asyncResult.error.message
+                    );
+                }
+            }
+        );
+    } catch (error) {
+        console.error("Error al abrir el diálogo de Conexión:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+function abrirDialogoEditarModelo(event) {
+    try {
+        // Misma comprobación/creación de EDIT_REPORT que ya hacía
+        // abrirModeloSemantico (botón "Abrir modelo semántico"): antes la
+        // garantizaba semantic_model.js al cargar el panel; como panel ya
+        // no existe hasta que se abra el diálogo, se asegura aquí desde
+        // el ribbon igual que en ese otro botón.
+        ensureEditReportSheetFromRibbon().finally(() => {
+            const dialogUrl = new URL("semantic_model.html", window.location.href).href;
+            Office.context.ui.displayDialogAsync(
+                dialogUrl,
+                { height: 90, width: 60, displayInIframe: false },
+                (asyncResult) => {
+                    if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                        console.error(
+                            "[Draco] Editar modelo semántico: displayDialogAsync ha fallado:",
+                            asyncResult.error && asyncResult.error.code,
+                            asyncResult.error && asyncResult.error.message
+                        );
+                    }
+                }
+            );
+        });
+    } catch (error) {
+        console.error("Error al abrir el diálogo de Editar modelo semántico:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+/**
  * Botón de ribbon "Abrir bucket" (AbrirBucketButton).
  * Abre un diálogo que lista los .xlsx/.xlsm del bucket de Google Cloud
  * Storage configurado en la conexión BigQuery (bucketBrowser.html) y
@@ -1313,6 +1382,17 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     const rowIdsArray = buildIdArray(atributesGrid, rowsDefs, "ROW_ID");
     const columnIdsArray = buildIdArray(atributesGrid, colDefs, "COLUMN_ID");
 
+    // Filtros del informe (zona "Filtros") + filtros "bloqueados" (Añadir
+    // filtro, tanto los de ESTE informe como los globales de "Todos los
+    // informes") — ReportState.Filters ya los trae todos juntos (los
+    // carga loadReportDefinition, llamado antes de esta función). Se
+    // combinan con AND justo detrás del bloque OR de buildBaseWhere: ese
+    // OR ya poda a las filas que podrían encajar en ALGUNA cabecera de
+    // fila/columna (optimización para no escanear toda la tabla de
+    // hechos); los filtros de aquí son una condición añadida de negocio,
+    // así que van en AND, no dentro del propio OR.
+    const filterConditions = buildFilterConditions(atributesGrid, relGrid);
+
     let sql = "";
 
     // ---- CTE BASE: se escanea la tabla de hechos UNA sola vez ----
@@ -1320,7 +1400,11 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     sql += buildSelectBase(relGrid, rowsDefs, colDefs, measureField) + CRLF + CRLF;
     sql += buildFrom(measuresGrid, measureName) + CRLF + CRLF;
     sql += buildJoins(relGrid) + CRLF + CRLF;
-    sql += buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs) + CRLF + CRLF;
+    sql += buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs);
+    for (const cond of filterConditions) {
+        sql += CRLF + "AND " + cond;
+    }
+    sql += CRLF + CRLF;
     sql += buildGroupByBase(relGrid, rowsDefs, colDefs) + CRLF;
     sql += ")," + CRLF + CRLF;
 
@@ -1882,12 +1966,22 @@ function buildHierarchyListCondition(atributesGrid, relGrid, dimension, filter) 
     return "(" + partes.join(CRLF + "   AND ") + ")";
 }
 
-function buildWhere(atributesGrid, relGrid) {
+/**
+ * Condiciones de los filtros del informe (zona "Filtros" del taskpane) Y
+ * de los filtros "bloqueados" (botón "Añadir filtro", tanto los atados a
+ * ESTE informe como los de "Todos los informes") — ReportState.Filters ya
+ * los trae todos juntos, cargados por loadReportDefinition
+ * (loadFilters + appendLockedFilterRangesToState). Devuelve un array de
+ * condiciones SQL sueltas (sin "WHERE" ni "AND" delante) — cada llamante
+ * decide cómo combinarlas: buildWhere (modo Dinámico) las usa como ÚNICO
+ * WHERE; buildSQLFixed (modo Fijo) las añade con AND al bloque OR ya
+ * existente (ver comentario en buildSQLFixed).
+ */
+function buildFilterConditions(atributesGrid, relGrid) {
     // Filtros "vacíos" (sin valor seleccionado en el taskpane) no deben
     // añadirse al WHERE: se ignoran por completo, como si no existieran.
     const activeFilters = ReportState.Filters.filter(f => String(f.Value).trim() !== "");
-
-    if (activeFilters.length === 0) return "";
+    if (activeFilters.length === 0) return [];
 
     const condiciones = [];
 
@@ -1908,8 +2002,12 @@ function buildWhere(atributesGrid, relGrid) {
         if (cond) condiciones.push(cond);
     }
 
-    if (condiciones.length === 0) return "";
+    return condiciones;
+}
 
+function buildWhere(atributesGrid, relGrid) {
+    const condiciones = buildFilterConditions(atributesGrid, relGrid);
+    if (condiciones.length === 0) return "";
     return "WHERE" + CRLF + condiciones.join(CRLF + "AND ");
 }
 
@@ -3791,36 +3889,6 @@ async function findDracoRowsNamedRangeForCell(context, worksheetId, addr) {
     };
 }
 
-/**
- * Localiza a qué informe pertenece una celda concreta, buscando entre los
- * rangos con nombre "Draco_<n>_Values" definidos en esa misma hoja (sin
- * "zona de crecimiento": a diferencia de _Rows/_Cols, un _Values no se
- * amplía solo, así que basta una comprobación de contención simple).
- *
- * Devuelve {reportId, sheetName} o null si la celda no cae dentro de
- * ningún Draco_XXX_Values de esa hoja. Usada por
- * handleDracoPlanningValueChanged para saber si una celda tocada a mano
- * pertenece a un informe (y, si es de planificación, marcarla en cian).
- */
-async function findDracoValuesRangeForCell(context, worksheetId, addr) {
-    const sheet = context.workbook.worksheets.getItem(worksheetId);
-    sheet.load("name");
-    const cell = sheet.getRange(addr);
-    cell.load(["rowIndex", "columnIndex"]);
-    await context.sync();
-
-    const candidates = await collectDracoAxisCandidates(context, sheet, "Values");
-    if (candidates.length === 0) return null;
-
-    const match = candidates.find(c =>
-        cell.rowIndex >= c.rowIndex && cell.rowIndex < c.rowIndex + c.rowCount &&
-        cell.columnIndex >= c.columnIndex && cell.columnIndex < c.columnIndex + c.columnCount
-    );
-    if (!match) return null;
-
-    return { reportId: match.reportId, sheetName: sheet.name };
-}
-
 // Contexto de canvas reutilizado para medir texto (evita crear un
 // <canvas> nuevo en cada clic).
 let _a50MeasureCtx = null;
@@ -3998,101 +4066,14 @@ async function handleDracoRowsSingleClick(eventArgs) {
     }
 }
 
-/**
- * Se dispara con onChanged en cada hoja de resultados (mismo registro por
- * hoja que handleDracoRowsSingleClick, ver ensureDracoRowsClickLoggerRegistered
- * más abajo): si la celda tocada cae dentro de un rango con nombre
- * Draco_<n>_Values Y ese informe tiene marcada la propiedad "Informe de
- * planificación" (Propiedades del informe > planningReport), pinta el
- * fondo de la celda en RGB(223,255,255) — marca visual de "editada a
- * mano, pendiente de guardar planificación".
- *
- * Se ignora sin hacer nada mientras:
- *   - DracoSuppressChangeEvents esté activo: son nuestras propias
- *     escrituras (p.ej. la fórmula EPM_VALUE que deja el picker, o el
- *     propio jsonTo3Matrices pintando la tabla), no una edición manual.
- *   - DracoSuppressPlanningPaintCount > 0: hay un refresco en curso
- *     (Actualizar / Actualizar todos / Guardar planificación, ver
- *     beginSuppressPlanningPaint/endSuppressPlanningPaint) — si no,
- *     CADA refresco dejaría todo el informe pintado en cian, como si el
- *     usuario lo hubiera editado a mano entero.
- *
- * El color que tenía la celda ANTES de pintarse se guarda en
- * DracoPlanningModifiedCells (si no estaba ya registrada: si el usuario
- * la toca varias veces seguidas mientras sigue en cian, no se debe
- * "olvidar" el color original de antes de la primera edición). Esa
- * misma estructura la vacía/usa flushDracoPlanningModifiedCells, tanto
- * al guardar planificación como al arrancar cualquier refresco.
- */
-async function handleDracoPlanningValueChanged(eventArgs) {
-    try {
-        if (DracoSuppressChangeEvents) return;
-        if (DracoSuppressPlanningPaintCount > 0) return;
-        if (!eventArgs || !eventArgs.address) return;
-
-        let addr = String(eventArgs.address);
-        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
-        addr = addr.replace(/\$/g, "").toUpperCase();
-        if (!addr) return;
-
-        await Excel.run(async (context) => {
-            const sheet = context.workbook.worksheets.getItem(eventArgs.worksheetId);
-            sheet.load("name");
-
-            const cell = sheet.getRange(addr);
-            cell.load(["rowCount", "columnCount", "format/fill/color"]);
-            await context.sync();
-
-            // Varias celdas a la vez (pegado/relleno): no se intenta
-            // resolver un único informe/color para todas juntas. Excel
-            // dispara un evento onChanged por cada bloque pegado, no por
-            // celda, así que un pegado múltiple simplemente no se marca
-            // (igual de conservador que runDracoMemberRecognitionAction
-            // con el reconocimiento de miembros).
-            if (cell.rowCount !== 1 || cell.columnCount !== 1) return;
-
-            const located = await findDracoValuesRangeForCell(context, eventArgs.worksheetId, addr);
-            if (!located) return; // fuera de cualquier Draco_XXX_Values
-
-            const report = window.ReportStore ? window.ReportStore.getReport(located.reportId) : null;
-            const props = report && report.reportProperties ? report.reportProperties : null;
-            if (!props || !props.planningReport) return; // informe no marcado como "de planificación"
-
-            if (!DracoPlanningModifiedCells.has(located.reportId)) {
-                DracoPlanningModifiedCells.set(located.reportId, new Map());
-            }
-            const bucket = DracoPlanningModifiedCells.get(located.reportId);
-            if (!bucket.has(addr)) {
-                bucket.set(addr, {
-                    sheetName: sheet.name,
-                    address: addr,
-                    color: cell.format.fill.color || ""
-                });
-            }
-
-            cell.format.fill.color = "#DFFFFF"; // RGB(223,255,255)
-            await context.sync();
-
-            console.log(`[Draco] Celda de planificación marcada en cian: ${sheet.name}!${addr} (informe ${located.reportId}).`);
-        });
-    } catch (e) {
-        console.error("[Draco] Error marcando en cian la celda de planificación modificada:", e);
-    }
-}
-
 const DracoRowsClickHandlerRegisteredSheets = new Set();
 let DracoRowsClickOnAddedRegistered = false;
 
 /**
- * Engancha, en TODAS las hojas del libro (los rangos Draco_XXX_Rows/Cols/
- * Values pueden estar en cualquiera) y en las que se añadan después:
- *   - handleDracoRowsSingleClick (onSingleClicked): clic en el icono +/-
- *     de jerarquía.
- *   - handleDracoPlanningValueChanged (onChanged): marca en cian una
- *     celda de Draco_XXX_Values editada a mano en un informe de
- *     planificación.
- * Se puede llamar varias veces sin problema (cada hoja solo se engancha
- * una vez, para los dos listeners a la vez).
+ * Engancha handleDracoRowsSingleClick en TODAS las hojas del libro (los
+ * rangos Draco_XXX_Rows pueden estar en cualquiera) y en las hojas que se
+ * añadan después. Se puede llamar varias veces sin problema (cada hoja
+ * solo se engancha una vez).
  */
 async function ensureDracoRowsClickLoggerRegistered() {
     try {
@@ -4104,7 +4085,6 @@ async function ensureDracoRowsClickLoggerRegistered() {
             sheets.items.forEach(sheet => {
                 if (DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) return;
                 sheet.onSingleClicked.add(handleDracoRowsSingleClick);
-                sheet.onChanged.add(handleDracoPlanningValueChanged);
                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
             });
 
@@ -4117,7 +4097,6 @@ async function ensureDracoRowsClickLoggerRegistered() {
                             await ctx.sync();
                             if (!DracoRowsClickHandlerRegisteredSheets.has(sheet.name)) {
                                 sheet.onSingleClicked.add(handleDracoRowsSingleClick);
-                                sheet.onChanged.add(handleDracoPlanningValueChanged);
                                 DracoRowsClickHandlerRegisteredSheets.add(sheet.name);
                                 await ctx.sync();
                             }
@@ -4131,9 +4110,9 @@ async function ensureDracoRowsClickLoggerRegistered() {
 
             await context.sync();
         });
-        console.log("[Draco] Listeners de clic (Draco_*_Rows) y cambio (Draco_*_Values) registrados en todas las hojas.");
+        console.log("[Draco] Listener de clic en rangos Draco_*_Rows registrado en todas las hojas.");
     } catch (e) {
-        console.warn("[Draco] No se pudieron registrar los listeners de clic/cambio en Draco_* (¿host sin soporte de ExcelApi 1.10?):", e);
+        console.warn("[Draco] No se pudo registrar el listener de clic en Draco_*_Rows (¿host sin soporte de ExcelApi 1.10?):", e);
     }
 }
 
@@ -4748,11 +4727,16 @@ async function registerEditReportPickerHandler(context) {
     console.log("[Draco] Listener de EDIT_REPORT registrado: T2:V2 (REC/DC, buscador de miembros).");
 }
 
-// NOTA: handleDracoPlanningValueChanged (marca en cian las celdas de
-// Draco_<id>_Values editadas a mano en informes de planificación) vive
-// junto a handleDracoRowsSingleClick, más arriba, y se engancha en el
-// mismo sitio (ensureDracoRowsClickLoggerRegistered) — no en
-// registerDracoSelectionHandler.
+// NOTA: aquí existía handleDracoPlanningValueChanged (onChanged de cada
+// hoja de resultados), que marcaba en cian las celdas de
+// Draco_<id>_Values editadas a mano en informes de planificación. Se ha
+// eliminado por completo, junto con su enganche en
+// registerDracoSelectionHandler. El resto de la infraestructura de
+// planificación (DracoPlanningModifiedCells, flushDracoPlanningModifiedCells,
+// beginSuppressPlanningPaint, guardarPlanificacion) se conserva intacta
+// porque la usan otros flujos (guardar planificación / refresco), pero ya
+// no se alimenta automáticamente: ninguna celda se marcará en cian al
+// editarla a mano.
 
 // sheetName es el nombre de la hoja de resultados donde vive `sheet`: cada
 // informe puede pintarse en una hoja distinta (ver resultSheetNameFromGrid/
@@ -6611,6 +6595,8 @@ try {
     Office.actions.associate("hidePane", hidePane);
     Office.actions.associate("abrirModeloSemantico", abrirModeloSemantico);
     Office.actions.associate("guardarModeloSemantico", guardarModeloSemantico);
+    Office.actions.associate("abrirDialogoConexion", abrirDialogoConexion);
+    Office.actions.associate("abrirDialogoEditarModelo", abrirDialogoEditarModelo);
     Office.actions.associate("writeHolaInA1", writeHolaInA1);
     Office.actions.associate("actualizarInformeFixed", actualizarInformeFixed);
     Office.actions.associate("actualizarInforme", actualizarInforme);
