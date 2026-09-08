@@ -4734,16 +4734,163 @@ async function registerEditReportPickerHandler(context) {
     console.log("[Draco] Listener de EDIT_REPORT registrado: T2:V2 (REC/DC, buscador de miembros).");
 }
 
-// NOTA: aquí existía handleDracoPlanningValueChanged (onChanged de cada
-// hoja de resultados), que marcaba en cian las celdas de
-// Draco_<id>_Values editadas a mano en informes de planificación. Se ha
-// eliminado por completo, junto con su enganche en
-// registerDracoSelectionHandler. El resto de la infraestructura de
-// planificación (DracoPlanningModifiedCells, flushDracoPlanningModifiedCells,
-// beginSuppressPlanningPaint, guardarPlanificacion) se conserva intacta
-// porque la usan otros flujos (guardar planificación / refresco), pero ya
-// no se alimenta automáticamente: ninguna celda se marcará en cian al
-// editarla a mano.
+// Color de relleno con el que se marcan las celdas de Draco_<id>_Values
+// tocadas a mano en un informe de planificación (ver
+// handleDracoPlanningValueChanged). Antes era cian; ahora azul.
+const DRACO_PLANNING_MARK_COLOR = "#BDD7EE"; // Excel "Azul, Énfasis 1, Claro 60%"
+
+/**
+ * Igual que getDracoReportProperties() (arriba, cerca de
+ * DracoPlanningModifiedCells) pero para un informe concreto, no
+ * necesariamente el activo en el taskpane: handleDracoPlanningValueChanged
+ * reacciona a ediciones en CUALQUIER informe pintado en la hoja tocada,
+ * esté o no seleccionado en ese momento en el taskpane.
+ */
+function getDracoReportPropertiesById(reportId) {
+    const defaults = {
+        reportName: "Report 001",
+        suppressZeroRows: false,
+        suppressZeroCols: false,
+        subtotalsOnTop: false,
+        overwriteFormats: true,
+        autoFitColumns: true,
+        planningReport: false
+    };
+    try {
+        if (!window.ReportStore || !reportId) return defaults;
+        const report = window.ReportStore.getReport(reportId);
+        if (!report) return defaults;
+        return Object.assign({}, defaults, report.reportProperties || {});
+    } catch (e) {
+        console.warn("[Draco] No se pudieron leer las propiedades del informe " + reportId + ", se usan valores por defecto:", e);
+        return defaults;
+    }
+}
+
+/**
+ * onChanged de cada hoja de resultados: si la celda (o rango, p.ej. un
+ * pegado) tocada A MANO por el usuario cae dentro de un rango con nombre
+ * Draco_<id>_Values, y ESE informe tiene marcada la opción "Informe de
+ * planificación" (modal Propiedades del informe > propPlanningReport),
+ * pinta en azul (DRACO_PLANNING_MARK_COLOR) cada celda tocada dentro de
+ * ese rango y registra su color anterior en DracoPlanningModifiedCells,
+ * para poder devolvérselo:
+ *   - al pulsar "Guardar planificación" (guardarPlanificacion), o
+ *   - al arrancar cualquier refresco (actualizarInformeFixedCore /
+ *     actualizarInformeCore / actualizarTodosCore), que ya llaman a
+ *     flushDracoPlanningModifiedCells ANTES de borrar y repintar
+ *     Draco_<id>_Values entero.
+ *
+ * Se IGNORA por completo (sin pintar nada) mientras:
+ *   - DracoSuppressChangeEvents esté activo: es el propio add-in
+ *     escribiendo (p.ej. jsonTo3Matrices pintando el resultado de un
+ *     refresco, o el picker de miembros) — sin este freno, CADA refresco
+ *     marcaría en azul la tabla entera en vez de solo lo que el usuario
+ *     teclee a mano.
+ *   - DracoSuppressPlanningPaintCount > 0: hay un refresco de
+ *     planificación en curso (ver beginSuppressPlanningPaint /
+ *     endSuppressPlanningPaint, que envuelven TODO el refresco, incluida
+ *     la llamada de red), que ya borra y repinta Draco_<id>_Values entero
+ *     por su cuenta.
+ *
+ * Si la celda ya estaba registrada en DracoPlanningModifiedCells (el
+ * usuario la toca dos veces antes de guardar/refrescar) se conserva el
+ * color ORIGINAL guardado la primera vez, no el azul de la marca
+ * anterior, para no perder el color real al restaurarlo luego.
+ */
+async function handleDracoPlanningValueChanged(eventArgs) {
+    if (DracoSuppressChangeEvents) return;
+    if (DracoSuppressPlanningPaintCount > 0) return;
+    if (!eventArgs || !eventArgs.address) return;
+
+    try {
+        let addr = String(eventArgs.address);
+        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+        if (!addr) return;
+        const touched = parseAddressRange(addr); // {r1,c1,r2,c2}, base 1
+
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getItem(eventArgs.worksheetId);
+            sheet.load("name");
+            await context.sync();
+            const sheetName = sheet.name;
+
+            // Rangos Draco_<id>_Values definidos en ESTA hoja.
+            const names = context.workbook.names;
+            names.load("items/name");
+            await context.sync();
+
+            const pattern = /^Draco_(\d+)_Values$/i;
+            const matching = names.items.filter(n => pattern.test(n.name));
+            if (matching.length === 0) return;
+
+            const loaded = matching.map(n => {
+                const range = context.workbook.names.getItem(n.name).getRange();
+                range.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+                const ws = range.worksheet;
+                ws.load("name");
+                return { name: n.name, reportId: Number(n.name.match(pattern)[1]), range, ws };
+            });
+            await context.sync();
+
+            const candidates = loaded.filter(c => c.ws.name === sheetName);
+            if (candidates.length === 0) return;
+
+            // Intersección (base 1) entre lo tocado y cada Draco_<id>_Values
+            // de esta hoja, descartando los informes que no sean de
+            // planificación.
+            const cellsToMark = [];
+            for (const c of candidates) {
+                const props = getDracoReportPropertiesById(c.reportId);
+                if (!props.planningReport) continue;
+
+                const vr1 = c.range.rowIndex + 1, vr2 = c.range.rowIndex + c.range.rowCount;
+                const vc1 = c.range.columnIndex + 1, vc2 = c.range.columnIndex + c.range.columnCount;
+
+                const r1 = Math.max(touched.r1, vr1), r2 = Math.min(touched.r2, vr2);
+                const c1 = Math.max(touched.c1, vc1), c2 = Math.min(touched.c2, vc2);
+                if (r1 > r2 || c1 > c2) continue;
+
+                for (let r = r1; r <= r2; r++) {
+                    for (let cc = c1; cc <= c2; cc++) {
+                        cellsToMark.push({ reportId: c.reportId, row1: r, col1: cc });
+                    }
+                }
+            }
+            if (cellsToMark.length === 0) return;
+
+            // 1) Cargar la dirección real y el color ACTUAL de cada celda
+            //    (antes de tocarlo), para poder devolvérselo luego.
+            const ranges = cellsToMark.map(m =>
+                sheet.getRangeByIndexes(m.row1 - 1, m.col1 - 1, 1, 1)
+            );
+            ranges.forEach(r => r.load(["address", "format/fill/color"]));
+            await context.sync();
+
+            // 2) Pintar en azul y registrar (si no lo estaba ya) el color
+            //    original de cada celda.
+            ranges.forEach((r, i) => {
+                const { reportId } = cellsToMark[i];
+                const bucket = DracoPlanningModifiedCells.get(reportId) || new Map();
+                DracoPlanningModifiedCells.set(reportId, bucket);
+
+                let cellAddr = r.address;
+                if (cellAddr.indexOf("!") !== -1) cellAddr = cellAddr.split("!").pop();
+
+                if (!bucket.has(cellAddr)) {
+                    let originalColor = "";
+                    try { originalColor = r.format.fill.color || ""; } catch (e) { originalColor = ""; }
+                    bucket.set(cellAddr, { sheetName, address: cellAddr, color: originalColor });
+                }
+
+                r.format.fill.color = DRACO_PLANNING_MARK_COLOR;
+            });
+            await context.sync();
+        });
+    } catch (e) {
+        console.error("[Draco] Error marcando en azul una celda de Draco_*_Values modificada a mano:", e);
+    }
+}
 
 // sheetName es el nombre de la hoja de resultados donde vive `sheet`: cada
 // informe puede pintarse en una hoja distinta (ver resultSheetNameFromGrid/
@@ -4754,13 +4901,15 @@ async function registerEditReportPickerHandler(context) {
 async function registerDracoSelectionHandler(context, sheet, sheetName) {
     if (DracoHandlerRegisteredSheets.has(sheetName)) return;
 
-    // La detección de "se ha tecleado algo" y el marcado en cian de
-    // planificación (que vivían aquí, por hoja) se han eliminado por
-    // completo. La detección de reconocimiento/doble clic la sigue
-    // haciendo el XLAM en VBA, avisando por EDIT_REPORT!T2:V2 (V2="REC"
-    // o "DC"); el único sitio que abre el picker es
-    // handleDracoPickerFlagRequest, enganchado una vez a EDIT_REPORT
-    // (ver registerEditReportPickerHandler), no aquí por cada hoja.
+    // Marcado en azul de planificación: reacciona a CUALQUIER edición a
+    // mano en Draco_<id>_Values de esta hoja (ver
+    // handleDracoPlanningValueChanged). La detección de
+    // reconocimiento/doble clic la sigue haciendo el XLAM en VBA,
+    // avisando por EDIT_REPORT!T2:V2 (V2="REC" o "DC"); el único sitio
+    // que abre el picker es handleDracoPickerFlagRequest, enganchado una
+    // vez a EDIT_REPORT (ver registerEditReportPickerHandler), no aquí
+    // por cada hoja.
+    sheet.onChanged.add(handleDracoPlanningValueChanged);
 
     // Petición de apertura del Member Picker desde EDIT_REPORT
     await registerEditReportPickerHandler(context);
