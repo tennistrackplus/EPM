@@ -2718,20 +2718,7 @@ async function flushDracoPlanningModifiedCells() {
 }
 
 async function beginSuppressPlanningPaint() {
-    const wasZero = DracoSuppressPlanningPaintCount === 0;
     DracoSuppressPlanningPaintCount++;
-
-    // Desenganchar del todo el onChanged de planificación mientras dura
-    // el refresco (no solo confiar en su comprobación rápida de
-    // DracoSuppressPlanningPaintCount): jsonPaintValues pinta el informe
-    // celda a celda (una asignación de rango por celda, para que cada
-    // una dispare su propio onChanged si algo lo escucha) y, con el
-    // controlador enganchado, un informe grande dispara miles de esas
-    // llamadas — cada una barata por separado, pero el volumen total
-    // ralentiza (o llega a colgar) el refresco. Sin el controlador
-    // enganchado, esas mismas escrituras no disparan nada en absoluto.
-    if (wasZero) await toggleDracoPlanningPaintListeners(false);
-
     try {
         await Excel.run(async (context) => {
             const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
@@ -2754,13 +2741,6 @@ async function beginSuppressPlanningPaint() {
 
 async function endSuppressPlanningPaint() {
     DracoSuppressPlanningPaintCount = Math.max(0, DracoSuppressPlanningPaintCount - 1);
-
-    // Reenganchar solo cuando ya no queda ningún refresco en curso
-    // (varios pueden solaparse, p.ej. "Actualizar todos" — ver el
-    // contador): si aquí ya hay otro begin() pendiente, no se reengancha
-    // todavía.
-    if (DracoSuppressPlanningPaintCount === 0) await toggleDracoPlanningPaintListeners(true);
-
     try {
         await Excel.run(async (context) => {
             const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
@@ -2778,38 +2758,6 @@ async function endSuppressPlanningPaint() {
         });
     } catch (e) {
         console.warn("[Draco] No se pudo decrementar el candado cruzado de planificación (EDIT_REPORT!Z2):", e);
-    }
-}
-
-// Engancha (attach=true) o desengancha (attach=false) handleDracoPlanningValueChanged
-// en todas las hojas donde ensureDracoRowsClickLoggerRegistered lo tiene
-// registrado. Se usa desde beginSuppressPlanningPaint/endSuppressPlanningPaint
-// (ver comentario arriba) — DracoRowsClickHandlerRegisteredSheets se
-// declara más abajo en el fichero, pero al ser una función que solo se
-// invoca en tiempo de ejecución (nunca durante la carga inicial del
-// script) ya existe para entonces sin problema.
-async function toggleDracoPlanningPaintListeners(attach) {
-    try {
-        await Excel.run(async (context) => {
-            const sheetNames = Array.from(DracoRowsClickHandlerRegisteredSheets);
-            if (sheetNames.length === 0) return;
-
-            const sheets = sheetNames.map(name => context.workbook.worksheets.getItemOrNullObject(name));
-            sheets.forEach(s => s.load("isNullObject"));
-            await context.sync();
-
-            sheets.forEach(s => {
-                if (s.isNullObject) return;
-                if (attach) {
-                    s.onChanged.add(handleDracoPlanningValueChanged);
-                } else {
-                    s.onChanged.remove(handleDracoPlanningValueChanged);
-                }
-            });
-            await context.sync();
-        });
-    } catch (e) {
-        console.warn(`[Draco] No se pudo ${attach ? "reenganchar" : "desenganchar"} el marcado en cian de planificación:`, e);
     }
 }
 
