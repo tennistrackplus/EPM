@@ -6482,6 +6482,9 @@ async function loadDracoPlanningCrossContext(context, reportId) {
 
 // "Dim X Valor Y, Dim Z Valor W" para una celda concreta, a partir de las
 // listas de fila/columna ya cargadas (loadDracoPlanningCrossContext).
+// Solo encuentra algo si el eje correspondiente está en Estático (hay
+// fórmulas EPM_VALUE que leer) — para Dinámico, ver
+// dracoPlanningCrossTextForCellDynamic más abajo.
 function dracoPlanningCrossTextForCell(crossCtx, cellAddr) {
     const { row, col } = parseAddress(cellAddr);
     const items = [
@@ -6489,6 +6492,112 @@ function dracoPlanningCrossTextForCell(crossCtx, cellAddr) {
         ...crossCtx.colDefs.filter(d => d.R === col)
     ];
     return items.map(d => `Dim ${d.Dimension} Valor ${d.Display || d.Value}`).join(", ");
+}
+
+/**
+ * Igual que loadDracoPlanningCrossContext, pero para ejes en DINÁMICO: no
+ * hay ninguna fórmula EPM_VALUE que leer (el eje solo tiene el texto ya
+ * calculado), así que se usa el MISMO procedimiento que
+ * convertAxisStaticFormulas usa para saber "esto es Dimensión X, Valor Y"
+ * a partir de una celda de cabecera sin fórmula:
+ *   1) iAux = columna física (en Filas) o fila física (en Columnas) del
+ *      campo dentro del eje.
+ *   2) indentLevel real de ESA celda concreta -> flag (profundidad).
+ *   3) fieldLevels[iAux] (construido desde el DISEÑO en EDIT_REPORT, no
+ *      depende de si el eje es Dinámico o Estático) + flag ->
+ *      resolveAxisFieldForFlag -> {dim, attr}.
+ *   4) el VALOR es el propio texto ya pintado en esa celda, sin el glifo
+ *      ▸/▾ de expandir/contraer.
+ */
+async function loadDracoPlanningCrossContextDynamic(context, reportId) {
+    const editReportGrid = await getEditReportGrid(context, reportId);
+    loadReportDefinition(editReportGrid, reportId); // rellena ReportState (incluye Filters)
+
+    const fieldLevelsRows = buildAxisFieldLevelsTable(editReportGrid, "rows");
+    const fieldLevelsCols = buildAxisFieldLevelsTable(editReportGrid, "columns");
+
+    const names = dracoRangeNames(reportId);
+
+    const rowsNameObj = context.workbook.names.getItemOrNullObject(names.rows);
+    const rowsRange = rowsNameObj.getRangeOrNullObject();
+    rowsRange.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
+
+    const colsNameObj = context.workbook.names.getItemOrNullObject(names.cols);
+    const colsRange = colsNameObj.getRangeOrNullObject();
+    colsRange.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
+
+    await context.sync();
+
+    const rowsIndent = rowsRange.isNullObject ? null : await readIndentLevelsForRange(context, rowsRange);
+    const colsIndent = colsRange.isNullObject ? null : await readIndentLevelsForRange(context, colsRange);
+
+    const isMeasureDim = (dim) => String(dim).toUpperCase() === "MEASURE";
+    const findMeasureLabel = (fieldLevels) => {
+        for (let iAux = 1; iAux < fieldLevels.length; iAux++) {
+            const col = fieldLevels[iAux];
+            if (!col) continue;
+            for (const flagKey of Object.keys(col.byFlag)) {
+                const entry = col.byFlag[flagKey];
+                if (entry && isMeasureDim(entry.dim)) return entry.attr;
+            }
+        }
+        return "";
+    };
+    const measureLabel = findMeasureLabel(fieldLevelsRows) || findMeasureLabel(fieldLevelsCols);
+
+    const filtersText = (ReportState.Filters || [])
+        .filter(f => String(f.Value).trim() !== "")
+        .map(f => `${f.Dimension}=${summarizeDracoFilterValue(f.Value)}`)
+        .join(", ");
+
+    return { rowsRange, rowsIndent, fieldLevelsRows, colsRange, colsIndent, fieldLevelsCols, measureLabel, filtersText };
+}
+
+const DRACO_GLYPH_PREFIX = /^[▸▾]\s+/;
+
+function dracoPlanningCrossTextForCellDynamic(ctx, cellAddr) {
+    const { row, col } = parseAddress(cellAddr); // 1-based
+    const parts = [];
+
+    // Cruce de FILA: mismo ROW absoluto, recorriendo las columnas del
+    // rango Draco_XXX_Rows (cada columna = un nivel de jerarquía).
+    if (ctx.rowsRange && !ctx.rowsRange.isNullObject) {
+        const rr = ctx.rowsRange;
+        const localRow = (row - 1) - rr.rowIndex;
+        if (localRow >= 0 && localRow < rr.rowCount) {
+            for (let c = 0; c < rr.columnCount; c++) {
+                const currentValue = rr.values[localRow][c];
+                if (currentValue === "" || currentValue === null || currentValue === undefined) continue;
+                const iAux = c + 1;
+                const flag = (ctx.rowsIndent[localRow][c] || 0) + 1;
+                const field = resolveAxisFieldForFlag(ctx.fieldLevelsRows[iAux], flag);
+                if (!field || String(field.dim).toUpperCase() === "MEASURE") continue;
+                const text = String(currentValue).replace(DRACO_GLYPH_PREFIX, "");
+                parts.push(`Dim ${field.dim} Valor ${text}`);
+            }
+        }
+    }
+
+    // Cruce de COLUMNA: mismo COL absoluto, recorriendo las filas del
+    // rango Draco_XXX_Cols.
+    if (ctx.colsRange && !ctx.colsRange.isNullObject) {
+        const cr = ctx.colsRange;
+        const localCol = (col - 1) - cr.columnIndex;
+        if (localCol >= 0 && localCol < cr.columnCount) {
+            for (let r = 0; r < cr.rowCount; r++) {
+                const currentValue = cr.values[r][localCol];
+                if (currentValue === "" || currentValue === null || currentValue === undefined) continue;
+                const iAux = r + 1;
+                const flag = (ctx.colsIndent[r][localCol] || 0) + 1;
+                const field = resolveAxisFieldForFlag(ctx.fieldLevelsCols[iAux], flag);
+                if (!field || String(field.dim).toUpperCase() === "MEASURE") continue;
+                const text = String(currentValue).replace(DRACO_GLYPH_PREFIX, "");
+                parts.push(`Dim ${field.dim} Valor ${text}`);
+            }
+        }
+    }
+
+    return parts.join(", ");
 }
 
 async function writeDracoPlanningSavedTable() {
@@ -6505,35 +6614,63 @@ async function writeDracoPlanningSavedTable() {
             for (const [reportId, bucket] of DracoPlanningModifiedCells.entries()) {
                 if (bucket.size === 0) continue;
 
-                let crossCtx;
+                let crossCtx = null;
+                let crossDiag = "";
+                let useDynamic = false;
                 try {
                     crossCtx = await loadDracoPlanningCrossContext(context, reportId);
+                    if (crossCtx.rowDefs.length === 0 && crossCtx.colDefs.length === 0) {
+                        crossCtx = null; // sin fórmulas EPM_VALUE: probar como Dinámico
+                    }
                 } catch (e) {
-                    console.warn(`[Draco] No se pudo resolver el cruce fila/columna del informe ${reportId} para la tabla guardada:`, e);
+                    console.warn(`[Draco] No se pudo resolver el cruce (Estático) del informe ${reportId}:`, e);
                     crossCtx = null;
+                }
+
+                if (!crossCtx) {
+                    try {
+                        crossCtx = await loadDracoPlanningCrossContextDynamic(context, reportId);
+                        useDynamic = true;
+                        if (
+                            (!crossCtx.rowsRange || crossCtx.rowsRange.isNullObject) &&
+                            (!crossCtx.colsRange || crossCtx.colsRange.isNullObject)
+                        ) {
+                            crossDiag = "Ni fórmulas EPM_VALUE (Estático) ni rango Draco_XXX_Rows/Cols (Dinámico) encontrados.";
+                            crossCtx = null;
+                        }
+                    } catch (e) {
+                        console.warn(`[Draco] No se pudo resolver el cruce (Dinámico) del informe ${reportId} para la tabla guardada:`, e);
+                        crossDiag = "EXCEPCIÓN: " + (e && e.message ? e.message : String(e));
+                        crossCtx = null;
+                    }
                 }
 
                 const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
                 const reportName = (report && report.name) || `Informe ${reportId}`;
 
                 for (const entry of bucket.values()) {
-                    const crossText = crossCtx ? dracoPlanningCrossTextForCell(crossCtx, entry.address) : "";
+                    const crossText = crossCtx
+                        ? (useDynamic
+                            ? dracoPlanningCrossTextForCellDynamic(crossCtx, entry.address)
+                            : dracoPlanningCrossTextForCell(crossCtx, entry.address))
+                        : "";
                     rows.push([
                         reportName,
                         entry.sheetName + "!" + entry.address,
                         entry.color || "",
                         crossText,
                         crossCtx ? crossCtx.measureLabel : "",
-                        crossCtx ? crossCtx.filtersText : ""
+                        crossCtx ? crossCtx.filtersText : "",
+                        crossDiag
                     ]);
                 }
             }
             if (rows.length === 0) return;
 
             const startRow = Number(DRACO_PLANNING_SAVED_TABLE_CELL.replace(/\D/g, "")); // 130
-            editReportSheet.getRangeByIndexes(startRow - 1, 0, 1, 6).values =
-                [["Informe", "Celda", "Color anterior", "Cruce", "Medida", "Filtros"]];
-            editReportSheet.getRangeByIndexes(startRow, 0, rows.length, 6).values = rows;
+            editReportSheet.getRangeByIndexes(startRow - 1, 0, 1, 7).values =
+                [["Informe", "Celda", "Color anterior", "Cruce", "Medida", "Filtros", "Diagnóstico"]];
+            editReportSheet.getRangeByIndexes(startRow, 0, rows.length, 7).values = rows;
 
             await context.sync();
         });
