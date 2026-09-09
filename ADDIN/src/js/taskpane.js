@@ -1891,27 +1891,41 @@ const TaskPaneApp = {
             container.innerHTML = "";
             dims.forEach(dim => {
                 const cfg = saved[dim] || { required: false, mode: "null" };
-                const row = document.createElement("div");
-                row.className = "dim-behavior-row";
-                row.style.cssText = "display:flex; align-items:center; gap:8px; font-size:11px;";
-                row.innerHTML = `
-                    <label style="display:flex; align-items:center; gap:4px; flex:0 0 auto;">
-                        <input type="checkbox" class="dim-behavior-required" data-dim="${dim}" ${cfg.required ? "checked" : ""} style="width:auto;" />
-                        Obligatoria
-                    </label>
-                    <span style="flex:1 1 auto; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${dim}</span>
-                    <select class="dim-behavior-mode" data-dim="${dim}" style="width:auto; flex:0 0 auto;">
-                        <option value="null" ${cfg.mode === "null" ? "selected" : ""}>Guardar como NULL</option>
-                        <option value="lineal" ${cfg.mode === "lineal" ? "selected" : ""}>Repartir linealmente</option>
-                        <option value="proporcional" ${cfg.mode === "proporcional" ? "selected" : ""}>Repartir proporcional</option>
-                    </select>
-                `;
-                container.appendChild(row);
+                container.appendChild(this.buildDimensionBehaviorRow(dim, cfg));
             });
         } catch (err) {
             console.warn("No se pudieron cargar las dimensiones del modelo para 'Comportamiento de dimensiones':", err);
             container.innerHTML = "<div style='font-size:11px; color:#a80000;'>No se pudieron cargar las dimensiones.</div>";
         }
+    },
+
+    // Fila reutilizable "Obligatoria + criterio de reparto" — la usan
+    // tanto "Propiedades del informe" (global) como el modal de Medida
+    // (override por medida). El criterio solo tiene sentido si la
+    // dimensión NO es obligatoria (si es obligatoria, nunca puede faltar,
+    // así que no hay nada que repartir) — por eso se oculta al marcarla.
+    buildDimensionBehaviorRow(dim, cfg) {
+        const row = document.createElement("div");
+        row.className = "dim-behavior-row";
+        row.style.cssText = "display:flex; align-items:center; gap:8px; font-size:11px;";
+        row.innerHTML = `
+            <label style="display:flex; align-items:center; gap:4px; flex:0 0 auto;">
+                <input type="checkbox" class="dim-behavior-required" data-dim="${dim}" ${cfg.required ? "checked" : ""} style="width:auto;" />
+                Obligatoria
+            </label>
+            <span style="flex:1 1 auto; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${dim}</span>
+            <select class="dim-behavior-mode" data-dim="${dim}" style="width:auto; flex:0 0 auto; ${cfg.required ? "display:none;" : ""}">
+                <option value="null" ${cfg.mode === "null" ? "selected" : ""}>Si falta: guardar como NULL</option>
+                <option value="lineal" ${cfg.mode === "lineal" ? "selected" : ""}>Si falta: repartir linealmente</option>
+                <option value="proporcional" ${cfg.mode === "proporcional" ? "selected" : ""}>Si falta: repartir proporcional</option>
+            </select>
+        `;
+        const checkbox = row.querySelector(".dim-behavior-required");
+        const select = row.querySelector(".dim-behavior-mode");
+        checkbox.addEventListener("change", () => {
+            select.style.display = checkbox.checked ? "none" : "";
+        });
+        return row;
     },
 
     openDistributeValuesModal() {
