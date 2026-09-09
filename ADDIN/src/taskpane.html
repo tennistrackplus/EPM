@@ -1530,6 +1530,20 @@
                         <input type="checkbox" id="propPlanningReport">
                         Informe de planificación
                     </label>
+
+                    <div id="propDimensionsBehaviorSection" style="margin-top:12px; padding-top:12px; border-top:1px solid #edebe9; display:none;">
+                        <div style="font-weight:600; font-size: var(--fs-sm, 11px); margin-bottom:8px; color:#323130;">
+                            Comportamiento de dimensiones al guardar planificación
+                        </div>
+                        <div style="font-size: 10px; color:#605e5c; margin-bottom:8px;">
+                            Por cada dimensión del modelo: si es obligatoria (no se puede
+                            guardar un valor sin especificarla) y, si NO aparece en este
+                            informe, cómo repartir el importe.
+                        </div>
+                        <div id="propDimensionsBehaviorContainer" style="display:flex; flex-direction:column; gap:6px; max-height:220px; overflow-y:auto;">
+                            <div style="font-size:11px; color:#605e5c;">Cargando dimensiones…</div>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -1896,6 +1910,12 @@
                     <option value="Percent">Porcentaje (%)</option>
                 </select>
             </div>
+            <div class="form-group">
+                <label style="display:flex; align-items:center; gap:6px; text-transform:none; font-weight:400;">
+                    <input type="checkbox" id="modalMeasurePlanificable" style="width:auto;" />
+                    Planificable
+                </label>
+            </div>
             <button class="btn" id="btnSaveMeasureModal">Guardar medida</button>
         </div>
     </div>
@@ -2012,6 +2032,18 @@
             document.querySelectorAll(".epm-page-view").forEach((el) => {
                 el.classList.toggle("epm-page-view--active", el.id === viewId);
             });
+
+            // "Al mostrar esta vista, refresca su estado" — antes cada vista
+            // era una página aparte que se recargaba entera cada vez que se
+            // abría (Office.onReady volvía a correr), así que el estado se
+            // comprobaba de cero en cada apertura. Fusionadas en un único
+            // documento, esa comprobación inicial solo corre UNA vez (al
+            // cargar el panel entero); sin este enganche, la vista de
+            // Conexión seguía mostrando "conectado" aunque el token hubiera
+            // caducado entre medias, porque nunca volvía a mirar.
+            if (viewId === "view-conexion" && window.LoginApp && typeof window.LoginApp.renderList === "function") {
+                window.LoginApp.renderList();
+            }
         };
     </script>
 </body>
