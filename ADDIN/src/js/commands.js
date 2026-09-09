@@ -1586,15 +1586,39 @@ function coerceCellLiteral(text) {
     return text;
 }
 
+// reportId -> Map("fila_columna" -> valor), con el valor que jsonPaintValues
+// pintó en cada celda de Draco_XXX_Values en el ÚLTIMO refresco — es
+// "la verdad" contra la que se compara al guardar planificación, para
+// mandar al MERGE solo las celdas cuyo valor de verdad cambió (ver
+// filterDracoPlanningRealChanges). Se limpia y rellena entero en cada
+// refresco (jsonPaintValues), no se va acumulando entre refrescos.
+//
+// SOLO se guarda para informes de planificación (reportProperties.
+// planningReport) — para el resto no hace falta esta "tabla" en memoria
+// en absoluto, y así no se guarda ni se retiene sin necesidad.
+const DracoPlanningBaselineValues = new Map();
+
 async function jsonPaintValues(context, json, reportId) {
     const triples = parseJsonValueTriples(json);
     const resultSheetName = await getDracoResultSheetName(context, reportId);
     await ensureDracoResultSheetExists(context, resultSheetName);
     const sheet = context.workbook.worksheets.getItem(resultSheetName);
 
+    const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
+    const isPlanningReport = !!(report && report.reportProperties && report.reportProperties.planningReport);
+    const baseline = isPlanningReport ? new Map() : null;
+
     for (const t of triples) {
         const range = sheet.getRangeByIndexes(t.row - 1, t.col - 1, 1, 1);
-        range.values = [[coerceCellLiteral(t.text)]];
+        const literal = coerceCellLiteral(t.text);
+        range.values = [[literal]];
+        if (baseline) baseline.set(t.row + "_" + t.col, literal);
+    }
+
+    if (isPlanningReport) {
+        DracoPlanningBaselineValues.set(reportId, baseline);
+    } else {
+        DracoPlanningBaselineValues.delete(reportId); // por si dejó de ser de planificación desde el último refresco
     }
 
     await context.sync();
@@ -4148,12 +4172,27 @@ async function handleDracoRowsSingleClick(eventArgs) {
  * seguidas — inofensivo pero redundante). Al ser un único proceso, este
  * controlador se registra una sola vez, sin duplicados.
  *
+ * ORDEN DE TRABAJO (así se piden las cosas a Excel, de menos a más caro):
+ *   1) Informes de planificación cuya hoja de resultados sea ESTA hoja —
+ *      puro JS contra ReportStore (localStorage), CERO idas y vueltas a
+ *      Excel. Si no hay ninguno, se corta aquí: la inmensa mayoría de
+ *      ediciones en hojas sin ningún informe de planificación cuestan UNA
+ *      sola ida y vuelta (la de abajo, para tener sheet.name), no cuatro.
+ *   2) Solo el rango Draco_<id>_Values de ESOS candidatos en concreto
+ *      (por nombre exacto), no la colección completa de nombres del
+ *      libro — evita traer y filtrar en el cliente decenas de nombres
+ *      que no pintan nada aquí.
+ *   3) Intersección con la dirección modificada — en memoria.
+ *   4) Solo entonces se lee el formato y se escribe, y solo de las
+ *      celdas que de verdad han caído dentro de un rango de planificación.
+ *
  * El color que tenía cada celda ANTES de pintarse se guarda en
  * DracoPlanningModifiedCells (si no estaba ya registrada: si el usuario
  * la toca varias veces seguidas mientras sigue en cian, no se debe
- * "olvidar" el color original de antes de la primera edición). Esa
- * misma estructura la vacía/usa flushDracoPlanningModifiedCells, tanto
- * al guardar planificación como al arrancar cualquier refresco.
+ * "olvidar" el color original de antes de la primera edición, y tampoco
+ * hace falta releerlo/reescribirlo si ya está en cian). Esa misma
+ * estructura la vacía/usa flushDracoPlanningModifiedCells, tanto al
+ * guardar planificación como al arrancar cualquier refresco.
  */
 async function handleDracoPlanningValueChanged(eventArgs) {
     try {
@@ -4186,12 +4225,44 @@ async function handleDracoPlanningValueChanged(eventArgs) {
                 return;
             }
 
-            const candidates = await collectDracoAxisCandidates(context, sheet, "Values");
-            if (candidates.length === 0) return; // esta hoja no tiene ningún Draco_XXX_Values
+            // 1) Informes de planificación con resultados en ESTA hoja —
+            // puro JS, sin ninguna llamada a Excel todavía (design.
+            // resultSheetName está garantizado en todo informe, no hace
+            // falta ningún fallback ni leer EDIT_REPORT!D1).
+            const candidateReportIds = [];
+            if (window.ReportStore) {
+                const store = window.ReportStore.getAllReports() || {};
+                for (const idStr of Object.keys(store)) {
+                    const report = store[idStr];
+                    if (!report || !report.reportProperties || !report.reportProperties.planningReport) continue;
+                    const resultSheetName = report.design ? report.design.resultSheetName : "";
+                    if (resultSheetName === sheet.name) candidateReportIds.push(Number(idStr));
+                }
+            }
+            if (candidateReportIds.length === 0) return; // esta hoja no tiene ningún informe de planificación
 
-            // Qué celdas del bloque tocado caen en un Draco_XXX_Values, y de
-            // qué informe — contención en memoria, sin más llamadas a Excel
-            // por celda.
+            // 2) Rango Draco_<id>_Values de CADA candidato, por nombre
+            // exacto — no la colección completa de nombres del libro.
+            const namedLookups = candidateReportIds.map(id => {
+                const nameObj = context.workbook.names.getItemOrNullObject(`Draco_${pad3(id)}_Values`);
+                const r = nameObj.getRangeOrNullObject();
+                r.load(["rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
+                return { reportId: id, range: r };
+            });
+            await context.sync();
+
+            const candidates = namedLookups
+                .filter(n => !n.range.isNullObject)
+                .map(n => ({
+                    reportId: n.reportId,
+                    rowIndex: n.range.rowIndex,
+                    rowCount: n.range.rowCount,
+                    columnIndex: n.range.columnIndex,
+                    columnCount: n.range.columnCount
+                }));
+            if (candidates.length === 0) return;
+
+            // 3) Intersección con la dirección modificada — en memoria.
             const hits = []; // {r, c, reportId}
             for (let dr = 0; dr < range.rowCount; dr++) {
                 for (let dc = 0; dc < range.columnCount; dc++) {
@@ -4206,25 +4277,14 @@ async function handleDracoPlanningValueChanged(eventArgs) {
             }
             if (hits.length === 0) return;
 
-            // Filtrar a informes de planificación (una consulta por
-            // reportId DISTINTO entre los que salen, no por celda).
-            const planningReportIds = new Set();
-            for (const reportId of new Set(hits.map(h => h.reportId))) {
-                const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
-                const props = report && report.reportProperties ? report.reportProperties : null;
-                if (props && props.planningReport) planningReportIds.add(reportId);
-            }
-            const toMark = hits.filter(h => planningReportIds.has(h.reportId));
-            if (toMark.length === 0) return;
-
-            // Cargar dirección y color ACTUAL de cada celda a marcar, todas
-            // de una vez (una sola tanda de lecturas, no una por celda).
-            const cellRanges = toMark.map(h => sheet.getRangeByIndexes(h.r, h.c, 1, 1));
+            // 4) Leer dirección + color ACTUAL solo de las celdas que han
+            // caído dentro de un rango de planificación, todas de una vez.
+            const cellRanges = hits.map(h => sheet.getRangeByIndexes(h.r, h.c, 1, 1));
             cellRanges.forEach(cr => cr.load(["address", "format/fill/color"]));
             await context.sync();
 
             cellRanges.forEach((cr, i) => {
-                const reportId = toMark[i].reportId;
+                const reportId = hits[i].reportId;
                 let cellAddr = String(cr.address);
                 if (cellAddr.indexOf("!") !== -1) cellAddr = cellAddr.split("!").pop();
                 cellAddr = cellAddr.replace(/\$/g, "").toUpperCase();
@@ -4244,7 +4304,7 @@ async function handleDracoPlanningValueChanged(eventArgs) {
             });
             await context.sync();
 
-            console.log(`[Draco] ${toMark.length} celda(s) de planificación marcada(s) en cian en ${sheet.name} (bloque ${addr}).`);
+            console.log(`[Draco] ${hits.length} celda(s) de planificación marcada(s) en cian en ${sheet.name} (bloque ${addr}).`);
         });
     } catch (e) {
         console.error("[Draco] Error marcando en cian las celdas de planificación modificadas:", e);
@@ -6347,22 +6407,83 @@ function comingSoon(event) {
  * cambios marcados en el informe de planificación, revisión en
  * EDIT_REPORT!V4 y ejecución) cuando esté lista.
  * ------------------------------------------------------------------- */
-// Tabla legible (celda | color anterior) que escribe guardarPlanificacion
-// justo antes de vaciar el registro — a diferencia del JSON de A127 (que
-// también se escribe en cada refresco, pensado para que lo lea el XLAM),
-// esta tabla es solo para "Guardar" y en formato humano: una fila por
-// celda modificada, con su dirección y el color que tenía antes de
-// marcarse en cian.
-const DRACO_PLANNING_SAVED_TABLE_CELL = "A130"; // A130:B... hacia abajo
+// Tabla legible (informe | celda | color anterior | cruce | medida |
+// filtros) que escribe guardarPlanificacion justo antes de vaciar el
+// registro — a diferencia del JSON de A127 (que también se escribe en
+// cada refresco, pensado para que lo lea el XLAM), esta tabla es solo
+// para "Guardar" y en formato humano: una fila por celda modificada.
+//
+// El "cruce" (qué Dimensión/Valor corresponde a esa celda en cada eje)
+// sale de readRowDefinitions/readColumnDefinitions — las mismas que ya
+// usa buildSQLFixed para leer las fórmulas EPM_VALUE pintadas en las
+// cabeceras de fila/columna: para una celda de Draco_<id>_Values, su fila
+// física coincide con la fila de sus cabeceras de FILA, y su columna
+// física con la columna de sus cabeceras de COLUMNA, así que basta
+// filtrar esas dos listas por R === fila / R === columna de la celda.
+const DRACO_PLANNING_SAVED_TABLE_CELL = "A130"; // A130:F... hacia abajo
+
+// Texto legible ("valor1/valor2" o "NO valor1/valor2") de un filtro
+// guardado, reutilizando el mismo parseo que ya usa buildFilterConditions.
+function summarizeDracoFilterValue(rawValue) {
+    const filter = parseStoredFilterValue(rawValue);
+    if (!filter) return String(rawValue || "");
+
+    const list = (filter.items && filter.items.length) ? filter.items
+        : (filter.excludeItems && filter.excludeItems.length) ? filter.excludeItems
+        : null;
+    if (list) {
+        const texto = list.map(it => (it && (it.display || it.value)) || it).join("/");
+        return (filter.excludeItems && filter.excludeItems.length && !filter.items) ? "NO " + texto : texto;
+    }
+    if (filter.values && filter.values.length) {
+        return (filter.include === false ? "NO " : "") + filter.values.join("/");
+    }
+    return String(rawValue || "");
+}
+
+// Para un informe concreto: {rowDefs, colDefs, measureLabel, filtersText}
+// — una sola vez por informe (no por celda), reutilizado luego para cada
+// celda modificada de ESE informe.
+async function loadDracoPlanningCrossContext(context, reportId) {
+    const editReportGrid = await getEditReportGrid(context, reportId);
+    const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
+    const csvGrid = await getFormulaGrid(context, resultSheetName);
+
+    loadReportDefinition(editReportGrid, reportId); // rellena ReportState (incluye Filters)
+
+    const rowDefs = await readRowDefinitions(context, editReportGrid, csvGrid);
+    const colDefs = await readColumnDefinitions(context, editReportGrid, csvGrid);
+
+    const isMeasureDef = (d) => String(d.Dimension).toUpperCase() === "MEASURE";
+    const measureDef = rowDefs.find(isMeasureDef) || colDefs.find(isMeasureDef);
+    const measureLabel = measureDef ? (measureDef.Display || measureDef.AttributeName || "") : "";
+
+    const filtersText = (ReportState.Filters || [])
+        .filter(f => String(f.Value).trim() !== "")
+        .map(f => `${f.Dimension}=${summarizeDracoFilterValue(f.Value)}`)
+        .join(", ");
+
+    return {
+        rowDefs: rowDefs.filter(d => !isMeasureDef(d)),
+        colDefs: colDefs.filter(d => !isMeasureDef(d)),
+        measureLabel,
+        filtersText
+    };
+}
+
+// "Dim X Valor Y, Dim Z Valor W" para una celda concreta, a partir de las
+// listas de fila/columna ya cargadas (loadDracoPlanningCrossContext).
+function dracoPlanningCrossTextForCell(crossCtx, cellAddr) {
+    const { row, col } = parseAddress(cellAddr);
+    const items = [
+        ...crossCtx.rowDefs.filter(d => d.R === row),
+        ...crossCtx.colDefs.filter(d => d.R === col)
+    ];
+    return items.map(d => `Dim ${d.Dimension} Valor ${d.Display || d.Value}`).join(", ");
+}
 
 async function writeDracoPlanningSavedTable() {
-    const flat = [];
-    for (const [reportId, bucket] of DracoPlanningModifiedCells.entries()) {
-        for (const entry of bucket.values()) {
-            flat.push({ sheet: entry.sheetName, address: entry.address, color: entry.color || "" });
-        }
-    }
-    if (flat.length === 0) return;
+    if (DracoPlanningModifiedCells.size === 0) return;
 
     try {
         await Excel.run(async (context) => {
@@ -6371,11 +6492,39 @@ async function writeDracoPlanningSavedTable() {
             await context.sync();
             if (editReportSheet.isNullObject) return;
 
-            const startRow = Number(DRACO_PLANNING_SAVED_TABLE_CELL.replace(/\D/g, "")); // 130
-            editReportSheet.getRangeByIndexes(startRow - 1, 0, 1, 2).values = [["Celda", "Color anterior"]];
+            const rows = [];
+            for (const [reportId, bucket] of DracoPlanningModifiedCells.entries()) {
+                if (bucket.size === 0) continue;
 
-            const rows = flat.map(f => [f.sheet + "!" + f.address, f.color]);
-            editReportSheet.getRangeByIndexes(startRow, 0, rows.length, 2).values = rows;
+                let crossCtx;
+                try {
+                    crossCtx = await loadDracoPlanningCrossContext(context, reportId);
+                } catch (e) {
+                    console.warn(`[Draco] No se pudo resolver el cruce fila/columna del informe ${reportId} para la tabla guardada:`, e);
+                    crossCtx = null;
+                }
+
+                const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
+                const reportName = (report && report.name) || `Informe ${reportId}`;
+
+                for (const entry of bucket.values()) {
+                    const crossText = crossCtx ? dracoPlanningCrossTextForCell(crossCtx, entry.address) : "";
+                    rows.push([
+                        reportName,
+                        entry.sheetName + "!" + entry.address,
+                        entry.color || "",
+                        crossText,
+                        crossCtx ? crossCtx.measureLabel : "",
+                        crossCtx ? crossCtx.filtersText : ""
+                    ]);
+                }
+            }
+            if (rows.length === 0) return;
+
+            const startRow = Number(DRACO_PLANNING_SAVED_TABLE_CELL.replace(/\D/g, "")); // 130
+            editReportSheet.getRangeByIndexes(startRow - 1, 0, 1, 6).values =
+                [["Informe", "Celda", "Color anterior", "Cruce", "Medida", "Filtros"]];
+            editReportSheet.getRangeByIndexes(startRow, 0, rows.length, 6).values = rows;
 
             await context.sync();
         });
@@ -6384,9 +6533,77 @@ async function writeDracoPlanningSavedTable() {
     }
 }
 
+/**
+ * Compara el valor ACTUAL de cada celda marcada en cian contra su valor
+ * de referencia (el que pintó el último refresco, guardado en
+ * DracoPlanningBaselineValues) y descarta del registro las que en
+ * realidad no cambiaron de valor (el usuario la tocó, pero la dejó
+ * igual que estaba) — así lo que llegue después a la tabla guardada / al
+ * MERGE es solo lo que de verdad hace falta escribir.
+ *
+ * Si una celda no tiene valor de referencia (el informe nunca se
+ * refrescó en esta sesión, por ejemplo), se mantiene tal cual: sin
+ * referencia no hay forma de saber si cambió, así que por seguridad se
+ * asume que sí.
+ */
+async function filterDracoPlanningRealChanges() {
+    const allCells = []; // {reportId, address, sheetName}
+    for (const [reportId, bucket] of DracoPlanningModifiedCells.entries()) {
+        for (const entry of bucket.values()) {
+            allCells.push({ reportId, address: entry.address, sheetName: entry.sheetName });
+        }
+    }
+    if (allCells.length === 0) return;
+
+    try {
+        await Excel.run(async (context) => {
+            const cellRanges = allCells.map(c =>
+                context.workbook.worksheets.getItem(c.sheetName).getRange(c.address)
+            );
+            cellRanges.forEach(cr => cr.load("values"));
+            await context.sync();
+
+            let descartadas = 0;
+            allCells.forEach((c, i) => {
+                const { row, col } = parseAddress(c.address);
+                const baseline = DracoPlanningBaselineValues.get(c.reportId);
+                if (!baseline) return; // sin referencia: se mantiene, por seguridad
+
+                const baselineValue = baseline.get(row + "_" + col);
+                if (baselineValue === undefined) return; // tampoco hay referencia para ESTA celda en concreto
+
+                const currentValue = cellRanges[i].values[0][0];
+                if (String(baselineValue) === String(currentValue)) {
+                    const bucket = DracoPlanningModifiedCells.get(c.reportId);
+                    if (bucket) {
+                        bucket.delete(c.address);
+                        descartadas++;
+                    }
+                }
+            });
+
+            // Informes que se quedaron sin ninguna celda de verdad modificada.
+            for (const [reportId, bucket] of DracoPlanningModifiedCells.entries()) {
+                if (bucket.size === 0) DracoPlanningModifiedCells.delete(reportId);
+            }
+
+            if (descartadas > 0) {
+                console.log(`[Draco] ${descartadas} celda(s) marcada(s) en cian pero con el mismo valor que el último refresco: descartadas antes de guardar.`);
+            }
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo comparar el valor actual contra el de referencia; se guardan todas las celdas marcadas por si acaso:", e);
+    }
+}
+
 async function guardarPlanificacion(event) {
     try {
         console.log("Guardar planificación: INSERT real todavía no implementado; se vuelca/limpia el registro de celdas modificadas de planificación.");
+
+        // Descarta las celdas marcadas en cian que en realidad no cambiaron
+        // de valor respecto al último refresco (ver comentario de la
+        // función) — antes de escribir la tabla ni de mandar nada al MERGE.
+        await filterDracoPlanningRealChanges();
 
         // Tabla legible (celda | color anterior) — SOLO en "Guardar", antes
         // de que flushDracoPlanningModifiedCells vacíe el registro.
