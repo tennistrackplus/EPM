@@ -2082,7 +2082,7 @@ const TaskPaneApp = {
         body.appendChild(nameEl);
 
         if (isMeasure) {
-            body.appendChild(this.buildMeasureOptionsForm(zoneId, entry, options));
+            body.appendChild(await this.buildMeasureOptionsForm(zoneId, entry, options));
         } else if (entry.isHierarchy) {
             // Una jerarquía NO tiene "Mostrar totales" ni "Ordenar": solo
             // se puede elegir hasta qué nivel expandir y qué niveles se
@@ -2201,7 +2201,7 @@ const TaskPaneApp = {
         levelsBox.querySelectorAll("input[type=checkbox]").forEach(cb => cb.addEventListener("change", persist));
     },
 
-    buildMeasureOptionsForm(zoneId, entry, options) {
+    async buildMeasureOptionsForm(zoneId, entry, options) {
         const wrap = document.createElement("div");
         wrap.className = "field-options-group";
 
@@ -2243,6 +2243,22 @@ const TaskPaneApp = {
                         `<option value="${a}" ${options.aggregation === a ? "selected" : ""}>${a}</option>`).join("")}
                 </select>
             </label>
+            <div class="field-options-section-title">Planificación</div>
+            <label class="field-options-checkbox-row">
+                <input type="checkbox" id="optPlanificable" ${options.planificable ? "checked" : ""}>
+                <span>Planificable</span>
+            </label>
+            <div id="optPlanificableSection" style="display:${options.planificable ? "block" : "none"}; margin-top:6px;">
+                <label class="field-options-checkbox-row">
+                    <input type="checkbox" id="optDimensionsBehaviorCustom" ${options.dimensionsBehaviorCustom ? "checked" : ""}>
+                    <span>Personalizar criterio de dimensiones para esta medida</span>
+                </label>
+                <div style="font-size:10px; color:#605e5c; margin:4px 0 6px;">
+                    Si no se marca, usa el criterio global del informe
+                    (Propiedades del informe).
+                </div>
+                <div id="optDimensionsBehaviorContainer" style="display:${options.dimensionsBehaviorCustom ? "flex" : "none"}; flex-direction:column; gap:6px; max-height:180px; overflow-y:auto;"></div>
+            </div>
         `;
 
         const persist = () => {
@@ -2252,12 +2268,81 @@ const TaskPaneApp = {
             current.decimals = Number(wrap.querySelector("#optDecimals").value) || 0;
             current.factor = Number(wrap.querySelector("#optFactor").value) || 1;
             current.aggregation = wrap.querySelector("#optAggregation").value;
+            current.planificable = wrap.querySelector("#optPlanificable").checked;
+            current.dimensionsBehaviorCustom = wrap.querySelector("#optDimensionsBehaviorCustom").checked;
+
+            const dimensionsBehavior = {};
+            wrap.querySelectorAll("#optDimensionsBehaviorContainer .dim-behavior-row").forEach(row => {
+                const dim = row.querySelector(".dim-behavior-required").getAttribute("data-dim");
+                dimensionsBehavior[dim] = {
+                    required: row.querySelector(".dim-behavior-required").checked,
+                    mode: row.querySelector(".dim-behavior-mode").value
+                };
+            });
+            current.dimensionsBehavior = dimensionsBehavior;
+
             this.setFieldOptions(zoneId, entry, current);
             this.scheduleAutoUpdate();
         };
 
         wrap.querySelectorAll("select, input").forEach(el => el.addEventListener("change", persist));
 
+        // "Planificable" despliega/oculta la sección de personalización.
+        wrap.querySelector("#optPlanificable").addEventListener("change", (e) => {
+            wrap.querySelector("#optPlanificableSection").style.display = e.target.checked ? "block" : "none";
+        });
+
+        // "Personalizar..." despliega/oculta y rellena la lista de
+        // dimensiones (mismo bloque reutilizable que Propiedades del
+        // informe: buildDimensionBehaviorRow).
+        const dimsContainer = wrap.querySelector("#optDimensionsBehaviorContainer");
+        wrap.querySelector("#optDimensionsBehaviorCustom").addEventListener("change", async (e) => {
+            dimsContainer.style.display = e.target.checked ? "flex" : "none";
+            if (e.target.checked) await this.fillDimensionsBehaviorContainer(dimsContainer, options.dimensionsBehavior || {});
+        });
+
+        if (options.dimensionsBehaviorCustom) {
+            await this.fillDimensionsBehaviorContainer(dimsContainer, options.dimensionsBehavior || {});
+        }
+
         return wrap;
+    },
+
+    // Rellena un contenedor con una fila "Obligatoria + criterio" por cada
+    // dimensión del modelo del informe actual — usado tanto aquí (Opciones
+    // de campo de una medida) como en Propiedades del informe.
+    async fillDimensionsBehaviorContainer(container, saved) {
+        container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Cargando dimensiones…</div>";
+        try {
+            const report = (this.currentReportId && window.ReportStore) ? window.ReportStore.getReport(this.currentReportId) : null;
+            const modelName = report ? report.semanticModelName : "";
+            if (!modelName || !window.SemanticModelStore) {
+                container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Este informe no tiene modelo semántico asignado.</div>";
+                return;
+            }
+
+            const grid = await window.SemanticModelStore.getModelGrid("MODEL_DIMENSION", modelName);
+            const dims = [];
+            const seen = new Set();
+            const values = grid && grid.values ? grid.values : [];
+            for (let r = 1; r < values.length; r++) {
+                const dim = values[r] && values[r][1];
+                if (dim && !seen.has(dim)) { seen.add(dim); dims.push(dim); }
+            }
+
+            if (dims.length === 0) {
+                container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Este modelo no tiene dimensiones.</div>";
+                return;
+            }
+
+            container.innerHTML = "";
+            dims.forEach(dim => {
+                const cfg = saved[dim] || { required: false, mode: "null" };
+                container.appendChild(this.buildDimensionBehaviorRow(dim, cfg));
+            });
+        } catch (err) {
+            console.warn("No se pudieron cargar las dimensiones para 'Comportamiento de dimensiones':", err);
+            container.innerHTML = "<div style='font-size:11px; color:#a80000;'>No se pudieron cargar las dimensiones.</div>";
+        }
     }
 };

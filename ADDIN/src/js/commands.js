@@ -4169,10 +4169,17 @@ async function writeDracoPlanningDebug(msg) {
 /**
  * Para cada informe candidato (ya filtrado a "de planificación" + esta
  * hoja), decide qué medida aplica a cada celda concreta y si esa medida
- * está marcada como "Planificable" en MODEL_MEASURES (columna nueva, ver
- * semantic_model.js). Devuelve Map<reportId, (r, c) => boolean>.
+ * está marcada como "Planificable" — dato que vive POR INFORME (panel
+ * "Opciones de campo" de "Editar informes", ver buildMeasureOptionsForm
+ * en taskpane.js), NO en el modelo semántico: dos informes distintos con
+ * la misma medida pueden tener cada uno su propio "Planificable".
  *
- * La medida puede venir de dos sitios distintos:
+ * Se guarda en report.design.fieldOptions, con la misma clave
+ * "zona|MEASURE|nombre" que usa el propio panel (fieldOptionsKey) — zona
+ * es "filters", "rows" o "columns", según dónde esté puesta la medida.
+ *
+ * La medida puede venir de dos sitios distintos (y hay que saber de
+ * CUÁL, para construir la clave correcta):
  *   - FIJA para todo el informe: arrastrada a la zona "Filtros"
  *     (ReportState.FilterMeasureNames, se resuelve una sola vez).
  *   - VARIABLE por fila/columna: puesta como "MEASURE" en el diseño de
@@ -4180,6 +4187,8 @@ async function writeDracoPlanningDebug(msg) {
  *     en Dinámico (iAux + fieldLevels), pero aquí solo para localizar la
  *     columna/fila física de la MEASURE una vez, y leer su valor pintado
  *     en cada celda concreta que haga falta.
+ *
+ * Devuelve Map<reportId, (r, c) => boolean>.
  */
 async function buildDracoPlanningMeasureCheckers(context, reportIds) {
     const checkers = new Map();
@@ -4190,21 +4199,18 @@ async function buildDracoPlanningMeasureCheckers(context, reportIds) {
             loadReportDefinition(editReportGrid, reportId); // rellena ReportState (Filters/FilterMeasureNames)
 
             const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
-            const modelName = report ? report.semanticModelName : "";
-            const measuresGrid = (modelName && window.SemanticModelStore)
-                ? await window.SemanticModelStore.getModelGrid("MODEL_MEASURES", modelName)
-                : null;
+            const fieldOptions = (report && report.design) ? (report.design.fieldOptions || {}) : {};
 
-            const isMeasurePlanificable = (measureName) => {
-                if (!measuresGrid || !measureName) return false;
-                const R = buscarMedida(measuresGrid, measureName);
-                if (!R) return false;
-                return String(cellValue(measuresGrid, R, 9)).trim().toUpperCase() === "X"; // columna PLANIFICABLE
+            const isMeasurePlanificable = (zoneId, measureName) => {
+                if (!measureName) return false;
+                const key = `${zoneId}|MEASURE|${measureName}`;
+                const opts = fieldOptions[key];
+                return !!(opts && opts.planificable);
             };
 
             // Caso simple: medida fija, en la zona "Filtros".
             if (ReportState.FilterMeasureNames && ReportState.FilterMeasureNames.length > 0) {
-                const fixedOk = isMeasurePlanificable(ReportState.FilterMeasureNames[0]);
+                const fixedOk = isMeasurePlanificable("filters", ReportState.FilterMeasureNames[0]);
                 checkers.set(reportId, () => fixedOk);
                 continue;
             }
@@ -4236,6 +4242,7 @@ async function buildDracoPlanningMeasureCheckers(context, reportIds) {
 
             checkers.set(reportId, (r, c) => {
                 let measureName = null;
+                let zoneId = null;
 
                 if (measureIAuxRows !== null && rowsRange && !rowsRange.isNullObject) {
                     const localRow = r - rowsRange.rowIndex;
@@ -4244,6 +4251,7 @@ async function buildDracoPlanningMeasureCheckers(context, reportIds) {
                         const raw = rowsRange.values[localRow][localCol];
                         if (raw !== "" && raw !== null && raw !== undefined) {
                             measureName = String(raw).replace(DRACO_GLYPH_PREFIX, "");
+                            zoneId = "rows";
                         }
                     }
                 }
@@ -4254,12 +4262,13 @@ async function buildDracoPlanningMeasureCheckers(context, reportIds) {
                         const raw = colsRange.values[localRow][localCol];
                         if (raw !== "" && raw !== null && raw !== undefined) {
                             measureName = String(raw).replace(DRACO_GLYPH_PREFIX, "");
+                            zoneId = "columns";
                         }
                     }
                 }
 
                 if (!measureName) return false; // no se pudo determinar la medida: por seguridad, no marcar
-                return isMeasurePlanificable(measureName);
+                return isMeasurePlanificable(zoneId, measureName);
             });
         } catch (e) {
             console.warn(`[Draco] No se pudo resolver la medida del informe ${reportId} para comprobar "Planificable":`, e);

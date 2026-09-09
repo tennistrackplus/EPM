@@ -144,16 +144,6 @@ function initEvents() {
 
     document.getElementById("btnSaveMeasureModal").addEventListener("click", saveMeasureModal);
 
-    document.getElementById("modalMeasurePlanificable").addEventListener("change", (e) => {
-        document.getElementById("modalMeasureCriterioSection").style.display = e.target.checked ? "block" : "none";
-    });
-
-    document.getElementById("modalMeasureCriterioPersonalizado").addEventListener("change", (e) => {
-        const container = document.getElementById("modalMeasureDimensionsBehaviorContainer");
-        container.style.display = e.target.checked ? "flex" : "none";
-        if (e.target.checked) renderMeasureDimensionsBehaviorRows();
-    });
-
     document.getElementById("btnCloseMeasureModal").addEventListener("click",()=>{
 
         measureModal.style.display="none";
@@ -855,9 +845,6 @@ async function fetchFactFields(isModelLoad = false) {
                     // Config Medida
                     aggregation: (saved && saved.aggregation) || "SUM",
                     format: (saved && saved.format) || "Auto",
-                    planificable: !!(saved && saved.planificable),
-                    dimensionsBehaviorCustom: !!(saved && saved.dimensionsBehaviorCustom),
-                    dimensionsBehavior: (saved && saved.dimensionsBehavior) || {},
                     // Config Dimensión (Relación)
                     relProject: (saved && saved.relProject) || "",
                     relDataset: (saved && saved.relDataset) || "",
@@ -949,11 +936,6 @@ function openConfigModal(index) {
         document.getElementById("modalMeasureAlias").value = field.alias;
         document.getElementById("modalMeasureAgg").value = field.aggregation;
         document.getElementById("modalMeasureFormat").value = field.format;
-        document.getElementById("modalMeasurePlanificable").checked = !!field.planificable;
-        document.getElementById("modalMeasureCriterioSection").style.display = field.planificable ? "block" : "none";
-        document.getElementById("modalMeasureCriterioPersonalizado").checked = !!field.dimensionsBehaviorCustom;
-        document.getElementById("modalMeasureDimensionsBehaviorContainer").style.display = field.dimensionsBehaviorCustom ? "flex" : "none";
-        if (field.dimensionsBehaviorCustom) renderMeasureDimensionsBehaviorRows();
         document.getElementById("measureModal").style.display = "block";
     } else {
         document.getElementById("modalDimFieldName").textContent = field.name;
@@ -986,73 +968,9 @@ function saveMeasureModal() {
         fieldsState[currentConfigFieldIndex].alias = document.getElementById("modalMeasureAlias").value;
         fieldsState[currentConfigFieldIndex].aggregation = document.getElementById("modalMeasureAgg").value;
         fieldsState[currentConfigFieldIndex].format = document.getElementById("modalMeasureFormat").value;
-        fieldsState[currentConfigFieldIndex].planificable = document.getElementById("modalMeasurePlanificable").checked;
-        fieldsState[currentConfigFieldIndex].dimensionsBehaviorCustom = document.getElementById("modalMeasureCriterioPersonalizado").checked;
-
-        const dimensionsBehavior = {};
-        document.querySelectorAll("#modalMeasureDimensionsBehaviorContainer .dim-behavior-row").forEach(row => {
-            const dim = row.querySelector(".dim-behavior-required").getAttribute("data-dim");
-            dimensionsBehavior[dim] = {
-                required: row.querySelector(".dim-behavior-required").checked,
-                mode: row.querySelector(".dim-behavior-mode").value
-            };
-        });
-        fieldsState[currentConfigFieldIndex].dimensionsBehavior = dimensionsBehavior;
-
         renderFieldsTable();
     }
     document.getElementById("measureModal").style.display = "none";
-}
-
-// Lista de dimensiones (Obligatoria + criterio de reparto si falta) para
-// PERSONALIZAR el criterio de UNA medida en concreto — igual que el
-// mismo bloque en "Propiedades del informe" (taskpane.js), pero aquí ni
-// siquiera hace falta leer MODEL_DIMENSION de la hoja: fieldsState ya
-// tiene todas las dimensiones habilitadas en memoria, en el propio
-// editor de modelo. Solo estético por ahora: no está enganchado a
-// ningún guardado real todavía.
-function renderMeasureDimensionsBehaviorRows() {
-    const container = document.getElementById("modalMeasureDimensionsBehaviorContainer");
-    if (!container || currentConfigFieldIndex === null) return;
-
-    const field = fieldsState[currentConfigFieldIndex];
-    const dims = fieldsState.filter(f => f.enabled && f.type === "DIMENSION");
-
-    container.innerHTML = "";
-    if (dims.length === 0) {
-        container.innerHTML = "<div style='font-size:11px; color:#64748b;'>Este modelo no tiene dimensiones habilitadas.</div>";
-        return;
-    }
-
-    const saved = field.dimensionsBehavior || {};
-    dims.forEach(d => {
-        const cfg = saved[d.name] || { required: false, mode: "null" };
-        container.appendChild(buildMeasureDimensionBehaviorRow(d.name, cfg));
-    });
-}
-
-function buildMeasureDimensionBehaviorRow(dim, cfg) {
-    const row = document.createElement("div");
-    row.className = "dim-behavior-row";
-    row.style.cssText = "display:flex; align-items:center; gap:8px; font-size:11px;";
-    row.innerHTML = `
-        <label style="display:flex; align-items:center; gap:4px; flex:0 0 auto;">
-            <input type="checkbox" class="dim-behavior-required" data-dim="${dim}" ${cfg.required ? "checked" : ""} style="width:auto;" />
-            Obligatoria
-        </label>
-        <span style="flex:1 1 auto; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${dim}</span>
-        <select class="dim-behavior-mode" data-dim="${dim}" style="width:auto; flex:0 0 auto; ${cfg.required ? "display:none;" : ""}">
-            <option value="null" ${cfg.mode === "null" ? "selected" : ""}>Si falta: NULL</option>
-            <option value="lineal" ${cfg.mode === "lineal" ? "selected" : ""}>Si falta: lineal</option>
-            <option value="proporcional" ${cfg.mode === "proporcional" ? "selected" : ""}>Si falta: proporcional</option>
-        </select>
-    `;
-    const checkbox = row.querySelector(".dim-behavior-required");
-    const select = row.querySelector(".dim-behavior-mode");
-    checkbox.addEventListener("change", () => {
-        select.style.display = checkbox.checked ? "none" : "";
-    });
-    return row;
 }
 
 async function fetchDimensionAttributes(forceRefetch = false) {
