@@ -4185,6 +4185,14 @@ async function handleDracoPlanningValueChanged(eventArgs) {
             range.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
             await context.sync();
 
+            // Corta el bucle real que provoca el propio diagnóstico: escribir
+            // en EDIT_REPORT!W1 dispara este mismo onChanged para W1 (el
+            // aviso de DracoSuppressChangeEvents no llega a tiempo, porque
+            // el evento de "W1 cambió" puede notificarse después de haberlo
+            // ya quitado). Cortar aquí, por dirección exacta, no depende de
+            // ninguna temporización.
+            if (sheet.name === "EDIT_REPORT" && addr === "W1") return;
+
             // Límite de seguridad: un pegado/relleno realmente descomunal
             // no se recorre celda a celda. 20.000 da margen de sobra para
             // planificaciones grandes de verdad (p.ej. 500 líneas x 24
@@ -4198,25 +4206,38 @@ async function handleDracoPlanningValueChanged(eventArgs) {
                 return;
             }
 
-            // 1) Informes de planificación con resultados en ESTA hoja —
-            // puro JS, sin ninguna llamada a Excel todavía (design.
-            // resultSheetName está garantizado en todo informe, no hace
-            // falta ningún fallback ni leer EDIT_REPORT!D1).
-            const candidateReportIds = [];
+            // 1) Informes de planificación — filtrado en JS puro primero
+            // (sin Excel), luego resuelto con getDracoResultSheetName (la
+            // MISMA función que usa el resto del código, con su fallback a
+            // EDIT_REPORT!D1) — confirmado con datos reales que
+            // report.design.resultSheetName puede venir "undefined" (no
+            // garantizado como se asumía antes), así que no basta con
+            // mirarlo directamente.
+            const planningReportIds = [];
             const debugAllReports = []; // para el diagnóstico si no hay candidatos
             if (window.ReportStore) {
                 const store = window.ReportStore.getAllReports() || {};
                 for (const idStr of Object.keys(store)) {
                     const report = store[idStr];
-                    const resultSheetName = report && report.design ? report.design.resultSheetName : "";
                     const isPlanning = !!(report && report.reportProperties && report.reportProperties.planningReport);
-                    debugAllReports.push(`#${idStr}(plan=${isPlanning},hoja="${resultSheetName}")`);
-                    if (!isPlanning) continue;
-                    if (resultSheetName === sheet.name) candidateReportIds.push(Number(idStr));
+                    debugAllReports.push(`#${idStr}(plan=${isPlanning})`);
+                    if (isPlanning) planningReportIds.push(Number(idStr));
                 }
             }
+            if (planningReportIds.length === 0) {
+                await writeDracoPlanningDebug(`${sheet.name}!${addr}: 0 informes de planificación en todo el libro. Informes vistos: ${debugAllReports.join(", ") || "(ninguno)"}`);
+                return; // ningún informe está marcado como "de planificación"
+            }
+
+            const candidateReportIds = [];
+            const debugSheetNames = [];
+            for (const id of planningReportIds) {
+                const resultSheetName = await getDracoResultSheetName(context, id);
+                debugSheetNames.push(`#${id}->"${resultSheetName}"`);
+                if (resultSheetName === sheet.name) candidateReportIds.push(id);
+            }
             if (candidateReportIds.length === 0) {
-                await writeDracoPlanningDebug(`${sheet.name}!${addr}: 0 informes de planificación en esta hoja. Informes vistos: ${debugAllReports.join(", ") || "(ninguno)"}`);
+                await writeDracoPlanningDebug(`${sheet.name}!${addr}: hay informe(s) de planificación (${planningReportIds.join(",")}) pero ninguno resuelve a esta hoja. Hoja de cada uno: ${debugSheetNames.join(", ")}`);
                 return; // esta hoja no tiene ningún informe de planificación
             }
 
