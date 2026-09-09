@@ -182,7 +182,7 @@
             rows.push([
                 idx + 1, f.name,
                 fact.project, fact.dataset, fact.table, f.name,
-                f.aggregation, f.format, modelName
+                f.aggregation, f.format, f.planificable ? "X" : "", modelName
             ]);
         });
         return rows;
@@ -239,7 +239,7 @@
         MODEL_FACT: ["MODEL_NAME", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE"],
         MODEL_RELATIONSHIP: ["FILA", "DIMENSION", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_FIELD", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "JOIN TYPE", "MODEL_NAME"],
         MODEL_DIMENSION: ["FILA", "DIMENSION", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_FIELD", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "MODEL_NAME"],
-        MODEL_MEASURES: ["FILA", "MEASURE", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_FIELD", "AGGREGATION", "FORMAT", "MODEL_NAME"],
+        MODEL_MEASURES: ["FILA", "MEASURE", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_FIELD", "AGGREGATION", "FORMAT", "PLANIFICABLE", "MODEL_NAME"],
         MODEL_ATRIBUTES: ["FILA", "DIMENSION", "ATRIBUTE", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "DISPLAY_NAME", "DATA_TYPE", "IS_KEY", "MODEL_NAME"],
         MODEL_HIER: ["FILA", "HIERARCHY", "NIVEL", "DIMENSION", "ATRIBUTO", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "MODEL_NAME"]
     };

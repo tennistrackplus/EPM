@@ -845,6 +845,7 @@ async function fetchFactFields(isModelLoad = false) {
                     // Config Medida
                     aggregation: (saved && saved.aggregation) || "SUM",
                     format: (saved && saved.format) || "Auto",
+                    planificable: !!(saved && saved.planificable),
                     // Config Dimensión (Relación)
                     relProject: (saved && saved.relProject) || "",
                     relDataset: (saved && saved.relDataset) || "",
@@ -936,6 +937,7 @@ function openConfigModal(index) {
         document.getElementById("modalMeasureAlias").value = field.alias;
         document.getElementById("modalMeasureAgg").value = field.aggregation;
         document.getElementById("modalMeasureFormat").value = field.format;
+        document.getElementById("modalMeasurePlanificable").checked = !!field.planificable;
         document.getElementById("measureModal").style.display = "block";
     } else {
         document.getElementById("modalDimFieldName").textContent = field.name;
@@ -968,6 +970,7 @@ function saveMeasureModal() {
         fieldsState[currentConfigFieldIndex].alias = document.getElementById("modalMeasureAlias").value;
         fieldsState[currentConfigFieldIndex].aggregation = document.getElementById("modalMeasureAgg").value;
         fieldsState[currentConfigFieldIndex].format = document.getElementById("modalMeasureFormat").value;
+        fieldsState[currentConfigFieldIndex].planificable = document.getElementById("modalMeasurePlanificable").checked;
         renderFieldsTable();
     }
     document.getElementById("measureModal").style.display = "none";

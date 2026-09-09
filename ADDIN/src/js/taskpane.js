@@ -597,6 +597,18 @@ const TaskPaneApp = {
         const btnSaveProps = document.getElementById("btnSaveProperties");
         if (btnSaveProps) btnSaveProps.addEventListener("click", () => this.saveReportPropertiesFromModal());
 
+        // "Comportamiento de dimensiones" (solo visible/aplicable para
+        // informes de planificación): se muestra/oculta y se rellena al
+        // vuelo según el tick y el modelo semántico elegidos, sin tener
+        // que reabrir el modal.
+        const propPlanningCheckbox = document.getElementById("propPlanningReport");
+        if (propPlanningCheckbox) propPlanningCheckbox.addEventListener("change", () => this.toggleDimensionsBehaviorSection());
+
+        const propModelSelect = document.getElementById("propSemanticModel");
+        if (propModelSelect) propModelSelect.addEventListener("change", () => {
+            if (document.getElementById("propPlanningReport").checked) this.renderDimensionsBehaviorRows();
+        });
+
         // Botón "Opciones de campo" (toggle del panel derecho)
         const btnFieldOptions = document.getElementById("btnFieldOptions");
         if (btnFieldOptions) btnFieldOptions.addEventListener("click", () => this.toggleFieldOptionsPanel());
@@ -1831,8 +1843,75 @@ const TaskPaneApp = {
         document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
         document.getElementById("propPlanningReport").checked = !!this.reportProperties.planningReport;
 
+        this.toggleDimensionsBehaviorSection();
+
         modal.style.display = "flex";
         this.updateRibbonToggleLabel("BtnPropiedadesInforme", "Propiedades", true);
+    },
+
+    // Solo se muestra si el informe está marcado como "de planificación" —
+    // por ahora es solo la parte visual (lista las dimensiones reales del
+    // modelo y deja elegir "Obligatoria" + el reparto si falta), sin
+    // enganchar todavía el guardado/uso real de estos valores.
+    toggleDimensionsBehaviorSection() {
+        const section = document.getElementById("propDimensionsBehaviorSection");
+        if (!section) return;
+        const isPlanning = document.getElementById("propPlanningReport").checked;
+        section.style.display = isPlanning ? "block" : "none";
+        if (isPlanning) this.renderDimensionsBehaviorRows();
+    },
+
+    async renderDimensionsBehaviorRows() {
+        const container = document.getElementById("propDimensionsBehaviorContainer");
+        if (!container) return;
+        container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Cargando dimensiones…</div>";
+
+        try {
+            const modelName = document.getElementById("propSemanticModel").value;
+            if (!modelName || !window.SemanticModelStore) {
+                container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Elige primero un modelo semántico.</div>";
+                return;
+            }
+
+            const grid = await window.SemanticModelStore.getModelGrid("MODEL_DIMENSION", modelName);
+            const dims = [];
+            const seen = new Set();
+            const values = grid && grid.values ? grid.values : [];
+            for (let r = 1; r < values.length; r++) { // fila 0 = cabecera
+                const dim = values[r] && values[r][1]; // columna DIMENSION
+                if (dim && !seen.has(dim)) { seen.add(dim); dims.push(dim); }
+            }
+
+            if (dims.length === 0) {
+                container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Este modelo no tiene dimensiones.</div>";
+                return;
+            }
+
+            const saved = (this.reportProperties.dimensionsBehavior) || {};
+            container.innerHTML = "";
+            dims.forEach(dim => {
+                const cfg = saved[dim] || { required: false, mode: "null" };
+                const row = document.createElement("div");
+                row.className = "dim-behavior-row";
+                row.style.cssText = "display:flex; align-items:center; gap:8px; font-size:11px;";
+                row.innerHTML = `
+                    <label style="display:flex; align-items:center; gap:4px; flex:0 0 auto;">
+                        <input type="checkbox" class="dim-behavior-required" data-dim="${dim}" ${cfg.required ? "checked" : ""} style="width:auto;" />
+                        Obligatoria
+                    </label>
+                    <span style="flex:1 1 auto; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${dim}</span>
+                    <select class="dim-behavior-mode" data-dim="${dim}" style="width:auto; flex:0 0 auto;">
+                        <option value="null" ${cfg.mode === "null" ? "selected" : ""}>Guardar como NULL</option>
+                        <option value="lineal" ${cfg.mode === "lineal" ? "selected" : ""}>Repartir linealmente</option>
+                        <option value="proporcional" ${cfg.mode === "proporcional" ? "selected" : ""}>Repartir proporcional</option>
+                    </select>
+                `;
+                container.appendChild(row);
+            });
+        } catch (err) {
+            console.warn("No se pudieron cargar las dimensiones del modelo para 'Comportamiento de dimensiones':", err);
+            container.innerHTML = "<div style='font-size:11px; color:#a80000;'>No se pudieron cargar las dimensiones.</div>";
+        }
     },
 
     openDistributeValuesModal() {
@@ -1846,6 +1925,19 @@ const TaskPaneApp = {
     },
 
     async saveReportPropertiesFromModal() {
+        // "Comportamiento de dimensiones" — solo la parte visual por ahora
+        // (se guarda la selección para que no se pierda al reabrir el
+        // modal, pero todavía no se usa en ningún sitio: ni al pintar en
+        // cian, ni al guardar planificación).
+        const dimensionsBehavior = {};
+        document.querySelectorAll("#propDimensionsBehaviorContainer .dim-behavior-row").forEach(row => {
+            const dim = row.querySelector(".dim-behavior-required").getAttribute("data-dim");
+            dimensionsBehavior[dim] = {
+                required: row.querySelector(".dim-behavior-required").checked,
+                mode: row.querySelector(".dim-behavior-mode").value
+            };
+        });
+
         this.reportProperties = {
             reportName: (document.getElementById("propReportName").value || "Report 001").trim(),
             suppressZeroRows: document.getElementById("propSuppressZeroRows").checked,
@@ -1853,7 +1945,8 @@ const TaskPaneApp = {
             subtotalsOnTop: document.getElementById("propSubtotalsOnTop").checked,
             overwriteFormats: document.getElementById("propOverwriteFormats").checked,
             autoFitColumns: document.getElementById("propAutoFitColumns").checked,
-            planningReport: document.getElementById("propPlanningReport").checked
+            planningReport: document.getElementById("propPlanningReport").checked,
+            dimensionsBehavior
         };
 
         const btn = document.getElementById("btnSaveProperties");
