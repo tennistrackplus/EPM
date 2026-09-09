@@ -4166,6 +4166,110 @@ async function writeDracoPlanningDebug(msg) {
     }
 }
 
+/**
+ * Para cada informe candidato (ya filtrado a "de planificación" + esta
+ * hoja), decide qué medida aplica a cada celda concreta y si esa medida
+ * está marcada como "Planificable" en MODEL_MEASURES (columna nueva, ver
+ * semantic_model.js). Devuelve Map<reportId, (r, c) => boolean>.
+ *
+ * La medida puede venir de dos sitios distintos:
+ *   - FIJA para todo el informe: arrastrada a la zona "Filtros"
+ *     (ReportState.FilterMeasureNames, se resuelve una sola vez).
+ *   - VARIABLE por fila/columna: puesta como "MEASURE" en el diseño de
+ *     Filas o Columnas — mismo procedimiento que la lectura del "cruce"
+ *     en Dinámico (iAux + fieldLevels), pero aquí solo para localizar la
+ *     columna/fila física de la MEASURE una vez, y leer su valor pintado
+ *     en cada celda concreta que haga falta.
+ */
+async function buildDracoPlanningMeasureCheckers(context, reportIds) {
+    const checkers = new Map();
+
+    for (const reportId of reportIds) {
+        try {
+            const editReportGrid = await getEditReportGrid(context, reportId);
+            loadReportDefinition(editReportGrid, reportId); // rellena ReportState (Filters/FilterMeasureNames)
+
+            const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
+            const modelName = report ? report.semanticModelName : "";
+            const measuresGrid = (modelName && window.SemanticModelStore)
+                ? await window.SemanticModelStore.getModelGrid("MODEL_MEASURES", modelName)
+                : null;
+
+            const isMeasurePlanificable = (measureName) => {
+                if (!measuresGrid || !measureName) return false;
+                const R = buscarMedida(measuresGrid, measureName);
+                if (!R) return false;
+                return String(cellValue(measuresGrid, R, 9)).trim().toUpperCase() === "X"; // columna PLANIFICABLE
+            };
+
+            // Caso simple: medida fija, en la zona "Filtros".
+            if (ReportState.FilterMeasureNames && ReportState.FilterMeasureNames.length > 0) {
+                const fixedOk = isMeasurePlanificable(ReportState.FilterMeasureNames[0]);
+                checkers.set(reportId, () => fixedOk);
+                continue;
+            }
+
+            // Caso general: la medida varía por fila o columna.
+            const fieldLevelsRows = buildAxisFieldLevelsTable(editReportGrid, "rows");
+            const fieldLevelsCols = buildAxisFieldLevelsTable(editReportGrid, "columns");
+
+            const names = dracoRangeNames(reportId);
+            const rowsNameObj = context.workbook.names.getItemOrNullObject(names.rows);
+            const rowsRange = rowsNameObj.getRangeOrNullObject();
+            rowsRange.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
+            const colsNameObj = context.workbook.names.getItemOrNullObject(names.cols);
+            const colsRange = colsNameObj.getRangeOrNullObject();
+            colsRange.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
+            await context.sync();
+
+            // Localizar en qué columna (Filas) o fila (Columnas) física
+            // vive la MEASURE dentro del eje — una sola vez, no por celda.
+            const findMeasureIAux = (fieldLevels) => {
+                for (let iAux = 1; iAux < fieldLevels.length; iAux++) {
+                    const col = fieldLevels[iAux];
+                    if (col && col.byFlag[1] && String(col.byFlag[1].dim).toUpperCase() === "MEASURE") return iAux;
+                }
+                return null;
+            };
+            const measureIAuxRows = findMeasureIAux(fieldLevelsRows);
+            const measureIAuxCols = findMeasureIAux(fieldLevelsCols);
+
+            checkers.set(reportId, (r, c) => {
+                let measureName = null;
+
+                if (measureIAuxRows !== null && rowsRange && !rowsRange.isNullObject) {
+                    const localRow = r - rowsRange.rowIndex;
+                    const localCol = measureIAuxRows - 1;
+                    if (localRow >= 0 && localRow < rowsRange.rowCount && localCol >= 0 && localCol < rowsRange.columnCount) {
+                        const raw = rowsRange.values[localRow][localCol];
+                        if (raw !== "" && raw !== null && raw !== undefined) {
+                            measureName = String(raw).replace(DRACO_GLYPH_PREFIX, "");
+                        }
+                    }
+                }
+                if (!measureName && measureIAuxCols !== null && colsRange && !colsRange.isNullObject) {
+                    const localCol = c - colsRange.columnIndex;
+                    const localRow = measureIAuxCols - 1;
+                    if (localRow >= 0 && localRow < colsRange.rowCount && localCol >= 0 && localCol < colsRange.columnCount) {
+                        const raw = colsRange.values[localRow][localCol];
+                        if (raw !== "" && raw !== null && raw !== undefined) {
+                            measureName = String(raw).replace(DRACO_GLYPH_PREFIX, "");
+                        }
+                    }
+                }
+
+                if (!measureName) return false; // no se pudo determinar la medida: por seguridad, no marcar
+                return isMeasurePlanificable(measureName);
+            });
+        } catch (e) {
+            console.warn(`[Draco] No se pudo resolver la medida del informe ${reportId} para comprobar "Planificable":`, e);
+            checkers.set(reportId, () => false); // por seguridad, no marcar si falla la comprobación
+        }
+    }
+
+    return checkers;
+}
+
 async function handleDracoPlanningValueChanged(eventArgs) {
     try {
         if (DracoSuppressChangeEvents) return;
@@ -4281,6 +4385,27 @@ async function handleDracoPlanningValueChanged(eventArgs) {
             if (hits.length === 0) {
                 const rangos = candidates.map(c => `#${c.reportId}[fila ${c.rowIndex + 1}-${c.rowIndex + c.rowCount}, col ${c.columnIndex + 1}-${c.columnIndex + c.columnCount}]`).join(", ");
                 await writeDracoPlanningDebug(`${sheet.name}!${addr} (fila ${range.rowIndex + 1}, col ${range.columnIndex + 1}) no cae dentro de ningún Draco_XXX_Values. Rangos existentes: ${rangos}`);
+                return;
+            }
+
+            // 3.5) Además de que el INFORME sea de planificación, la MEDIDA
+            // de cada celda tiene que estar marcada "Planificable" (tick
+            // nuevo en MODEL_MEASURES) — puede ser una medida fija en la
+            // zona "Filtros", o variar por fila/columna si está puesta en
+            // el diseño de Filas/Columnas.
+            const measureCheckers = await buildDracoPlanningMeasureCheckers(
+                context,
+                Array.from(new Set(hits.map(h => h.reportId)))
+            );
+            const hitsAntesDeMedida = hits.length;
+            const hitsFiltrados = hits.filter(h => {
+                const checker = measureCheckers.get(h.reportId);
+                return checker ? checker(h.r, h.c) : false;
+            });
+            hits.length = 0;
+            hits.push(...hitsFiltrados);
+            if (hits.length === 0) {
+                await writeDracoPlanningDebug(`${sheet.name}!${addr}: ${hitsAntesDeMedida} celda(s) en zona de planificación, pero ninguna con medida marcada "Planificable" en MODEL_MEASURES.`);
                 return;
             }
 
@@ -6491,7 +6616,7 @@ function dracoPlanningCrossTextForCell(crossCtx, cellAddr) {
         ...crossCtx.rowDefs.filter(d => d.R === row),
         ...crossCtx.colDefs.filter(d => d.R === col)
     ];
-    return items.map(d => `Dim ${d.Dimension} Valor ${d.Display || d.Value}`).join(", ");
+    return items.map(d => `${d.Dimension}.${d.AttributeName}=${d.Display || d.Value}`).join(", ");
 }
 
 /**
@@ -6573,7 +6698,7 @@ function dracoPlanningCrossTextForCellDynamic(ctx, cellAddr) {
                 const field = resolveAxisFieldForFlag(ctx.fieldLevelsRows[iAux], flag);
                 if (!field || String(field.dim).toUpperCase() === "MEASURE") continue;
                 const text = String(currentValue).replace(DRACO_GLYPH_PREFIX, "");
-                parts.push(`Dim ${field.dim} Valor ${text}`);
+                parts.push(`${field.dim}.${field.attr}=${text}`);
             }
         }
     }
@@ -6592,7 +6717,7 @@ function dracoPlanningCrossTextForCellDynamic(ctx, cellAddr) {
                 const field = resolveAxisFieldForFlag(ctx.fieldLevelsCols[iAux], flag);
                 if (!field || String(field.dim).toUpperCase() === "MEASURE") continue;
                 const text = String(currentValue).replace(DRACO_GLYPH_PREFIX, "");
-                parts.push(`Dim ${field.dim} Valor ${text}`);
+                parts.push(`${field.dim}.${field.attr}=${text}`);
             }
         }
     }
@@ -6654,6 +6779,19 @@ async function writeDracoPlanningSavedTable() {
                             ? dracoPlanningCrossTextForCellDynamic(crossCtx, entry.address)
                             : dracoPlanningCrossTextForCell(crossCtx, entry.address))
                         : "";
+
+                    // Valor actual (el importe tecleado) y diferencia contra
+                    // el valor de referencia del último refresco (ver
+                    // filterDracoPlanningRealChanges, que ya los deja
+                    // guardados en la propia entrada). Si no hay referencia
+                    // (informe nunca refrescado en esta sesión), la
+                    // diferencia se deja vacía — no hay contra qué comparar.
+                    const currentNum = Number(entry.currentValue);
+                    const baselineNum = Number(entry.baselineValue);
+                    const diff = (entry.baselineValue !== undefined && !isNaN(currentNum) && !isNaN(baselineNum))
+                        ? currentNum - baselineNum
+                        : "";
+
                     rows.push([
                         reportName,
                         entry.sheetName + "!" + entry.address,
@@ -6661,6 +6799,8 @@ async function writeDracoPlanningSavedTable() {
                         crossText,
                         crossCtx ? crossCtx.measureLabel : "",
                         crossCtx ? crossCtx.filtersText : "",
+                        entry.currentValue !== undefined ? entry.currentValue : "",
+                        diff,
                         crossDiag
                     ]);
                 }
@@ -6668,9 +6808,9 @@ async function writeDracoPlanningSavedTable() {
             if (rows.length === 0) return;
 
             const startRow = Number(DRACO_PLANNING_SAVED_TABLE_CELL.replace(/\D/g, "")); // 130
-            editReportSheet.getRangeByIndexes(startRow - 1, 0, 1, 7).values =
-                [["Informe", "Celda", "Color anterior", "Cruce", "Medida", "Filtros", "Diagnóstico"]];
-            editReportSheet.getRangeByIndexes(startRow, 0, rows.length, 7).values = rows;
+            editReportSheet.getRangeByIndexes(startRow - 1, 0, 1, 9).values =
+                [["Informe", "Celda", "Color anterior", "Cruce", "Medida", "Filtros", "Valor", "Diferencia vs JSON", "Diagnóstico"]];
+            editReportSheet.getRangeByIndexes(startRow, 0, rows.length, 9).values = rows;
 
             await context.sync();
         });
@@ -6713,18 +6853,25 @@ async function filterDracoPlanningRealChanges() {
             allCells.forEach((c, i) => {
                 const { row, col } = parseAddress(c.address);
                 const baseline = DracoPlanningBaselineValues.get(c.reportId);
-                if (!baseline) return; // sin referencia: se mantiene, por seguridad
-
-                const baselineValue = baseline.get(row + "_" + col);
-                if (baselineValue === undefined) return; // tampoco hay referencia para ESTA celda en concreto
-
+                const baselineValue = baseline ? baseline.get(row + "_" + col) : undefined;
                 const currentValue = cellRanges[i].values[0][0];
-                if (String(baselineValue) === String(currentValue)) {
+
+                if (baseline !== undefined && baselineValue !== undefined && String(baselineValue) === String(currentValue)) {
                     const bucket = DracoPlanningModifiedCells.get(c.reportId);
                     if (bucket) {
                         bucket.delete(c.address);
                         descartadas++;
                     }
+                    return;
+                }
+
+                // Se queda: se guardan valor actual y de referencia en la
+                // propia entrada, para no releerlos en writeDracoPlanningSavedTable.
+                const bucket = DracoPlanningModifiedCells.get(c.reportId);
+                const entry = bucket ? bucket.get(c.address) : null;
+                if (entry) {
+                    entry.currentValue = currentValue;
+                    entry.baselineValue = baselineValue; // undefined si no había referencia
                 }
             });
 
