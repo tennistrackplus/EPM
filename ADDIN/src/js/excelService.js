@@ -211,61 +211,7 @@ async function executeSQLBigQuery(sql) {
         body: body
     });
 
-    const firstText = await response.text();
-    return await svcPollBigQueryJobUntilComplete(projectId, token, firstText);
-}
-
-/**
- * Igual que pollBigQueryJobUntilComplete en commands.js — copia local
- * (mismo motivo que svcRowsToPseudoBqJson: no depender del orden de
- * carga entre ficheros). jobs.query puede volver con jobComplete:false
- * y sin filas si tarda más del timeout por defecto (~10s); sin este
- * polling, eso se leía como "0 filas" — el síntoma típico era el
- * selector de valores del filtro abriéndose vacío justo cuando había
- * otra consulta pesada en marcha a la vez (p.ej. un "Actualizar").
- *
- * IMPORTANTE (ver misma nota en commands.js): se devuelve SIEMPRE texto
- * crudo tal cual lo manda la API, nunca JSON.stringify(objeto ya
- * parseado) — parseMemberJsonTree() y el resto del parseo de esta app
- * escanean el texto a mano asumiendo el formato EXACTO de Google
- * (espacio después de "v":); JSON.stringify lo compacta y desincroniza
- * la lectura carácter a carácter.
- */
-async function svcPollBigQueryJobUntilComplete(projectId, token, firstResponseText) {
-    let parsed;
-    try {
-        parsed = JSON.parse(firstResponseText);
-    } catch (e) {
-        return firstResponseText;
-    }
-
-    if (parsed.jobComplete !== false || !parsed.jobReference || !parsed.jobReference.jobId) {
-        return firstResponseText; // ya estaba completa: se devuelve el texto original tal cual
-    }
-
-    let lastText = firstResponseText;
-    let attempts = 0;
-    while (parsed && parsed.jobComplete === false && parsed.jobReference && parsed.jobReference.jobId && attempts < 30) {
-        await new Promise(r => setTimeout(r, 1000));
-        const jobId = parsed.jobReference.jobId;
-        const location = parsed.jobReference.location;
-        let pollUrl = "https://bigquery.googleapis.com/bigquery/v2/projects/" + projectId + "/queries/" + jobId + "?timeoutMs=10000";
-        if (location) pollUrl += "&location=" + encodeURIComponent(location);
-
-        const pollResponse = await fetch(pollUrl, {
-            headers: { "Authorization": "Bearer " + token }
-        });
-        const pollText = await pollResponse.text();
-        lastText = pollText;
-        try {
-            parsed = JSON.parse(pollText);
-        } catch (e) {
-            return pollText;
-        }
-        attempts++;
-    }
-
-    return lastText; // texto crudo de la última respuesta (completa), no un JSON reconstruido
+    return await response.text();
 }
 
 /* ---------------------------------------------------------------------
