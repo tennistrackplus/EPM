@@ -7120,9 +7120,13 @@ function dracoPlanningSqlLiteralForMeasureValue(value) {
  * se añaden ambas columnas y cada fila deja NULL la que no le
  * corresponde a ella.
  */
-async function writeDracoPlanningMergeSql(rows, dimNames) {
-    if (rows.length === 0) return;
-
+// Agrupa las filas ya validadas por tabla de hechos real y construye un
+// INSERT por cada una (columnas fijas por dimensión + una columna por
+// cada medida realmente usada en esa tabla). Reutilizada tanto para
+// escribir el texto en EDIT_REPORT!J1 como para ejecutarlo de verdad
+// (executeDracoPlanningInserts) — una sola vez se decide cómo se
+// construye el INSERT, no dos.
+function buildDracoPlanningInsertStatements(rows, dimNames) {
     const byTable = new Map(); // factTable -> {rows: [...], factFields: Set}
     for (const r of rows) {
         const table = r.factTable || "(tabla de hechos no resuelta)";
@@ -7153,7 +7157,13 @@ ${tuples.join(",\n")};`
         );
     }
 
-    const sql = statements.join("\n\n");
+    return statements;
+}
+
+async function writeDracoPlanningMergeSql(rows, dimNames) {
+    if (rows.length === 0) return;
+
+    const sql = buildDracoPlanningInsertStatements(rows, dimNames).join("\n\n");
 
     try {
         await Excel.run(async (context) => {
@@ -7170,6 +7180,45 @@ ${tuples.join(",\n")};`
 }
 
 /**
+ * Ejecuta de verdad, contra el proveedor activo (BigQuery/Snowflake, ver
+ * executeSQL), cada INSERT generado por buildDracoPlanningInsertStatements
+ * — uno por tabla de hechos distinta. Se para en el primero que falle
+ * (no sigue con los demás) y devuelve el error tal cual lo dio el
+ * proveedor, para poder mostrarlo.
+ *
+ * BigQuery/Snowflake no lanzan excepción si el SQL falla — devuelven un
+ * texto/JSON con "error"/"errors" dentro, con código 200 igualmente — por
+ * eso hace falta mirar el contenido de la respuesta, no solo capturar
+ * try/catch.
+ */
+async function executeDracoPlanningInserts(rows, dimNames) {
+    if (rows.length === 0) return { success: true, error: "" };
+
+    const statements = buildDracoPlanningInsertStatements(rows, dimNames);
+
+    for (const stmt of statements) {
+        try {
+            const responseText = await executeSQL(stmt);
+            let parsed = null;
+            try { parsed = JSON.parse(responseText); } catch (e) { /* respuesta no era JSON, se asume OK */ }
+
+            if (parsed) {
+                if (parsed.error) {
+                    return { success: false, error: parsed.error.message || JSON.stringify(parsed.error) };
+                }
+                if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
+                    return { success: false, error: parsed.errors.map(e => e.message || JSON.stringify(e)).join("; ") };
+                }
+            }
+        } catch (e) {
+            return { success: false, error: e && e.message ? e.message : String(e) };
+        }
+    }
+
+    return { success: true, error: "" };
+}
+
+/**
  * Popup pequeño (planningValidationBadge.html) que confirma el resultado
  * de validateDracoPlanningMandatoryDimensions al pulsar "Guardar
  * planificación" — mismo patrón que showMemberRecognitionBadge
@@ -7177,13 +7226,19 @@ ${tuples.join(",\n")};`
  * quien llama. Si es válido, se cierra solo a los ~1,4s (como el de
  * Reconocimiento de miembros); si faltan dimensiones, se queda abierto
  * (hay una lista que leer) hasta que el usuario haga clic.
+ *
+ * titulo/subtitulo son opcionales — si no se pasan, usa los textos por
+ * defecto de validación de dimensiones; para el resultado de ejecutar el
+ * INSERT de verdad se pasan unos distintos (ver guardarPlanificacion).
  */
-function showPlanningValidationBadge(isValid, detalle) {
+function showPlanningValidationBadge(isValid, detalle, titulo, subtitulo) {
     try {
         const params = new URLSearchParams({
             valid: isValid ? "1" : "0",
             detalle: detalle || ""
         });
+        if (titulo) params.set("titulo", titulo);
+        if (subtitulo) params.set("subtitulo", subtitulo);
         const dialogUrl = new URL(
             `planningValidationBadge.html?${params.toString()}`,
             window.location.href
@@ -7218,7 +7273,7 @@ function showPlanningValidationBadge(isValid, detalle) {
 
 async function guardarPlanificacion(event) {
     try {
-        console.log("Guardar planificación: INSERT real (contra BigQuery/Snowflake) todavía no implementado; de momento solo se genera el texto en EDIT_REPORT!J1.");
+        console.log("Guardar planificación: ejecuta el INSERT contra el proveedor activo y refresca los informes afectados.");
 
         // Descarta las celdas marcadas en cian que en realidad no cambiaron
         // de valor respecto al último refresco (ver comentario de la
@@ -7240,16 +7295,36 @@ async function guardarPlanificacion(event) {
         }
         showPlanningValidationBadge(true, "");
 
-        // INSERT (Opción A: columnas fijas por dimensión) — de momento solo
-        // el texto, escrito en EDIT_REPORT!J1; las dimensiones con
-        // criterio "lineal"/"proporcional" que faltaban llevan la palabra
-        // "reparto" en vez de un valor (el reparto de verdad se ataca
-        // aparte, cuando el caso principal funcione bien).
+        // INSERT (Opción A: columnas fijas por dimensión) — se escribe el
+        // texto en EDIT_REPORT!J1 (para poder revisarlo/depurarlo) Y se
+        // ejecuta de verdad contra el proveedor activo. Las dimensiones
+        // con criterio "lineal"/"proporcional" que faltaban llevan la
+        // palabra "reparto" en vez de un valor (el reparto de verdad se
+        // ataca aparte, cuando el caso principal funcione bien — con
+        // "reparto" en el texto, ejecutarlo fallaría por sintaxis, así que
+        // de momento ese caso concreto no debería llegar a "Guardar" sin
+        // que antes se revise a mano).
         await writeDracoPlanningMergeSql(validation.rows, validation.dimNames);
+
+        const insertResult = await executeDracoPlanningInserts(validation.rows, validation.dimNames);
+        if (!insertResult.success) {
+            showPlanningValidationBadge(
+                false,
+                insertResult.error,
+                "Error al guardar en la tabla de hechos",
+                "No se ha podido ejecutar el INSERT:"
+            );
+            return; // no se vacía el registro: las celdas se quedan en cian para poder reintentar
+        }
+        showPlanningValidationBadge(true, "", "Guardado", "Los datos se han escrito en la tabla de hechos");
 
         // Tabla legible (celda | color anterior) — SOLO en "Guardar", antes
         // de que flushDracoPlanningModifiedCells vacíe el registro.
         await writeDracoPlanningSavedTable();
+
+        // Qué informes hay que refrescar, ANTES de vaciar el registro
+        // (flushDracoPlanningModifiedCells lo deja vacío).
+        const affectedReportIds = Array.from(new Set(validation.rows.map(r => r.reportId)));
 
         // Vuelca en EDIT_REPORT!A127 las celdas de Draco_<id>_Values
         // modificadas a mano desde el último guardado/refresco (junto con
@@ -7257,6 +7332,17 @@ async function guardarPlanificacion(event) {
         // ese color original, y vacía el registro en memoria. Ver
         // handleDracoPlanningValueChanged / flushDracoPlanningModifiedCells.
         await flushDracoPlanningModifiedCells();
+
+        // Refrescar cada informe afectado, para que se vea ya el dato
+        // recién guardado (actualizarUnInforme decide Fijo/Dinámico según
+        // el diseño de cada uno).
+        for (const reportId of affectedReportIds) {
+            try {
+                await actualizarUnInforme(reportId);
+            } catch (e) {
+                console.error(`[Draco] Error refrescando el informe ${reportId} tras guardar planificación:`, e);
+            }
+        }
     } catch (e) {
         console.error("[Draco] Error en guardarPlanificacion:", e);
     } finally {
