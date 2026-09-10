@@ -1495,6 +1495,52 @@ function snowflakeRowsToPseudoBqJson(rows) {
     return out;
 }
 
+/**
+ * BigQuery: jobs.query (POST /queries) puede volver con jobComplete:false
+ * y SIN filas si la consulta tarda más que el timeout por defecto
+ * (~10s) — no es un error, la API contesta 200 igualmente. Si no se
+ * comprueba esto, una consulta que tarda un poco (algo más probable
+ * cuando hay otra consulta pesada en marcha a la vez, p.ej. un
+ * "Actualizar" de un informe grande compitiendo por cuota) se lee como
+ * "0 filas" en vez de esperar a que termine — el síntoma típico es un
+ * diálogo (filtro, buscador de miembros...) que se abre pero sale
+ * vacío, sin ningún error visible.
+ *
+ * Aquí se hace polling al job (getQueryResults) hasta que jobComplete
+ * sea true, con el mismo patrón que ya usa SF.execRaw para Snowflake
+ * (hasta 30 intentos, 1s entre cada uno -> ~30s de margen extra).
+ */
+async function pollBigQueryJobUntilComplete(projectId, token, firstResponseText) {
+    let parsed;
+    try {
+        parsed = JSON.parse(firstResponseText);
+    } catch (e) {
+        return firstResponseText; // no era JSON (o ya venía roto): se deja tal cual, que lo gestione quien llama
+    }
+
+    let attempts = 0;
+    while (parsed && parsed.jobComplete === false && parsed.jobReference && parsed.jobReference.jobId && attempts < 30) {
+        await new Promise(r => setTimeout(r, 1000));
+        const jobId = parsed.jobReference.jobId;
+        const location = parsed.jobReference.location;
+        let pollUrl = "https://bigquery.googleapis.com/bigquery/v2/projects/" + projectId + "/queries/" + jobId + "?timeoutMs=10000";
+        if (location) pollUrl += "&location=" + encodeURIComponent(location);
+
+        const pollResponse = await fetch(pollUrl, {
+            headers: { "Authorization": "Bearer " + token }
+        });
+        const pollText = await pollResponse.text();
+        try {
+            parsed = JSON.parse(pollText);
+        } catch (e) {
+            return pollText; // respuesta rara: se deja tal cual
+        }
+        attempts++;
+    }
+
+    return JSON.stringify(parsed);
+}
+
 async function executeSQL(sql) {
     if (Provider.key() === "snowflake") {
         const rows = await SF.runQuery(sql);
@@ -1524,8 +1570,10 @@ async function executeSQL(sql) {
         body: body
     });
 
-    return await response.text();
+    const firstText = await response.text();
+    return await pollBigQueryJobUntilComplete(projectId, token, firstText);
 }
+
 
 /* ---------------------------------------------------------------------
  * JSON_PaintValues
