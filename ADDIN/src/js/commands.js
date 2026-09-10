@@ -7086,6 +7086,13 @@ async function validateDracoPlanningMandatoryDimensions() {
 // hacia abajo, para que no choquen aunque haya muchas celdas modificadas.
 const DRACO_PLANNING_INSERT_SQL_CELL = "J1";
 
+// Celda justo al lado de la anterior, donde se pinta el RESULTADO de
+// ejecutar ese INSERT contra el proveedor activo (respuesta cruda del
+// proveedor si va bien, o el mensaje de error si falla) — ver
+// writeDracoPlanningInsertResult, llamada desde guardarPlanificacion justo
+// después de executeDracoPlanningInserts.
+const DRACO_PLANNING_INSERT_RESULT_CELL = "K1";
+
 // Literal SQL para el valor de una dimensión: NULL, la palabra suelta
 // "reparto" (marcador, aposta NO es SQL válido — el reparto de verdad se
 // ataca después, aparte) o el valor entre comillas simples.
@@ -7192,9 +7199,10 @@ async function writeDracoPlanningMergeSql(rows, dimNames) {
  * try/catch.
  */
 async function executeDracoPlanningInserts(rows, dimNames) {
-    if (rows.length === 0) return { success: true, error: "" };
+    if (rows.length === 0) return { success: true, error: "", responses: [] };
 
     const statements = buildDracoPlanningInsertStatements(rows, dimNames);
+    const responses = []; // respuesta cruda de CADA statement ejecutado con éxito, en orden
 
     for (const stmt of statements) {
         try {
@@ -7204,18 +7212,49 @@ async function executeDracoPlanningInserts(rows, dimNames) {
 
             if (parsed) {
                 if (parsed.error) {
-                    return { success: false, error: parsed.error.message || JSON.stringify(parsed.error) };
+                    return { success: false, error: parsed.error.message || JSON.stringify(parsed.error), responses };
                 }
                 if (Array.isArray(parsed.errors) && parsed.errors.length > 0) {
-                    return { success: false, error: parsed.errors.map(e => e.message || JSON.stringify(e)).join("; ") };
+                    return { success: false, error: parsed.errors.map(e => e.message || JSON.stringify(e)).join("; "), responses };
                 }
             }
+
+            responses.push(responseText);
         } catch (e) {
-            return { success: false, error: e && e.message ? e.message : String(e) };
+            return { success: false, error: e && e.message ? e.message : String(e), responses };
         }
     }
 
-    return { success: true, error: "" };
+    return { success: true, error: "", responses };
+}
+
+/**
+ * Pinta en EDIT_REPORT!K1 (al lado del texto del INSERT en J1, ver
+ * DRACO_PLANNING_INSERT_RESULT_CELL) el resultado de ejecutarlo: la
+ * respuesta cruda del proveedor si fue bien (una por statement/tabla de
+ * hechos, separadas por una línea en blanco), o el mensaje de error si
+ * falló — así se ve de un vistazo, sin mirar la consola, que el INSERT
+ * realmente se ha lanzado y qué contestó el proveedor.
+ */
+async function writeDracoPlanningInsertResult(insertResult) {
+    const text = insertResult.success
+        ? (insertResult.responses && insertResult.responses.length
+            ? insertResult.responses.join("\n\n")
+            : "(sin filas que insertar)")
+        : "ERROR: " + insertResult.error;
+
+    try {
+        await Excel.run(async (context) => {
+            const editReportSheet = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+            editReportSheet.load("isNullObject");
+            await context.sync();
+            if (editReportSheet.isNullObject) return;
+            editReportSheet.getRange(DRACO_PLANNING_INSERT_RESULT_CELL).values = [[text]];
+            await context.sync();
+        });
+    } catch (e) {
+        console.error("[Draco] Error escribiendo el resultado del INSERT de planificación en EDIT_REPORT:", e);
+    }
 }
 
 /**
@@ -7307,6 +7346,13 @@ async function guardarPlanificacion(event) {
         await writeDracoPlanningMergeSql(validation.rows, validation.dimNames);
 
         const insertResult = await executeDracoPlanningInserts(validation.rows, validation.dimNames);
+
+        // Se pinta el resultado (respuesta del proveedor o error) en la
+        // celda de al lado del INSERT (K1) SIEMPRE, vaya bien o mal, para
+        // poder comprobar de un vistazo que el "Guardar" realmente ha
+        // llegado a ejecutarse contra el proveedor.
+        await writeDracoPlanningInsertResult(insertResult);
+
         if (!insertResult.success) {
             showPlanningValidationBadge(
                 false,
