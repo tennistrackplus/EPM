@@ -1509,6 +1509,19 @@ function snowflakeRowsToPseudoBqJson(rows) {
  * Aquí se hace polling al job (getQueryResults) hasta que jobComplete
  * sea true, con el mismo patrón que ya usa SF.execRaw para Snowflake
  * (hasta 30 intentos, 1s entre cada uno -> ~30s de margen extra).
+ *
+ * IMPORTANTE: se devuelve SIEMPRE el texto crudo tal cual lo manda la
+ * API (el de la primera respuesta si ya venía completa, o el de la
+ * última respuesta de polling si hizo falta esperar) — NUNCA
+ * JSON.stringify(objetoYaParseado). El resto del parseo de esta app
+ * (parseJsonValueTriples, jsonTo3MatricesCore, parseMemberJsonTree...)
+ * no usa JSON.parse: escanea el texto a mano asumiendo el formato EXACTO
+ * que devuelve Google (con un espacio después de "v":, p.ej.
+ * `"v": "algo"`). JSON.stringify genera JSON compacto SIN ese espacio,
+ * lo que desincroniza en un carácter la lectura de cada valor —
+ * encabezados con una comilla de más, filtros rotos, refrescos vacíos.
+ * Solo se usa JSON.parse aquí para MIRAR jobComplete/jobReference, el
+ * texto que se devuelve es siempre el original de fetch(), sin tocar.
  */
 async function pollBigQueryJobUntilComplete(projectId, token, firstResponseText) {
     let parsed;
@@ -1518,6 +1531,11 @@ async function pollBigQueryJobUntilComplete(projectId, token, firstResponseText)
         return firstResponseText; // no era JSON (o ya venía roto): se deja tal cual, que lo gestione quien llama
     }
 
+    if (parsed.jobComplete !== false || !parsed.jobReference || !parsed.jobReference.jobId) {
+        return firstResponseText; // ya estaba completa (caso normal): se devuelve el texto original tal cual
+    }
+
+    let lastText = firstResponseText;
     let attempts = 0;
     while (parsed && parsed.jobComplete === false && parsed.jobReference && parsed.jobReference.jobId && attempts < 30) {
         await new Promise(r => setTimeout(r, 1000));
@@ -1530,6 +1548,7 @@ async function pollBigQueryJobUntilComplete(projectId, token, firstResponseText)
             headers: { "Authorization": "Bearer " + token }
         });
         const pollText = await pollResponse.text();
+        lastText = pollText; // texto crudo de ESTA respuesta, el que se devolverá si es la última
         try {
             parsed = JSON.parse(pollText);
         } catch (e) {
@@ -1538,7 +1557,7 @@ async function pollBigQueryJobUntilComplete(projectId, token, firstResponseText)
         attempts++;
     }
 
-    return JSON.stringify(parsed);
+    return lastText; // texto crudo de la última respuesta (completa), no un JSON reconstruido
 }
 
 async function executeSQL(sql) {
