@@ -3129,7 +3129,7 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         }
 
         const range = namedRange.getRange();
-        range.load(["values", "formulas", "rowCount", "columnCount"]);
+        range.load(["values", "text", "formulas", "rowCount", "columnCount"]);
         await context.sync();
 
         // Profundidad real (indentLevel) de cada celda ya pintada: para una
@@ -3180,7 +3180,11 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
                         rowOut.push(currentFormula);
                         continue;
                     }
-                    const text = String(currentValue).replace(GLYPH_PREFIX, "");
+                    // Texto TAL COMO SE VE en la celda (.text), no el valor
+                    // crudo (.values) — para una celda con formato de fecha,
+                    // .values da el número de serie de Excel (p.ej. 46054),
+                    // no la fecha; .text da lo que de verdad está pintado.
+                    const text = String(range.text[r][c]).replace(GLYPH_PREFIX, "");
                     if (field.dim === "MEASURE") {
                         // Una medida no tiene "valor de miembro": Valor
                         // vacío, Display = nombre de la medida.
@@ -6718,11 +6722,11 @@ async function loadDracoPlanningCrossContextDynamic(context, reportId) {
 
     const rowsNameObj = context.workbook.names.getItemOrNullObject(names.rows);
     const rowsRange = rowsNameObj.getRangeOrNullObject();
-    rowsRange.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
+    rowsRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
 
     const colsNameObj = context.workbook.names.getItemOrNullObject(names.cols);
     const colsRange = colsNameObj.getRangeOrNullObject();
-    colsRange.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
+    colsRange.load(["values", "text", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
 
     await context.sync();
 
@@ -6773,7 +6777,10 @@ function dracoPlanningCrossItemsForCellDynamic(ctx, cellAddr) {
                 const flag = (ctx.rowsIndent[localRow][c] || 0) + 1;
                 const field = resolveAxisFieldForFlag(ctx.fieldLevelsRows[iAux], flag);
                 if (!field || String(field.dim).toUpperCase() === "MEASURE") continue;
-                const text = String(currentValue).replace(DRACO_GLYPH_PREFIX, "");
+                // .text (lo que se VE en la celda), no .values (el valor
+                // crudo) — una celda con formato de fecha da el número de
+                // serie de Excel en .values, no la fecha.
+                const text = String(rr.text[localRow][c]).replace(DRACO_GLYPH_PREFIX, "");
                 items.push({ dim: field.dim, attr: field.attr, value: text });
             }
         }
@@ -6792,7 +6799,7 @@ function dracoPlanningCrossItemsForCellDynamic(ctx, cellAddr) {
                 const flag = (ctx.colsIndent[r][localCol] || 0) + 1;
                 const field = resolveAxisFieldForFlag(ctx.fieldLevelsCols[iAux], flag);
                 if (!field || String(field.dim).toUpperCase() === "MEASURE") continue;
-                const text = String(currentValue).replace(DRACO_GLYPH_PREFIX, "");
+                const text = String(cr.text[r][localCol]).replace(DRACO_GLYPH_PREFIX, "");
                 items.push({ dim: field.dim, attr: field.attr, value: text });
             }
         }
@@ -6987,6 +6994,7 @@ async function validateDracoPlanningMandatoryDimensions() {
 
                 const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
                 const reportName = (report && report.name) || `Informe ${reportId}`;
+                const modelName = report ? report.semanticModelName : "";
 
                 let ctx;
                 try {
@@ -6995,6 +7003,15 @@ async function validateDracoPlanningMandatoryDimensions() {
                     console.warn(`[Draco] No se pudo validar las dimensiones obligatorias del informe ${reportId} (se deja pasar, sin contexto no se puede comprobar):`, e);
                     continue;
                 }
+
+                // MODEL_MEASURES del modelo de ESTE informe, una sola vez
+                // (no por celda) — de aquí sale la tabla de hechos real
+                // (FACT_PROJECT.FACT_DATASET.FACT_TABLE) y el campo real de
+                // cada medida (FACT_FIELD, p.ej. "IMPORTE"/"CANTIDAD") — el
+                // destino real del INSERT, no un log genérico.
+                const measuresGrid = (modelName && window.SemanticModelStore)
+                    ? await window.SemanticModelStore.getModelGrid("MODEL_MEASURES", modelName)
+                    : null;
 
                 for (const entry of bucket.values()) {
                     const { row, col } = parseAddress(entry.address); // 1-based
@@ -7034,12 +7051,24 @@ async function validateDracoPlanningMandatoryDimensions() {
                         }
                     }
 
+                    const measureName = (measure && measure.measureName) || ctx.measureLabel || "";
+                    const measureRow = measuresGrid ? buscarMedida(measuresGrid, measureName) : 0;
+                    const factField = (measureRow && String(cellValue(measuresGrid, measureRow, 6)).trim()) || measureName;
+                    const factTable = measureRow
+                        ? Provider.qualify(
+                            cellValue(measuresGrid, measureRow, 3),
+                            cellValue(measuresGrid, measureRow, 4),
+                            cellValue(measuresGrid, measureRow, 5)
+                        )
+                        : "";
+
                     rows.push({
                         reportId,
                         reportName,
                         address: entry.sheetName + "!" + entry.address,
                         dimsValues,
-                        measureName: (measure && measure.measureName) || ctx.measureLabel || "",
+                        factTable,       // tabla de hechos real (vacía si no se pudo resolver la medida en MODEL_MEASURES)
+                        factField,       // columna real de la medida (p.ej. "IMPORTE"), no un genérico "measure_name"
                         value: entry.currentValue
                     });
                 }
@@ -7074,34 +7103,57 @@ function dracoPlanningSqlLiteralForMeasureValue(value) {
 
 /**
  * Genera el texto del INSERT directo (Opción A: columnas fijas por
- * dimensión, sin condición de coincidencia — un INSERT liso, no un
- * INSERT) a partir de las filas ya validadas
- * (validateDracoPlanningMandatoryDimensions) y lo escribe en
+ * dimensión) contra la TABLA DE HECHOS real (no un log propio): tabla y
+ * columna de medida salen de MODEL_MEASURES (FACT_PROJECT.FACT_DATASET.
+ * FACT_TABLE / FACT_FIELD, ya resueltos por fila en
+ * validateDracoPlanningMandatoryDimensions), así que la columna de
+ * importe se llama tal cual está en el modelo (p.ej. "IMPORTE",
+ * "CANTIDAD"), no un "measure_name"/"value" genérico. Se escribe en
  * EDIT_REPORT!J1 — de momento solo el TEXTO, no se ejecuta contra ningún
  * proveedor todavía. Las dimensiones con criterio "lineal"/"proporcional"
  * que faltaban en su celda llevan la palabra "reparto" en vez de un
  * valor real — se sustituirá por el reparto de verdad más adelante.
+ *
+ * Si hay filas de distintas tablas de hechos (informes con medidas de
+ * tablas distintas) se genera un INSERT por cada tabla. Si hay más de
+ * una medida involucrada para la MISMA tabla (p.ej. IMPORTE y CANTIDAD),
+ * se añaden ambas columnas y cada fila deja NULL la que no le
+ * corresponde a ella.
  */
 async function writeDracoPlanningMergeSql(rows, dimNames) {
     if (rows.length === 0) return;
 
-    const columns = ["report_id", ...dimNames, "measure_name", "value"];
+    const byTable = new Map(); // factTable -> {rows: [...], factFields: Set}
+    for (const r of rows) {
+        const table = r.factTable || "(tabla de hechos no resuelta)";
+        if (!byTable.has(table)) byTable.set(table, { rows: [], factFields: new Set() });
+        const bucket = byTable.get(table);
+        bucket.rows.push(r);
+        bucket.factFields.add(r.factField);
+    }
 
-    const tuples = rows.map(r => {
-        const vals = [
-            r.reportId,
-            ...dimNames.map(d => dracoPlanningSqlLiteralForDimValue(r.dimsValues[d])),
-            "'" + String(r.measureName).replace(/'/g, "''") + "'",
-            dracoPlanningSqlLiteralForMeasureValue(r.value)
-        ];
-        return "    (" + vals.join(", ") + ")";
-    });
+    const statements = [];
+    for (const [table, bucket] of byTable.entries()) {
+        const factFields = Array.from(bucket.factFields);
+        const columns = [...dimNames, ...factFields];
 
-    const sql =
-`INSERT INTO planning_log
+        const tuples = bucket.rows.map(r => {
+            const dimVals = dimNames.map(d => dracoPlanningSqlLiteralForDimValue(r.dimsValues[d]));
+            const measureVals = factFields.map(f =>
+                f === r.factField ? dracoPlanningSqlLiteralForMeasureValue(r.value) : "NULL"
+            );
+            return "    (" + [...dimVals, ...measureVals].join(", ") + ")";
+        });
+
+        statements.push(
+`INSERT INTO ${table}
   (${columns.join(", ")})
 VALUES
-${tuples.join(",\n")};`;
+${tuples.join(",\n")};`
+        );
+    }
+
+    const sql = statements.join("\n\n");
 
     try {
         await Excel.run(async (context) => {
