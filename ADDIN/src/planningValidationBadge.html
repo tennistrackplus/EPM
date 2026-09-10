@@ -63,19 +63,21 @@
             const params = new URLSearchParams(window.location.search);
             const isValid = params.get("valid") === "1";
             const detalle = params.get("detalle") || "";
+            const tituloOverride = params.get("titulo");
+            const subtituloOverride = params.get("subtitulo");
 
             const el = document.getElementById("badge");
             el.classList.remove("ok", "error");
             el.classList.add(isValid ? "ok" : "error");
 
             if (isValid) {
-                document.getElementById("badgeTitle").textContent = "Validación correcta";
-                document.getElementById("badgeSubtitle").textContent = "Todas las celdas tienen sus dimensiones obligatorias";
+                document.getElementById("badgeTitle").textContent = tituloOverride || "Validación correcta";
+                document.getElementById("badgeSubtitle").textContent = subtituloOverride || "Todas las celdas tienen sus dimensiones obligatorias";
                 setTimeout(notifyHostAndClose, AUTO_CLOSE_MS);
             } else {
                 document.getElementById("badgeDot").style.display = "none";
-                document.getElementById("badgeTitle").textContent = "Faltan dimensiones obligatorias";
-                document.getElementById("badgeSubtitle").textContent = "Es necesario indicar un valor para las dimensiones:";
+                document.getElementById("badgeTitle").textContent = tituloOverride || "Faltan dimensiones obligatorias";
+                document.getElementById("badgeSubtitle").textContent = subtituloOverride || "Es necesario indicar un valor para las dimensiones:";
                 const detalleEl = document.getElementById("badgeDetalle");
                 detalleEl.textContent = detalle;
                 detalleEl.style.display = "block";
