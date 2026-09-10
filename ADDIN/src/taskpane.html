@@ -529,18 +529,18 @@
             box-sizing: border-box;
         }
 
-        #view-modelo h3, #view-modelo h4 {
+        :where(#view-modelo) h3, :where(#view-modelo) h4 {
             color: var(--text-primary, #0f172a);
             margin: 0;
         }
 
-        #view-modelo h3 {
+        :where(#view-modelo) h3 {
             font-size: 13px;
             font-weight: 700;
             letter-spacing: 0.2px;
         }
 
-        #view-modelo h4 {
+        :where(#view-modelo) h4 {
             font-size: 11px;
             font-weight: 700;
             text-transform: uppercase;
@@ -595,7 +595,7 @@
             margin-bottom: 0;
         }
 
-        #view-modelo label {
+        :where(#view-modelo) label {
             display: block;
             font-size: 10px;
             font-weight: 700;
@@ -660,7 +660,7 @@
             border-color: #fca5a5;
         }
 
-        #view-modelo select, #view-modelo input[type="text"] {
+        :where(#view-modelo) select, :where(#view-modelo) input[type="text"] {
             width: 100%;
             height: 30px;
             padding: 0 8px;
@@ -673,7 +673,7 @@
             transition: border-color 0.15s ease;
         }
 
-        #view-modelo select:focus, #view-modelo input[type="text"]:focus {
+        :where(#view-modelo) select:focus, :where(#view-modelo) input[type="text"]:focus {
             border-color: #2563eb;
         }
 
