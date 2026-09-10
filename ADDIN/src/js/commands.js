@@ -1495,71 +1495,6 @@ function snowflakeRowsToPseudoBqJson(rows) {
     return out;
 }
 
-/**
- * BigQuery: jobs.query (POST /queries) puede volver con jobComplete:false
- * y SIN filas si la consulta tarda más que el timeout por defecto
- * (~10s) — no es un error, la API contesta 200 igualmente. Si no se
- * comprueba esto, una consulta que tarda un poco (algo más probable
- * cuando hay otra consulta pesada en marcha a la vez, p.ej. un
- * "Actualizar" de un informe grande compitiendo por cuota) se lee como
- * "0 filas" en vez de esperar a que termine — el síntoma típico es un
- * diálogo (filtro, buscador de miembros...) que se abre pero sale
- * vacío, sin ningún error visible.
- *
- * Aquí se hace polling al job (getQueryResults) hasta que jobComplete
- * sea true, con el mismo patrón que ya usa SF.execRaw para Snowflake
- * (hasta 30 intentos, 1s entre cada uno -> ~30s de margen extra).
- *
- * IMPORTANTE: se devuelve SIEMPRE el texto crudo tal cual lo manda la
- * API (el de la primera respuesta si ya venía completa, o el de la
- * última respuesta de polling si hizo falta esperar) — NUNCA
- * JSON.stringify(objetoYaParseado). El resto del parseo de esta app
- * (parseJsonValueTriples, jsonTo3MatricesCore, parseMemberJsonTree...)
- * no usa JSON.parse: escanea el texto a mano asumiendo el formato EXACTO
- * que devuelve Google (con un espacio después de "v":, p.ej.
- * `"v": "algo"`). JSON.stringify genera JSON compacto SIN ese espacio,
- * lo que desincroniza en un carácter la lectura de cada valor —
- * encabezados con una comilla de más, filtros rotos, refrescos vacíos.
- * Solo se usa JSON.parse aquí para MIRAR jobComplete/jobReference, el
- * texto que se devuelve es siempre el original de fetch(), sin tocar.
- */
-async function pollBigQueryJobUntilComplete(projectId, token, firstResponseText) {
-    let parsed;
-    try {
-        parsed = JSON.parse(firstResponseText);
-    } catch (e) {
-        return firstResponseText; // no era JSON (o ya venía roto): se deja tal cual, que lo gestione quien llama
-    }
-
-    if (parsed.jobComplete !== false || !parsed.jobReference || !parsed.jobReference.jobId) {
-        return firstResponseText; // ya estaba completa (caso normal): se devuelve el texto original tal cual
-    }
-
-    let lastText = firstResponseText;
-    let attempts = 0;
-    while (parsed && parsed.jobComplete === false && parsed.jobReference && parsed.jobReference.jobId && attempts < 30) {
-        await new Promise(r => setTimeout(r, 1000));
-        const jobId = parsed.jobReference.jobId;
-        const location = parsed.jobReference.location;
-        let pollUrl = "https://bigquery.googleapis.com/bigquery/v2/projects/" + projectId + "/queries/" + jobId + "?timeoutMs=10000";
-        if (location) pollUrl += "&location=" + encodeURIComponent(location);
-
-        const pollResponse = await fetch(pollUrl, {
-            headers: { "Authorization": "Bearer " + token }
-        });
-        const pollText = await pollResponse.text();
-        lastText = pollText; // texto crudo de ESTA respuesta, el que se devolverá si es la última
-        try {
-            parsed = JSON.parse(pollText);
-        } catch (e) {
-            return pollText; // respuesta rara: se deja tal cual
-        }
-        attempts++;
-    }
-
-    return lastText; // texto crudo de la última respuesta (completa), no un JSON reconstruido
-}
-
 async function executeSQL(sql) {
     if (Provider.key() === "snowflake") {
         const rows = await SF.runQuery(sql);
@@ -1589,10 +1524,8 @@ async function executeSQL(sql) {
         body: body
     });
 
-    const firstText = await response.text();
-    return await pollBigQueryJobUntilComplete(projectId, token, firstText);
+    return await response.text();
 }
-
 
 /* ---------------------------------------------------------------------
  * JSON_PaintValues
