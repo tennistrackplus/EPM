@@ -1589,7 +1589,7 @@ function coerceCellLiteral(text) {
 // reportId -> Map("fila_columna" -> valor), con el valor que jsonPaintValues
 // pintó en cada celda de Draco_XXX_Values en el ÚLTIMO refresco — es
 // "la verdad" contra la que se compara al guardar planificación, para
-// mandar al MERGE solo las celdas cuyo valor de verdad cambió (ver
+// mandar al INSERT solo las celdas cuyo valor de verdad cambió (ver
 // filterDracoPlanningRealChanges). Se limpia y rellena entero en cada
 // refresco (jsonPaintValues), no se va acumulando entre refrescos.
 //
@@ -4167,26 +4167,151 @@ async function writeDracoPlanningDebug(msg) {
 }
 
 /**
+ * Contexto de planificación de UN informe, resuelto una sola vez y
+ * reutilizado para todas sus celdas modificadas — lo usan tanto el
+ * chequeo de "Planificable" (buildDracoPlanningMeasureCheckers) como la
+ * validación de "Dimensiones obligatorias" (validateDracoPlanningMandatoryDimensions)
+ * y la tabla guardada (writeDracoPlanningSavedTable), para no repetir
+ * tres veces la misma resolución de medida/cruce.
+ *
+ * Expone:
+ *   - resolveMeasure(r, c) -> {measureName, zoneId} | null
+ *     Medida aplicable a una celda del área de Draco_XXX_Values: FIJA
+ *     (arrastrada a "Filtros") o VARIABLE por fila/columna (puesta como
+ *     "MEASURE" en el diseño). zoneId es "filters"/"rows"/"columns" —
+ *     hace falta para construir la clave de fieldOptions.
+ *   - getCrossItems(addr) -> [{dim, attr, value}, ...]
+ *     El "cruce" de esa celda (Estático primero, Dinámico si no hay
+ *     fórmulas EPM_VALUE que leer).
+ *   - isMeasurePlanificable(zoneId, measureName) -> boolean
+ *   - dimensionsBehaviorForMeasure(zoneId, measureName) -> objeto
+ *     {dim: {required, mode}, ...} — el de la medida si tiene
+ *     "Personalizar" marcado (Opciones de campo), si no el del informe
+ *     (Propiedades del informe).
+ *   - measureLabel, filtersText: para la tabla guardada.
+ */
+async function buildDracoPlanningReportContext(context, reportId) {
+    const editReportGrid = await getEditReportGrid(context, reportId);
+    loadReportDefinition(editReportGrid, reportId); // rellena ReportState (Filters/FilterMeasureNames)
+
+    const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
+    const fieldOptions = (report && report.design) ? (report.design.fieldOptions || {}) : {};
+    const reportLevelBehavior = (report && report.reportProperties && report.reportProperties.dimensionsBehavior) || {};
+
+    // Medida: FIJA (filtro) o VARIABLE (filas/columnas) — se resuelve una
+    // sola vez por informe, no por celda.
+    let fixedMeasure = null;
+    let measureIAuxRows = null, measureIAuxCols = null, rowsRangeForMeasure = null, colsRangeForMeasure = null;
+
+    if (ReportState.FilterMeasureNames && ReportState.FilterMeasureNames.length > 0) {
+        fixedMeasure = { measureName: ReportState.FilterMeasureNames[0], zoneId: "filters" };
+    } else {
+        const fieldLevelsRows = buildAxisFieldLevelsTable(editReportGrid, "rows");
+        const fieldLevelsCols = buildAxisFieldLevelsTable(editReportGrid, "columns");
+        const names = dracoRangeNames(reportId);
+
+        const rowsNameObj = context.workbook.names.getItemOrNullObject(names.rows);
+        rowsRangeForMeasure = rowsNameObj.getRangeOrNullObject();
+        rowsRangeForMeasure.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
+        const colsNameObj = context.workbook.names.getItemOrNullObject(names.cols);
+        colsRangeForMeasure = colsNameObj.getRangeOrNullObject();
+        colsRangeForMeasure.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
+        await context.sync();
+
+        const findMeasureIAux = (fieldLevels) => {
+            for (let iAux = 1; iAux < fieldLevels.length; iAux++) {
+                const col = fieldLevels[iAux];
+                if (col && col.byFlag[1] && String(col.byFlag[1].dim).toUpperCase() === "MEASURE") return iAux;
+            }
+            return null;
+        };
+        measureIAuxRows = findMeasureIAux(fieldLevelsRows);
+        measureIAuxCols = findMeasureIAux(fieldLevelsCols);
+    }
+
+    const resolveMeasure = (r, c) => {
+        if (fixedMeasure) return fixedMeasure;
+
+        if (measureIAuxRows !== null && rowsRangeForMeasure && !rowsRangeForMeasure.isNullObject) {
+            const localRow = r - rowsRangeForMeasure.rowIndex;
+            const localCol = measureIAuxRows - 1;
+            if (localRow >= 0 && localRow < rowsRangeForMeasure.rowCount && localCol >= 0 && localCol < rowsRangeForMeasure.columnCount) {
+                const raw = rowsRangeForMeasure.values[localRow][localCol];
+                if (raw !== "" && raw !== null && raw !== undefined) {
+                    return { measureName: String(raw).replace(DRACO_GLYPH_PREFIX, ""), zoneId: "rows" };
+                }
+            }
+        }
+        if (measureIAuxCols !== null && colsRangeForMeasure && !colsRangeForMeasure.isNullObject) {
+            const localCol = c - colsRangeForMeasure.columnIndex;
+            const localRow = measureIAuxCols - 1;
+            if (localRow >= 0 && localRow < colsRangeForMeasure.rowCount && localCol >= 0 && localCol < colsRangeForMeasure.columnCount) {
+                const raw = colsRangeForMeasure.values[localRow][localCol];
+                if (raw !== "" && raw !== null && raw !== undefined) {
+                    return { measureName: String(raw).replace(DRACO_GLYPH_PREFIX, ""), zoneId: "columns" };
+                }
+            }
+        }
+        return null;
+    };
+
+    // Cruce: Estático primero (fórmulas EPM_VALUE); si no hay ninguna,
+    // Dinámico (texto ya pintado).
+    let crossCtx = null;
+    let useDynamic = false;
+    try {
+        crossCtx = await loadDracoPlanningCrossContext(context, reportId);
+        if (crossCtx.rowDefs.length === 0 && crossCtx.colDefs.length === 0) crossCtx = null;
+    } catch (e) {
+        crossCtx = null;
+    }
+    if (!crossCtx) {
+        try {
+            crossCtx = await loadDracoPlanningCrossContextDynamic(context, reportId);
+            useDynamic = true;
+        } catch (e) {
+            crossCtx = null;
+        }
+    }
+
+    const getCrossItems = (addr) => {
+        if (!crossCtx) return [];
+        return useDynamic
+            ? dracoPlanningCrossItemsForCellDynamic(crossCtx, addr)
+            : dracoPlanningCrossItemsForCell(crossCtx, addr);
+    };
+
+    const isMeasurePlanificable = (zoneId, measureName) => {
+        if (!measureName) return false;
+        const opts = fieldOptions[`${zoneId}|MEASURE|${measureName}`];
+        return !!(opts && opts.planificable);
+    };
+
+    const dimensionsBehaviorForMeasure = (zoneId, measureName) => {
+        if (zoneId && measureName) {
+            const opts = fieldOptions[`${zoneId}|MEASURE|${measureName}`];
+            if (opts && opts.dimensionsBehaviorCustom && opts.dimensionsBehavior) return opts.dimensionsBehavior;
+        }
+        return reportLevelBehavior;
+    };
+
+    return {
+        resolveMeasure,
+        getCrossItems,
+        isMeasurePlanificable,
+        dimensionsBehaviorForMeasure,
+        measureLabel: crossCtx ? crossCtx.measureLabel : "",
+        filtersText: crossCtx ? crossCtx.filtersText : ""
+    };
+}
+
+/**
  * Para cada informe candidato (ya filtrado a "de planificación" + esta
  * hoja), decide qué medida aplica a cada celda concreta y si esa medida
  * está marcada como "Planificable" — dato que vive POR INFORME (panel
  * "Opciones de campo" de "Editar informes", ver buildMeasureOptionsForm
  * en taskpane.js), NO en el modelo semántico: dos informes distintos con
  * la misma medida pueden tener cada uno su propio "Planificable".
- *
- * Se guarda en report.design.fieldOptions, con la misma clave
- * "zona|MEASURE|nombre" que usa el propio panel (fieldOptionsKey) — zona
- * es "filters", "rows" o "columns", según dónde esté puesta la medida.
- *
- * La medida puede venir de dos sitios distintos (y hay que saber de
- * CUÁL, para construir la clave correcta):
- *   - FIJA para todo el informe: arrastrada a la zona "Filtros"
- *     (ReportState.FilterMeasureNames, se resuelve una sola vez).
- *   - VARIABLE por fila/columna: puesta como "MEASURE" en el diseño de
- *     Filas o Columnas — mismo procedimiento que la lectura del "cruce"
- *     en Dinámico (iAux + fieldLevels), pero aquí solo para localizar la
- *     columna/fila física de la MEASURE una vez, y leer su valor pintado
- *     en cada celda concreta que haga falta.
  *
  * Devuelve Map<reportId, (r, c) => boolean>.
  */
@@ -4195,80 +4320,11 @@ async function buildDracoPlanningMeasureCheckers(context, reportIds) {
 
     for (const reportId of reportIds) {
         try {
-            const editReportGrid = await getEditReportGrid(context, reportId);
-            loadReportDefinition(editReportGrid, reportId); // rellena ReportState (Filters/FilterMeasureNames)
-
-            const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
-            const fieldOptions = (report && report.design) ? (report.design.fieldOptions || {}) : {};
-
-            const isMeasurePlanificable = (zoneId, measureName) => {
-                if (!measureName) return false;
-                const key = `${zoneId}|MEASURE|${measureName}`;
-                const opts = fieldOptions[key];
-                return !!(opts && opts.planificable);
-            };
-
-            // Caso simple: medida fija, en la zona "Filtros".
-            if (ReportState.FilterMeasureNames && ReportState.FilterMeasureNames.length > 0) {
-                const fixedOk = isMeasurePlanificable("filters", ReportState.FilterMeasureNames[0]);
-                checkers.set(reportId, () => fixedOk);
-                continue;
-            }
-
-            // Caso general: la medida varía por fila o columna.
-            const fieldLevelsRows = buildAxisFieldLevelsTable(editReportGrid, "rows");
-            const fieldLevelsCols = buildAxisFieldLevelsTable(editReportGrid, "columns");
-
-            const names = dracoRangeNames(reportId);
-            const rowsNameObj = context.workbook.names.getItemOrNullObject(names.rows);
-            const rowsRange = rowsNameObj.getRangeOrNullObject();
-            rowsRange.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
-            const colsNameObj = context.workbook.names.getItemOrNullObject(names.cols);
-            const colsRange = colsNameObj.getRangeOrNullObject();
-            colsRange.load(["values", "rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
-            await context.sync();
-
-            // Localizar en qué columna (Filas) o fila (Columnas) física
-            // vive la MEASURE dentro del eje — una sola vez, no por celda.
-            const findMeasureIAux = (fieldLevels) => {
-                for (let iAux = 1; iAux < fieldLevels.length; iAux++) {
-                    const col = fieldLevels[iAux];
-                    if (col && col.byFlag[1] && String(col.byFlag[1].dim).toUpperCase() === "MEASURE") return iAux;
-                }
-                return null;
-            };
-            const measureIAuxRows = findMeasureIAux(fieldLevelsRows);
-            const measureIAuxCols = findMeasureIAux(fieldLevelsCols);
-
+            const ctx = await buildDracoPlanningReportContext(context, reportId);
             checkers.set(reportId, (r, c) => {
-                let measureName = null;
-                let zoneId = null;
-
-                if (measureIAuxRows !== null && rowsRange && !rowsRange.isNullObject) {
-                    const localRow = r - rowsRange.rowIndex;
-                    const localCol = measureIAuxRows - 1;
-                    if (localRow >= 0 && localRow < rowsRange.rowCount && localCol >= 0 && localCol < rowsRange.columnCount) {
-                        const raw = rowsRange.values[localRow][localCol];
-                        if (raw !== "" && raw !== null && raw !== undefined) {
-                            measureName = String(raw).replace(DRACO_GLYPH_PREFIX, "");
-                            zoneId = "rows";
-                        }
-                    }
-                }
-                if (!measureName && measureIAuxCols !== null && colsRange && !colsRange.isNullObject) {
-                    const localCol = c - colsRange.columnIndex;
-                    const localRow = measureIAuxCols - 1;
-                    if (localRow >= 0 && localRow < colsRange.rowCount && localCol >= 0 && localCol < colsRange.columnCount) {
-                        const raw = colsRange.values[localRow][localCol];
-                        if (raw !== "" && raw !== null && raw !== undefined) {
-                            measureName = String(raw).replace(DRACO_GLYPH_PREFIX, "");
-                            zoneId = "columns";
-                        }
-                    }
-                }
-
-                if (!measureName) return false; // no se pudo determinar la medida: por seguridad, no marcar
-                return isMeasurePlanificable(zoneId, measureName);
+                const m = ctx.resolveMeasure(r, c);
+                if (!m) return false; // no se pudo determinar la medida: por seguridad, no marcar
+                return ctx.isMeasurePlanificable(m.zoneId, m.measureName);
             });
         } catch (e) {
             console.warn(`[Draco] No se pudo resolver la medida del informe ${reportId} para comprobar "Planificable":`, e);
@@ -6614,18 +6670,26 @@ async function loadDracoPlanningCrossContext(context, reportId) {
     };
 }
 
+// Items estructurados {dim, attr, value} de una celda concreta (Estático:
+// hay fórmulas EPM_VALUE que leer). dracoPlanningCrossTextForCell (más
+// abajo) es solo un formateador de esto a texto — la validación de
+// dimensiones obligatorias usa esta versión estructurada directamente.
+function dracoPlanningCrossItemsForCell(crossCtx, cellAddr) {
+    const { row, col } = parseAddress(cellAddr);
+    return [
+        ...crossCtx.rowDefs.filter(d => d.R === row),
+        ...crossCtx.colDefs.filter(d => d.R === col)
+    ].map(d => ({ dim: d.Dimension, attr: d.AttributeName, value: d.Display || d.Value }));
+}
+
 // "Dim X Valor Y, Dim Z Valor W" para una celda concreta, a partir de las
 // listas de fila/columna ya cargadas (loadDracoPlanningCrossContext).
 // Solo encuentra algo si el eje correspondiente está en Estático (hay
 // fórmulas EPM_VALUE que leer) — para Dinámico, ver
 // dracoPlanningCrossTextForCellDynamic más abajo.
 function dracoPlanningCrossTextForCell(crossCtx, cellAddr) {
-    const { row, col } = parseAddress(cellAddr);
-    const items = [
-        ...crossCtx.rowDefs.filter(d => d.R === row),
-        ...crossCtx.colDefs.filter(d => d.R === col)
-    ];
-    return items.map(d => `${d.Dimension}.${d.AttributeName}=${d.Display || d.Value}`).join(", ");
+    return dracoPlanningCrossItemsForCell(crossCtx, cellAddr)
+        .map(it => `${it.dim}.${it.attr}=${it.value}`).join(", ");
 }
 
 /**
@@ -6689,9 +6753,12 @@ async function loadDracoPlanningCrossContextDynamic(context, reportId) {
 
 const DRACO_GLYPH_PREFIX = /^[▸▾]\s+/;
 
-function dracoPlanningCrossTextForCellDynamic(ctx, cellAddr) {
+// Items estructurados {dim, attr, value} — versión Dinámica (sin fórmulas
+// EPM_VALUE, lee el texto ya pintado). Mismo papel que
+// dracoPlanningCrossItemsForCell pero para el otro caso.
+function dracoPlanningCrossItemsForCellDynamic(ctx, cellAddr) {
     const { row, col } = parseAddress(cellAddr); // 1-based
-    const parts = [];
+    const items = [];
 
     // Cruce de FILA: mismo ROW absoluto, recorriendo las columnas del
     // rango Draco_XXX_Rows (cada columna = un nivel de jerarquía).
@@ -6707,7 +6774,7 @@ function dracoPlanningCrossTextForCellDynamic(ctx, cellAddr) {
                 const field = resolveAxisFieldForFlag(ctx.fieldLevelsRows[iAux], flag);
                 if (!field || String(field.dim).toUpperCase() === "MEASURE") continue;
                 const text = String(currentValue).replace(DRACO_GLYPH_PREFIX, "");
-                parts.push(`${field.dim}.${field.attr}=${text}`);
+                items.push({ dim: field.dim, attr: field.attr, value: text });
             }
         }
     }
@@ -6726,12 +6793,17 @@ function dracoPlanningCrossTextForCellDynamic(ctx, cellAddr) {
                 const field = resolveAxisFieldForFlag(ctx.fieldLevelsCols[iAux], flag);
                 if (!field || String(field.dim).toUpperCase() === "MEASURE") continue;
                 const text = String(currentValue).replace(DRACO_GLYPH_PREFIX, "");
-                parts.push(`${field.dim}.${field.attr}=${text}`);
+                items.push({ dim: field.dim, attr: field.attr, value: text });
             }
         }
     }
 
-    return parts.join(", ");
+    return items;
+}
+
+function dracoPlanningCrossTextForCellDynamic(ctx, cellAddr) {
+    return dracoPlanningCrossItemsForCellDynamic(ctx, cellAddr)
+        .map(it => `${it.dim}.${it.attr}=${it.value}`).join(", ");
 }
 
 async function writeDracoPlanningSavedTable() {
@@ -6748,46 +6820,22 @@ async function writeDracoPlanningSavedTable() {
             for (const [reportId, bucket] of DracoPlanningModifiedCells.entries()) {
                 if (bucket.size === 0) continue;
 
-                let crossCtx = null;
+                let ctx = null;
                 let crossDiag = "";
-                let useDynamic = false;
                 try {
-                    crossCtx = await loadDracoPlanningCrossContext(context, reportId);
-                    if (crossCtx.rowDefs.length === 0 && crossCtx.colDefs.length === 0) {
-                        crossCtx = null; // sin fórmulas EPM_VALUE: probar como Dinámico
-                    }
+                    ctx = await buildDracoPlanningReportContext(context, reportId);
                 } catch (e) {
-                    console.warn(`[Draco] No se pudo resolver el cruce (Estático) del informe ${reportId}:`, e);
-                    crossCtx = null;
-                }
-
-                if (!crossCtx) {
-                    try {
-                        crossCtx = await loadDracoPlanningCrossContextDynamic(context, reportId);
-                        useDynamic = true;
-                        if (
-                            (!crossCtx.rowsRange || crossCtx.rowsRange.isNullObject) &&
-                            (!crossCtx.colsRange || crossCtx.colsRange.isNullObject)
-                        ) {
-                            crossDiag = "Ni fórmulas EPM_VALUE (Estático) ni rango Draco_XXX_Rows/Cols (Dinámico) encontrados.";
-                            crossCtx = null;
-                        }
-                    } catch (e) {
-                        console.warn(`[Draco] No se pudo resolver el cruce (Dinámico) del informe ${reportId} para la tabla guardada:`, e);
-                        crossDiag = "EXCEPCIÓN: " + (e && e.message ? e.message : String(e));
-                        crossCtx = null;
-                    }
+                    console.warn(`[Draco] No se pudo resolver el contexto de planificación del informe ${reportId} para la tabla guardada:`, e);
+                    crossDiag = "EXCEPCIÓN: " + (e && e.message ? e.message : String(e));
+                    ctx = null;
                 }
 
                 const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
                 const reportName = (report && report.name) || `Informe ${reportId}`;
 
                 for (const entry of bucket.values()) {
-                    const crossText = crossCtx
-                        ? (useDynamic
-                            ? dracoPlanningCrossTextForCellDynamic(crossCtx, entry.address)
-                            : dracoPlanningCrossTextForCell(crossCtx, entry.address))
-                        : "";
+                    const items = ctx ? ctx.getCrossItems(entry.address) : [];
+                    const crossText = items.map(it => `${it.dim}.${it.attr}=${it.value}`).join(", ");
 
                     // Valor actual (el importe tecleado) y diferencia contra
                     // el valor de referencia del último refresco (ver
@@ -6806,8 +6854,8 @@ async function writeDracoPlanningSavedTable() {
                         entry.sheetName + "!" + entry.address,
                         entry.color || "",
                         crossText,
-                        crossCtx ? crossCtx.measureLabel : "",
-                        crossCtx ? crossCtx.filtersText : "",
+                        ctx ? ctx.measureLabel : "",
+                        ctx ? ctx.filtersText : "",
                         entry.currentValue !== undefined ? entry.currentValue : "",
                         diff,
                         crossDiag
@@ -6898,14 +6946,254 @@ async function filterDracoPlanningRealChanges() {
     }
 }
 
+/**
+ * Comprueba que cada celda modificada de planificación tenga valor para
+ * TODAS las dimensiones marcadas como obligatorias (Propiedades del
+ * informe, o el criterio propio de su medida si tiene "Personalizar"
+ * marcado — ver buildDracoPlanningReportContext.dimensionsBehaviorForMeasure).
+ *
+ * De paso (para no recorrer las celdas dos veces ni recalcular el
+ * contexto por informe otra vez), monta también la fila que le
+ * correspondería a cada celda en el futuro INSERT/MERGE — ver `rows` en
+ * el resultado. Si una dimensión NO obligatoria no aparece en la celda,
+ * su valor es `null` (criterio "NULL") o el marcador `"__REPARTO__"`
+ * (criterio "lineal"/"proporcional" — de momento solo un aviso, el
+ * reparto de verdad se ataca después, aparte).
+ *
+ * Reutiliza buildDracoPlanningReportContext (una vez por informe, no por
+ * celda) — el cruce/medida ya sale calculado una sola vez ahí, así que
+ * esto no añade ninguna ida y vuelta a Excel extra aparte de la que ya
+ * hacía falta para la tabla guardada.
+ *
+ * Devuelve {valid, errors, rows, dimNames}:
+ *   - errors: array de {reportName, cell, missingDims} — una entrada por
+ *     cada celda a la que le falte alguna dimensión obligatoria.
+ *   - rows: array de {reportId, reportName, address, dimsValues,
+ *     measureName, value} — SOLO si valid es true (si falta algo
+ *     obligatorio en cualquier celda, no se monta ninguna fila).
+ *   - dimNames: nombres de todas las dimensiones usadas en `rows` (para
+ *     saber qué columnas lleva el INSERT/MERGE).
+ */
+async function validateDracoPlanningMandatoryDimensions() {
+    const errors = [];
+    const rows = [];
+    const dimNamesSet = new Set();
+    if (DracoPlanningModifiedCells.size === 0) return { valid: true, errors, rows, dimNames: [] };
+
+    try {
+        await Excel.run(async (context) => {
+            for (const [reportId, bucket] of DracoPlanningModifiedCells.entries()) {
+                if (bucket.size === 0) continue;
+
+                const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
+                const reportName = (report && report.name) || `Informe ${reportId}`;
+
+                let ctx;
+                try {
+                    ctx = await buildDracoPlanningReportContext(context, reportId);
+                } catch (e) {
+                    console.warn(`[Draco] No se pudo validar las dimensiones obligatorias del informe ${reportId} (se deja pasar, sin contexto no se puede comprobar):`, e);
+                    continue;
+                }
+
+                for (const entry of bucket.values()) {
+                    const { row, col } = parseAddress(entry.address); // 1-based
+                    const measure = ctx.resolveMeasure(row - 1, col - 1); // resolveMeasure espera 0-based
+                    const behavior = measure
+                        ? ctx.dimensionsBehaviorForMeasure(measure.zoneId, measure.measureName)
+                        : (report && report.reportProperties ? (report.reportProperties.dimensionsBehavior || {}) : {});
+
+                    const items = ctx.getCrossItems(entry.address);
+                    const presentMap = new Map(items.map(it => [String(it.dim).toUpperCase(), it.value]));
+
+                    const requiredDims = Object.keys(behavior).filter(dim => behavior[dim] && behavior[dim].required);
+                    const missing = requiredDims.filter(dim => !presentMap.has(String(dim).toUpperCase()));
+
+                    if (missing.length > 0) {
+                        errors.push({
+                            reportName,
+                            cell: entry.sheetName + "!" + entry.address,
+                            missingDims: missing
+                        });
+                        continue; // esta celda falla: no se monta fila para ella
+                    }
+
+                    // Todas las obligatorias están — montar el valor de CADA
+                    // dimensión configurada (esté o no en esta celda).
+                    const dimsValues = {};
+                    for (const dim of Object.keys(behavior)) {
+                        dimNamesSet.add(dim);
+                        const upperDim = dim.toUpperCase();
+                        if (presentMap.has(upperDim)) {
+                            dimsValues[dim] = presentMap.get(upperDim);
+                        } else {
+                            const cfg = behavior[dim] || {};
+                            dimsValues[dim] = (cfg.mode === "lineal" || cfg.mode === "proporcional")
+                                ? "__REPARTO__"
+                                : null; // "null" (o sin criterio explícito): NULL
+                        }
+                    }
+
+                    rows.push({
+                        reportId,
+                        reportName,
+                        address: entry.sheetName + "!" + entry.address,
+                        dimsValues,
+                        measureName: (measure && measure.measureName) || ctx.measureLabel || "",
+                        value: entry.currentValue
+                    });
+                }
+            }
+        });
+    } catch (e) {
+        console.error("[Draco] Error validando dimensiones obligatorias:", e);
+        errors.push({ reportName: "", cell: "", missingDims: ["(error interno: " + (e && e.message ? e.message : String(e)) + ")"] });
+    }
+
+    return { valid: errors.length === 0, errors, rows: errors.length === 0 ? rows : [], dimNames: Array.from(dimNamesSet) };
+}
+
+// Celda donde se escribe el INSERT generado — lejos de la tabla de A130
+// hacia abajo, para que no choquen aunque haya muchas celdas modificadas.
+const DRACO_PLANNING_INSERT_SQL_CELL = "J1";
+
+// Literal SQL para el valor de una dimensión: NULL, la palabra suelta
+// "reparto" (marcador, aposta NO es SQL válido — el reparto de verdad se
+// ataca después, aparte) o el valor entre comillas simples.
+function dracoPlanningSqlLiteralForDimValue(value) {
+    if (value === null || value === undefined) return "NULL";
+    if (value === "__REPARTO__") return "reparto";
+    return "'" + String(value).replace(/'/g, "''") + "'";
+}
+
+function dracoPlanningSqlLiteralForMeasureValue(value) {
+    if (value === null || value === undefined || value === "") return "NULL";
+    const num = Number(value);
+    return isNaN(num) ? "NULL" : num;
+}
+
+/**
+ * Genera el texto del INSERT directo (Opción A: columnas fijas por
+ * dimensión, sin condición de coincidencia — un INSERT liso, no un
+ * INSERT) a partir de las filas ya validadas
+ * (validateDracoPlanningMandatoryDimensions) y lo escribe en
+ * EDIT_REPORT!J1 — de momento solo el TEXTO, no se ejecuta contra ningún
+ * proveedor todavía. Las dimensiones con criterio "lineal"/"proporcional"
+ * que faltaban en su celda llevan la palabra "reparto" en vez de un
+ * valor real — se sustituirá por el reparto de verdad más adelante.
+ */
+async function writeDracoPlanningMergeSql(rows, dimNames) {
+    if (rows.length === 0) return;
+
+    const columns = ["report_id", ...dimNames, "measure_name", "value"];
+
+    const tuples = rows.map(r => {
+        const vals = [
+            r.reportId,
+            ...dimNames.map(d => dracoPlanningSqlLiteralForDimValue(r.dimsValues[d])),
+            "'" + String(r.measureName).replace(/'/g, "''") + "'",
+            dracoPlanningSqlLiteralForMeasureValue(r.value)
+        ];
+        return "    (" + vals.join(", ") + ")";
+    });
+
+    const sql =
+`INSERT INTO planning_log
+  (${columns.join(", ")})
+VALUES
+${tuples.join(",\n")};`;
+
+    try {
+        await Excel.run(async (context) => {
+            const editReportSheet = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+            editReportSheet.load("isNullObject");
+            await context.sync();
+            if (editReportSheet.isNullObject) return;
+            editReportSheet.getRange(DRACO_PLANNING_INSERT_SQL_CELL).values = [[sql]];
+            await context.sync();
+        });
+    } catch (e) {
+        console.error("[Draco] Error escribiendo el INSERT de planificación en EDIT_REPORT:", e);
+    }
+}
+
+/**
+ * Popup pequeño (planningValidationBadge.html) que confirma el resultado
+ * de validateDracoPlanningMandatoryDimensions al pulsar "Guardar
+ * planificación" — mismo patrón que showMemberRecognitionBadge
+ * (displayDialogAsync + auto-cierre): "fire and forget", no bloquea a
+ * quien llama. Si es válido, se cierra solo a los ~1,4s (como el de
+ * Reconocimiento de miembros); si faltan dimensiones, se queda abierto
+ * (hay una lista que leer) hasta que el usuario haga clic.
+ */
+function showPlanningValidationBadge(isValid, detalle) {
+    try {
+        const params = new URLSearchParams({
+            valid: isValid ? "1" : "0",
+            detalle: detalle || ""
+        });
+        const dialogUrl = new URL(
+            `planningValidationBadge.html?${params.toString()}`,
+            window.location.href
+        ).href;
+
+        Office.context.ui.displayDialogAsync(
+            dialogUrl,
+            isValid ? { height: 15, width: 22, displayInIframe: false } : { height: 35, width: 32, displayInIframe: false },
+            (asyncResult) => {
+                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                    console.warn(
+                        "[Draco] No se pudo mostrar el aviso de validación de planificación:",
+                        asyncResult.error && asyncResult.error.message
+                    );
+                    return;
+                }
+                const dialog = asyncResult.value;
+                let closed = false;
+                const closeOnce = () => {
+                    if (closed) return;
+                    closed = true;
+                    try { dialog.close(); } catch (e) { /* ya cerrado */ }
+                };
+                dialog.addEventHandler(Office.EventType.DialogMessageReceived, closeOnce);
+                dialog.addEventHandler(Office.EventType.DialogEventReceived, closeOnce);
+            }
+        );
+    } catch (e) {
+        console.warn("[Draco] Error mostrando el aviso de validación de planificación:", e);
+    }
+}
+
 async function guardarPlanificacion(event) {
     try {
-        console.log("Guardar planificación: INSERT real todavía no implementado; se vuelca/limpia el registro de celdas modificadas de planificación.");
+        console.log("Guardar planificación: INSERT real (contra BigQuery/Snowflake) todavía no implementado; de momento solo se genera el texto en EDIT_REPORT!J1.");
 
         // Descarta las celdas marcadas en cian que en realidad no cambiaron
         // de valor respecto al último refresco (ver comentario de la
-        // función) — antes de escribir la tabla ni de mandar nada al MERGE.
+        // función) — antes de comprobar nada ni de mandar nada al INSERT.
         await filterDracoPlanningRealChanges();
+
+        // Dimensiones obligatorias: si a alguna celda le falta alguna, se
+        // avisa y NO se sigue (ni tabla guardada, ni vaciado del registro
+        // — las celdas se quedan tal cual, en cian, para poder corregirlas).
+        // De paso, si todo va bien, ya vienen montadas las filas del INSERT
+        // (validation.rows) — ver la función para el detalle.
+        const validation = await validateDracoPlanningMandatoryDimensions();
+        if (!validation.valid) {
+            const detalle = validation.errors
+                .map(e => `${e.reportName} · ${e.cell}: ${e.missingDims.join(", ")}`)
+                .join("\n");
+            showPlanningValidationBadge(false, detalle);
+            return;
+        }
+        showPlanningValidationBadge(true, "");
+
+        // INSERT (Opción A: columnas fijas por dimensión) — de momento solo
+        // el texto, escrito en EDIT_REPORT!J1; las dimensiones con
+        // criterio "lineal"/"proporcional" que faltaban llevan la palabra
+        // "reparto" en vez de un valor (el reparto de verdad se ataca
+        // aparte, cuando el caso principal funcione bien).
+        await writeDracoPlanningMergeSql(validation.rows, validation.dimNames);
 
         // Tabla legible (celda | color anterior) — SOLO en "Guardar", antes
         // de que flushDracoPlanningModifiedCells vacíe el registro.

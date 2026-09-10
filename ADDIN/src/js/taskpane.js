@@ -1829,11 +1829,11 @@ const TaskPaneApp = {
         }
     },
 
-    openReportPropertiesModal() {
+    async openReportPropertiesModal() {
         const modal = document.getElementById("reportPropertiesModal");
         if (!modal) return;
 
-        this.populateSemanticModelDropdown();
+        await this.populateSemanticModelDropdown();
 
         document.getElementById("propReportName").value = this.reportProperties.reportName || "Report 001";
         document.getElementById("propSuppressZeroRows").checked = !!this.reportProperties.suppressZeroRows;
@@ -1843,22 +1843,22 @@ const TaskPaneApp = {
         document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
         document.getElementById("propPlanningReport").checked = !!this.reportProperties.planningReport;
 
-        this.toggleDimensionsBehaviorSection();
+        await this.toggleDimensionsBehaviorSection();
 
         modal.style.display = "flex";
         this.updateRibbonToggleLabel("BtnPropiedadesInforme", "Propiedades", true);
     },
 
     // Solo se muestra si el informe está marcado como "de planificación" —
-    // por ahora es solo la parte visual (lista las dimensiones reales del
-    // modelo y deja elegir "Obligatoria" + el reparto si falta), sin
-    // enganchar todavía el guardado/uso real de estos valores.
-    toggleDimensionsBehaviorSection() {
+    // por ahora es solo la parte visual (marca qué dimensiones son
+    // imprescindibles y el reparto para el resto), sin enganchar todavía
+    // el guardado/uso real de estos valores.
+    async toggleDimensionsBehaviorSection() {
         const section = document.getElementById("propDimensionsBehaviorSection");
         if (!section) return;
         const isPlanning = document.getElementById("propPlanningReport").checked;
         section.style.display = isPlanning ? "block" : "none";
-        if (isPlanning) this.renderDimensionsBehaviorRows();
+        if (isPlanning) await this.renderDimensionsBehaviorRows();
     },
 
     async renderDimensionsBehaviorRows() {
@@ -1890,7 +1890,7 @@ const TaskPaneApp = {
             const saved = (this.reportProperties.dimensionsBehavior) || {};
             container.innerHTML = "";
             dims.forEach(dim => {
-                const cfg = saved[dim] || { required: false, mode: "null" };
+                const cfg = saved[dim] || { required: true, mode: "null" };
                 container.appendChild(this.buildDimensionBehaviorRow(dim, cfg));
             });
         } catch (err) {
@@ -1899,25 +1899,25 @@ const TaskPaneApp = {
         }
     },
 
-    // Fila reutilizable "Obligatoria + criterio de reparto" — la usan
-    // tanto "Propiedades del informe" (global) como el modal de Medida
-    // (override por medida). El criterio solo tiene sentido si la
-    // dimensión NO es obligatoria (si es obligatoria, nunca puede faltar,
-    // así que no hay nada que repartir) — por eso se oculta al marcarla.
+    // Fila reutilizable "checkbox (imprescindible) + dimensión + criterio
+    // de reparto" — la usan tanto "Propiedades del informe" (global) como
+    // el panel de Opciones de campo de una medida (override por medida).
+    // El criterio solo tiene sentido si la dimensión NO está marcada (si
+    // lo está, nunca puede faltar, así que no hay nada que repartir) —
+    // por eso se oculta al marcarla.
     buildDimensionBehaviorRow(dim, cfg) {
         const row = document.createElement("div");
         row.className = "dim-behavior-row";
         row.style.cssText = "display:flex; align-items:center; gap:8px; font-size:11px;";
         row.innerHTML = `
-            <label style="display:flex; align-items:center; gap:4px; flex:0 0 auto;">
-                <input type="checkbox" class="dim-behavior-required" data-dim="${dim}" ${cfg.required ? "checked" : ""} style="width:auto;" />
-                Obligatoria
+            <label style="display:flex; align-items:center; gap:6px; flex:1 1 auto; overflow:hidden;">
+                <input type="checkbox" class="dim-behavior-required" data-dim="${dim}" ${cfg.required ? "checked" : ""} style="width:auto; flex:0 0 auto;" />
+                <span style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${dim}</span>
             </label>
-            <span style="flex:1 1 auto; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${dim}</span>
             <select class="dim-behavior-mode" data-dim="${dim}" style="width:auto; flex:0 0 auto; ${cfg.required ? "display:none;" : ""}">
-                <option value="null" ${cfg.mode === "null" ? "selected" : ""}>Si falta: guardar como NULL</option>
-                <option value="lineal" ${cfg.mode === "lineal" ? "selected" : ""}>Si falta: repartir linealmente</option>
-                <option value="proporcional" ${cfg.mode === "proporcional" ? "selected" : ""}>Si falta: repartir proporcional</option>
+                <option value="null" ${cfg.mode === "null" ? "selected" : ""}>NULL</option>
+                <option value="lineal" ${cfg.mode === "lineal" ? "selected" : ""}>Lineal</option>
+                <option value="proporcional" ${cfg.mode === "proporcional" ? "selected" : ""}>Proporcional</option>
             </select>
         `;
         const checkbox = row.querySelector(".dim-behavior-required");
@@ -2337,7 +2337,7 @@ const TaskPaneApp = {
 
             container.innerHTML = "";
             dims.forEach(dim => {
-                const cfg = saved[dim] || { required: false, mode: "null" };
+                const cfg = saved[dim] || { required: true, mode: "null" };
                 container.appendChild(this.buildDimensionBehaviorRow(dim, cfg));
             });
         } catch (err) {
