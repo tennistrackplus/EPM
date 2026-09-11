@@ -1495,7 +1495,17 @@ function snowflakeRowsToPseudoBqJson(rows) {
     return out;
 }
 
-async function executeSQL(sql) {
+/**
+ * @param {string} sql
+ * @param {string} [billingProjectId] Proyecto de facturación a usar para el job
+ *   de BigQuery (jobs.query). Si no se indica, se usa BQ.getBillingProject()
+ *   (config de la conexión) y, en su defecto, "bigqueryexcelconnector" como
+ *   antes. Quien llama y SÍ sabe a qué proyecto pertenece la tabla destino
+ *   (p.ej. executeDracoPlanningInserts, a partir del INSERT INTO `proyecto.dataset.tabla`)
+ *   debe pasarlo aquí para que el job se facture ahí y no en un proyecto sin
+ *   billing (ver executeDracoPlanningInserts).
+ */
+async function executeSQL(sql, billingProjectId) {
     if (Provider.key() === "snowflake") {
         const rows = await SF.runQuery(sql);
         return snowflakeRowsToPseudoBqJson(rows);
@@ -1509,7 +1519,7 @@ async function executeSQL(sql) {
         throw new Error("No hay una sesión activa de BigQuery. Inicia sesión en el panel primero.");
     }
 
-    const projectId = "bigqueryexcelconnector";
+    const projectId = billingProjectId || BQ.getBillingProject() || "bigqueryexcelconnector";
 
     const url = "https://bigquery.googleapis.com/bigquery/v2/projects/" + projectId + "/queries";
 
@@ -7133,6 +7143,20 @@ function dracoPlanningSqlLiteralForMeasureValue(value) {
 // escribir el texto en EDIT_REPORT!J1 como para ejecutarlo de verdad
 // (executeDracoPlanningInserts) — una sola vez se decide cómo se
 // construye el INSERT, no dos.
+/**
+ * Extrae el proyecto GCP de una tabla ya cualificada por Provider.qualify()
+ * (`proyecto.dataset.tabla`, con o sin backticks — en Snowflake sería
+ * BD.esquema.tabla, así que ahí no aplica y se devuelve null). Esto es lo
+ * que permite facturar el INSERT contra el MISMO proyecto donde vive la
+ * tabla de hechos real, en vez de un proyecto de facturación fijo.
+ */
+function projectIdFromQualifiedTable(qualifiedTable) {
+    if (Provider.key() === "snowflake") return null;
+    const clean = String(qualifiedTable || "").replace(/`/g, "").trim();
+    const parts = clean.split(".");
+    return parts.length >= 3 ? parts[0] : null;
+}
+
 function buildDracoPlanningInsertStatements(rows, dimNames) {
     const byTable = new Map(); // factTable -> {rows: [...], factFields: Set}
     for (const r of rows) {
@@ -7156,12 +7180,14 @@ function buildDracoPlanningInsertStatements(rows, dimNames) {
             return "    (" + [...dimVals, ...measureVals].join(", ") + ")";
         });
 
-        statements.push(
+        statements.push({
+            table,
+            sql:
 `INSERT INTO ${table}
   (${columns.join(", ")})
 VALUES
 ${tuples.join(",\n")};`
-        );
+        });
     }
 
     return statements;
@@ -7170,7 +7196,7 @@ ${tuples.join(",\n")};`
 async function writeDracoPlanningMergeSql(rows, dimNames) {
     if (rows.length === 0) return;
 
-    const sql = buildDracoPlanningInsertStatements(rows, dimNames).join("\n\n");
+    const sql = buildDracoPlanningInsertStatements(rows, dimNames).map(s => s.sql).join("\n\n");
 
     try {
         await Excel.run(async (context) => {
@@ -7206,7 +7232,10 @@ async function executeDracoPlanningInserts(rows, dimNames) {
 
     for (const stmt of statements) {
         try {
-            const responseText = await executeSQL(stmt);
+            // Factura el INSERT contra el proyecto de SU tabla de hechos
+            // (p.ej. "draco-506807"), no contra un proyecto fijo sin billing.
+            const billingProjectId = projectIdFromQualifiedTable(stmt.table);
+            const responseText = await executeSQL(stmt.sql, billingProjectId);
             let parsed = null;
             try { parsed = JSON.parse(responseText); } catch (e) { /* respuesta no era JSON, se asume OK */ }
 
