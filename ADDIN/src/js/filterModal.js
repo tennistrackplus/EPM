@@ -193,26 +193,33 @@ const FilterModal = {
      * selección al reabrir el diálogo.
      */
     open(fieldData) {
-        return new Promise(async (resolve) => {
-            const container = null; // ya no hay contenedor propio: los mensajes de error van por consola.
-
-            let items = [];
-            try {
+        return new Promise((resolve) => {
+            // Antes: se esperaba aquí (await) a que terminase la consulta de
+            // valores ANTES de abrir el diálogo. Con red lenta eso deja al
+            // taskpane sin ninguna señal de actividad durante ese rato (el
+            // "Esperando datos…" del diálogo apenas llega a verse, porque
+            // para cuando la ventana se abre los datos ya están listos) —
+            // parece que el selector se ha quedado bloqueado.
+            //
+            // Ahora el diálogo se abre INMEDIATAMENTE (el usuario ve
+            // "Esperando datos…" desde el primer clic) y la consulta se
+            // lanza en paralelo; se envía al diálogo en cuanto están listos
+            // TANTO el diálogo (mensaje "ready") COMO los datos (lo que
+            // termine último de los dos).
+            const itemsPromise = (async () => {
                 const sql = await window.ExcelService.buildFilterValuesSQL(fieldData.dim, fieldData.name);
-
                 if (!sql) {
                     console.error("FilterModal: no se ha encontrado el atributo o jerarquía.", fieldData);
-                    resolve(null);
-                    return;
+                    return null; // null = error, distinto de "sin resultados" ([])
                 }
-
                 const json = await window.ExcelService.executeSQL(sql);
-                items = loadJsonTree(json);
-            } catch (err) {
-                console.error("Error cargando valores de filtro:", err);
-                resolve(null);
-                return;
-            }
+                return loadJsonTree(json);
+            })();
+            // Si displayDialogAsync fallara (ver más abajo) antes de que llegue
+            // "ready", nadie más leería el resultado/error de itemsPromise —
+            // este catch silencioso evita un "unhandled promise rejection" en
+            // consola; el error real, si lo hay, ya se habrá logueado arriba.
+            itemsPromise.catch(() => {});
 
             const dialogUrl = new URL("filterDialog.html", window.location.href).href;
 
@@ -244,12 +251,34 @@ const FilterModal = {
                         }
 
                         if (payload.type === "ready") {
-                            dialog.messageChild(JSON.stringify({
-                                items,
-                                fieldData: { dim: fieldData.dim, name: fieldData.name, isHierarchy: fieldData.isHierarchy },
-                                currentFilter: fieldData.currentFilter || null,
-                                initialSearch: fieldData.initialSearch || ""
-                            }));
+                            // El diálogo ya está mostrando "Esperando datos…"; en
+                            // cuanto la consulta (lanzada en paralelo al abrir el
+                            // diálogo) termine, le mandamos el resultado. Si ya
+                            // había terminado antes de que llegase "ready", el
+                            // .then() se resuelve al instante.
+                            itemsPromise.then((items) => {
+                                if (settled) return; // el usuario ya canceló mientras tanto
+                                if (items === null) {
+                                    // buildFilterValuesSQL no encontró el campo: no
+                                    // hay nada que mostrar, se cierra el diálogo.
+                                    settled = true;
+                                    closeDialog();
+                                    resolve(null);
+                                    return;
+                                }
+                                dialog.messageChild(JSON.stringify({
+                                    items,
+                                    fieldData: { dim: fieldData.dim, name: fieldData.name, isHierarchy: fieldData.isHierarchy },
+                                    currentFilter: fieldData.currentFilter || null,
+                                    initialSearch: fieldData.initialSearch || ""
+                                }));
+                            }, (err) => {
+                                console.error("Error cargando valores de filtro:", err);
+                                if (settled) return;
+                                settled = true;
+                                closeDialog();
+                                resolve(null);
+                            });
                             return;
                         }
 
