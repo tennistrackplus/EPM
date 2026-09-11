@@ -203,7 +203,12 @@ const TaskPaneApp = {
 
             if (window.ReportActions && typeof window.ReportActions.actualizar === "function") {
                 this.setAutoStatus("Actualizando…");
-                await window.ReportActions.actualizar();
+                if (window.BusyIndicator) await window.BusyIndicator.show("Actualizando");
+                try {
+                    await window.ReportActions.actualizar();
+                } finally {
+                    if (window.BusyIndicator) await window.BusyIndicator.hide();
+                }
             }
 
             this.setAutoStatus("Actualizado ✓");
