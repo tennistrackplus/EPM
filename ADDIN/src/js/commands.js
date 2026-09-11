@@ -31,6 +31,7 @@
  * registra con console.error cualquier fallo al crear el shape (p.ej. si
  * el host de Excel no soporta la API de Shapes, ExcelApi 1.9).
  */
+
 (function () {
 
     const SHAPE_NAME = "EPM_BusyIndicator";
