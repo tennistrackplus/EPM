@@ -12,6 +12,7 @@ if (typeof Office !== "undefined") {
     });
 }
 
+
 /* ---------------------------------------------------------------------
  * RangeAxis — traducción de RR_Load/RC_Load/RR_Refresh/RC_Refresh/
  * RR_Move/RC_Move. Mantiene los dos rangos (Filas / Columnas) y sus
