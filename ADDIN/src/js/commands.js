@@ -5478,6 +5478,18 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const axisCrossValues = new Map();
     DracoAxisCrossValues.set(reportId, axisCrossValues);
 
+    // Baseline del IMPORTE (DracoPlanningBaselineValues): hasta ahora SOLO
+    // se rellenaba en jsonPaintValues (el refresco "Fixed" antiguo), pero
+    // los informes con Filas/Columnas jerárquicas se pintan por AQUÍ
+    // (factCells, más abajo) y jsonPaintValues nunca llega a ejecutarse
+    // para ellos — así que el baseline se quedaba siempre vacío, y el
+    // writeback insertaba el valor ABSOLUTO tecleado en vez del delta
+    // contra el último refresco. Se rellena igual que jsonPaintValues:
+    // SOLO si es informe de planificación, keyed "row_col" -> valor.
+    const report_ = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
+    const isPlanningReport_ = !!(report_ && report_.reportProperties && report_.reportProperties.planningReport);
+    const factBaseline = isPlanningReport_ ? new Map() : null;
+
     const totalCampos = 2 + ReportState.RowCount + ReportState.ColumnCount + ReportState.MeasureCount;
 
     // ---- Extraer todos los "v" ----
@@ -5814,9 +5826,16 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
             const col = physCol + colsOffCol;
             const value = coerceCellLiteral(String(f[measureFieldBase + mIdx]));
             factCells.set(row + "_" + col, { row, col, value });
+            if (factBaseline) factBaseline.set(row + "_" + col, value);
         }
     }
     await writeCellBlock(context, sheet, factCells);
+
+    if (isPlanningReport_) {
+        DracoPlanningBaselineValues.set(reportId, factBaseline);
+    } else {
+        DracoPlanningBaselineValues.delete(reportId); // por si dejó de ser de planificación desde el último refresco
+    }
 
     /* -------------------------------------------------------------
      * 2) FILAS — mismo cálculo que antes (última entrada no-nula por
