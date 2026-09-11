@@ -19,13 +19,17 @@
  * LIMITACIÓN IMPORTANTE (API de Office): no existe en Excel JS API un
  * equivalente a Application.StatusBar de VBA, ni tampoco una forma de leer
  * la posición de scroll/ventana visible (no hay "ActiveWindow.VisibleRange").
- * Por eso "abajo a la izquierda" aquí es una posición fija en PUNTOS desde
- * la esquina superior izquierda de LA HOJA (A1), no de lo que se ve en
- * pantalla en cada momento: si el usuario ha hecho scroll lejos de A1, el
- * indicador puede quedar fuera de la vista. Ajusta INDICATOR_TOP más abajo
- * si tus hojas suelen verse con más o menos scroll por defecto. Si
- * necesitas garantía de visibilidad siempre, la alternativa robusta sigue
- * siendo el texto en el propio taskpane (setAutoStatus).
+ * Por eso, en vez de una posición fija en puntos desde A1 (que puede caer
+ * fuera de lo que el usuario ve en pantalla según el tamaño de su ventana
+ * — así falló la primera versión de este archivo, el shape se creaba pero
+ * quedaba invisible más abajo del borde inferior de la ventana), el
+ * indicador se ancla justo debajo de la CELDA ACTIVA: al dispararse la
+ * actualización (doble clic en un filtro, editar el diseño...) esa celda
+ * casi siempre está dentro de lo que el usuario tiene visible, así que es
+ * la mejor aproximación disponible a "donde está mirando ahora mismo". Si
+ * aun así no apareciera, revisa la consola del navegador/Excel: show()
+ * registra con console.error cualquier fallo al crear el shape (p.ej. si
+ * el host de Excel no soporta la API de Shapes, ExcelApi 1.9).
  */
 (function () {
 
@@ -39,8 +43,6 @@
     // probarla en vez de la de arriba.
     // const FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-    const INDICATOR_LEFT = 8;    // puntos desde el borde izquierdo de la hoja
-    const INDICATOR_TOP = 520;   // puntos desde el borde superior de la hoja
     const INDICATOR_WIDTH = 140;
     const INDICATOR_HEIGHT = 24;
 
@@ -57,13 +59,29 @@
     async function createShape(context) {
         const sheet = context.workbook.worksheets.getActiveWorksheet();
         sheet.load("name");
+
+        // Antes: posición fija (INDICATOR_LEFT/INDICATOR_TOP) medida desde
+        // A1. Con una ventana de Excel que no llegue a mostrar esa fila, el
+        // shape se crea igualmente pero queda FUERA de lo que se ve en
+        // pantalla — sin ningún error, simplemente no se ve. La celda
+        // activa, en cambio, casi siempre está dentro de lo que el usuario
+        // tiene visible en el momento de disparar la actualización (doble
+        // clic en un filtro, editar el diseño, etc.), así que anclamos el
+        // indicador justo debajo de ella en vez de a un punto fijo de la
+        // hoja.
+        const activeCell = context.workbook.getActiveCell();
+        activeCell.load(["left", "top", "height"]);
+
         await context.sync();
         sheetName = sheet.name;
 
+        const left = Math.max(4, activeCell.left);
+        const top = activeCell.top + activeCell.height + 4;
+
         const shape = sheet.shapes.addTextBox(frameText());
         shape.name = SHAPE_NAME;
-        shape.left = INDICATOR_LEFT;
-        shape.top = INDICATOR_TOP;
+        shape.left = left;
+        shape.top = top;
         shape.width = INDICATOR_WIDTH;
         shape.height = INDICATOR_HEIGHT;
         shape.lockAspectRatio = false;
@@ -90,6 +108,13 @@
         if (sheet.isNullObject) return null; // la hoja se borró mientras tanto
         return shapes.items.find(s => s.name === SHAPE_NAME) || null;
     }
+
+    // Duración mínima que se deja el indicador visible una vez creado,
+    // aunque la operación real termine antes: si el refresco tarda p.ej.
+    // 100ms, el shape se crearía y se borraría casi en el mismo instante,
+    // dando la sensación de que nunca llegó a aparecer.
+    const MIN_VISIBLE_MS = 400;
+    let shownAt = 0;
 
     async function tick() {
         frameIdx = (frameIdx + 1) % FRAMES.length;
@@ -124,10 +149,11 @@
                 if (!existing) await createShape(context);
             });
         } catch (err) {
-            console.warn("[BusyIndicator] No se pudo crear el indicador:", err);
+            console.error("[BusyIndicator] No se pudo crear el indicador:", err);
             return; // sin shape no tiene sentido animar
         }
 
+        shownAt = Date.now();
         frameIdx = 0;
         if (!timerId) timerId = setInterval(tick, FRAME_MS);
     }
@@ -139,6 +165,11 @@
     async function hide() {
         refCount = Math.max(0, refCount - 1);
         if (refCount > 0) return;
+
+        const elapsed = Date.now() - shownAt;
+        if (elapsed < MIN_VISIBLE_MS) {
+            await new Promise(resolve => setTimeout(resolve, MIN_VISIBLE_MS - elapsed));
+        }
 
         if (timerId) { clearInterval(timerId); timerId = null; }
 
