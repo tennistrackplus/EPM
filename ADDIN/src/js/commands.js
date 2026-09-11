@@ -22,6 +22,7 @@ Office.onReady(() => {
     // Se ha eliminado por completo del fichero.
 });
 
+
 /**
  * Asegura que exista la hoja técnica EDIT_REPORT (estado del diseño del
  * informe: filtros/filas/columnas), igual que ensureCoreModelSheets() en
@@ -1013,6 +1014,47 @@ function sqlValue(atributesGrid, dimension, atributo, valor) {
         return valor;
     }
     return "'" + String(valor).replace(/'/g, "''") + "'";
+}
+
+// Tipos DATA_TYPE (MODEL_ATRIBUTES) que NO van entre comillas en SQL —
+// mismo criterio "isNumeric" que ya usa semantic_model.js al pintar el
+// editor de campos, para que ambos sitios coincidan.
+const DRACO_PLANNING_NUMERIC_TYPES = ["INTEGER", "FLOAT", "NUMERIC", "BIGNUMERIC"];
+
+/**
+ * DATA_TYPE (MODEL_ATRIBUTES) de la dimensión "dim" tal como se usa en el
+ * writeback de Draco Planning: a diferencia de getAttributeType (que
+ * necesita DIMENSION + ATRIBUTO exactos), aquí solo se conoce el nombre de
+ * la dimensión tal como aparece en Filtros/Filas/Columnas — para una
+ * dimensión "plana" de un único atributo (caso típico de las columnas de
+ * DRACO_PLANIFICACION: CANAL, CUENTA, PRODUCTO...) el nombre de esa
+ * dimensión Y el de su atributo suelen coincidir, así que se prueba esa
+ * coincidencia exacta primero; si no la hay, se cae al atributo marcado
+ * como IS_KEY ("X") de esa dimensión. Devuelve "STRING" si no se
+ * encuentra nada (mismo comportamiento por defecto que getAttributeType).
+ */
+function resolveDracoPlanningDimensionType(atributesGrid, dim) {
+    const lastRow = lastRowInColumnValues(atributesGrid, 1);
+    const dimUpper = String(dim).trim().toUpperCase();
+    let keyRowType = null;
+
+    for (let R = 2; R <= lastRow; R++) {
+        const rowDim = String(cellValue(atributesGrid, R, 2)).trim().toUpperCase();
+        if (rowDim !== dimUpper) continue;
+
+        const rowAttr = String(cellValue(atributesGrid, R, 3)).trim().toUpperCase();
+        const rowType = String(cellValue(atributesGrid, R, 9)).trim().toUpperCase();
+        const isKey = String(cellValue(atributesGrid, R, 10)).trim().toUpperCase() === "X";
+
+        if (rowAttr === dimUpper) return rowType; // coincidencia exacta atributo==dimensión: la más fiable
+        if (isKey && keyRowType === null) keyRowType = rowType;
+    }
+
+    return keyRowType !== null ? keyRowType : "STRING";
+}
+
+function dracoPlanningValueIsNumericType(dataType) {
+    return DRACO_PLANNING_NUMERIC_TYPES.includes(String(dataType || "").trim().toUpperCase());
 }
 
 /* ---------------------------------------------------------------------
@@ -7023,6 +7065,17 @@ async function validateDracoPlanningMandatoryDimensions() {
                     ? await window.SemanticModelStore.getModelGrid("MODEL_MEASURES", modelName)
                     : null;
 
+                // MODEL_ATRIBUTES del modelo de ESTE informe — de aquí sale
+                // el DATA_TYPE real de cada dimensión (INTEGER/FLOAT/NUMERIC/
+                // BIGNUMERIC/STRING/...), para no escribir SIEMPRE el valor
+                // entre comillas en el INSERT (ver dracoPlanningSqlLiteralForDimValue
+                // más abajo) — si la columna destino es INT64/NUMERIC en
+                // BigQuery, comillas dan "Value has type STRING which cannot
+                // be inserted into column X, which has type INT64".
+                const atributesGrid = (modelName && window.SemanticModelStore)
+                    ? await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES", modelName)
+                    : null;
+
                 for (const entry of bucket.values()) {
                     const { row, col } = parseAddress(entry.address); // 1-based
                     const measure = ctx.resolveMeasure(row - 1, col - 1); // resolveMeasure espera 0-based
@@ -7048,6 +7101,7 @@ async function validateDracoPlanningMandatoryDimensions() {
                     // Todas las obligatorias están — montar el valor de CADA
                     // dimensión configurada (esté o no en esta celda).
                     const dimsValues = {};
+                    const dimTypes = {}; // dim -> DATA_TYPE (MODEL_ATRIBUTES), para no citar numéricos entre comillas
                     for (const dim of Object.keys(behavior)) {
                         dimNamesSet.add(dim);
                         const upperDim = dim.toUpperCase();
@@ -7059,6 +7113,7 @@ async function validateDracoPlanningMandatoryDimensions() {
                                 ? "__REPARTO__"
                                 : null; // "null" (o sin criterio explícito): NULL
                         }
+                        dimTypes[dim] = atributesGrid ? resolveDracoPlanningDimensionType(atributesGrid, dim) : "STRING";
                     }
 
                     const measureName = (measure && measure.measureName) || ctx.measureLabel || "";
@@ -7077,6 +7132,7 @@ async function validateDracoPlanningMandatoryDimensions() {
                         reportName,
                         address: entry.sheetName + "!" + entry.address,
                         dimsValues,
+                        dimTypes,        // dim -> DATA_TYPE (MODEL_ATRIBUTES): decide si el literal SQL va entre comillas
                         factTable,       // tabla de hechos real (vacía si no se pudo resolver la medida en MODEL_MEASURES)
                         factField,       // columna real de la medida (p.ej. "IMPORTE"), no un genérico "measure_name"
                         value: entry.currentValue
@@ -7105,10 +7161,21 @@ const DRACO_PLANNING_INSERT_RESULT_CELL = "K1";
 
 // Literal SQL para el valor de una dimensión: NULL, la palabra suelta
 // "reparto" (marcador, aposta NO es SQL válido — el reparto de verdad se
-// ataca después, aparte) o el valor entre comillas simples.
-function dracoPlanningSqlLiteralForDimValue(value) {
+// ataca después, aparte) o el valor — entre comillas simples si su
+// DATA_TYPE (MODEL_ATRIBUTES) es de texto, o tal cual (sin comillas) si es
+// numérico (INTEGER/FLOAT/NUMERIC/BIGNUMERIC — ver
+// resolveDracoPlanningDimensionType), para no meter un STRING en una
+// columna INT64/NUMERIC de BigQuery.
+function dracoPlanningSqlLiteralForDimValue(value, dataType) {
     if (value === null || value === undefined) return "NULL";
     if (value === "__REPARTO__") return "reparto";
+
+    if (dracoPlanningValueIsNumericType(dataType)) {
+        const s = String(value).trim().replace(",", "."); // por si llega con coma decimal
+        const num = Number(s);
+        return (s === "" || isNaN(num)) ? "NULL" : num;
+    }
+
     return "'" + String(value).replace(/'/g, "''") + "'";
 }
 
@@ -7173,7 +7240,7 @@ function buildDracoPlanningInsertStatements(rows, dimNames) {
         const columns = [...dimNames, ...factFields];
 
         const tuples = bucket.rows.map(r => {
-            const dimVals = dimNames.map(d => dracoPlanningSqlLiteralForDimValue(r.dimsValues[d]));
+            const dimVals = dimNames.map(d => dracoPlanningSqlLiteralForDimValue(r.dimsValues[d], r.dimTypes && r.dimTypes[d]));
             const measureVals = factFields.map(f =>
                 f === r.factField ? dracoPlanningSqlLiteralForMeasureValue(r.value) : "NULL"
             );
