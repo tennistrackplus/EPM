@@ -7245,6 +7245,25 @@ async function validateDracoPlanningMandatoryDimensions() {
                         )
                         : "";
 
+                    // DRACO_PLANIFICACION es "append-only" (se lee con
+                    // SUM(IMPORTE) — ver la consulta del informe): insertar
+                    // el valor ABSOLUTO que el usuario tecleó sumaría por
+                    // encima de lo que ya había, en vez de dejarlo en ese
+                    // número. Hay que insertar la DIFERENCIA contra el
+                    // último valor conocido (baseline, el que puso el
+                    // último refresco — ver filterDracoPlanningRealChanges),
+                    // igual que ya se calcula (solo para mostrar) en
+                    // writeDracoPlanningSavedTable. Sin baseline (informe
+                    // nunca refrescado en esta sesión, o valor no numérico)
+                    // se inserta el valor tal cual: no hay nada de lo que
+                    // restar.
+                    const currentNum = Number(entry.currentValue);
+                    const baselineNum = Number(entry.baselineValue);
+                    const hasBaseline = entry.baselineValue !== undefined && !isNaN(baselineNum);
+                    const deltaValue = (hasBaseline && !isNaN(currentNum))
+                        ? currentNum - baselineNum
+                        : entry.currentValue;
+
                     rows.push({
                         reportId,
                         reportName,
@@ -7253,7 +7272,7 @@ async function validateDracoPlanningMandatoryDimensions() {
                         dimTypes,        // dim -> DATA_TYPE (MODEL_ATRIBUTES): decide si el literal SQL va entre comillas
                         factTable,       // tabla de hechos real (vacía si no se pudo resolver la medida en MODEL_MEASURES)
                         factField,       // columna real de la medida (p.ej. "IMPORTE"), no un genérico "measure_name"
-                        value: entry.currentValue
+                        value: deltaValue
                     });
                 }
             }
