@@ -1890,6 +1890,38 @@ function parseStoredFilterValue(raw) {
     return { mode: "values", include: true, values: [s] };
 }
 
+/**
+ * Para el writeback de Draco Planning: si un filtro (Zona "Filtros" de un
+ * informe) representa EXACTAMENTE un valor incluido — un único valor/item,
+ * sin exclusiones (excludeValues/excludeItems/excludeRanges, ni el
+ * include:false del formato antiguo) y sin rangos — devuelve ese valor
+ * (el canónico: values[0], o item.value si viene del selector de
+ * miembros/jerarquía). Con 0 valores, 2+ valores, exclusiones o un rango,
+ * es ambiguo qué escribir en el INSERT, así que devuelve undefined: esa
+ * dimensión sigue contando como "sin resolver" (falta), igual que antes.
+ */
+function singleDracoFilterValueForWriteback(rawValue) {
+    const filter = parseStoredFilterValue(rawValue);
+    if (!filter) return undefined;
+
+    const hasExclusions =
+        (filter.excludeValues && filter.excludeValues.length) ||
+        (filter.excludeItems && filter.excludeItems.length) ||
+        (filter.excludeRanges && filter.excludeRanges.length) ||
+        filter.include === false; // formato antiguo "values" con NOT
+    if (hasExclusions) return undefined;
+
+    if (filter.ranges && filter.ranges.length) return undefined; // rango: no hay un único valor discreto
+
+    const values = filter.values || [];
+    const items = filter.items || [];
+    if (values.length + items.length !== 1) return undefined; // 0 o 2+: ambiguo
+
+    if (values.length === 1) return values[0];
+    const it = items[0];
+    return (it && typeof it === "object") ? (it.value !== undefined ? it.value : it.display) : it;
+}
+
 function sqlLiteralForFilter(atributesGrid, dimension, attributeName, rawValue) {
     const tipo = getAttributeType(atributesGrid, dimension, attributeName);
     if (UNQUOTED_TYPES.includes(tipo)) return String(rawValue);
@@ -7204,6 +7236,18 @@ async function validateDracoPlanningMandatoryDimensions() {
                     continue;
                 }
 
+                // Dimensiones resueltas por la zona "Filtros" (no por Filas/
+                // Columnas) con un único valor concreto — ReportState.Filters
+                // ya quedó relleno para ESTE informe por loadReportDefinition
+                // (dentro de buildDracoPlanningReportContext). Una sola vez
+                // por informe, no por celda: el filtro es el mismo para
+                // todas las celdas modificadas de este informe.
+                const filterValuesMap = new Map();
+                for (const f of (ReportState.Filters || [])) {
+                    const val = singleDracoFilterValueForWriteback(f.Value);
+                    if (val !== undefined) filterValuesMap.set(String(f.Dimension).toUpperCase(), val);
+                }
+
                 // MODEL_MEASURES del modelo de ESTE informe, una sola vez
                 // (no por celda) — de aquí sale la tabla de hechos real
                 // (FACT_PROJECT.FACT_DATASET.FACT_TABLE) y el campo real de
@@ -7223,8 +7267,16 @@ async function validateDracoPlanningMandatoryDimensions() {
                     const items = ctx.getCrossItemsForWriteback(entry.address);
                     const presentMap = new Map(items.map(it => [String(it.dim).toUpperCase(), it.value]));
 
+                    // "Presente" = está en Filas/Columnas de ESTA celda, O
+                    // resuelto por un filtro de la zona "Filtros" con un
+                    // único valor (ver filterValuesMap arriba) — una
+                    // dimensión puede estar fijada por filtro sin aparecer
+                    // nunca en el cruce de fila/columna.
+                    const hasValue = (upperDim) => presentMap.has(upperDim) || filterValuesMap.has(upperDim);
+                    const valueFor = (upperDim) => presentMap.has(upperDim) ? presentMap.get(upperDim) : filterValuesMap.get(upperDim);
+
                     const requiredDims = Object.keys(behavior).filter(dim => behavior[dim] && behavior[dim].required);
-                    const missing = requiredDims.filter(dim => !presentMap.has(String(dim).toUpperCase()));
+                    const missing = requiredDims.filter(dim => !hasValue(String(dim).toUpperCase()));
 
                     if (missing.length > 0) {
                         errors.push({
@@ -7242,8 +7294,8 @@ async function validateDracoPlanningMandatoryDimensions() {
                     for (const dim of Object.keys(behavior)) {
                         dimNamesSet.add(dim);
                         const upperDim = dim.toUpperCase();
-                        if (presentMap.has(upperDim)) {
-                            dimsValues[dim] = presentMap.get(upperDim);
+                        if (hasValue(upperDim)) {
+                            dimsValues[dim] = valueFor(upperDim);
                         } else {
                             const cfg = behavior[dim] || {};
                             dimsValues[dim] = (cfg.mode === "lineal" || cfg.mode === "proporcional")
