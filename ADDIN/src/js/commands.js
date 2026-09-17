@@ -2695,6 +2695,27 @@ const DracoHandlerRegisteredSheets = new Set();
 let DracoEditReportHandlerRegistered = false; // evita registrar el listener de EDIT_REPORT!A5 (picker) más de una vez — INDEPENDIENTE de lo anterior: no depende de que exista ninguna hoja de resultados ni de que se haya refrescado nunca
 let DracoSuppressChangeEvents = false; // true mientras jsonTo3Matrices pinta celdas (evita que el reconocimiento de miembros reaccione a nuestras propias escrituras)
 
+// true mientras handleDracoPickerFlagRequest está procesando de verdad una
+// petición DC/REC (desde que empieza su Excel.run hasta que limpia T2:V2).
+// El VBA del XLAM no espera a que el add-in termine antes de escribir el
+// siguiente doble clic en T2:V2 ("el filtrado fino se hace aquí", ver
+// comentario más arriba), así que varios dobles clics rápidos disparan
+// varios onChanged casi seguidos. Antes, cada uno de ellos entraba a hacer
+// su PROPIO Excel.run + findDracoRowsNamedRangeForCell/resolveDracoFieldForAxisLevel
+// (varias vueltas context.sync cada uno) ANTES de llegar al único guard que
+// existía (DracoMemberPickerOpen, dentro de openMemberRecognitionPicker) —
+// con Shared Runtime todo esto compite por el mismo hilo JS único del
+// panel+ribbon, así que una ráfaga de N clics amontona N cadenas de
+// Excel.run en la misma cola, y el add-in entero (incluida la ventana del
+// picker que sí llegó a abrirse) se queda esperando a que esa cola drene.
+// Esto es lo que de verdad explica "se pilla con clics rápidos y tarda
+// minutos en las consultas siguientes", no la velocidad de BigQuery. Este
+// guard corta la ráfaga ANTES de tocar Excel: solo la primera petición
+// DC/REC en curso se procesa; las que llegan mientras tanto se ignoran de
+// inmediato (sin Excel.run, sin coste), y en cuanto la primera limpia
+// T2:V2 (picker cerrado), un doble clic nuevo vuelve a procesarse normal.
+let DracoPickerFlagRequestBusy = false;
+
 // Candado DEDICADO y COMPLETAMENTE INDEPENDIENTE de DracoSuppressChangeEvents
 // (a propósito: reutilizar ese flag, que ya protege muchas otras cosas —
 // picker, expandir/contraer, etc. — para esto acabó rompiendo otras partes
@@ -5211,6 +5232,18 @@ async function handleDracoPickerFlagRequest(eventArgs) {
         );
         if (!touchesControlZone) return;
 
+        // Ya hay una petición DC/REC en curso (p.ej. varios dobles clics
+        // rápidos seguidos sobre distintas celdas): se ignora esta nueva
+        // notificación SIN llegar a abrir Excel.run. La que ya está en
+        // marcha limpiará T2:V2 al terminar (picker cerrado); a partir de
+        // ahí, el siguiente doble clic disparará su propio onChanged y se
+        // procesará con normalidad.
+        if (DracoPickerFlagRequestBusy) {
+            console.log("[Draco] Ya hay una petición DC/REC en curso: se ignora esta hasta que termine (clic rápido repetido).");
+            return;
+        }
+        DracoPickerFlagRequestBusy = true;
+
         await Excel.run(async (context) => {
             const editReport = context.workbook.worksheets.getItem("EDIT_REPORT");
             const ctrl = editReport.getRange(
@@ -5261,6 +5294,7 @@ async function handleDracoPickerFlagRequest(eventArgs) {
         console.error("[Draco] Error gestionando la petición del picker desde EDIT_REPORT!T2:V2:", e);
     } finally {
         DracoSuppressChangeEvents = false;
+        DracoPickerFlagRequestBusy = false;
     }
 }
 
