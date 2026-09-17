@@ -5546,15 +5546,22 @@ async function jsonTo3Matrices(context, json, reportId) {
     }
 }
 
-// jsonTo3MatricesCore borra los rangos con nombre anteriores y luego
-// escribe filas, columnas y valores en varias tandas (varios
-// context.sync() seguidos): sin nada más, Excel repinta la pantalla en
-// CADA una de esas tandas, y se ve como "primero borra, luego va
-// escribiendo" — el parpadeo que reporta el usuario. Application.
-// suspendScreenUpdatingUntilNextSync() solo dura hasta el PRÓXIMO sync
-// (no es un interruptor que se quede fijo como Application.ScreenUpdating
-// en VBA), así que hay que rearmarlo antes de cada uno de esos syncs; de
-// ahí este helper, en vez de llamarlo una sola vez al principio.
+// jsonTo3MatricesCore (y sus funciones auxiliares: clearDracoNamedRanges,
+// writeCellBlock, writeIndentAndColorRuns, applyDracoNamedRanges,
+// applyDracoTotalHighlight, el autofit de columnas) borran y escriben en
+// varias tandas — de ahí el parpadeo "primero borra, luego va
+// escribiendo" que reporta el usuario. suspendScreenUpdatingUntilNextSync()
+// solo dura hasta el PRÓXIMO sync, así que hay que rearmarlo antes de
+// cada sync que vaya a producir un cambio visible.
+//
+// OJO (probado y descartado): NO llamar a esto antes de TODOS los
+// context.sync() de estas funciones, incluidos los que solo leen
+// propiedades (.load(...) sin ninguna escritura de por medio) — la propia
+// documentación de Office avisa de que llamarlo repetidamente (p.ej. en
+// bucle) provoca MÁS parpadeo, no menos, y añade lentitud perceptible. Se
+// llama solo delante de los sync que van justo después de un borrado o
+// una escritura real (clear/.values=/.format...); los que solo cargan
+// datos para leerlos no lo necesitan y se dejan tal cual.
 function draco_suspendScreenUpdating(context) {
     try {
         context.application.suspendScreenUpdatingUntilNextSync();
@@ -5830,13 +5837,11 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const prevNamedItems = [rangeNamesForClear.rows, rangeNamesForClear.cols, rangeNamesForClear.values]
         .map(n => context.workbook.names.getItemOrNullObject(n));
     prevNamedItems.forEach(it => it.load("isNullObject"));
-    draco_suspendScreenUpdating(context);
     await context.sync();
 
     const prevRanges = prevNamedItems.filter(it => !it.isNullObject).map(it => it.getRange());
     prevRanges.forEach(r => r.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]));
     if (prevRanges.length > 0) {
-        draco_suspendScreenUpdating(context);
         await context.sync();
     }
 
@@ -6162,7 +6167,6 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
             const colsRangeName = context.workbook.names.getItemOrNullObject(rn.cols);
             rowsRangeName.load("isNullObject");
             colsRangeName.load("isNullObject");
-            draco_suspendScreenUpdating(context);
             await context.sync();
 
             if (!rowsRangeName.isNullObject) rowsRangeName.getRange().format.autofitColumns();
@@ -6331,7 +6335,6 @@ async function clearDracoNamedRanges(context, reportId, overwriteFormats) {
     const names = [rn.rows, rn.cols, rn.values];
     const items = names.map(n => context.workbook.names.getItemOrNullObject(n));
     items.forEach(it => it.load("isNullObject"));
-    draco_suspendScreenUpdating(context);
     await context.sync();
 
     const clearMode = overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents;
@@ -6431,7 +6434,6 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId) {
     for (const d of defs) {
         const existing = context.workbook.names.getItemOrNullObject(d.name);
         existing.load("isNullObject");
-        draco_suspendScreenUpdating(context);
         await context.sync();
         if (!existing.isNullObject) {
             existing.delete();
@@ -6487,7 +6489,6 @@ async function writeCellBlock(context, sheet, cellsMap) {
 
     const range = sheet.getRangeByIndexes(minRow - 1, minCol - 1, numRows, numCols);
     range.load("values");
-    draco_suspendScreenUpdating(context);
     await context.sync();
 
     const grid = range.values.map(r => r.slice());
@@ -6533,7 +6534,6 @@ async function writeIndentRuns(context, sheet, cellsMap) {
         }
     }
 
-    draco_suspendScreenUpdating(context);
     await context.sync();
 }
 
