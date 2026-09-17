@@ -183,13 +183,53 @@ function svcRowsToPseudoBqJson(rows) {
     return out;
 }
 
+// Límite duro en el cliente: si la conexión a BigQuery se queda colgada
+// (proxy/VPN/inspección TLS de la red corporativa, o un simple corte de
+// red — NO la ejecución de la consulta en sí, que para las tablas que
+// consulta el picker/filtro es cuestión de milisegundos), se aborta el
+// fetch cuanto antes. Esto importa más de lo que parece: el navegador
+// limita a un puñado de conexiones simultáneas por dominio, así que un
+// fetch colgado sin abortar nunca ocupa uno de esos huecos para
+// SIEMPRE — y cualquier otra consulta a bigquery.googleapis.com (el
+// siguiente picker, el siguiente filtro, el propio informe) se queda
+// esperando turno detrás de ella, no porque BigQuery esté lento sino
+// porque no hay conexión libre. De ahí el síntoma de "se pilla y encima
+// deja sin funcionar las consultas siguientes durante un buen rato":
+// antes no había NINGÚN timeout aquí, así que ese hueco no se liberaba
+// jamás por sí solo. Por eso el margen es corto (bastante por encima del
+// propio timeoutMs que se le pide a BigQuery), no largo: esperar más no
+// arregla una conexión que nunca iba a responder.
+const SVC_CLIENT_TIMEOUT_MS = 12000;
+// Límite total (incluyendo el sondeo de getQueryResults más abajo) para
+// el caso, distinto, de una consulta legítimamente pesada en otra tabla
+// grande que BigQuery sigue ejecutando de verdad (jobComplete:false).
+const SVC_MAX_TOTAL_WAIT_MS = 40000;
+
+async function svcFetchWithTimeout(url, options) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SVC_CLIENT_TIMEOUT_MS);
+    try {
+        return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+    } catch (err) {
+        if (err && err.name === "AbortError") {
+            throw new Error(
+                "La conexión con BigQuery no respondió en " + (SVC_CLIENT_TIMEOUT_MS / 1000) +
+                "s (probable corte de red o proxy). Prueba de nuevo."
+            );
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 async function executeSQLBigQuery(sql) {
     if (Provider.key() === "snowflake") {
         const rows = await SF.runQuery(sql);
         return svcRowsToPseudoBqJson(rows);
     }
 
-    // BigQuery (comportamiento original, sin cambios)
+    // BigQuery
     const token = localStorage.getItem("bigquery_access_token");
     const expires = localStorage.getItem("bigquery_token_expires");
 
@@ -198,20 +238,67 @@ async function executeSQLBigQuery(sql) {
     }
 
     const projectId = "bigqueryexcelconnector";
-    const url = "https://bigquery.googleapis.com/bigquery/v2/projects/" + projectId + "/queries";
+    const baseUrl = "https://bigquery.googleapis.com/bigquery/v2/projects/" + projectId;
+    const headers = {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json"
+    };
 
-    const body = JSON.stringify({ query: sql, useLegacySql: false });
+    const startedAt = Date.now();
 
-    const response = await fetch(url, {
+    let response = await svcFetchWithTimeout(baseUrl + "/queries", {
         method: "POST",
-        headers: {
-            "Authorization": "Bearer " + token,
-            "Content-Type": "application/json"
-        },
-        body: body
+        headers,
+        // timeoutMs explícito, por debajo de SVC_CLIENT_TIMEOUT_MS (si le
+        // pidiéramos a BigQuery más margen del que el propio cliente está
+        // dispuesto a esperar, el fetch se abortaría antes de que BigQuery
+        // llegase a devolver su "todavía en curso").
+        body: JSON.stringify({ query: sql, useLegacySql: false, timeoutMs: SVC_CLIENT_TIMEOUT_MS - 2000 })
     });
+    let text = await response.text();
 
-    return await response.text();
+    if (!response.ok) {
+        throw new Error("Error de BigQuery (" + response.status + "): " + text);
+    }
+
+    // Si la tabla es grande (SELECT DISTINCT + ORDER BY sin LIMIT, como
+    // generan buildAttributeSQL/buildHierarchySQL), BigQuery puede devolver
+    // el job todavía en curso (jobComplete:false) en vez de esperar más. El
+    // parser del picker/filtro (loadJsonTree/parseMemberJsonTree) busca el
+    // literal "v": directamente sobre el texto, así que un job incompleto
+    // se leía silenciosamente como "sin resultados" — aquí se sondea
+    // jobs.getQueryResults hasta que el job termine de verdad, o se avisa
+    // con un error claro si se pasa de SVC_MAX_TOTAL_WAIT_MS.
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
+
+    while (parsed && parsed.jobComplete === false && parsed.jobReference && parsed.jobReference.jobId) {
+        if (Date.now() - startedAt > SVC_MAX_TOTAL_WAIT_MS) {
+            throw new Error(
+                "La consulta está tardando demasiado en BigQuery (más de " +
+                (SVC_MAX_TOTAL_WAIT_MS / 1000) + "s). Prueba a acotar el campo o vuelve a intentarlo."
+            );
+        }
+
+        const jobId = encodeURIComponent(parsed.jobReference.jobId);
+        const loc = parsed.jobReference.location
+            ? "&location=" + encodeURIComponent(parsed.jobReference.location)
+            : "";
+
+        response = await svcFetchWithTimeout(
+            baseUrl + "/queries/" + jobId + "?timeoutMs=" + (SVC_CLIENT_TIMEOUT_MS - 2000) + loc,
+            { method: "GET", headers }
+        );
+        text = await response.text();
+
+        if (!response.ok) {
+            throw new Error("Error de BigQuery (" + response.status + "): " + text);
+        }
+
+        try { parsed = JSON.parse(text); } catch (e) { break; }
+    }
+
+    return text;
 }
 
 /* ---------------------------------------------------------------------
