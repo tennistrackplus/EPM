@@ -1709,6 +1709,16 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     // Draco_<id>_Values de todas formas.
     await flushDracoPlanningModifiedCells();
 
+    // "Actualizando…" (shape flotante sobre la hoja, ver busyindicator.js):
+    // se muestra ANTES del primer Excel.run y solo se quita en el finally,
+    // así cubre TODO el refresco (SQL, consulta y pintado), no solo la
+    // parte visible. show()/hide() llevan su propio refCount, así que da
+    // igual que taskpane.js (runAutoSaveAndRefresh) también lo muestre a
+    // la vez: no se quita hasta que TODAS las llamadas a show() tengan su
+    // hide(). if (window.BusyIndicator) por si esta página (commands.html
+    // vs taskpane.html) no lo tiene cargado.
+    if (window.BusyIndicator) await window.BusyIndicator.show("Actualizando");
+
     // Ver comentario junto a DracoSuppressPlanningPaintCount: mientras
     // dura todo este refresco (que borra y reescribe Draco_<id>_Values),
     // handleDracoPlanningValueChanged no debe pintar esas celdas como si
@@ -1758,6 +1768,7 @@ async function actualizarInformeFixedCore(reportIdOverride) {
 
     } finally {
         await endSuppressPlanningPaint();
+        if (window.BusyIndicator) await window.BusyIndicator.hide();
     }
 }
 
@@ -5535,6 +5546,25 @@ async function jsonTo3Matrices(context, json, reportId) {
     }
 }
 
+// jsonTo3MatricesCore borra los rangos con nombre anteriores y luego
+// escribe filas, columnas y valores en varias tandas (varios
+// context.sync() seguidos): sin nada más, Excel repinta la pantalla en
+// CADA una de esas tandas, y se ve como "primero borra, luego va
+// escribiendo" — el parpadeo que reporta el usuario. Application.
+// suspendScreenUpdatingUntilNextSync() solo dura hasta el PRÓXIMO sync
+// (no es un interruptor que se quede fijo como Application.ScreenUpdating
+// en VBA), así que hay que rearmarlo antes de cada uno de esos syncs; de
+// ahí este helper, en vez de llamarlo una sola vez al principio.
+function draco_suspendScreenUpdating(context) {
+    try {
+        context.application.suspendScreenUpdatingUntilNextSync();
+    } catch (e) {
+        // Excel/host sin soporte (API set < 1.9 de ExcelApi): se ignora y
+        // el refresco simplemente vuelve a parpadear como antes, sin
+        // romper nada.
+    }
+}
+
 async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     DracoLastJsonByReport.set(dracoStateKey(reportId), json); // cache para poder repintar en un toggle +/- sin re-consultar BigQuery
@@ -5800,11 +5830,15 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const prevNamedItems = [rangeNamesForClear.rows, rangeNamesForClear.cols, rangeNamesForClear.values]
         .map(n => context.workbook.names.getItemOrNullObject(n));
     prevNamedItems.forEach(it => it.load("isNullObject"));
+    draco_suspendScreenUpdating(context);
     await context.sync();
 
     const prevRanges = prevNamedItems.filter(it => !it.isNullObject).map(it => it.getRange());
     prevRanges.forEach(r => r.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]));
-    if (prevRanges.length > 0) await context.sync();
+    if (prevRanges.length > 0) {
+        draco_suspendScreenUpdating(context);
+        await context.sync();
+    }
 
     let prevBounds = null;
     for (const r of prevRanges) {
@@ -5857,6 +5891,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
             ).clear(reportProps.overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents);
         }
     }
+    draco_suspendScreenUpdating(context);
     await context.sync();
 
     /* -------------------------------------------------------------
@@ -6127,11 +6162,13 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
             const colsRangeName = context.workbook.names.getItemOrNullObject(rn.cols);
             rowsRangeName.load("isNullObject");
             colsRangeName.load("isNullObject");
+            draco_suspendScreenUpdating(context);
             await context.sync();
 
             if (!rowsRangeName.isNullObject) rowsRangeName.getRange().format.autofitColumns();
             if (!colsRangeName.isNullObject) colsRangeName.getRange().format.autofitColumns();
 
+            draco_suspendScreenUpdating(context);
             await context.sync();
         } catch (e) {
             console.warn("No se pudo autoajustar el ancho de columnas:", e);
@@ -6183,6 +6220,7 @@ async function applyDracoTotalHighlight(context, sheet, filasCells, columnasCell
         }
     }
 
+    draco_suspendScreenUpdating(context);
     await context.sync();
 }
 
@@ -6269,6 +6307,7 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
         }
     }
 
+    draco_suspendScreenUpdating(context);
     await context.sync();
 }
 
@@ -6292,6 +6331,7 @@ async function clearDracoNamedRanges(context, reportId, overwriteFormats) {
     const names = [rn.rows, rn.cols, rn.values];
     const items = names.map(n => context.workbook.names.getItemOrNullObject(n));
     items.forEach(it => it.load("isNullObject"));
+    draco_suspendScreenUpdating(context);
     await context.sync();
 
     const clearMode = overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents;
@@ -6303,6 +6343,7 @@ async function clearDracoNamedRanges(context, reportId, overwriteFormats) {
         }
     }
     if (anyToClear) {
+        draco_suspendScreenUpdating(context);
         await context.sync();
     }
 }
@@ -6363,6 +6404,7 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId) {
                 r.format.borders.getItem(edge).style = Excel.BorderLineStyle.none;
             }
         }
+        draco_suspendScreenUpdating(context);
         await context.sync();
 
         // Pasada 2: pintar el borde exterior fino, color RGB(13,23,42).
@@ -6374,6 +6416,7 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId) {
                 border.color = DRACO_BORDER_COLOR;
             }
         }
+        draco_suspendScreenUpdating(context);
         await context.sync();
     }
 
@@ -6388,14 +6431,17 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId) {
     for (const d of defs) {
         const existing = context.workbook.names.getItemOrNullObject(d.name);
         existing.load("isNullObject");
+        draco_suspendScreenUpdating(context);
         await context.sync();
         if (!existing.isNullObject) {
             existing.delete();
+            draco_suspendScreenUpdating(context);
             await context.sync();
         }
         context.workbook.names.add(d.name, d.range);
     }
 
+    draco_suspendScreenUpdating(context);
     await context.sync();
 }
 
@@ -6434,12 +6480,14 @@ async function writeCellBlock(context, sheet, cellsMap) {
         for (const c of cellsMap.values()) {
             sheet.getRangeByIndexes(c.row - 1, c.col - 1, 1, 1).values = [[c.value]];
         }
+        draco_suspendScreenUpdating(context);
         await context.sync();
         return;
     }
 
     const range = sheet.getRangeByIndexes(minRow - 1, minCol - 1, numRows, numCols);
     range.load("values");
+    draco_suspendScreenUpdating(context);
     await context.sync();
 
     const grid = range.values.map(r => r.slice());
@@ -6448,6 +6496,7 @@ async function writeCellBlock(context, sheet, cellsMap) {
     }
 
     range.values = grid;
+    draco_suspendScreenUpdating(context);
     await context.sync();
 }
 
@@ -6484,6 +6533,7 @@ async function writeIndentRuns(context, sheet, cellsMap) {
         }
     }
 
+    draco_suspendScreenUpdating(context);
     await context.sync();
 }
 
@@ -6502,6 +6552,8 @@ async function actualizarInformeCore(reportIdOverride) {
 
     // PLANIFICACIÓN > ver comentario igual en actualizarInformeFixedCore.
     await flushDracoPlanningModifiedCells();
+
+    if (window.BusyIndicator) await window.BusyIndicator.show("Actualizando");
 
     // Ver comentario junto a DracoSuppressPlanningPaintCount.
     await beginSuppressPlanningPaint();
@@ -6555,6 +6607,7 @@ async function actualizarInformeCore(reportIdOverride) {
 
     } finally {
         await endSuppressPlanningPaint();
+        if (window.BusyIndicator) await window.BusyIndicator.hide();
     }
 }
 
@@ -6659,6 +6712,14 @@ async function actualizarTodosCore(concurrency) {
     // así que esas llamadas repetidas no hacen nada.)
     await flushDracoPlanningModifiedCells();
 
+    // Un único show()/hide() para TODO el lote: como show()/hide() llevan
+    // refCount, cada informe individual (actualizarInformeFixedCore, o el
+    // jsonTo3Matrices de los dinámicos, más abajo) puede seguir mostrando
+    // el suyo sin que el indicador desaparezca entre uno y otro — solo se
+    // quita de verdad cuando ESTE hide() (el último en llamarse) lleva el
+    // contador a 0.
+    if (window.BusyIndicator) await window.BusyIndicator.show("Actualizando todos");
+
     // Ver comentario junto a DracoSuppressPlanningPaintCount: cubre TODO
     // "Refrescar todos" (dinámicos + fijos, que a su vez llama a
     // actualizarInformeFixedCore y suma su propia cuenta al contador).
@@ -6748,6 +6809,7 @@ async function actualizarTodosCore(concurrency) {
 
     } finally {
         await endSuppressPlanningPaint();
+        if (window.BusyIndicator) await window.BusyIndicator.hide();
     }
 }
 
