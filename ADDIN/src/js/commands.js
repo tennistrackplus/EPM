@@ -193,15 +193,18 @@ function mostrarVistaEditarModelo(event) {
 function abrirDesdeBucket(event) {
     try {
         const url = new URL("bucketBrowser.html", window.location.href);
-        const sessionParams = window.BQ ? BQ.getSessionQueryParams() : "";
-        if (sessionParams) url.search = sessionParams;
+        // SEGURIDAD: ya no se pasa el token por la URL (ver
+        // BQ.handleDialogMessage/requestSessionFromOpener en bigquery.js).
         Office.context.ui.displayDialogAsync(url.href, { height: 55, width: 40, displayInIframe: false }, (asyncResult) => {
             if (asyncResult.status === Office.AsyncResultStatus.Failed) {
                 console.error("No se pudo abrir el diálogo del bucket:", asyncResult.error.message);
                 return;
             }
             const dialog = asyncResult.value;
-            dialog.addEventHandler(Office.EventType.DialogMessageReceived, () => dialog.close());
+            dialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+                if (window.BQ && BQ.handleDialogMessage(dialog, arg.message)) return;
+                dialog.close();
+            });
         });
     } catch (error) {
         console.error("Error al abrir el explorador del bucket:", error);

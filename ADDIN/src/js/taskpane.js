@@ -1244,7 +1244,17 @@ const TaskPaneApp = {
 
                 const header = document.createElement("div");
                 header.className = "dimension-header";
-                header.innerHTML = `<span class="dimension-caret">▾</span><span>${dim.dimension.toLowerCase()}</span>`;
+                // SEGURIDAD: dim.dimension puede venir de un modelo semántico
+                // importado desde un repositorio Git compartido (.lkml), no
+                // solo del esquema de BigQuery -> se construye con nodos y
+                // textContent en vez de innerHTML.
+                const caretSpan = document.createElement("span");
+                caretSpan.className = "dimension-caret";
+                caretSpan.textContent = "\u25be"; // ▾
+                const nameSpan = document.createElement("span");
+                nameSpan.textContent = dim.dimension.toLowerCase();
+                header.appendChild(caretSpan);
+                header.appendChild(nameSpan);
                 // Contraer/expandir la dimensión oculta sus atributos (y
                 // jerarquías) para dejar el árbol de campos más compacto,
                 // igual que las listas de campos de una tabla dinámica.
@@ -1278,10 +1288,16 @@ const TaskPaneApp = {
         const iconClass = isHierarchy ? "field-icon hierarchy-icon" : "field-icon";
         const iconSymbol = isHierarchy ? "🗂️" : "📄";
 
-        div.innerHTML = `
-            <span class="${iconClass}">${iconSymbol}</span>
-            <span class="field-label">${name.toLowerCase()}</span>
-        `;
+        // SEGURIDAD: "name" puede venir de un modelo semántico importado
+        // (.lkml de un repo compartido), no solo del esquema de BigQuery.
+        const iconSpan = document.createElement("span");
+        iconSpan.className = iconClass;
+        iconSpan.textContent = iconSymbol;
+        const labelSpan = document.createElement("span");
+        labelSpan.className = "field-label";
+        labelSpan.textContent = name.toLowerCase();
+        div.appendChild(iconSpan);
+        div.appendChild(labelSpan);
 
         const fieldData = { dim, name, isHierarchy };
 
@@ -1615,10 +1631,25 @@ const TaskPaneApp = {
             ? (isMeasure ? fieldLabel : (filterSummary ? `${fieldLabel}: ${filterSummary}` : `${fieldLabel}: (vacío · doble clic para elegir)`))
             : fieldLabel;
 
-        tag.innerHTML = `
-            <span class="dropped-tag-title">${titleText}</span>
-            <span class="dropped-tag-remove">&times;</span>
-        `;
+        // SEGURIDAD: titleText puede incluir valores de miembro reales
+        // (describeFilter -> valores elegidos en memberPicker, que a su vez
+        // provienen de datos de BigQuery/Snowflake, no de código de este
+        // add-in). NUNCA insertar ese texto con innerHTML: si una fila de
+        // datos contiene marcado HTML (p.ej. "<img src=x onerror=...>"),
+        // se ejecutaría en el contexto del add-in con acceso a
+        // localStorage (tokens OAuth/GitHub) y a la API de Office. Se
+        // construyen los nodos aparte y se usa textContent para el texto
+        // que no es de confianza.
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "dropped-tag-title";
+        titleSpan.textContent = titleText;
+
+        const removeSpan = document.createElement("span");
+        removeSpan.className = "dropped-tag-remove";
+        removeSpan.textContent = "\u00d7"; // ×
+
+        tag.appendChild(titleSpan);
+        tag.appendChild(removeSpan);
 
         tag.addEventListener("dragstart", (e) => {
             e.stopPropagation();
@@ -1724,10 +1755,25 @@ const TaskPaneApp = {
             ? `🔒 ${fieldLabel}: ${filterSummary}`
             : `🔒 ${fieldLabel}: (vacío · doble clic para elegir)`;
 
-        tag.innerHTML = `
-            <span class="dropped-tag-title" title="Creado con 'Añadir filtro' (${scopeLabel}). Bloqueado: no se arrastra ni se reordena; doble clic para cambiar los valores.">${titleText}</span>
-            <span class="dropped-tag-remove" title="Eliminar este filtro y su rango con nombre en Excel">&times;</span>
-        `;
+        // SEGURIDAD: titleText (y fieldLabel/filterSummary dentro de él)
+        // puede contener valores reales de datos del cliente -> nunca por
+        // innerHTML. Se construyen los nodos aparte; textContent y la
+        // propiedad .title escapan automáticamente su contenido, a
+        // diferencia de interpolar dentro de un atributo HTML en un
+        // template literal (que además permitiría "escapar" del atributo
+        // con un valor que contuviera comillas).
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "dropped-tag-title";
+        titleSpan.title = `Creado con 'Añadir filtro' (${scopeLabel}). Bloqueado: no se arrastra ni se reordena; doble clic para cambiar los valores.`;
+        titleSpan.textContent = titleText;
+
+        const removeSpan = document.createElement("span");
+        removeSpan.className = "dropped-tag-remove";
+        removeSpan.title = "Eliminar este filtro y su rango con nombre en Excel";
+        removeSpan.textContent = "\u00d7"; // ×
+
+        tag.appendChild(titleSpan);
+        tag.appendChild(removeSpan);
 
         tag.addEventListener("dblclick", () => this.openLockedFilterRangePicker(rangeName, meta));
 
@@ -1915,19 +1961,39 @@ const TaskPaneApp = {
         const row = document.createElement("div");
         row.className = "dim-behavior-row";
         row.style.cssText = "display:flex; align-items:center; gap:8px; font-size:11px;";
-        row.innerHTML = `
-            <label style="display:flex; align-items:center; gap:6px; flex:1 1 auto; overflow:hidden;">
-                <input type="checkbox" class="dim-behavior-required" data-dim="${dim}" ${cfg.required ? "checked" : ""} style="width:auto; flex:0 0 auto;" />
-                <span style="font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${dim}</span>
-            </label>
-            <select class="dim-behavior-mode" data-dim="${dim}" style="width:auto; flex:0 0 auto; ${cfg.required ? "display:none;" : ""}">
-                <option value="null" ${cfg.mode === "null" ? "selected" : ""}>NULL</option>
-                <option value="lineal" ${cfg.mode === "lineal" ? "selected" : ""}>Lineal</option>
-                <option value="proporcional" ${cfg.mode === "proporcional" ? "selected" : ""}>Proporcional</option>
-            </select>
-        `;
-        const checkbox = row.querySelector(".dim-behavior-required");
-        const select = row.querySelector(".dim-behavior-mode");
+        // SEGURIDAD: "dim" puede venir de un modelo semántico importado
+        // (.lkml de un repo compartido) -> se construye con setAttribute/
+        // textContent (que escapan su valor) en vez de interpolarlo dentro
+        // de un template literal HTML, donde además de XSS permitiría
+        // "romper" el atributo data-dim con un valor que contuviera comillas.
+        const label = document.createElement("label");
+        label.style.cssText = "display:flex; align-items:center; gap:6px; flex:1 1 auto; overflow:hidden;";
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.className = "dim-behavior-required";
+        checkbox.setAttribute("data-dim", dim);
+        checkbox.checked = !!cfg.required;
+        checkbox.style.cssText = "width:auto; flex:0 0 auto;";
+        const dimSpan = document.createElement("span");
+        dimSpan.style.cssText = "font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;";
+        dimSpan.textContent = dim;
+        label.appendChild(checkbox);
+        label.appendChild(dimSpan);
+
+        const select = document.createElement("select");
+        select.className = "dim-behavior-mode";
+        select.setAttribute("data-dim", dim);
+        select.style.cssText = "width:auto; flex:0 0 auto;" + (cfg.required ? "display:none;" : "");
+        [["null", "NULL"], ["lineal", "Lineal"], ["proporcional", "Proporcional"]].forEach(([value, label2]) => {
+            const opt = document.createElement("option");
+            opt.value = value;
+            opt.textContent = label2;
+            opt.selected = cfg.mode === value;
+            select.appendChild(opt);
+        });
+
+        row.appendChild(label);
+        row.appendChild(select);
         checkbox.addEventListener("change", () => {
             select.style.display = checkbox.checked ? "none" : "";
         });
@@ -2167,8 +2233,22 @@ const TaskPaneApp = {
         expandLabel.innerHTML = `<span class="field-options-field-label">Expandir hasta nivel</span>`;
         const expandSelect = document.createElement("select");
         expandSelect.id = "optExpandToLevel";
-        expandSelect.innerHTML = `<option value="">(todos)</option>` +
-            levels.map(l => `<option value="${l.nivel}" title="Nivel ${l.nivel} — ${l.attribute}" ${String(options.expandToLevel) === String(l.nivel) ? "selected" : ""}>Nivel ${l.nivel} — ${l.attribute}</option>`).join("");
+        // SEGURIDAD: l.attribute puede venir de un modelo semántico
+        // importado (.lkml de un repo compartido) -> se construyen las
+        // <option> con propiedades del DOM (que escapan su valor) en vez
+        // de con un template literal HTML.
+        const optAll = document.createElement("option");
+        optAll.value = "";
+        optAll.textContent = "(todos)";
+        expandSelect.appendChild(optAll);
+        levels.forEach(l => {
+            const opt = document.createElement("option");
+            opt.value = l.nivel;
+            opt.title = `Nivel ${l.nivel} — ${l.attribute}`;
+            opt.selected = String(options.expandToLevel) === String(l.nivel);
+            opt.textContent = `Nivel ${l.nivel} — ${l.attribute}`;
+            expandSelect.appendChild(opt);
+        });
         expandLabel.appendChild(expandSelect);
         container.appendChild(expandLabel);
 
@@ -2186,8 +2266,17 @@ const TaskPaneApp = {
             const row = document.createElement("label");
             row.className = "field-options-checkbox-row field-options-level-row";
             row.title = `Nivel ${l.nivel} — ${l.attribute}`;
-            row.innerHTML = `<input type="checkbox" data-nivel="${l.nivel}" ${visibleLevels.includes(l.nivel) ? "checked" : ""}>
-                <span class="field-options-level-text">Nivel ${l.nivel} — ${l.attribute}</span>`;
+            // SEGURIDAD: l.attribute no es de confianza (ver arriba) -> nodos
+            // construidos aparte en vez de innerHTML.
+            const cb = document.createElement("input");
+            cb.type = "checkbox";
+            cb.dataset.nivel = l.nivel;
+            cb.checked = visibleLevels.includes(l.nivel);
+            const levelText = document.createElement("span");
+            levelText.className = "field-options-level-text";
+            levelText.textContent = `Nivel ${l.nivel} — ${l.attribute}`;
+            row.appendChild(cb);
+            row.appendChild(levelText);
             levelsBox.appendChild(row);
         });
         container.appendChild(levelsBox);

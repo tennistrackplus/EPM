@@ -24,14 +24,10 @@
         const suggested = (window.GCS && GCS.getSuggestedFileName && GCS.getSuggestedFileName()) || "Informe_EPM.xlsx";
         const url = new URL("saveBucket.html", window.location.href);
         url.searchParams.set("name", suggested);
-        // Ver BQ.getSessionQueryParams(): el diálogo se abre en su propia
-        // ventana y puede no compartir localStorage con este runtime, así
-        // que le pasamos el token vigente por la URL para que no pida
-        // conectarse de nuevo estando ya conectado.
-        const sessionParams = window.BQ ? BQ.getSessionQueryParams() : "";
-        if (sessionParams) {
-            new URLSearchParams(sessionParams).forEach((value, key) => url.searchParams.set(key, value));
-        }
+        // SEGURIDAD: ya no se pasa el token OAuth por la URL. El propio
+        // diálogo (saveBucket.html) lo pide por mensajería nada más cargar
+        // (BQ.requestSessionFromOpener) y aquí solo respondemos a esa
+        // petición dentro del DialogMessageReceived de abajo.
 
         Office.context.ui.displayDialogAsync(
             url.href,
@@ -45,6 +41,8 @@
                 const dialog = asyncResult.value;
 
                 dialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+                    if (window.BQ && BQ.handleDialogMessage(dialog, arg.message)) return;
+
                     let payload = null;
                     try {
                         payload = JSON.parse(arg.message);

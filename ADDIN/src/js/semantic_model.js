@@ -627,7 +627,18 @@ async function loadProjectsTree(container, autoProject = null, autoDataset = nul
                 
                 const header = document.createElement("div");
                 header.className = "tree-header";
-                header.innerHTML = `<span class="tree-toggle">▶</span> 📁 <strong>${projectId}</strong>`;
+                // SEGURIDAD: projectId viene de la API del proveedor
+                // (BigQuery/Snowflake); aunque suele tener un charset
+                // restringido, se construye con textContent por defensa
+                // en profundidad en vez de innerHTML.
+                const toggleSpan1 = document.createElement("span");
+                toggleSpan1.className = "tree-toggle";
+                toggleSpan1.textContent = "\u25b6"; // ▶
+                const strongEl = document.createElement("strong");
+                strongEl.textContent = projectId;
+                header.appendChild(toggleSpan1);
+                header.appendChild(document.createTextNode(" \ud83d\udcc1 "));
+                header.appendChild(strongEl);
                 
                 const childrenDiv = document.createElement("div");
                 childrenDiv.className = "tree-children";
@@ -689,7 +700,12 @@ async function loadDatasetsTree(projectId, container, autoDataset = null) {
                 
                 const header = document.createElement("div");
                 header.className = "tree-header";
-                header.innerHTML = `<span class="tree-toggle">▶</span> 📊 ${datasetId}`;
+                // SEGURIDAD: datasetId viene de la API del proveedor -> textContent.
+                const toggleSpan2 = document.createElement("span");
+                toggleSpan2.className = "tree-toggle";
+                toggleSpan2.textContent = "\u25b6"; // ▶
+                header.appendChild(toggleSpan2);
+                header.appendChild(document.createTextNode(" \ud83d\udcca " + datasetId));
                 
                 const childrenDiv = document.createElement("div");
                 childrenDiv.className = "tree-children";
@@ -752,7 +768,8 @@ async function loadTablesTree(projectId, datasetId, container) {
                 
                 const itemDiv = document.createElement("div");
                 itemDiv.className = "tree-header table-item";
-                itemDiv.innerHTML = `📋 ${tableId}`;
+                // SEGURIDAD: tableId viene de la API del proveedor -> textContent.
+                itemDiv.textContent = "\ud83d\udccb " + tableId;
                 
                 itemDiv.addEventListener("click", (e) => {
                     e.stopPropagation();
@@ -872,43 +889,57 @@ function renderFieldsTable() {
         const row = document.createElement("div");
         row.className = "field-row";
 
-row.innerHTML = `
+        // SEGURIDAD: field.alias es texto libre editado por el usuario (y
+        // field.name puede venir de un modelo importado desde un repo Git
+        // compartido) -> se construyen los nodos con DOM API en vez de
+        // interpolar en un template literal HTML. Interpolar field.alias
+        // dentro de value="${...}" era además una vía de escape del propio
+        // atributo (una comilla en el alias podía inyectar otro atributo,
+        // p.ej. un manejador de evento).
+        const enableInput = document.createElement("input");
+        enableInput.className = "field-enable";
+        enableInput.type = "checkbox";
+        enableInput.checked = !!field.enabled;
+        enableInput.addEventListener("click", (e) => e.stopPropagation());
+        enableInput.addEventListener("change", () => updateFieldEnabled(idx, enableInput.checked));
 
-    <input
-        class="field-enable"
-        type="checkbox"
-        ${field.enabled ? "checked" : ""}
-        onclick="event.stopPropagation(); updateFieldEnabled(${idx}, this.checked)"
-    />
+        const typeSelect = document.createElement("select");
+        typeSelect.className = "field-type";
+        typeSelect.addEventListener("click", (e) => e.stopPropagation());
+        typeSelect.addEventListener("change", () => updateFieldType(idx, typeSelect.value));
+        [["MEASURE", "MEA"], ["DIMENSION", "DIM"]].forEach(([value, text]) => {
+            const opt = document.createElement("option");
+            opt.value = value;
+            opt.textContent = text;
+            opt.selected = field.type === value;
+            typeSelect.appendChild(opt);
+        });
 
-    <select
-        class="field-type"
-        onclick="event.stopPropagation()"
-        onchange="updateFieldType(${idx}, this.value)"
-    >
-        <option value="MEASURE" ${field.type === "MEASURE" ? "selected" : ""}>MEA</option>
-        <option value="DIMENSION" ${field.type === "DIMENSION" ? "selected" : ""}>DIM</option>
-    </select>
+        const fieldInfo = document.createElement("div");
+        fieldInfo.className = "field-info";
 
-    <div class="field-info">
+        const aliasInput = document.createElement("input");
+        aliasInput.className = "field-alias-input";
+        aliasInput.type = "text";
+        aliasInput.value = field.alias;
+        aliasInput.addEventListener("click", (e) => e.stopPropagation());
+        aliasInput.addEventListener("input", () => updateFieldAlias(idx, aliasInput.value));
 
-        <input
-            class="field-alias-input"
-            type="text"
-            value="${field.alias}"
-            onclick="event.stopPropagation()"
-            oninput="updateFieldAlias(${idx}, this.value)"
-        />
+        const fieldNameDiv = document.createElement("div");
+        fieldNameDiv.className = "field-name";
+        fieldNameDiv.textContent = field.name;
 
-        <div class="field-name">
-            ${field.name}
-        </div>
+        fieldInfo.appendChild(aliasInput);
+        fieldInfo.appendChild(fieldNameDiv);
 
-    </div>
+        const arrowDiv = document.createElement("div");
+        arrowDiv.className = "field-arrow";
+        arrowDiv.textContent = "\u203a"; // ›
 
-    <div class="field-arrow">›</div>
-
-`;
+        row.appendChild(enableInput);
+        row.appendChild(typeSelect);
+        row.appendChild(fieldInfo);
+        row.appendChild(arrowDiv);
 
         row.onclick = () => openConfigModal(idx);
 
@@ -1047,46 +1078,49 @@ function renderAttributesTable(attributes) {
         const row = document.createElement("div");
         row.className = "field-row";
 
-        row.innerHTML = `
+        // SEGURIDAD: attr.alias/attr.name, igual que en renderFieldsTable,
+        // no son de confianza (texto libre / modelo importado) -> DOM API
+        // en vez de template literal HTML.
+        const enableInput = document.createElement("input");
+        enableInput.className = "field-enable";
+        enableInput.type = "checkbox";
+        enableInput.checked = !!attr.enabled;
+        enableInput.addEventListener("click", (e) => e.stopPropagation());
+        enableInput.addEventListener("change", () => updateAttrEnabled(idx, enableInput.checked));
 
-            <input
-                class="field-enable"
-                type="checkbox"
-                ${attr.enabled ? "checked" : ""}
-                onclick="event.stopPropagation(); updateAttrEnabled(${idx}, this.checked)"
-            />
+        const fieldInfo = document.createElement("div");
+        fieldInfo.className = "field-info";
 
-            <div class="field-info">
+        const aliasInput = document.createElement("input");
+        aliasInput.className = "field-alias-input";
+        aliasInput.type = "text";
+        aliasInput.value = attr.alias;
+        aliasInput.addEventListener("click", (e) => e.stopPropagation());
+        aliasInput.addEventListener("input", () => updateAttrAlias(idx, aliasInput.value));
 
-                <input
-                    class="field-alias-input"
-                    type="text"
-                    value="${attr.alias}"
-                    onclick="event.stopPropagation()"
-                    oninput="updateAttrAlias(${idx}, this.value)"
-                />
+        const fieldNameDiv = document.createElement("div");
+        fieldNameDiv.className = "field-name";
+        fieldNameDiv.textContent = attr.name;
 
-                <div class="field-name">
-                    ${attr.name}
-                </div>
+        fieldInfo.appendChild(aliasInput);
+        fieldInfo.appendChild(fieldNameDiv);
 
-            </div>
+        const keyLabel = document.createElement("label");
+        keyLabel.className = "field-key";
+        const keyRadio = document.createElement("input");
+        keyRadio.type = "radio";
+        keyRadio.name = "dimKeyGroup";
+        keyRadio.checked = !!attr.isKey;
+        keyRadio.addEventListener("click", (e) => e.stopPropagation());
+        keyRadio.addEventListener("change", () => updateAttrKey(idx));
+        const keySpan = document.createElement("span");
+        keySpan.textContent = "Key";
+        keyLabel.appendChild(keyRadio);
+        keyLabel.appendChild(keySpan);
 
-            <label class="field-key">
-
-                <input
-                    type="radio"
-                    name="dimKeyGroup"
-                    ${attr.isKey ? "checked" : ""}
-                    onclick="event.stopPropagation()"
-                    onchange="updateAttrKey(${idx})"
-                >
-
-                <span>Key</span>
-
-            </label>
-
-        `;
+        row.appendChild(enableInput);
+        row.appendChild(fieldInfo);
+        row.appendChild(keyLabel);
 
         list.appendChild(row);
 
@@ -1150,16 +1184,39 @@ function renderHierarchiesList() {
         const row = document.createElement("div");
         row.className = "hierarchy-row";
 
-        row.innerHTML = `
-            <div class="hierarchy-info">
-                <div class="hierarchy-name">${hier.name}</div>
-                <div class="hierarchy-levels-summary">${levelNames || "(sin niveles)"}</div>
-            </div>
-            <div class="hierarchy-chip-actions">
-                <button type="button" class="hierarchy-chip-btn" title="Editar jerarquía" onclick="event.stopPropagation(); openHierarchyEditor(${idx})">✎</button>
-                <button type="button" class="hierarchy-chip-btn" title="Eliminar jerarquía" onclick="event.stopPropagation(); deleteHierarchyAt(${idx})">🗑</button>
-            </div>
-        `;
+        // SEGURIDAD: hier.name y levelNames (alias/nombre de atributos) son
+        // texto libre / potencialmente importado -> DOM API en vez de
+        // template literal HTML.
+        const infoDiv = document.createElement("div");
+        infoDiv.className = "hierarchy-info";
+        const nameDiv = document.createElement("div");
+        nameDiv.className = "hierarchy-name";
+        nameDiv.textContent = hier.name;
+        const summaryDiv = document.createElement("div");
+        summaryDiv.className = "hierarchy-levels-summary";
+        summaryDiv.textContent = levelNames || "(sin niveles)";
+        infoDiv.appendChild(nameDiv);
+        infoDiv.appendChild(summaryDiv);
+
+        const actionsDiv = document.createElement("div");
+        actionsDiv.className = "hierarchy-chip-actions";
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "hierarchy-chip-btn";
+        editBtn.title = "Editar jerarquía";
+        editBtn.textContent = "\u270e"; // ✎
+        editBtn.addEventListener("click", (e) => { e.stopPropagation(); openHierarchyEditor(idx); });
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "hierarchy-chip-btn";
+        delBtn.title = "Eliminar jerarquía";
+        delBtn.textContent = "\ud83d\uddd1"; // 🗑
+        delBtn.addEventListener("click", (e) => { e.stopPropagation(); deleteHierarchyAt(idx); });
+        actionsDiv.appendChild(editBtn);
+        actionsDiv.appendChild(delBtn);
+
+        row.appendChild(infoDiv);
+        row.appendChild(actionsDiv);
 
         container.appendChild(row);
 
@@ -1249,10 +1306,15 @@ function renderHierarchyEditor() {
             chip.draggable = true;
             chip.title = "Arrastra a la derecha o haz clic para añadir";
 
-            chip.innerHTML = `
-                <span class="hierarchy-level-name">${attr.alias || attr.name}</span>
-                <span class="hierarchy-chip-btn">＋</span>
-            `;
+            // SEGURIDAD: attr.alias/attr.name no son de confianza -> DOM API.
+            const nameSpan = document.createElement("span");
+            nameSpan.className = "hierarchy-level-name";
+            nameSpan.textContent = attr.alias || attr.name;
+            const addSpan = document.createElement("span");
+            addSpan.className = "hierarchy-chip-btn";
+            addSpan.textContent = "\uff0b"; // ＋
+            chip.appendChild(nameSpan);
+            chip.appendChild(addSpan);
 
             chip.addEventListener("dragstart", (e) => {
                 chip.classList.add("dragging");
@@ -1286,10 +1348,19 @@ function renderHierarchyEditor() {
             chip.draggable = true;
             chip.dataset.index = idx;
 
-            chip.innerHTML = `
-                <span class="hierarchy-level-name">${attr ? (attr.alias || attr.name) : lvl.attribute}</span>
-                <button type="button" class="hierarchy-chip-btn hierarchy-chip-btn-remove" title="Quitar del nivel" onclick="event.stopPropagation(); removeHierarchyLevel(${idx})">✕</button>
-            `;
+            // SEGURIDAD: attr.alias/attr.name/lvl.attribute no son de
+            // confianza -> DOM API en vez de innerHTML.
+            const nameSpan2 = document.createElement("span");
+            nameSpan2.className = "hierarchy-level-name";
+            nameSpan2.textContent = attr ? (attr.alias || attr.name) : lvl.attribute;
+            const removeBtn = document.createElement("button");
+            removeBtn.type = "button";
+            removeBtn.className = "hierarchy-chip-btn hierarchy-chip-btn-remove";
+            removeBtn.title = "Quitar del nivel";
+            removeBtn.textContent = "\u2715"; // ✕
+            removeBtn.addEventListener("click", (e) => { e.stopPropagation(); removeHierarchyLevel(idx); });
+            chip.appendChild(nameSpan2);
+            chip.appendChild(removeBtn);
 
             chip.addEventListener("dragstart", (e) => {
                 chip.classList.add("dragging");

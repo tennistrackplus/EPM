@@ -470,6 +470,12 @@ const LoginApp = {
      */
     setupBrowserMessageListener() {
         window.addEventListener("message", (event) => {
+            // SEGURIDAD: se comprueba el origen antes de procesar el
+            // mensaje (antes se aceptaba cualquier origen). auth-callback.html
+            // y auth-callback-snowflake.html ahora responden con
+            // window.location.origin en vez de "*", así que aquí debe
+            // coincidir con el propio origen de este add-in.
+            if (event.origin !== window.location.origin) return;
             if (typeof event.data === "string") {
                 try {
                     const data = JSON.parse(event.data);
@@ -492,11 +498,10 @@ const LoginApp = {
 
             if (response.provider === "bigquery") {
                 if (response.status === "success") {
-                    // BQ.setToken guarda el token en localStorage Y en
-                    // Office.context.document.settings, para que también lo
-                    // vea el runtime aislado de los botones del ribbon
-                    // (commands.html) cuando se pulse "Abrir bucket" /
-                    // "Guardar en bucket" (ver bigquery.js).
+                    // BQ.setToken guarda el token solo en localStorage. Con
+                    // Shared Runtime (ver manifest), commands.js corre en el
+                    // mismo proceso que este panel, así que ya comparte este
+                    // mismo localStorage sin necesitar ningún respaldo extra.
                     const expiresAt = Date.now() + (parseInt(response.expiresIn, 10) * 1000);
                     if (window.BQ && typeof BQ.setToken === "function") {
                         BQ.setToken(response.token, expiresAt);
