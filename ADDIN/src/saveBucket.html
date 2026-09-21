@@ -59,13 +59,13 @@
             document.getElementById("btnConfirmSaveBucket").disabled = !(selectedBucket && nameOk);
         }
 
-        function init() {
-            // El diálogo puede no compartir localStorage con quien lo abrió
-            // (ribbon o taskpane): si el token viene en la URL (ver
-            // BQ.getSessionQueryParams()), lo copiamos a nuestro propio
-            // localStorage antes de comprobar la conexión.
+        async function init() {
+            // SEGURIDAD: el token ya no viaja por la URL del diálogo (ver
+            // BQ.requestSessionFromOpener / handleDialogMessage en
+            // bigquery.js y gcsSaveBridge.js). Se pide por mensajería
+            // (Dialog API de Office) antes de comprobar la conexión.
             if (window.BQ) {
-                BQ.hydrateSessionFromDialogParams(new URLSearchParams(window.location.search));
+                await BQ.requestSessionFromOpener();
             }
 
             // Nombre de fichero sugerido, recibido por query string desde quien

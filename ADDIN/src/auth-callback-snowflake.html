@@ -90,7 +90,8 @@
                 if (typeof Office !== "undefined" && Office.context && Office.context.ui && typeof Office.context.ui.messageParent === "function") {
                     Office.context.ui.messageParent(payload);
                 } else if (window.opener) {
-                    window.opener.postMessage(payload, "*");
+                    // SEGURIDAD: origen exacto en vez de "*" (ver auth-callback.html).
+                    window.opener.postMessage(payload, window.location.origin);
                     window.close();
                 }
             }

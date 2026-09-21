@@ -112,8 +112,12 @@
                 if (typeof Office !== "undefined" && Office.context && Office.context.ui && typeof Office.context.ui.messageParent === "function") {
                     Office.context.ui.messageParent(payload);
                 } else if (window.opener) {
-                    // Respaldo si se abrió mediante un navegador web estándar
-                    window.opener.postMessage(payload, "*");
+                    // Respaldo si se abrió mediante un navegador web estándar.
+                    // SEGURIDAD: se usa el origen exacto de esta misma página
+                    // (nunca "*") para que el token no pueda ser leído por
+                    // cualquier ventana que consiga referenciarse como
+                    // "opener" desde otro origen.
+                    window.opener.postMessage(payload, window.location.origin);
                     window.close();
                 }
             }

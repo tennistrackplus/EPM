@@ -185,13 +185,15 @@
             }
         }
 
-        function init() {
-            // El diálogo puede no compartir localStorage con el panel de
-            // tareas que lo abrió: si el token viene en la URL (ver
-            // BQ.getSessionQueryParams() en js/commands.js), lo copiamos a
-            // nuestro propio localStorage antes de comprobar la conexión.
+        async function init() {
+            // SEGURIDAD: el token ya no viaja por la URL del diálogo. El
+            // diálogo puede no compartir localStorage con quien lo abrió,
+            // así que se pide la sesión vigente por mensajería (Dialog API
+            // de Office: messageParent/messageChild) antes de comprobar la
+            // conexión. Si no hay padre o no responde a tiempo, sigue igual
+            // y isConnected() dará simplemente "no conectado".
             if (window.BQ) {
-                BQ.hydrateSessionFromDialogParams(new URLSearchParams(window.location.search));
+                await BQ.requestSessionFromOpener();
             }
 
             document.getElementById("closeBtn").addEventListener("click", () => {
