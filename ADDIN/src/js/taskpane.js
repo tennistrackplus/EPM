@@ -134,6 +134,7 @@ const TaskPaneApp = {
         suppressZeroRows: false,
         suppressZeroCols: false,
         subtotalsOnTop: false,
+        hierarchyNodesOnTop: true,
         overwriteFormats: true,
         autoFitColumns: true,
         planningReport: false
@@ -417,6 +418,73 @@ const TaskPaneApp = {
         }
     },
 
+    // Evita reentradas mientras el propio cambio de informe (disparado
+    // desde la selección de Excel) está en curso: onReportSelectorChange
+    // no toca la selección de Excel, pero por si el futuro trajera algún
+    // cambio que sí lo hiciera, este flag corta cualquier reentrada.
+    _switchingReportFromSelection: false,
+    _selectionSyncRegistered: false,
+
+    /**
+     * "Seguir el informe activo según la celda seleccionada": engancha
+     * UNA sola vez (para todo el libro, no hoja por hoja) el evento
+     * workbook.onSelectionChanged. Cada vez que el usuario selecciona una
+     * celda (en cualquier pestaña, incluido un cambio de pestaña), se
+     * mira si esa hoja es la "hoja de resultados" de algún informe
+     * guardado (ReportActions.reportIdForResultSheet, misma función que ya
+     * usa el picker de expandir/contraer de EDIT_REPORT!T1): si es de un
+     * informe DISTINTO al que el taskpane tiene abierto ahora mismo, el
+     * taskpane cambia solo a ese informe -exactamente igual que si el
+     * usuario lo hubiera elegido a mano en el desplegable "Informe" (ver
+     * onReportSelectorChange)-. Si la hoja no pertenece a ningún informe
+     * conocido (p.ej. EDIT_REPORT o una hoja de datos cualquiera), o ya es
+     * el informe actual, no se hace nada.
+     */
+    async registerActiveReportFollowsSelection() {
+        if (this._selectionSyncRegistered) return;
+        this._selectionSyncRegistered = true;
+
+        await Excel.run(async (context) => {
+            context.workbook.onSelectionChanged.add(
+                (event) => this.handleSelectionChangedForReportSync(event)
+            );
+            await context.sync();
+        });
+    },
+
+    async handleSelectionChangedForReportSync(event) {
+        if (this._switchingReportFromSelection) return;
+        if (!window.ReportStore || !window.ReportActions || !window.ReportActions.reportIdForResultSheet) return;
+
+        try {
+            let sheetName = "";
+            await Excel.run(async (context) => {
+                const sheet = context.workbook.worksheets.getItem(event.worksheetId);
+                sheet.load("name");
+                await context.sync();
+                sheetName = sheet.name;
+            });
+            if (!sheetName) return;
+
+            const reportId = window.ReportActions.reportIdForResultSheet(sheetName);
+            if (!reportId) return;
+            if (this.currentReportId && Number(reportId) === Number(this.currentReportId)) return;
+            if (!window.ReportStore.getReport(reportId)) return; // por si acaso ya no existe
+
+            this._switchingReportFromSelection = true;
+            try {
+                const select = document.getElementById("reportSelector");
+                if (select) select.value = String(reportId);
+                await this.onReportSelectorChange(String(reportId));
+                this.setAutoStatus(`Informe: ${this.reportProperties.reportName || ("Informe " + reportId)} (hoja "${sheetName}")`);
+            } finally {
+                this._switchingReportFromSelection = false;
+            }
+        } catch (err) {
+            console.warn("[Draco] No se pudo sincronizar el informe activo con la selección de Excel:", err);
+        }
+    },
+
     async init() {
         // Cada paso va en su propio try/catch: un fallo puntual (p.ej. al
         // leer un ajuste de Office, o al procesar una acción pendiente del
@@ -494,6 +562,13 @@ const TaskPaneApp = {
         // en este taskpane como en el runtime de comandos del ribbon, así
         // que se activa con lo que ocurra antes: abrir el panel o pulsar
         // cualquier botón del ribbon (p.ej. "Actualizar").
+
+        // "Seguir el informe activo según la celda seleccionada" (ver la
+        // función de arriba): solo tiene sentido dentro del propio
+        // taskpane (necesita su desplegable "Informe" y su estado en
+        // memoria), así que se registra aquí y no en commands.js/
+        // Office.onReady.
+        await safeStep("registerActiveReportFollowsSelection", () => this.registerActiveReportFollowsSelection());
     },
 
     /**
@@ -1188,6 +1263,7 @@ const TaskPaneApp = {
                 suppressZeroRows: false,
                 suppressZeroCols: false,
                 subtotalsOnTop: false,
+                hierarchyNodesOnTop: true,
                 overwriteFormats: true,
                 autoFitColumns: true,
                 planningReport: false
@@ -1891,6 +1967,7 @@ const TaskPaneApp = {
         document.getElementById("propSuppressZeroRows").checked = !!this.reportProperties.suppressZeroRows;
         document.getElementById("propSuppressZeroCols").checked = !!this.reportProperties.suppressZeroCols;
         document.getElementById("propSubtotalsOnTop").checked = !!this.reportProperties.subtotalsOnTop;
+        document.getElementById("propHierarchyNodesOnTop").checked = this.reportProperties.hierarchyNodesOnTop !== false;
         document.getElementById("propOverwriteFormats").checked = !!this.reportProperties.overwriteFormats;
         document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
         document.getElementById("propPlanningReport").checked = !!this.reportProperties.planningReport;
@@ -2029,6 +2106,7 @@ const TaskPaneApp = {
             suppressZeroRows: document.getElementById("propSuppressZeroRows").checked,
             suppressZeroCols: document.getElementById("propSuppressZeroCols").checked,
             subtotalsOnTop: document.getElementById("propSubtotalsOnTop").checked,
+            hierarchyNodesOnTop: document.getElementById("propHierarchyNodesOnTop").checked,
             overwriteFormats: document.getElementById("propOverwriteFormats").checked,
             autoFitColumns: document.getElementById("propAutoFitColumns").checked,
             planningReport: document.getElementById("propPlanningReport").checked,

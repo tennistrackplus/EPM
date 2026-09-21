@@ -2204,34 +2204,42 @@ function computeGroupingSetDimensionsAndHierarchies(relGrid) {
         dimensions.push(getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName);
     }
 
-    // ---- HIERARCHIES: longitud de cada tramo de "misma dimensión consecutiva" ----
+    // ---- HIERARCHIES: longitud de cada tramo de "misma JERARQUÍA real" ----
+    // Un tramo NO es simplemente "misma Dimension consecutiva": eso
+    // confundía dos atributos PLANOS sueltos de una misma dimensión (p.ej.
+    // Región y Ciudad, cada uno con NIVEL=1 -ver loadRows/loadColumns y
+    // ReportStore.saveDesign/expandAxis, que graba NIVEL=1 fijo para
+    // cualquier campo que NO sea una jerarquía) con una jerarquía real
+    // desplegada (NIVEL 1,2,3... consecutivos de ReportStore.saveDesign/
+    // expandAxis para un campo isHierarchy). Con la condición anterior
+    // (solo Dimension), dos atributos sueltos de la misma dimensión
+    // generaban subtotales/anidado de jerarquía que nadie pidió. Ahora un
+    // tramo solo continúa si, ADEMÁS de compartir Dimension, el NIVEL es
+    // exactamente el siguiente consecutivo (1,2,3...); dos campos con
+    // NIVEL=1 seguidos (aunque sean de la misma dimensión) rompen el tramo
+    // y se tratan como dos tramos de longitud 1 -igual que si fueran de
+    // dimensiones distintas-, sin generar ningún subtotal automático.
+    function pushHierarchyRunLengths(fields, out) {
+        let lastDim = "";
+        let lastLevel = 0;
+        let contador = 0;
+        for (const f of fields) {
+            const nivel = Number(f.Hierarchy) || 0;
+            if (contador > 0 && f.Dimension === lastDim && nivel === lastLevel + 1) {
+                contador++;
+            } else {
+                if (contador > 0) out.push(contador);
+                contador = 1;
+            }
+            lastDim = f.Dimension;
+            lastLevel = nivel;
+        }
+        if (contador > 0) out.push(contador);
+    }
+
     const hierarchies = [];
-
-    let lastDim = "";
-    let contador = 0;
-    for (const r of ReportState.Rows) {
-        if (r.Dimension !== lastDim) {
-            if (lastDim !== "") hierarchies.push(contador);
-            lastDim = r.Dimension;
-            contador = 1;
-        } else {
-            contador++;
-        }
-    }
-    if (ReportState.Rows.length > 0) hierarchies.push(contador);
-
-    lastDim = "";
-    contador = 0;
-    for (const c of ReportState.Columns) {
-        if (c.Dimension !== lastDim) {
-            if (lastDim !== "") hierarchies.push(contador);
-            lastDim = c.Dimension;
-            contador = 1;
-        } else {
-            contador++;
-        }
-    }
-    if (ReportState.Columns.length > 0) hierarchies.push(contador);
+    pushHierarchyRunLengths(ReportState.Rows, hierarchies);
+    pushHierarchyRunLengths(ReportState.Columns, hierarchies);
 
     // ---- HIERARCHIES ACUM ----
     const hierarchiesAcum = [];
@@ -2975,6 +2983,12 @@ function resetDracoCollapseIfAxisChanged(axis, signature, reportId) {
 function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
     const opts = options || {};
     const subtotalsOnTop = !!opts.subtotalsOnTop;
+    // "Mostrar nodos de jerarquía arriba": igual que subtotalsOnTop, pero
+    // para los nodos-resumen que vienen de una JERARQUÍA real (ver
+    // computeGroupingSetDimensionsAndHierarchies), no de un subtotal manual
+    // (columnas L/R "X" de EDIT_REPORT). Antes las dos cosas compartían el
+    // mismo interruptor (subtotalsOnTop); ahora son independientes.
+    const hierarchyNodesOnTop = opts.hierarchyNodesOnTop !== false;
 
     const items = [];
     for (const V of dict.values()) {
@@ -2993,25 +3007,50 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
         return p + "\u00A7" + parts.join("\u241F");
     }
 
-    // "Mostrar subtotales arriba" (propiedades del informe): por defecto se
-    // respeta el orden natural del resultado (subtotal justo antes que su
-    // detalle, que es como suele venir el GROUPING SETS); si el usuario NO
-    // quiere los subtotales arriba, se reordena para que cada nodo-resumen
-    // pase a ir DESPUÉS de todos sus descendientes.
-    if (!subtotalsOnTop) {
-        items.sort((a, b) => {
-            const len = Math.min(a.deepest, b.deepest);
-            let samePrefix = true;
-            for (let i = 1; i <= len; i++) {
-                if (String(a.V[i]) !== String(b.V[i])) { samePrefix = false; break; }
-            }
-            if (samePrefix && a.deepest !== b.deepest) {
-                // Uno es ancestro (subtotal) del otro: el ancestro va DESPUÉS.
-                return a.deepest < b.deepest ? 1 : -1;
-            }
-            return a.oldId - b.oldId; // sin relación de parentesco directa: orden natural
-        });
+    // Longitud del tramo de JERARQUÍA real (NIVEL ascendente 1,2,3... —
+    // ver computeGroupingSetDimensionsAndHierarchies) al que pertenece cada
+    // posición del eje; 1 si es un campo plano (o el único nivel de una
+    // jerarquía de un solo nivel). `flags` ya trae el NIVEL (Hierarchy) de
+    // cada posición (ver computeAxisPaintPlan/flagsReal). Un campo plano
+    // SIEMPRE se guarda con NIVEL=1 (ver ReportStore.saveDesign/expandAxis),
+    // así que un tramo de longitud 1 solo puede producir un nodo-resumen a
+    // través de la marca manual "Subtotal" (columnas L/R), nunca de una
+    // jerarquía real — de ahí que sirva para distinguir el origen del nodo.
+    const tramoLen = new Array(count + 2).fill(1);
+    {
+        let i = 1;
+        while (i <= count) {
+            let j = i;
+            while (j < count && Number(flags[j + 1]) === Number(flags[j]) + 1) j++;
+            const len = j - i + 1;
+            for (let k = i; k <= j; k++) tramoLen[k] = len;
+            i = j + 1;
+        }
     }
+
+    // Reordena los nodos-resumen según corresponda: los que vienen de una
+    // jerarquía real usan "Mostrar nodos de jerarquía arriba"; los que
+    // vienen de un subtotal marcado a mano (columnas L/R) usan "Mostrar
+    // subtotales arriba". Por defecto (ambas propiedades a "arriba") se
+    // respeta el orden natural del resultado (el resumen sale justo antes
+    // que su detalle, que es como suele venir el GROUPING SETS); cuando la
+    // propiedad correspondiente está desactivada, ese nodo-resumen concreto
+    // pasa a ir DESPUÉS de todos sus descendientes.
+    items.sort((a, b) => {
+        const len = Math.min(a.deepest, b.deepest);
+        let samePrefix = true;
+        for (let i = 1; i <= len; i++) {
+            if (String(a.V[i]) !== String(b.V[i])) { samePrefix = false; break; }
+        }
+        if (samePrefix && a.deepest !== b.deepest) {
+            const boundaryField = len + 1;
+            const onTop = tramoLen[boundaryField] > 1 ? hierarchyNodesOnTop : subtotalsOnTop;
+            if (onTop) return a.oldId - b.oldId; // orden natural: el resumen ya viene antes
+            // Uno es ancestro (resumen) del otro: el ancestro va DESPUÉS.
+            return a.deepest < b.deepest ? 1 : -1;
+        }
+        return a.oldId - b.oldId; // sin relación de parentesco directa: orden natural
+    });
 
     // Excluidas: alguna de sus filas ancestro (p < profundidad propia) está contraída.
     const kept = items.filter(item => {
@@ -3061,9 +3100,10 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
 
 /**
  * Devuelve las propiedades del informe (nombre, suprimir ceros, subtotales
- * arriba, sobrescribir formatos, autoajustar columnas), guardadas por el
- * modal "Propiedades del informe" del taskpane en Office roaming settings.
- * Accesible desde cualquier contexto (taskpane o commands.html/ribbon).
+ * arriba, nodos de jerarquía arriba, sobrescribir formatos, autoajustar
+ * columnas), guardadas por el modal "Propiedades del informe" del taskpane
+ * en Office roaming settings. Accesible desde cualquier contexto (taskpane
+ * o commands.html/ribbon).
  */
 function getDracoReportProperties() {
     const defaults = {
@@ -3071,6 +3111,7 @@ function getDracoReportProperties() {
         suppressZeroRows: false,
         suppressZeroCols: false,
         subtotalsOnTop: false,
+        hierarchyNodesOnTop: true,
         overwriteFormats: true,
         autoFitColumns: true,
         planningReport: false
@@ -5807,8 +5848,8 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         }
     }
 
-    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, dracoCollapseState.rows.collapsed, flagsFilas, { subtotalsOnTop: reportProps.subtotalsOnTop });
-    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, dracoCollapseState.cols.collapsed, flagsColumnas, { subtotalsOnTop: reportProps.subtotalsOnTop });
+    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, dracoCollapseState.rows.collapsed, flagsFilas, { subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
+    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, dracoCollapseState.cols.collapsed, flagsColumnas, { subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
 
     console.log("jsonTo3Matrices diagnóstico:", {
         totalCampos, filas,
@@ -6839,7 +6880,10 @@ window.ReportActions = {
     dracoFilterRangeName,
     resolveDracoFilterRangeAddress, openDracoFilterRangePicker,
     // Registro del clic en Draco_XXX_Rows -> escribe zona + Jerarquia SI/NO en A51
-    ensureDracoRowsClickLoggerRegistered
+    ensureDracoRowsClickLoggerRegistered,
+    // Averiguar a qué informe pertenece una hoja (ver "seguir informe
+    // activo según la selección" en taskpane.js).
+    reportIdForResultSheet
 };
 
 
@@ -8215,6 +8259,200 @@ async function abrirAnadirFiltro(event) {
     }
 }
 
+/* =======================================================================
+ * "Copiar informe" / "Pegar informe" / "Eliminar informe" (ribbon, grupo
+ * InformeGroup del manifiesto). Con Shared Runtime (ver <Runtimes> en el
+ * manifiesto), estas funciones corren en el MISMO contexto JS que
+ * taskpane.js (vivo aunque el panel esté oculto, lifetime="long"), así
+ * que pueden llamar directamente a TaskPaneApp -mismo patrón que
+ * openReportProperties/openFieldOptions, más arriba-, con fallback si
+ * por lo que sea no existiera (host sin Shared Runtime).
+ * ===================================================================== */
+
+/**
+ * "Copiar informe": copia el diseño (filtros/filas/columnas/Estático/
+ * opciones de campo) y las Propiedades del informe ACTIVO (el que el
+ * taskpane tiene abierto ahora mismo) a un "portapapeles" en Office
+ * roaming settings (ReportStore.copyReportToClipboard), listo para
+ * "Pegar informe". No toca nada de Excel ni abre el panel (como copiar
+ * al portapapeles de Windows, no da ningún aviso si todo va bien).
+ */
+async function copiarInforme(event) {
+    try {
+        if (!window.ReportStore) return;
+        const reportId = activeReportIdOrNull();
+        if (!reportId) {
+            console.warn("[Draco] Copiar informe: no hay ningún informe activo.");
+            return;
+        }
+        const copied = await window.ReportStore.copyReportToClipboard(reportId);
+        if (copied) {
+            console.log(`[Draco] Informe "${copied.name}" copiado al portapapeles.`);
+            if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.setAutoStatus) {
+                TaskPaneApp.setAutoStatus(`Informe "${copied.name}" copiado`);
+            }
+        }
+    } catch (error) {
+        console.error("Error al copiar el informe:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+/**
+ * "Pegar informe": crea un informe NUEVO en la hoja activa AHORA MISMO
+ * (igual que "Añadir informe"), con el diseño y las propiedades del
+ * último informe copiado (ReportStore.pasteReportFromClipboard) — como
+ * si se hubiera creado a mano en la celda seleccionada y luego se le
+ * hubieran puesto esas propiedades. Se deja el taskpane mostrando ya ese
+ * informe y, si tiene diseño (filas/columnas), se refresca de inmediato
+ * para que el resultado aparezca pintado sin más pasos.
+ */
+async function pegarInforme(event) {
+    try {
+        if (!window.ReportStore) return;
+
+        // Se muestra el panel YA (si estaba oculto): cualquier alert() de
+        // aquí en adelante necesita que la ventana esté visible, o el
+        // usuario nunca la vería (Excel puede dejarla colgada si no).
+        if (Office.addin && Office.addin.showAsTaskpane) await Office.addin.showAsTaskpane();
+
+        if (!window.ReportStore.hasReportClipboard()) {
+            alert("No hay ningún informe copiado. Usa antes 'Copiar informe'.");
+            return;
+        }
+
+        // Hoja activa AHORA MISMO: si hay Shared Runtime se reutiliza
+        // captureActiveEditContext (además dejar EDIT_REPORT!D1/E1 al día,
+        // por si algo más los necesita); si no, se lee directo con Excel.run.
+        let activeSheetName = "";
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.captureActiveEditContext) {
+            const editContext = await TaskPaneApp.captureActiveEditContext();
+            activeSheetName = editContext ? editContext.activeSheetName : "";
+        }
+        if (!activeSheetName) {
+            await Excel.run(async (context) => {
+                const activeSheet = context.workbook.worksheets.getActiveWorksheet();
+                activeSheet.load("name");
+                await context.sync();
+                activeSheetName = activeSheet.name;
+            });
+        }
+
+        const pasted = await window.ReportStore.pasteReportFromClipboard(activeSheetName);
+        if (!pasted) {
+            alert("No se pudo pegar el informe.");
+            return;
+        }
+        console.log(`[Draco] Informe "${pasted.name}" pegado en "${activeSheetName}" (id ${pasted.id}).`);
+
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.populateReportSelector) {
+            // populateReportSelector() relee el informe ACTIVO de
+            // ReportStore (que ya es el recién pegado: createReport lo
+            // marca activo) y refresca el desplegable "Informe"; el resto
+            // de pasos son los mismos que al elegirlo a mano ahí (ver
+            // onReportSelectorChange).
+            await TaskPaneApp.populateReportSelector();
+            await TaskPaneApp.onReportSelectorChange(String(pasted.id));
+            if (TaskPaneApp.setAutoStatus) {
+                TaskPaneApp.setAutoStatus(`Informe "${pasted.name}" pegado en "${activeSheetName}"`);
+            }
+        }
+
+        // Si el diseño copiado ya tiene filas/columnas, se pinta de
+        // inmediato (si está vacío, actualizarUnInforme no tiene nada que
+        // hacer y no pasa nada por llamarlo igualmente).
+        await actualizarUnInforme(pasted.id);
+    } catch (error) {
+        console.error("Error al pegar el informe:", error);
+        await surfaceErrorToSheet(error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+/**
+ * "Eliminar informe": borra la DEFINICIÓN del informe ACTIVO
+ * (ReportStore.deleteReport) — filtros/filas/columnas/propiedades, todo
+ * lo que vive en Office roaming settings — preguntando antes si también
+ * se quiere borrar el CONTENIDO ya pintado en la hoja (los 3 rangos con
+ * nombre Draco_<id>_Rows/Cols/Values, ver clearDracoNamedRanges). La
+ * definición se borra SIEMPRE; el contenido de la hoja solo si se
+ * responde que sí (clear de solo contenido, no de formato).
+ */
+async function eliminarInforme(event) {
+    try {
+        if (!window.ReportStore) return;
+        const reportId = activeReportIdOrNull();
+        if (!reportId) {
+            console.warn("[Draco] Eliminar informe: no hay ningún informe activo.");
+            return;
+        }
+        const report = window.ReportStore.getReport(reportId);
+        const reportName = report ? report.name : ("Informe " + reportId);
+
+        // Hace falta el panel VISIBLE antes de preguntar: showConfirmDialog
+        // es un modal propio del taskpane (no un confirm() nativo, que
+        // Excel bloquea/ignora dentro del WebView -ver el comentario en
+        // taskpane.js, junto a showConfirmDialog-), así que si el panel
+        // estuviera oculto el usuario nunca vería la pregunta.
+        if (Office.addin && Office.addin.showAsTaskpane) await Office.addin.showAsTaskpane();
+
+        let clearContent = false;
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.showConfirmDialog) {
+            clearContent = await TaskPaneApp.showConfirmDialog(
+                `¿Quieres borrar también el contenido que "${reportName}" tiene pintado en la hoja?`,
+                { title: "Eliminar informe", confirmLabel: "Sí, borrar contenido" }
+            );
+        } else {
+            // Sin Shared Runtime (host antiguo, improbable): sin forma
+            // fiable de preguntar, se opta por la opción más segura -no
+            // tocar el contenido de la hoja- y solo se borra la definición.
+            console.warn("[Draco] Eliminar informe: TaskPaneApp no disponible, no se preguntará por el contenido (se conserva).");
+        }
+
+        if (clearContent) {
+            await Excel.run(async (context) => {
+                // false -> Excel.ClearApplyTo.contents (ver clearDracoNamedRanges):
+                // borra solo el contenido, no el formato de la hoja.
+                await clearDracoNamedRanges(context, reportId, false);
+            });
+        }
+
+        await window.ReportStore.deleteReport(reportId);
+        console.log(`[Draco] Informe "${reportName}" (id ${reportId}) eliminado.` + (clearContent ? " Contenido de la hoja borrado." : ""));
+
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.populateReportSelector) {
+            await TaskPaneApp.populateReportSelector();
+            if (TaskPaneApp.currentReportId) {
+                await TaskPaneApp.onReportSelectorChange(String(TaskPaneApp.currentReportId));
+            } else if (TaskPaneApp.showEmptyState) {
+                // No queda ningún informe: se limpia también el estado en
+                // memoria del taskpane (igual que addReport() al crear el
+                // primero desde cero), para no dejar filtros/filas/
+                // columnas del informe recién eliminado colgando en
+                // this.state sin ningún currentReportId al que pertenezcan.
+                if (TaskPaneApp.state) {
+                    TaskPaneApp.state.filters = [];
+                    TaskPaneApp.state.rows = [];
+                    TaskPaneApp.state.columns = [];
+                    TaskPaneApp.state.rowsStatic = false;
+                    TaskPaneApp.state.colsStatic = false;
+                    TaskPaneApp.state.fieldOptions = {};
+                }
+                TaskPaneApp.showEmptyState();
+            }
+            if (TaskPaneApp.setAutoStatus) {
+                TaskPaneApp.setAutoStatus(`Informe "${reportName}" eliminado` + (clearContent ? " (contenido borrado)" : ""));
+            }
+        }
+    } catch (error) {
+        console.error("Error al eliminar el informe:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
 // Nota: este fichero se carga tanto en el runtime de comandos (commands.html)
 // como, ahora, dentro del propio taskpane (taskpane.html), para poder
 // disparar Actualizar()/ActualizarInforme() (y por tanto jsonTo3Matrices)
@@ -8242,6 +8480,9 @@ try {
     Office.actions.associate("guardarPlanificacion", guardarPlanificacion);
     Office.actions.associate("guardarExcelEnBucket", guardarExcelEnBucket);
     Office.actions.associate("abrirDesdeBucket", abrirDesdeBucket);
+    Office.actions.associate("copiarInforme", copiarInforme);
+    Office.actions.associate("pegarInforme", pegarInforme);
+    Office.actions.associate("eliminarInforme", eliminarInforme);
 } catch (e) {
     console.warn("Office.actions.associate no disponible en este contexto:", e);
 }

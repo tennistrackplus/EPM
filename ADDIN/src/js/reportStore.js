@@ -36,12 +36,14 @@
     const RS_KEY = "epm_reports";              // JSON: { [reportId]: reportObj }
     const RS_ACTIVE_KEY = "epm_activeReportId"; // id del informe activo
     const RS_SEQ_KEY = "epm_reportSeq";         // último id secuencial usado
+    const RS_CLIPBOARD_KEY = "epm_reportClipboard"; // JSON: informe copiado (ver copyReportToClipboard/pasteReportFromClipboard)
 
     const DEFAULT_REPORT_PROPERTIES = {
         reportName: "",
         suppressZeroRows: false,
         suppressZeroCols: false,
         subtotalsOnTop: false,
+        hierarchyNodesOnTop: true,
         overwriteFormats: true,
         autoFitColumns: true,
         planningReport: false
@@ -232,6 +234,101 @@
         await _writeReport(reportId, report);
     }
 
+    /* ---------------------------------------------------------------
+     * "Copiar informe" / "Pegar informe" (botones del ribbon, ver
+     * copiarInforme/pegarInforme en commands.js): un portapapeles con UN
+     * único informe (el último copiado), guardado en Office roaming
+     * settings -sobrevive a cerrar y reabrir el libro, y es visible desde
+     * cualquier contexto (ribbon o taskpane), igual que el resto de
+     * ReportStore-. "Pegar" crea un informe NUEVO (mismo camino que
+     * createReport: id nuevo, anclado en la hoja que esté activa en ESE
+     * momento), copiando el diseño (filtros/filas/columnas/Estático/
+     * opciones de campo) y las Propiedades del informe del copiado, pero
+     * NO su nombre ni su hoja/rangos de resultados -eso es propio de
+     * cada informe, no algo que tenga sentido copiar-.
+     * ------------------------------------------------------------- */
+
+    function hasReportClipboard() {
+        try {
+            return !!Office.context.document.settings.get(RS_CLIPBOARD_KEY);
+        } catch (e) {
+            return false;
+        }
+    }
+
+    function getReportClipboard() {
+        try {
+            const raw = Office.context.document.settings.get(RS_CLIPBOARD_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw);
+            return (parsed && typeof parsed === "object") ? parsed : null;
+        } catch (e) {
+            console.error("ReportStore: JSON de epm_reportClipboard corrupto.", e);
+            return null;
+        }
+    }
+
+    async function copyReportToClipboard(reportId) {
+        const report = getReport(reportId);
+        if (!report) return null;
+
+        const design = report.design || {};
+        const clip = {
+            sourceName: report.name,
+            semanticModelName: report.semanticModelName || "",
+            design: {
+                filters: design.filters || [],
+                rows: design.rows || [],
+                columns: design.columns || [],
+                rowsStatic: !!design.rowsStatic,
+                colsStatic: !!design.colsStatic,
+                fieldOptions: design.fieldOptions || {}
+            },
+            reportProperties: Object.assign({}, DEFAULT_REPORT_PROPERTIES, report.reportProperties || {})
+        };
+
+        Office.context.document.settings.set(RS_CLIPBOARD_KEY, JSON.stringify(clip));
+        await _saveAsync();
+        return { id: reportId, name: report.name };
+    }
+
+    /**
+     * Crea un informe a partir del portapapeles. resultSheetName: hoja
+     * activa en el momento de pulsar "Pegar informe" (igual que
+     * createReport/addReport). Devuelve el informe recién creado, o null
+     * si no había nada copiado.
+     */
+    async function pasteReportFromClipboard(resultSheetName) {
+        const clip = getReportClipboard();
+        if (!clip) return null;
+
+        const report = await createReport(clip.semanticModelName || "", resultSheetName);
+
+        // saveDesign ya expande jerarquías (expandedRows/expandedCols) a
+        // partir de filters/rows/columns/fieldOptions -mismo camino que
+        // sigue el taskpane al autoguardar el diseño-, así que no hace
+        // falta duplicar esa lógica aquí; y (con el fix de más arriba)
+        // conserva el resultSheetName que acaba de fijar createReport.
+        await saveDesign(report.id, {
+            filters: clip.design.filters,
+            rows: clip.design.rows,
+            columns: clip.design.columns,
+            rowsStatic: clip.design.rowsStatic,
+            colsStatic: clip.design.colsStatic,
+            fieldOptions: clip.design.fieldOptions
+        });
+
+        // Propiedades del informe (subtotales, jerarquía arriba, suprimir
+        // ceros...) del copiado, conservando el NOMBRE autogenerado del
+        // informe nuevo ("Informe - 0XX"), no el del copiado -para no
+        // acabar con dos informes con el mismo nombre-.
+        const props = Object.assign({}, clip.reportProperties || {});
+        delete props.reportName;
+        await saveReportProperties(report.id, props);
+
+        return getReport(report.id);
+    }
+
     async function deleteReport(reportId) {
         const store = _readStoreRaw();
         delete store[String(reportId)];
@@ -356,7 +453,19 @@
             return out;
         };
 
+        // OJO: se parte del report.design ANTERIOR (spread) y solo se
+        // sobrescriben los campos que gestiona esta función. Antes se
+        // reconstruía el objeto entero desde cero, lo que BORRABA en
+        // silencio cualquier campo que no gestiona saveDesign -en
+        // concreto, resultSheetName (ver createReport/
+        // setReportResultSheetName)-: cada autoguardado del taskpane
+        // (con cualquier cambio de diseño) dejaba el informe sin la hoja
+        // de resultados asignada, así que dejaba de encontrarse desde
+        // reportIdForResultSheet (commands.js) en cuanto el usuario
+        // tocaba algo. Con el spread, resultSheetName (y cualquier otro
+        // campo futuro no gestionado aquí) se conserva.
         report.design = {
+            ...(report.design || {}),
             filters: (state.filters || []).map(f => ({
                 dimension: f.dimension, name: f.name, isHierarchy: f.isHierarchy,
                 realAttribute: f.realAttribute,
@@ -460,7 +569,11 @@
         setMemberRecognition,
         getReportGrid,
         getReportResultSheetName,
-        setReportResultSheetName
+        setReportResultSheetName,
+        hasReportClipboard,
+        getReportClipboard,
+        copyReportToClipboard,
+        pasteReportFromClipboard
     };
 
 })();
