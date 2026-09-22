@@ -1685,11 +1685,54 @@ async function jsonPaintValues(context, json, reportId) {
     const isPlanningReport = !!(report && report.reportProperties && report.reportProperties.planningReport);
     const baseline = isPlanningReport ? new Map() : null;
 
-    for (const t of triples) {
-        const range = sheet.getRangeByIndexes(t.row - 1, t.col - 1, 1, 1);
-        const literal = coerceCellLiteral(t.text);
-        range.values = [[literal]];
-        if (baseline) baseline.set(t.row + "_" + t.col, literal);
+    // Antes: UN range.getRangeByIndexes(...).values=[[...]] POR CELDA (un
+    // informe "Fijo"/planificación grande -p.ej. 500 filas x 24 meses =
+    // 12.000 celdas, ver comentario en handleDracoPlanningValueChanged-
+    // podía significar miles de objetos Range y miles de operaciones en
+    // cola, aunque solo hubiera un context.sync() final): eso es lo que
+    // de verdad hacía lento el pintado aquí, y al tardar tanto podía dar
+    // la sensación de que el indicador "Actualizando" se quedaba colgado
+    // sin ocultarse (en realidad seguía trabajando). Ahora se lee el
+    // rectángulo que cubre todas las celdas de una vez (como antes hacía
+    // writeCellBlock para los informes dinámicos), se cambian en memoria
+    // solo las que trae el JSON -preservando cualquier fórmula/etiqueta
+    // fija que el usuario tenga en los huecos, que en "Fijo" sí puede
+    // haberla- y se escribe de una sola vez.
+    if (triples.length > 0) {
+        let minRow = Infinity, maxRow = -Infinity, minCol = Infinity, maxCol = -Infinity;
+        for (const t of triples) {
+            if (t.row < minRow) minRow = t.row;
+            if (t.row > maxRow) maxRow = t.row;
+            if (t.col < minCol) minCol = t.col;
+            if (t.col > maxCol) maxCol = t.col;
+        }
+        const numRows = maxRow - minRow + 1;
+        const numCols = maxCol - minCol + 1;
+
+        // Igual que en writeCellBlock: si el rectángulo saliera enorme y
+        // disperso (pocas celdas reales en un área gigante, poco probable
+        // aquí pero por seguridad), se cae al camino celda a celda de
+        // toda la vida en vez de reservar/leer un array gigantesco.
+        if (numRows * numCols > 50000 && numRows * numCols > triples.length * 50) {
+            for (const t of triples) {
+                const range = sheet.getRangeByIndexes(t.row - 1, t.col - 1, 1, 1);
+                const literal = coerceCellLiteral(t.text);
+                range.values = [[literal]];
+                if (baseline) baseline.set(t.row + "_" + t.col, literal);
+            }
+        } else {
+            const range = sheet.getRangeByIndexes(minRow - 1, minCol - 1, numRows, numCols);
+            range.load("values");
+            await context.sync();
+
+            const grid = range.values.map(r => r.slice());
+            for (const t of triples) {
+                const literal = coerceCellLiteral(t.text);
+                grid[t.row - minRow][t.col - minCol] = literal;
+                if (baseline) baseline.set(t.row + "_" + t.col, literal);
+            }
+            range.values = grid;
+        }
     }
 
     if (isPlanningReport) {
@@ -6544,15 +6587,26 @@ async function writeCellBlock(context, sheet, cellsMap) {
         return;
     }
 
-    const range = sheet.getRangeByIndexes(minRow - 1, minCol - 1, numRows, numCols);
-    range.load("values");
-    await context.sync();
-
-    const grid = range.values.map(r => r.slice());
+    // El área que ocupa este bloque ya viene SIEMPRE recién borrada
+    // (clearDracoNamedRanges + limpieza de prevBounds, justo antes de
+    // llamar a esta función para factCells/filasCells/columnasCells — ver
+    // jsonTo3MatricesCore) o nunca se ha usado (celda en blanco por
+    // defecto): cualquier celda del rectángulo que no esté en cellsMap YA
+    // es "" ahora mismo. Antes se leía el rectángulo entero (range.load
+    // + sync) solo para volver a copiar esos mismos huecos en blanco —
+    // una vuelta de red entera desperdiciada. Se elimina esa lectura y se
+    // construye el array ya con "" de partida: de 2 sync() por llamada a
+    // 1 (y esta función se llama 3 veces por refresco: fact/filas/cols).
+    // OJO: esto NO vale para un área con contenido ajeno que deba
+    // conservarse en los huecos (por eso jsonPaintValues, que sí puede
+    // convivir con fórmulas/etiquetas fijas del usuario en los huecos,
+    // sigue leyendo antes de escribir).
+    const grid = Array.from({ length: numRows }, () => new Array(numCols).fill(""));
     for (const c of cellsMap.values()) {
         grid[c.row - minRow][c.col - minCol] = c.value;
     }
 
+    const range = sheet.getRangeByIndexes(minRow - 1, minCol - 1, numRows, numCols);
     range.values = grid;
     draco_suspendScreenUpdating(context);
     await context.sync();
