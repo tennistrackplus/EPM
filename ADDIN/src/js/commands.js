@@ -6132,8 +6132,25 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // formato — antes se borraba siempre con "all" sin mirar esta opción,
     // así que un informe con overwriteFormats=false igualmente perdía el
     // formato que el usuario hubiera dejado a mano en la ejecución anterior.
-    await clearDracoNamedRanges(context, reportId, reportProps.overwriteFormats);
-    tPerf = draco_perfMark(reportId, "Borrar rangos anteriores (clear)", tPerf);
+    //
+    // OJO — TODO EL RESTO DE ESTA FUNCIÓN (borrados, FACT, FILAS,
+    // COLUMNAS, resaltado de totales, fuente/número/bordes, rangos con
+    // nombre) queda en cola sin sincronizar hasta el ÚNICO sync grande de
+    // más abajo (justo antes de "Registrar listeners"). Antes cada paso
+    // tenía su propio context.sync(), y cada uno de esos "viajes" a Excel
+    // parece tener un coste fijo bastante alto e irregular en este
+    // entorno (2 celdas tardaban a veces lo mismo que 432) — exactamente
+    // el mismo motivo por el que en VBA se hacía todo con
+    // Application.ScreenUpdating=False de un tirón. Aquí no hace falta
+    // reconsultar si los 3 nombres existen (isNullObject) para borrarlos
+    // NI para redefinirlos más abajo: ya lo sabemos por prevNamedItems,
+    // cargado un poco más arriba — antes se volvía a preguntar dos veces
+    // más (una en clearDracoNamedRanges, otra en applyDracoNamedRanges),
+    // cada una con su propio sync.
+    const clearMode = reportProps.overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents;
+    for (const it of prevNamedItems) {
+        if (!it.isNullObject) it.getRange().clear(clearMode);
+    }
 
     // Limpiar cualquier resto de la ejecución anterior que hubiera quedado
     // FUERA de esos rangos con nombre (p.ej. fórmulas EPM_VALUE residuales
@@ -6156,11 +6173,10 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
             sheet.getRangeByIndexes(
                 firstDataRow, prevBounds.left,
                 prevBounds.bottom - firstDataRow, prevBounds.right - prevBounds.left
-            ).clear(reportProps.overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents);
+            ).clear(clearMode);
         }
     }
-    draco_suspendScreenUpdating(context);
-    await context.sync();
+    tPerf = draco_perfMark(reportId, "Borrar rangos anteriores (en cola, sin sync)", tPerf);
 
     /* -------------------------------------------------------------
      * 1) FACT — construir el bloque completo en memoria y escribirlo
@@ -6198,8 +6214,8 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
             if (factBaseline) factBaseline.set(row + "_" + col, value);
         }
     }
-    await writeCellBlock(context, sheet, factCells);
-    tPerf = draco_perfMark(reportId, `Escribir FACT (${factCells.size} celdas)`, tPerf);
+    await writeCellBlock(context, sheet, factCells, true);
+    tPerf = draco_perfMark(reportId, `Escribir FACT (${factCells.size} celdas, en cola)`, tPerf);
 
     if (isPlanningReport_) {
         DracoPlanningBaselineValues.set(reportId, factBaseline);
@@ -6294,12 +6310,12 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         }
     }
 
-    await writeCellBlock(context, sheet, filasCells);
+    await writeCellBlock(context, sheet, filasCells, true);
     let filasRunCount = 0;
     if (reportProps.overwriteFormats) {
-        filasRunCount = await writeIndentAndColorRuns(context, sheet, filasCells, "col", rowsOffCol);
+        filasRunCount = await writeIndentAndColorRuns(context, sheet, filasCells, "col", rowsOffCol, true);
     }
-    tPerf = draco_perfMark(reportId, `Escribir+formatear FILAS (${filasCells.size} celdas, ${filasRunCount} tramos de formato)`, tPerf);
+    tPerf = draco_perfMark(reportId, `Escribir+formatear FILAS (${filasCells.size} celdas, ${filasRunCount} tramos, en cola)`, tPerf);
 
     /* -------------------------------------------------------------
      * 3) COLUMNAS — análogo a FILAS
@@ -6368,20 +6384,32 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         }
     }
 
-    await writeCellBlock(context, sheet, columnasCells);
+    await writeCellBlock(context, sheet, columnasCells, true);
     let columnasRunCount = 0;
     if (reportProps.overwriteFormats) {
-        columnasRunCount = await writeIndentAndColorRuns(context, sheet, columnasCells, "row", colsOffRow);
+        columnasRunCount = await writeIndentAndColorRuns(context, sheet, columnasCells, "row", colsOffRow, true);
     }
-    tPerf = draco_perfMark(reportId, `Escribir+formatear COLUMNAS (${columnasCells.size} celdas, ${columnasRunCount} tramos de formato)`, tPerf);
+    tPerf = draco_perfMark(reportId, `Escribir+formatear COLUMNAS (${columnasCells.size} celdas, ${columnasRunCount} tramos, en cola)`, tPerf);
 
     // ---- Punto 7: fondo RGB(255,255,204) en cabeceras "Total" y en los
     // valores de fila/columna de total (gateado por "Sobrescribir
     // formatos", igual que el resto de formato). ----
     if (reportProps.overwriteFormats) {
-        await applyDracoTotalHighlight(context, sheet, filasCells, columnasCells, factCells);
-        tPerf = draco_perfMark(reportId, "Resaltado de totales", tPerf);
+        await applyDracoTotalHighlight(context, sheet, filasCells, columnasCells, factCells, true);
+        tPerf = draco_perfMark(reportId, "Resaltado de totales (en cola)", tPerf);
     }
+
+    // ══ ÚNICO sync grande para TODO lo anterior (borrados + FACT + FILAS
+    // + COLUMNAS + resaltado de totales) ══ — antes cada uno de esos pasos
+    // tenía su propio context.sync(); ahora es UN solo viaje a Excel para
+    // todo el bloque de escritura de datos. El "Formato general" que
+    // viene justo después (fuente/número/bordes + rangos con nombre) SÍ
+    // necesita sus propios 2 sync (los bordes lo exigen, ver comentario
+    // en applyDracoNamedRanges), pero ya no arrastra ningún sync previo
+    // sin fusionar.
+    draco_suspendScreenUpdating(context);
+    await context.sync();
+    tPerf = draco_perfMark(reportId, "── Sync grande: borrado + FACT + FILAS + COLUMNAS + totales ──", tPerf);
 
     /* -------------------------------------------------------------
      * 4) RANGOS CON NOMBRE Draco_001_Rows / Draco_001_Cols / Draco_001_Values
@@ -6412,13 +6440,13 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const physicalMaxRowId = measuresOnRowsAxis ? maxRowId * measureCount : maxRowId;
     const physicalMaxColId = measuresOnColsAxis ? maxColId * measureCount : maxColId;
 
-    await applyDracoNamedRanges(context, sheet, {
+    const namedRanges = await applyDracoNamedRanges(context, sheet, {
         RRows, RCols,
         totalDimFilas: paintedFilasCols,
         totalDimCols: paintedColsRows,
         maxRowId: physicalMaxRowId, maxColId: physicalMaxColId,
         applyVisualFormat: reportProps.overwriteFormats
-    }, reportId);
+    }, reportId, prevNamedItems);
     tPerf = draco_perfMark(reportId, "Rangos con nombre + formato general (fuente/número/bordes)", tPerf);
 
     // 6) Registrar (una sola vez por hoja) los listeners de clic/edición:
@@ -6431,18 +6459,15 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // 7) Autoajustar ancho de columnas (propiedades del informe: D6), solo
     // de los rangos con nombre Draco_<id>_Rows y Draco_<id>_Cols de ESTE
     // informe (donde se pintan sus filas/columnas), no de toda la hoja.
-    if (reportProps.autoFitColumns) {
+    // Reutiliza los MISMOS objetos Range que acaba de construir/devolver
+    // applyDracoNamedRanges (rowsRange/colsRange): antes se volvían a
+    // buscar por nombre con su propio load+sync, un viaje de red entero
+    // solo para recuperar algo que ya teníamos en memoria.
+    if (reportProps.autoFitColumns && namedRanges.rowsRange && namedRanges.colsRange) {
         if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ajustando columnas"));
         try {
-            const rn = dracoRangeNames(reportId);
-            const rowsRangeName = context.workbook.names.getItemOrNullObject(rn.rows);
-            const colsRangeName = context.workbook.names.getItemOrNullObject(rn.cols);
-            rowsRangeName.load("isNullObject");
-            colsRangeName.load("isNullObject");
-            await context.sync();
-
-            if (!rowsRangeName.isNullObject) rowsRangeName.getRange().format.autofitColumns();
-            if (!colsRangeName.isNullObject) colsRangeName.getRange().format.autofitColumns();
+            namedRanges.rowsRange.format.autofitColumns();
+            namedRanges.colsRange.format.autofitColumns();
 
             draco_suspendScreenUpdating(context);
             await context.sync();
@@ -6465,7 +6490,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
  * por SQL con 'TOTAL'), y para las celdas de VALORES que caigan en una
  * fila o columna marcada como total.
  */
-async function applyDracoTotalHighlight(context, sheet, filasCells, columnasCells, factCells) {
+async function applyDracoTotalHighlight(context, sheet, filasCells, columnasCells, factCells, deferSync) {
     const TOTAL_FILL = "#FFFFCC"; // RGB(255,255,204)
 
     const totalRows = new Set();
@@ -6497,8 +6522,12 @@ async function applyDracoTotalHighlight(context, sheet, filasCells, columnasCell
         }
     }
 
-    draco_suspendScreenUpdating(context);
-    await context.sync();
+    // deferSync=true (ver jsonTo3MatricesCore): se deja en cola, el
+    // llamador hace un único sync grande al final.
+    if (!deferSync) {
+        draco_suspendScreenUpdating(context);
+        await context.sync();
+    }
 }
 
 /* ---------------------------------------------------------------------
@@ -6536,7 +6565,7 @@ function dracoColorForLevel(fieldBase1, indent) {
  *   la jerarquía crece hacia abajo); se agrupa por fila y se recorren
  *   tramos contiguos de columna con el mismo indent.
  */
-async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffset) {
+async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffset, deferSync) {
     if (cellsMap.size === 0) return 0;
 
     const groupKeyName = axis === "col" ? "col" : "row";
@@ -6586,8 +6615,12 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
         }
     }
 
-    draco_suspendScreenUpdating(context);
-    await context.sync();
+    // deferSync=true (ver jsonTo3MatricesCore): se deja en cola, el
+    // llamador hace un único sync grande al final.
+    if (!deferSync) {
+        draco_suspendScreenUpdating(context);
+        await context.sync();
+    }
     return runCount;
 }
 
@@ -6632,20 +6665,41 @@ async function clearDracoNamedRanges(context, reportId, overwriteFormats) {
  * pintada, y aplica: fuente Segoe UI 9 en los tres, número 2 decimales +
  * separador de miles + centrado en Draco_001_Values, y un borde fino
  * RGB(13,23,42) alrededor de cada uno de los 3 rangos.
+ *
+ * existingItems (opcional): los mismos 3 NamedItem (rows/cols/values, en
+ * ese orden) que jsonTo3MatricesCore ya comprobó al principio del
+ * refresco (prevNamedItems) — se reutilizan para no volver a preguntar
+ * si existen (antes: 1 sync más aquí, redundante con esa comprobación
+ * previa). Si no se pasa, se comporta como si no existiera ninguno
+ * (add() directo; si el nombre ya existiera de verdad, Excel lo rechaza
+ * — por eso conviene pasar siempre existingItems desde el refresco
+ * normal, que sí los tiene).
+ *
+ * Devuelve {rowsRange, colsRange, valuesRange} (o todo null si no había
+ * datos) para que el autoajuste de columnas, justo después, pueda
+ * reutilizar estos MISMOS objetos Range sin tener que volver a buscarlos
+ * por nombre (otro sync que se ahorra).
  */
-async function applyDracoNamedRanges(context, sheet, dims, reportId) {
+async function applyDracoNamedRanges(context, sheet, dims, reportId, existingItems) {
     const { RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId, applyVisualFormat } = dims;
     const doFormat = applyVisualFormat !== false; // por defecto, sí formatear (comportamiento previo)
     let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
 
     if (maxRowId <= 0 || maxColId <= 0 || totalDimFilas <= 0 || totalDimCols <= 0) {
         // No hay datos suficientes para definir una tabla: no se crean rangos.
-        return;
+        return { rowsRange: null, colsRange: null, valuesRange: null };
     }
 
     const rowsRange = sheet.getRangeByIndexes(RRows.row - 1, RRows.col - 1, maxRowId, totalDimFilas);
     const colsRange = sheet.getRangeByIndexes(RCols.row - 1, RCols.col - 1, totalDimCols, maxColId);
     const valuesRange = sheet.getRangeByIndexes(RRows.row - 1, RCols.col - 1, maxRowId, maxColId);
+
+    const rn = dracoRangeNames(reportId);
+    const defs = [
+        { name: rn.rows, range: rowsRange },
+        { name: rn.cols, range: colsRange },
+        { name: rn.values, range: valuesRange }
+    ];
 
     // "Sobrescribir formatos" (propiedades del informe) desactivado: se
     // conservan el color/fuente/bordes que el usuario haya tocado a mano,
@@ -6666,8 +6720,15 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId) {
         //      (externo + interior, restos de refrescos anteriores con otra
         //      forma/tamaño de tabla) y SOLO DESPUÉS se pinta el borde exterior
         //      fino nuevo. Hacerlo en el mismo lote sin sync intermedio hace
-        //      que Excel no aplique bien el cambio, así que se separan en dos
-        //      pasadas con su propio context.sync().
+        //      que Excel no aplique bien el cambio (probado), así que estas
+        //      DOS pasadas concretas siguen necesitando su propio
+        //      context.sync() cada una — lo que SÍ se ha quitado es la
+        //      vuelta de red APARTE que hacía falta antes solo para
+        //      redefinir los nombres: ahora "borrar nombres antiguos" viaja
+        //      pegado a "quitar bordes" (pasada 1), y "crear nombres nuevos"
+        //      viaja pegado a "pintar bordes" (pasada 2), aprovechando los
+        //      mismos 2 sync que las propias pruebas ya exigían para
+        //      bordes, en vez de sumar 2 sync MÁS aparte.
         const ALL_BORDER_EDGES = [
             Excel.BorderIndex.edgeTop, Excel.BorderIndex.edgeBottom,
             Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight,
@@ -6678,16 +6739,21 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId) {
             Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight
         ];
 
-        // Pasada 1: quitar el borde del rango por completo.
+        // Pasada 1: quitar el borde del rango por completo + borrar los
+        // nombres antiguos (si existían).
         for (const r of [rowsRange, colsRange, valuesRange]) {
             for (const edge of ALL_BORDER_EDGES) {
                 r.format.borders.getItem(edge).style = Excel.BorderLineStyle.none;
             }
         }
+        if (existingItems) {
+            existingItems.forEach(it => { if (!it.isNullObject) it.delete(); });
+        }
         draco_suspendScreenUpdating(context);
         await context.sync();
 
-        // Pasada 2: pintar el borde exterior fino, color RGB(13,23,42).
+        // Pasada 2: pintar el borde exterior fino, color RGB(13,23,42) +
+        // redefinir los 3 nombres apuntando a los rangos recién pintados.
         for (const r of [rowsRange, colsRange, valuesRange]) {
             for (const edge of OUTER_BORDER_EDGES) {
                 const border = r.format.borders.getItem(edge);
@@ -6696,46 +6762,34 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId) {
                 border.color = DRACO_BORDER_COLOR;
             }
         }
+        defs.forEach(d => context.workbook.names.add(d.name, d.range));
+
         draco_suspendScreenUpdating(context);
         await context.sync();
-        tPerf = draco_perfMark(reportId, "  Fuente/número/bordes", tPerf);
-    }
-
-    // ---- (Re)definir los nombres apuntando a los rangos recién pintados ----
-    // Antes: 1 sync para leer si existe + 1 sync más para borrarlo, POR
-    // CADA nombre (hasta 6 viajes de red seguidos para 3 rangos, ya que
-    // los 3 nombres YA existen de la vez anterior en cualquier refresco
-    // que no sea el primero). Ahora: 1 sync para leer los 3, y 1 sync
-    // para borrar los que hicieran falta — igual que ya se hacía para
-    // fuente/número/bordes más arriba.
-    const rn = dracoRangeNames(reportId);
-    const defs = [
-        { name: rn.rows, range: rowsRange },
-        { name: rn.cols, range: colsRange },
-        { name: rn.values, range: valuesRange }
-    ];
-
-    const existingItems = defs.map(d => context.workbook.names.getItemOrNullObject(d.name));
-    existingItems.forEach(it => it.load("isNullObject"));
-    await context.sync();
-
-    let anyDeleted = false;
-    existingItems.forEach(it => {
-        if (!it.isNullObject) {
-            it.delete();
-            anyDeleted = true;
+        draco_perfMark(reportId, "  Fuente/número/bordes + rangos con nombre", tPerf);
+    } else {
+        // Sin "Sobrescribir formatos": solo hay que (re)definir los 3
+        // nombres, sin tocar fuente/número/bordes. Sigue haciendo falta
+        // borrar antes de añadir (Excel no deja redefinir un nombre ya
+        // existente con add() directamente), pero ya sin la comprobación
+        // de existencia redundante (existingItems ya la trae hecha).
+        let anyDeleted = false;
+        if (existingItems) {
+            existingItems.forEach(it => {
+                if (!it.isNullObject) { it.delete(); anyDeleted = true; }
+            });
         }
-    });
-    if (anyDeleted) {
+        if (anyDeleted) {
+            draco_suspendScreenUpdating(context);
+            await context.sync();
+        }
+        defs.forEach(d => context.workbook.names.add(d.name, d.range));
         draco_suspendScreenUpdating(context);
         await context.sync();
+        draco_perfMark(reportId, "  Redefinir rangos con nombre (sin formato)", tPerf);
     }
 
-    defs.forEach(d => context.workbook.names.add(d.name, d.range));
-
-    draco_suspendScreenUpdating(context);
-    await context.sync();
-    draco_perfMark(reportId, "  Redefinir rangos con nombre", tPerf);
+    return { rowsRange, colsRange, valuesRange };
 }
 
 /**
@@ -6753,7 +6807,7 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId) {
  * haya quedado pintado en la celda — así da igual cómo Excel decida
  * mostrarlo. Ver dracoPlanningCrossItemsForCellDynamic.
  */
-async function writeCellBlock(context, sheet, cellsMap) {
+async function writeCellBlock(context, sheet, cellsMap, deferSync) {
     if (cellsMap.size === 0) return;
 
     let minRow = Infinity, maxRow = -Infinity, minCol = Infinity, maxCol = -Infinity;
@@ -6773,8 +6827,10 @@ async function writeCellBlock(context, sheet, cellsMap) {
         for (const c of cellsMap.values()) {
             sheet.getRangeByIndexes(c.row - 1, c.col - 1, 1, 1).values = [[c.value]];
         }
-        draco_suspendScreenUpdating(context);
-        await context.sync();
+        if (!deferSync) {
+            draco_suspendScreenUpdating(context);
+            await context.sync();
+        }
         return;
     }
 
@@ -6799,8 +6855,14 @@ async function writeCellBlock(context, sheet, cellsMap) {
 
     const range = sheet.getRangeByIndexes(minRow - 1, minCol - 1, numRows, numCols);
     range.values = grid;
-    draco_suspendScreenUpdating(context);
-    await context.sync();
+    // deferSync=true (ver jsonTo3MatricesCore): se deja en cola sin
+    // sincronizar — el llamador hace UN solo sync grande al final, junto
+    // con FILAS/COLUMNAS/resaltado/formato/rangos con nombre, en vez de
+    // uno por cada bloque.
+    if (!deferSync) {
+        draco_suspendScreenUpdating(context);
+        await context.sync();
+    }
 }
 
 /**
