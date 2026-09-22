@@ -5796,10 +5796,10 @@ function computeAxisPaintPlan(levels) {
 // comportamiento que antes de que existiera "Refrescar todos"). Se pasa
 // explícito cuando se pinta UN informe concreto que no tiene por qué ser
 // el activo en el taskpane (ver actualizarTodosCore).
-async function jsonTo3Matrices(context, json, reportId, onCellsPainted) {
+async function jsonTo3Matrices(context, json, reportId) {
     DracoSuppressChangeEvents = true; // evita que el reconocimiento de miembros reaccione a este pintado
     try {
-        return await jsonTo3MatricesCore(context, json, reportId, onCellsPainted);
+        return await jsonTo3MatricesCore(context, json, reportId);
     } finally {
         DracoSuppressChangeEvents = false;
     }
@@ -5831,22 +5831,7 @@ function draco_suspendScreenUpdating(context) {
     }
 }
 
-/**
- * onCellsPainted (opcional): callback que se invoca justo después de que
- * los NÚMEROS ya estén pintados (borrado + FACT + FILAS + COLUMNAS +
- * resaltado de totales, el único sync grande) pero ANTES de fuente/
- * número/bordes/rangos con nombre — que no cambian ningún dato, solo
- * visten la tabla, y son la parte que más tarda de todo el pintado (los
- * bordes, en concreto, necesitan sus propios sync por una limitación ya
- * probada de la API). Pensado para que actualizarInformeCore oculte el
- * indicador "Actualizando" AQUÍ en vez de al final del todo: el usuario
- * ya ve sus datos, así que no tiene sentido seguir mostrando "trabajando"
- * mientras solo se retocan bordes y nombres por detrás. NO se llama
- * desde el toggle +/- (jsonTo3Matrices(..., reportId) sin este 4º
- * argumento, ver toggleDracoCollapseAtCell) ni desde "Actualizar todos"
- * (que muestra un único indicador para TODO el lote, no por informe).
- */
-async function jsonTo3MatricesCore(context, json, reportIdOverride, onCellsPainted) {
+async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
     DracoLastJsonByReport.set(dracoStateKey(reportId), json); // cache para poder repintar en un toggle +/- sin re-consultar BigQuery
@@ -6425,16 +6410,6 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride, onCellsPaint
     draco_suspendScreenUpdating(context);
     await context.sync();
     tPerf = draco_perfMark(reportId, "── Sync grande: borrado + FACT + FILAS + COLUMNAS + totales ──", tPerf);
-
-    // Ver el comentario junto a la firma de la función: aquí es donde el
-    // usuario ya ve sus datos pintados; si hay callback, se invoca ahora
-    // (antes de fuente/número/bordes/rangos con nombre) para que
-    // actualizarInformeCore pueda ocultar el indicador "Actualizando" en
-    // este punto en vez de esperar a que termine también el vestido.
-    if (onCellsPainted) {
-        await onCellsPainted();
-        tPerf = draco_perfMark(reportId, "  (indicador ocultado aquí, si procedía)", tPerf);
-    }
 
     /* -------------------------------------------------------------
      * 4) RANGOS CON NOMBRE Draco_001_Rows / Draco_001_Cols / Draco_001_Values
@@ -7015,18 +6990,8 @@ async function actualizarInformeCore(reportIdOverride) {
     tPerf = draco_perfMark(reportId, "Escribir SQL/JSON en EDIT_REPORT", tPerf);
 
     if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintando resultados"));
-    let indicatorHiddenEarly = false;
     await Excel.run(async (context) => {
-        await jsonTo3Matrices(context, json, reportId, async () => {
-            // Ver el comentario junto a jsonTo3MatricesCore: en cuanto los
-            // NÚMEROS ya están pintados, se oculta el indicador aquí — lo
-            // que queda (fuente/número/bordes/rangos con nombre) es solo
-            // "vestir" la tabla, no haría falta seguir viendo "Actualizando".
-            if (window.BusyIndicator) {
-                await window.BusyIndicator.hide();
-                indicatorHiddenEarly = true;
-            }
-        });
+        await jsonTo3Matrices(context, json, reportId);
     });
     tPerf = draco_perfMark(reportId, "Pintando resultados (total, ver desglose arriba)", tPerf);
 
@@ -7035,7 +7000,7 @@ async function actualizarInformeCore(reportIdOverride) {
         tPerf = draco_perfMark(reportId, "Candado cruzado de planificación (end)", tPerf);
         await draco_endManualCalculation();
         tPerf = draco_perfMark(reportId, "Restaurar cálculo automático", tPerf);
-        if (window.BusyIndicator && !indicatorHiddenEarly) await window.BusyIndicator.hide();
+        if (window.BusyIndicator) await window.BusyIndicator.hide();
         draco_perfMark(reportId, "Ocultar indicador (borrar forma)", tPerf);
         draco_perfMark(reportId, "══ TOTAL refresco completo ══", tRefreshStart);
         await endDracoPerfLog();
