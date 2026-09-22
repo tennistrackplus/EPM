@@ -1890,7 +1890,7 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     tPerf = draco_perfMark(reportId, "Escribir SQL/JSON en EDIT_REPORT", tPerf);
 
     // 3) JSON_PaintValues
-    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintando resultados"));
+    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintandooooooo resultados VERSION-Z1"));
     await Excel.run(async (context) => {
         await jsonPaintValues(context, json, reportId);
     });
@@ -6802,7 +6802,7 @@ async function actualizarInformeCore(reportIdOverride) {
     });
     tPerf = draco_perfMark(reportId, "Escribir SQL/JSON en EDIT_REPORT", tPerf);
 
-    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintando resultados"));
+    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintandooooooo resultados VERSION-Z1"));
     await Excel.run(async (context) => {
         await jsonTo3Matrices(context, json, reportId);
     });
@@ -7007,7 +7007,7 @@ async function actualizarTodosCore(concurrency) {
         try {
             if (window.BusyIndicator) {
                 await window.BusyIndicator.update(
-                    busyStepLabel(job.reportId, "Pintando resultados") + ` (${paintedCount + 1}/${totalQueries})`
+                    busyStepLabel(job.reportId, "Pintandooooooo resultados VERSION-Z1") + ` (${paintedCount + 1}/${totalQueries})`
                 );
             }
             await Excel.run(async (context) => {
