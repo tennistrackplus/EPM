@@ -1823,6 +1823,8 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
     beginDracoPerfLog();
+    const tRefreshStart = performance.now(); // TOTAL de extremo a extremo, ver más abajo
+    let tPerf = tRefreshStart; // instrumentación de tiempos, ver draco_perfMark
 
     // PLANIFICACIÓN > "refrescar" hace lo mismo que "Guardar
     // planificación": vuelca en EDIT_REPORT!A127 y devuelve su color
@@ -1831,6 +1833,7 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     // refresco porque este va a borrar y repintar entero
     // Draco_<id>_Values de todas formas.
     await flushDracoPlanningModifiedCells();
+    tPerf = draco_perfMark(reportId, "Vaciar cambios de planificación pendientes", tPerf);
 
     // "Actualizando…" (shape flotante sobre la hoja, ver busyindicator.js):
     // se muestra ANTES del primer Excel.run y solo se quita en el finally,
@@ -1841,30 +1844,37 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     // hide(). if (window.BusyIndicator) por si esta página (commands.html
     // vs taskpane.html) no lo tiene cargado.
     if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(reportId, "Generando SQL"));
-    let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
+    tPerf = draco_perfMark(reportId, "Mostrar indicador (crear forma)", tPerf);
 
     // Ver comentario junto a DracoSuppressPlanningPaintCount: mientras
     // dura todo este refresco (que borra y reescribe Draco_<id>_Values),
     // handleDracoPlanningValueChanged no debe pintar esas celdas como si
     // fueran una edición manual del usuario.
     await beginSuppressPlanningPaint();
+    tPerf = draco_perfMark(reportId, "Candado cruzado de planificación (begin)", tPerf);
     try {
 
     // 1) LoadReportDefinition + BuildSQL_Fixed + escritura de A1
     await Excel.run(async (context) => {
+        let tSub = performance.now(); // sub-marcas dentro de "Generando SQL"
         const editReportGrid = await getEditReportGrid(context, reportId);
+        tSub = draco_perfMark(reportId, "  Leer EDIT_REPORT (usedRange)", tSub);
+
         const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
         const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
         const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
         await ensureDracoResultSheetExists(context, resultSheetName);
         const csvGrid = await getFormulaGrid(context, resultSheetName);
+        tSub = draco_perfMark(reportId, "  Leer hoja de resultados (fórmulas)", tSub);
 
         loadReportDefinition(editReportGrid, reportId);
 
         sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
+        tSub = draco_perfMark(reportId, "  loadReportDefinition + buildSQLFixed (JS puro)", tSub);
 
         await context.sync();
+        draco_perfMark(reportId, "  Escribir/sincronizar", tSub);
     });
     tPerf = draco_perfMark(reportId, "Generando SQL", tPerf);
 
@@ -1894,11 +1904,14 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     await Excel.run(async (context) => {
         await jsonPaintValues(context, json, reportId);
     });
-    draco_perfMark(reportId, "Pintando resultados (total, ver desglose arriba)", tPerf);
+    tPerf = draco_perfMark(reportId, "Pintando resultados (total, ver desglose arriba)", tPerf);
 
     } finally {
         await endSuppressPlanningPaint();
+        tPerf = draco_perfMark(reportId, "Candado cruzado de planificación (end)", tPerf);
         if (window.BusyIndicator) await window.BusyIndicator.hide();
+        draco_perfMark(reportId, "Ocultar indicador (borrar forma)", tPerf);
+        draco_perfMark(reportId, "══ TOTAL refresco completo ══", tRefreshStart);
         await endDracoPerfLog();
     }
 }
@@ -2988,14 +3001,18 @@ async function beginSuppressPlanningPaint() {
     DracoSuppressPlanningPaintCount++;
     try {
         await Excel.run(async (context) => {
+            // Antes: 1 sync para saber si EDIT_REPORT existe + 1 sync más
+            // para leer el candado (Z2) = 2 vueltas de red solo para LEER,
+            // antes incluso de escribir nada. Se cargan las dos cosas
+            // juntas y se resuelven en un único sync (si EDIT_REPORT no
+            // existiera, el .getRange() de abajo fallaría al resolverse,
+            // pero el try/catch de fuera ya lo cubre igual que antes).
             const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
             editReport.load("isNullObject");
-            await context.sync();
-            if (editReport.isNullObject) return;
-
             const cell = editReport.getRange(DRACO_PLANNING_SUPPRESS_CELL);
             cell.load("values");
             await context.sync();
+            if (editReport.isNullObject) return;
 
             const current = Number(cell.values && cell.values[0] && cell.values[0][0]) || 0;
             cell.values = [[String(current + 1)]];
@@ -3010,14 +3027,14 @@ async function endSuppressPlanningPaint() {
     DracoSuppressPlanningPaintCount = Math.max(0, DracoSuppressPlanningPaintCount - 1);
     try {
         await Excel.run(async (context) => {
+            // Misma optimización que beginSuppressPlanningPaint: 1 sync
+            // para leer (existencia + candado) en vez de 2.
             const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
             editReport.load("isNullObject");
-            await context.sync();
-            if (editReport.isNullObject) return;
-
             const cell = editReport.getRange(DRACO_PLANNING_SUPPRESS_CELL);
             cell.load("values");
             await context.sync();
+            if (editReport.isNullObject) return;
 
             const current = Number(cell.values && cell.values[0] && cell.values[0][0]) || 0;
             cell.values = [[String(Math.max(0, current - 1))]];
@@ -6766,15 +6783,19 @@ async function actualizarInformeCore(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
     beginDracoPerfLog();
-    let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
+    const tRefreshStart = performance.now(); // TOTAL de extremo a extremo, ver más abajo
+    let tPerf = tRefreshStart; // instrumentación de tiempos, ver draco_perfMark
 
     // PLANIFICACIÓN > ver comentario igual en actualizarInformeFixedCore.
     await flushDracoPlanningModifiedCells();
+    tPerf = draco_perfMark(reportId, "Vaciar cambios de planificación pendientes", tPerf);
 
     if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(reportId, "Generando SQL"));
+    tPerf = draco_perfMark(reportId, "Mostrar indicador (crear forma)", tPerf);
 
     // Ver comentario junto a DracoSuppressPlanningPaintCount.
     await beginSuppressPlanningPaint();
+    tPerf = draco_perfMark(reportId, "Candado cruzado de planificación (begin)", tPerf);
     try {
 
     await Excel.run(async (context) => {
@@ -6833,11 +6854,14 @@ async function actualizarInformeCore(reportIdOverride) {
     await Excel.run(async (context) => {
         await jsonTo3Matrices(context, json, reportId);
     });
-    draco_perfMark(reportId, "Pintando resultados (total, ver desglose arriba)", tPerf);
+    tPerf = draco_perfMark(reportId, "Pintando resultados (total, ver desglose arriba)", tPerf);
 
     } finally {
         await endSuppressPlanningPaint();
+        tPerf = draco_perfMark(reportId, "Candado cruzado de planificación (end)", tPerf);
         if (window.BusyIndicator) await window.BusyIndicator.hide();
+        draco_perfMark(reportId, "Ocultar indicador (borrar forma)", tPerf);
+        draco_perfMark(reportId, "══ TOTAL refresco completo ══", tRefreshStart);
         await endDracoPerfLog();
     }
 }
@@ -6935,6 +6959,7 @@ async function actualizarTodosCore(concurrency) {
     if (!window.ReportStore) return;
     const reports = window.ReportStore.listReports();
     if (!reports || reports.length === 0) return;
+    const tRefreshStart = performance.now(); // TOTAL de extremo a extremo, ver más abajo
 
     // PLANIFICACIÓN > ver comentario igual en actualizarInformeFixedCore.
     // (actualizarInformeFixedCore también lo llama por su cuenta más
@@ -7067,6 +7092,7 @@ async function actualizarTodosCore(concurrency) {
     } finally {
         await endSuppressPlanningPaint();
         if (window.BusyIndicator) await window.BusyIndicator.hide();
+        draco_perfMark(null, "══ TOTAL 'Actualizar todos' completo ══", tRefreshStart);
         await endDracoPerfLog();
     }
 }
