@@ -536,6 +536,70 @@ function draco_perfMark(reportId, phase, tPrev) {
     return now;
 }
 
+// Mismo patrón de profundidad que DracoPerfLogDepth/BusyIndicator.refCount:
+// "Actualizar todos" pone el cálculo en manual UNA sola vez para TODO el
+// lote (llama a draco_beginManualCalculation antes del bucle), y cada
+// informe individual (actualizarInformeCore/actualizarInformeFixedCore)
+// puede seguir llamando a begin/end sin que se restaure a mitad de camino
+// -solo se restaura de verdad en el ÚLTIMO end() (depth 1->0)-.
+let DracoCalcModeDepth = 0;
+let DracoCalcModePrevMode = null;
+
+/**
+ * Pone el cálculo de Excel en Manual mientras dura el refresco: con
+ * cálculo Automático (lo normal), CADA sync() que cambia una celda puede
+ * disparar un recálculo de TODO el libro (fórmulas, EPM_VALUE, lo que
+ * dependa de lo que sea) — esto es clásico de cualquier macro VBA seria
+ * (Application.Calculation = xlCalculationManual) y explica la varianza
+ * tan grande vista en operaciones minúsculas (2 celdas a veces tardando
+ * más que 432: el coste no es el tamaño de lo que escribimos, es el
+ * recálculo que dispara). Se guarda el modo ANTERIOR para restaurarlo
+ * exacto al acabar (ver draco_endManualCalculation) — nunca se fuerza a
+ * "Automático" a pelo, por si el usuario ya lo tenía en Manual él mismo.
+ */
+async function draco_beginManualCalculation() {
+    DracoCalcModeDepth++;
+    if (DracoCalcModeDepth > 1) return; // ya en manual por una llamada exterior (p.ej. "Actualizar todos")
+    try {
+        await Excel.run(async (context) => {
+            const app = context.workbook.application;
+            app.load("calculationMode");
+            await context.sync();
+            DracoCalcModePrevMode = app.calculationMode;
+            if (DracoCalcModePrevMode !== Excel.CalculationMode.manual) {
+                app.calculationMode = Excel.CalculationMode.manual;
+                await context.sync();
+            }
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo poner el cálculo en manual:", e);
+    }
+}
+
+/**
+ * Restaura el modo de cálculo anterior. SIEMPRE se llama desde un
+ * finally (ver actualizarInformeCore/actualizarInformeFixedCore/
+ * actualizarTodosCore) para que, aunque el refresco falle a mitad de
+ * camino, el libro nunca se quede encallado en Manual — eso sería mucho
+ * peor que el problema que se está arreglando (dejaría de recalcularse
+ * TODO lo demás del libro sin que el usuario supiera por qué).
+ */
+async function draco_endManualCalculation() {
+    DracoCalcModeDepth = Math.max(0, DracoCalcModeDepth - 1);
+    if (DracoCalcModeDepth > 0) return; // todavía dentro de otra llamada exterior (p.ej. "Actualizar todos")
+    const prevMode = DracoCalcModePrevMode;
+    DracoCalcModePrevMode = null;
+    if (!prevMode || prevMode === Excel.CalculationMode.manual) return; // no había nada que restaurar
+    try {
+        await Excel.run(async (context) => {
+            context.workbook.application.calculationMode = prevMode;
+            await context.sync();
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo restaurar el modo de cálculo:", e);
+    }
+}
+
 /**
  * Nombres de los 3 rangos con nombre de un informe concreto. Antes eran
  * literales fijos ("Draco_001_Rows/Cols/Values") compartidos por TODOS los
@@ -1826,6 +1890,9 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     const tRefreshStart = performance.now(); // TOTAL de extremo a extremo, ver más abajo
     let tPerf = tRefreshStart; // instrumentación de tiempos, ver draco_perfMark
 
+    await draco_beginManualCalculation();
+    tPerf = draco_perfMark(reportId, "Poner cálculo en Manual", tPerf);
+
     // PLANIFICACIÓN > "refrescar" hace lo mismo que "Guardar
     // planificación": vuelca en EDIT_REPORT!A127 y devuelve su color
     // original a las celdas modificadas a mano pendientes, y vacía el
@@ -1909,6 +1976,8 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     } finally {
         await endSuppressPlanningPaint();
         tPerf = draco_perfMark(reportId, "Candado cruzado de planificación (end)", tPerf);
+        await draco_endManualCalculation();
+        tPerf = draco_perfMark(reportId, "Restaurar cálculo automático", tPerf);
         if (window.BusyIndicator) await window.BusyIndicator.hide();
         draco_perfMark(reportId, "Ocultar indicador (borrar forma)", tPerf);
         draco_perfMark(reportId, "══ TOTAL refresco completo ══", tRefreshStart);
@@ -6786,6 +6855,9 @@ async function actualizarInformeCore(reportIdOverride) {
     const tRefreshStart = performance.now(); // TOTAL de extremo a extremo, ver más abajo
     let tPerf = tRefreshStart; // instrumentación de tiempos, ver draco_perfMark
 
+    await draco_beginManualCalculation();
+    tPerf = draco_perfMark(reportId, "Poner cálculo en Manual", tPerf);
+
     // PLANIFICACIÓN > ver comentario igual en actualizarInformeFixedCore.
     await flushDracoPlanningModifiedCells();
     tPerf = draco_perfMark(reportId, "Vaciar cambios de planificación pendientes", tPerf);
@@ -6859,6 +6931,8 @@ async function actualizarInformeCore(reportIdOverride) {
     } finally {
         await endSuppressPlanningPaint();
         tPerf = draco_perfMark(reportId, "Candado cruzado de planificación (end)", tPerf);
+        await draco_endManualCalculation();
+        tPerf = draco_perfMark(reportId, "Restaurar cálculo automático", tPerf);
         if (window.BusyIndicator) await window.BusyIndicator.hide();
         draco_perfMark(reportId, "Ocultar indicador (borrar forma)", tPerf);
         draco_perfMark(reportId, "══ TOTAL refresco completo ══", tRefreshStart);
@@ -6960,6 +7034,12 @@ async function actualizarTodosCore(concurrency) {
     const reports = window.ReportStore.listReports();
     if (!reports || reports.length === 0) return;
     const tRefreshStart = performance.now(); // TOTAL de extremo a extremo, ver más abajo
+
+    // Una sola vez para TODO el lote (ver comentario en
+    // draco_beginManualCalculation): cada informe individual, dentro del
+    // bucle, puede seguir llamando a su propio begin/end sin que se
+    // restaure a mitad de camino (profundidad, igual que BusyIndicator).
+    await draco_beginManualCalculation();
 
     // PLANIFICACIÓN > ver comentario igual en actualizarInformeFixedCore.
     // (actualizarInformeFixedCore también lo llama por su cuenta más
@@ -7091,6 +7171,7 @@ async function actualizarTodosCore(concurrency) {
 
     } finally {
         await endSuppressPlanningPaint();
+        await draco_endManualCalculation();
         if (window.BusyIndicator) await window.BusyIndicator.hide();
         draco_perfMark(null, "══ TOTAL 'Actualizar todos' completo ══", tRefreshStart);
         await endDracoPerfLog();
