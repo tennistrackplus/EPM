@@ -1890,7 +1890,7 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     tPerf = draco_perfMark(reportId, "Escribir SQL/JSON en EDIT_REPORT", tPerf);
 
     // 3) JSON_PaintValues
-    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintandooooooo resultados VERSION-Z1"));
+    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintando resultados"));
     await Excel.run(async (context) => {
         await jsonPaintValues(context, json, reportId);
     });
@@ -6209,10 +6209,11 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     }
 
     await writeCellBlock(context, sheet, filasCells);
+    let filasRunCount = 0;
     if (reportProps.overwriteFormats) {
-        await writeIndentAndColorRuns(context, sheet, filasCells, "col", rowsOffCol);
+        filasRunCount = await writeIndentAndColorRuns(context, sheet, filasCells, "col", rowsOffCol);
     }
-    tPerf = draco_perfMark(reportId, `Escribir+formatear FILAS (${filasCells.size} celdas)`, tPerf);
+    tPerf = draco_perfMark(reportId, `Escribir+formatear FILAS (${filasCells.size} celdas, ${filasRunCount} tramos de formato)`, tPerf);
 
     /* -------------------------------------------------------------
      * 3) COLUMNAS — análogo a FILAS
@@ -6282,10 +6283,11 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     }
 
     await writeCellBlock(context, sheet, columnasCells);
+    let columnasRunCount = 0;
     if (reportProps.overwriteFormats) {
-        await writeIndentAndColorRuns(context, sheet, columnasCells, "row", colsOffRow);
+        columnasRunCount = await writeIndentAndColorRuns(context, sheet, columnasCells, "row", colsOffRow);
     }
-    tPerf = draco_perfMark(reportId, `Escribir+formatear COLUMNAS (${columnasCells.size} celdas)`, tPerf);
+    tPerf = draco_perfMark(reportId, `Escribir+formatear COLUMNAS (${columnasCells.size} celdas, ${columnasRunCount} tramos de formato)`, tPerf);
 
     // ---- Punto 7: fondo RGB(255,255,204) en cabeceras "Total" y en los
     // valores de fila/columna de total (gateado por "Sobrescribir
@@ -6331,6 +6333,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         maxRowId: physicalMaxRowId, maxColId: physicalMaxColId,
         applyVisualFormat: reportProps.overwriteFormats
     }, reportId);
+    tPerf = draco_perfMark(reportId, "Rangos con nombre + formato general (fuente/número/bordes)", tPerf);
 
     // 6) Registrar (una sola vez por hoja) los listeners de clic/edición:
     //    resuelven los indicadores +/- pintados arriba y el "Reconocimiento
@@ -6448,7 +6451,7 @@ function dracoColorForLevel(fieldBase1, indent) {
  *   tramos contiguos de columna con el mismo indent.
  */
 async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffset) {
-    if (cellsMap.size === 0) return;
+    if (cellsMap.size === 0) return 0;
 
     const groupKeyName = axis === "col" ? "col" : "row";
     const runKeyName = axis === "col" ? "row" : "col";
@@ -6460,6 +6463,7 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
         groups.get(g).push(c);
     }
 
+    let runCount = 0; // instrumentación: nº de range.format aplicados (ver draco_perfMark)
     for (const [g, list] of groups) {
         list.sort((a, b) => a[runKeyName] - b[runKeyName]);
         const fieldBase1 = g - fieldOffset; // 1-based: posición del campo en el eje
@@ -6489,6 +6493,7 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
                 range.format.font.size = DRACO_FONT_SIZE;
                 range.format.fill.color = style.fill;
                 range.format.font.color = style.font;
+                runCount++;
 
                 runStart = k;
             }
@@ -6497,6 +6502,7 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
 
     draco_suspendScreenUpdating(context);
     await context.sync();
+    return runCount;
 }
 
 /**
@@ -6544,6 +6550,7 @@ async function clearDracoNamedRanges(context, reportId, overwriteFormats) {
 async function applyDracoNamedRanges(context, sheet, dims, reportId) {
     const { RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId, applyVisualFormat } = dims;
     const doFormat = applyVisualFormat !== false; // por defecto, sí formatear (comportamiento previo)
+    let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
 
     if (maxRowId <= 0 || maxColId <= 0 || totalDimFilas <= 0 || totalDimCols <= 0) {
         // No hay datos suficientes para definir una tabla: no se crean rangos.
@@ -6605,9 +6612,16 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId) {
         }
         draco_suspendScreenUpdating(context);
         await context.sync();
+        tPerf = draco_perfMark(reportId, "  Fuente/número/bordes", tPerf);
     }
 
     // ---- (Re)definir los nombres apuntando a los rangos recién pintados ----
+    // Antes: 1 sync para leer si existe + 1 sync más para borrarlo, POR
+    // CADA nombre (hasta 6 viajes de red seguidos para 3 rangos, ya que
+    // los 3 nombres YA existen de la vez anterior en cualquier refresco
+    // que no sea el primero). Ahora: 1 sync para leer los 3, y 1 sync
+    // para borrar los que hicieran falta — igual que ya se hacía para
+    // fuente/número/bordes más arriba.
     const rn = dracoRangeNames(reportId);
     const defs = [
         { name: rn.rows, range: rowsRange },
@@ -6615,20 +6629,27 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId) {
         { name: rn.values, range: valuesRange }
     ];
 
-    for (const d of defs) {
-        const existing = context.workbook.names.getItemOrNullObject(d.name);
-        existing.load("isNullObject");
-        await context.sync();
-        if (!existing.isNullObject) {
-            existing.delete();
-            draco_suspendScreenUpdating(context);
-            await context.sync();
+    const existingItems = defs.map(d => context.workbook.names.getItemOrNullObject(d.name));
+    existingItems.forEach(it => it.load("isNullObject"));
+    await context.sync();
+
+    let anyDeleted = false;
+    existingItems.forEach(it => {
+        if (!it.isNullObject) {
+            it.delete();
+            anyDeleted = true;
         }
-        context.workbook.names.add(d.name, d.range);
+    });
+    if (anyDeleted) {
+        draco_suspendScreenUpdating(context);
+        await context.sync();
     }
+
+    defs.forEach(d => context.workbook.names.add(d.name, d.range));
 
     draco_suspendScreenUpdating(context);
     await context.sync();
+    draco_perfMark(reportId, "  Redefinir rangos con nombre", tPerf);
 }
 
 /**
@@ -6757,10 +6778,14 @@ async function actualizarInformeCore(reportIdOverride) {
     try {
 
     await Excel.run(async (context) => {
+        let tSub = performance.now(); // sub-marcas dentro de "Generando SQL"
         const editReportGrid = await getEditReportGrid(context, reportId);
+        tSub = draco_perfMark(reportId, "  Leer EDIT_REPORT (usedRange)", tSub);
+
         const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
         const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+        tSub = draco_perfMark(reportId, "  Leer modelo semántico (en memoria, sin Excel)", tSub);
 
         loadReportDefinition(editReportGrid, reportId);
         applyFilterMeasuresToDynamicReport();
@@ -6771,6 +6796,7 @@ async function actualizarInformeCore(reportIdOverride) {
         const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
 
         sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
+        tSub = draco_perfMark(reportId, "  loadReportDefinition + buildSQL (JS puro)", tSub);
 
         console.log("BuildSQL ->", sql);
 
@@ -6780,6 +6806,7 @@ async function actualizarInformeCore(reportIdOverride) {
         editReportSheet.getRange("X1").values = [[sql]];
 
         await context.sync();
+        draco_perfMark(reportId, "  Escribir X1 (sync)", tSub);
     });
     tPerf = draco_perfMark(reportId, "Generando SQL", tPerf);
 
@@ -6802,7 +6829,7 @@ async function actualizarInformeCore(reportIdOverride) {
     });
     tPerf = draco_perfMark(reportId, "Escribir SQL/JSON en EDIT_REPORT", tPerf);
 
-    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintandooooooo resultados VERSION-Z1"));
+    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintando resultados"));
     await Excel.run(async (context) => {
         await jsonTo3Matrices(context, json, reportId);
     });
@@ -7007,7 +7034,7 @@ async function actualizarTodosCore(concurrency) {
         try {
             if (window.BusyIndicator) {
                 await window.BusyIndicator.update(
-                    busyStepLabel(job.reportId, "Pintandooooooo resultados VERSION-Z1") + ` (${paintedCount + 1}/${totalQueries})`
+                    busyStepLabel(job.reportId, "Pintando resultados") + ` (${paintedCount + 1}/${totalQueries})`
                 );
             }
             await Excel.run(async (context) => {
