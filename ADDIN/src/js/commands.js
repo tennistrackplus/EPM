@@ -473,6 +473,69 @@ function busyStepLabel(reportId, phase) {
     return reportId ? (pad3(reportId) + " - " + phase) : phase;
 }
 
+// Acumula las líneas de draco_perfMark de UN refresco (o de "Actualizar
+// todos" entero) para volcarlas en EDIT_REPORT!Z1 al terminar — así no
+// hace falta abrir la consola del navegador (F12): un add-in de Excel
+// (JavaScript/Office.js) no tiene ninguna "ventana Inmediato" como el
+// editor de VBA, así que la celda es el sustituto más parecido. Depth
+// funciona igual que el refCount de BusyIndicator: "Actualizar todos"
+// llama a beginDracoPerfLog() una vez para TODO el lote, y cada informe
+// individual (actualizarInformeCore/actualizarInformeFixedCore) puede
+// seguir llamando a begin/end sin que el registro se reinicie o se
+// escriba a medias entre uno y otro — solo se vacía en el primer begin()
+// (depth 0->1) y solo se escribe en el último end() (depth 1->0).
+let DracoPerfLog = [];
+let DracoPerfLogDepth = 0;
+
+function beginDracoPerfLog() {
+    DracoPerfLogDepth++;
+    if (DracoPerfLogDepth === 1) DracoPerfLog = [];
+}
+
+async function endDracoPerfLog() {
+    DracoPerfLogDepth = Math.max(0, DracoPerfLogDepth - 1);
+    if (DracoPerfLogDepth > 0) return; // todavía dentro de otra llamada (p.ej. "Actualizar todos")
+    if (DracoPerfLog.length === 0) return;
+
+    const text = DracoPerfLog.join("\n");
+    try {
+        // Mismo guardado que writeDracoPlanningDebug (W1): se protege con
+        // DracoSuppressChangeEvents para que esta propia escritura no
+        // dispare handleDracoPlanningValueChanged sobre sí misma.
+        DracoSuppressChangeEvents = true;
+        await Excel.run(async (context) => {
+            const editReportSheet = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+            editReportSheet.load("isNullObject");
+            await context.sync();
+            if (editReportSheet.isNullObject) return;
+            editReportSheet.getRange("Z1").values = [[text]];
+            await context.sync();
+        });
+    } catch (e) {
+        console.error("[Draco] No se pudo escribir el registro de tiempos en EDIT_REPORT!Z1:", e);
+    } finally {
+        DracoSuppressChangeEvents = false;
+    }
+}
+
+/**
+ * Instrumentación de tiempos (consola F12 Y EDIT_REPORT!Z1, ver
+ * begin/endDracoPerfLog): marca cuánto ha tardado la fase que acaba de
+ * terminar, desde el checkpoint anterior (performance.now() en tPrev), y
+ * devuelve el checkpoint ACTUAL para encadenar la siguiente llamada.
+ * Pensado para responder "¿qué es lo que de verdad tarda -consulta,
+ * parseo del JSON, o cada parte del pintado-?" con datos reales en vez
+ * de suposiciones. No afecta al indicador visual (BusyIndicator.update,
+ * que es un texto para el usuario) ni al comportamiento del refresco.
+ */
+function draco_perfMark(reportId, phase, tPrev) {
+    const now = performance.now();
+    const line = `${busyStepLabel(reportId, phase)}: ${(now - tPrev).toFixed(0)} ms`;
+    console.log(`[Draco][perf] ${line}`);
+    DracoPerfLog.push(line);
+    return now;
+}
+
 /**
  * Nombres de los 3 rangos con nombre de un informe concreto. Antes eran
  * literales fijos ("Draco_001_Rows/Cols/Values") compartidos por TODOS los
@@ -1676,7 +1739,9 @@ const DracoPlanningBaselineValues = new Map();
 const DracoAxisCrossValues = new Map();
 
 async function jsonPaintValues(context, json, reportId) {
+    let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
     const triples = parseJsonValueTriples(json);
+    tPerf = draco_perfMark(reportId, `Parseo JSON manual (${triples.length} celdas)`, tPerf);
     const resultSheetName = await getDracoResultSheetName(context, reportId);
     await ensureDracoResultSheetExists(context, resultSheetName);
     const sheet = context.workbook.worksheets.getItem(resultSheetName);
@@ -1742,6 +1807,7 @@ async function jsonPaintValues(context, json, reportId) {
     }
 
     await context.sync();
+    draco_perfMark(reportId, "Escribir valores en la hoja", tPerf);
 }
 
 /* ---------------------------------------------------------------------
@@ -1756,6 +1822,7 @@ async function jsonPaintValues(context, json, reportId) {
 async function actualizarInformeFixedCore(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
+    beginDracoPerfLog();
 
     // PLANIFICACIÓN > "refrescar" hace lo mismo que "Guardar
     // planificación": vuelca en EDIT_REPORT!A127 y devuelve su color
@@ -1774,6 +1841,7 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     // hide(). if (window.BusyIndicator) por si esta página (commands.html
     // vs taskpane.html) no lo tiene cargado.
     if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(reportId, "Generando SQL"));
+    let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
 
     // Ver comentario junto a DracoSuppressPlanningPaintCount: mientras
     // dura todo este refresco (que borra y reescribe Draco_<id>_Values),
@@ -1798,10 +1866,12 @@ async function actualizarInformeFixedCore(reportIdOverride) {
 
         await context.sync();
     });
+    tPerf = draco_perfMark(reportId, "Generando SQL", tPerf);
 
     // 2) ExecuteSQL contra BigQuery
     if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
     const json = await executeSQL(sql);
+    tPerf = draco_perfMark(reportId, "Ejecutando consulta (red)", tPerf);
 
     // [Punto 8] SQL y JSON generados ya NO se escriben en A1/B1 de la hoja
     // de resultados: se escriben en EDIT_REPORT!X1 (SQL) e Y1 (JSON).
@@ -1817,16 +1887,19 @@ async function actualizarInformeFixedCore(reportIdOverride) {
 
         await context.sync();
     });
+    tPerf = draco_perfMark(reportId, "Escribir SQL/JSON en EDIT_REPORT", tPerf);
 
     // 3) JSON_PaintValues
     if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintando resultados"));
     await Excel.run(async (context) => {
         await jsonPaintValues(context, json, reportId);
     });
+    draco_perfMark(reportId, "Pintando resultados (total, ver desglose arriba)", tPerf);
 
     } finally {
         await endSuppressPlanningPaint();
         if (window.BusyIndicator) await window.BusyIndicator.hide();
+        await endDracoPerfLog();
     }
 }
 
@@ -4607,12 +4680,13 @@ async function handleDracoPlanningValueChanged(eventArgs) {
             await context.sync();
 
             // Corta el bucle real que provoca el propio diagnóstico: escribir
-            // en EDIT_REPORT!W1 dispara este mismo onChanged para W1 (el
-            // aviso de DracoSuppressChangeEvents no llega a tiempo, porque
-            // el evento de "W1 cambió" puede notificarse después de haberlo
-            // ya quitado). Cortar aquí, por dirección exacta, no depende de
-            // ninguna temporización.
-            if (sheet.name === "EDIT_REPORT" && addr === "W1") return;
+            // en EDIT_REPORT!W1 (o Z1, el registro de tiempos de
+            // draco_perfMark, ver endDracoPerfLog) dispara este mismo
+            // onChanged (el aviso de DracoSuppressChangeEvents no llega a
+            // tiempo, porque el evento de "cambió" puede notificarse después
+            // de haberlo ya quitado). Cortar aquí, por dirección exacta, no
+            // depende de ninguna temporización.
+            if (sheet.name === "EDIT_REPORT" && (addr === "W1" || addr === "Z1")) return;
 
             // Límite de seguridad: un pegado/relleno realmente descomunal
             // no se recorre celda a celda. 20.000 da margen de sobra para
@@ -5673,6 +5747,7 @@ function draco_suspendScreenUpdating(context) {
 
 async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
+    let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
     DracoLastJsonByReport.set(dracoStateKey(reportId), json); // cache para poder repintar en un toggle +/- sin re-consultar BigQuery
 
     // Se reconstruye entera en cada refresco (no se va acumulando entre
@@ -5720,6 +5795,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     }
 
     const filas = Math.floor(valores.length / totalCampos);
+    tPerf = draco_perfMark(reportId, `Parseo JSON manual (${valores.length} valores)`, tPerf);
 
     // ---- FACT ----
     const fact = [];
@@ -5932,6 +6008,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // borraría también lo pintado de OTROS informes de esa misma hoja. Se
     // calcula ANTES de limpiar los rangos con nombre porque clear() no
     // borra la definición del nombre ni su dirección, solo el contenido.
+    tPerf = draco_perfMark(reportId, "Construir estructuras en memoria (fact/filas/cols)", tPerf);
     const rangeNamesForClear = dracoRangeNames(reportId);
     const prevNamedItems = [rangeNamesForClear.rows, rangeNamesForClear.cols, rangeNamesForClear.values]
         .map(n => context.workbook.names.getItemOrNullObject(n));
@@ -5970,6 +6047,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // así que un informe con overwriteFormats=false igualmente perdía el
     // formato que el usuario hubiera dejado a mano en la ejecución anterior.
     await clearDracoNamedRanges(context, reportId, reportProps.overwriteFormats);
+    tPerf = draco_perfMark(reportId, "Borrar rangos anteriores (clear)", tPerf);
 
     // Limpiar cualquier resto de la ejecución anterior que hubiera quedado
     // FUERA de esos rangos con nombre (p.ej. fórmulas EPM_VALUE residuales
@@ -6035,6 +6113,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         }
     }
     await writeCellBlock(context, sheet, factCells);
+    tPerf = draco_perfMark(reportId, `Escribir FACT (${factCells.size} celdas)`, tPerf);
 
     if (isPlanningReport_) {
         DracoPlanningBaselineValues.set(reportId, factBaseline);
@@ -6133,6 +6212,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     if (reportProps.overwriteFormats) {
         await writeIndentAndColorRuns(context, sheet, filasCells, "col", rowsOffCol);
     }
+    tPerf = draco_perfMark(reportId, `Escribir+formatear FILAS (${filasCells.size} celdas)`, tPerf);
 
     /* -------------------------------------------------------------
      * 3) COLUMNAS — análogo a FILAS
@@ -6205,12 +6285,14 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     if (reportProps.overwriteFormats) {
         await writeIndentAndColorRuns(context, sheet, columnasCells, "row", colsOffRow);
     }
+    tPerf = draco_perfMark(reportId, `Escribir+formatear COLUMNAS (${columnasCells.size} celdas)`, tPerf);
 
     // ---- Punto 7: fondo RGB(255,255,204) en cabeceras "Total" y en los
     // valores de fila/columna de total (gateado por "Sobrescribir
     // formatos", igual que el resto de formato). ----
     if (reportProps.overwriteFormats) {
         await applyDracoTotalHighlight(context, sheet, filasCells, columnasCells, factCells);
+        tPerf = draco_perfMark(reportId, "Resaltado de totales", tPerf);
     }
 
     /* -------------------------------------------------------------
@@ -6255,6 +6337,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     //    de miembros" sobre las celdas de Draco_<id>_Rows/Draco_<id>_Cols
     //    de ESTA hoja.
     await registerDracoSelectionHandler(context, sheet, resultSheetName);
+    tPerf = draco_perfMark(reportId, "Registrar listeners de la hoja", tPerf);
 
     // 7) Autoajustar ancho de columnas (propiedades del informe: D6), solo
     // de los rangos con nombre Draco_<id>_Rows y Draco_<id>_Cols de ESTE
@@ -6274,6 +6357,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
 
             draco_suspendScreenUpdating(context);
             await context.sync();
+            draco_perfMark(reportId, "Ajustar ancho de columnas", tPerf);
         } catch (e) {
             console.warn("No se pudo autoajustar el ancho de columnas:", e);
         }
@@ -6660,6 +6744,8 @@ async function writeIndentRuns(context, sheet, cellsMap) {
 async function actualizarInformeCore(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
+    beginDracoPerfLog();
+    let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
 
     // PLANIFICACIÓN > ver comentario igual en actualizarInformeFixedCore.
     await flushDracoPlanningModifiedCells();
@@ -6695,9 +6781,11 @@ async function actualizarInformeCore(reportIdOverride) {
 
         await context.sync();
     });
+    tPerf = draco_perfMark(reportId, "Generando SQL", tPerf);
 
     if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
     const json = await executeSQL(sql);
+    tPerf = draco_perfMark(reportId, "Ejecutando consulta (red)", tPerf);
 
     console.log("JSON de BigQuery ->", json);
 
@@ -6712,15 +6800,18 @@ async function actualizarInformeCore(reportIdOverride) {
         editReportSheet.getRange("Y1").values = [[jsonForCell]];
         await context.sync();
     });
+    tPerf = draco_perfMark(reportId, "Escribir SQL/JSON en EDIT_REPORT", tPerf);
 
     if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintando resultados"));
     await Excel.run(async (context) => {
         await jsonTo3Matrices(context, json, reportId);
     });
+    draco_perfMark(reportId, "Pintando resultados (total, ver desglose arriba)", tPerf);
 
     } finally {
         await endSuppressPlanningPaint();
         if (window.BusyIndicator) await window.BusyIndicator.hide();
+        await endDracoPerfLog();
     }
 }
 
@@ -6832,6 +6923,7 @@ async function actualizarTodosCore(concurrency) {
     // quita de verdad cuando ESTE hide() (el último en llamarse) lleva el
     // contador a 0.
     if (window.BusyIndicator) await window.BusyIndicator.show("Actualizando todos");
+    beginDracoPerfLog();
 
     // Ver comentario junto a DracoSuppressPlanningPaintCount: cubre TODO
     // "Refrescar todos" (dinámicos + fijos, que a su vez llama a
@@ -6895,8 +6987,10 @@ async function actualizarTodosCore(concurrency) {
                 busyStepLabel(job.reportId, "Ejecutando consulta") + ` (${queriesDone}/${totalQueries} hechas)`
             );
         }
+        const tJob = performance.now(); // tiempo propio de ESTE informe, no encadenado (van en paralelo)
         try {
             job.json = await executeSQL(job.sql);
+            draco_perfMark(job.reportId, "Ejecutando consulta (red, en paralelo)", tJob);
         } catch (err) {
             job.error = err;
             console.error(`[Draco] Error consultando datos del informe "${job.reportName}":`, err);
@@ -6946,6 +7040,7 @@ async function actualizarTodosCore(concurrency) {
     } finally {
         await endSuppressPlanningPaint();
         if (window.BusyIndicator) await window.BusyIndicator.hide();
+        await endDracoPerfLog();
     }
 }
 
