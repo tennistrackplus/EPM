@@ -5796,10 +5796,10 @@ function computeAxisPaintPlan(levels) {
 // comportamiento que antes de que existiera "Refrescar todos"). Se pasa
 // explícito cuando se pinta UN informe concreto que no tiene por qué ser
 // el activo en el taskpane (ver actualizarTodosCore).
-async function jsonTo3Matrices(context, json, reportId) {
+async function jsonTo3Matrices(context, json, reportId, onCellsPainted) {
     DracoSuppressChangeEvents = true; // evita que el reconocimiento de miembros reaccione a este pintado
     try {
-        return await jsonTo3MatricesCore(context, json, reportId);
+        return await jsonTo3MatricesCore(context, json, reportId, onCellsPainted);
     } finally {
         DracoSuppressChangeEvents = false;
     }
@@ -5831,7 +5831,22 @@ function draco_suspendScreenUpdating(context) {
     }
 }
 
-async function jsonTo3MatricesCore(context, json, reportIdOverride) {
+/**
+ * onCellsPainted (opcional): callback que se invoca justo después de que
+ * los NÚMEROS ya estén pintados (borrado + FACT + FILAS + COLUMNAS +
+ * resaltado de totales, el único sync grande) pero ANTES de fuente/
+ * número/bordes/rangos con nombre — que no cambian ningún dato, solo
+ * visten la tabla, y son la parte que más tarda de todo el pintado (los
+ * bordes, en concreto, necesitan sus propios sync por una limitación ya
+ * probada de la API). Pensado para que actualizarInformeCore oculte el
+ * indicador "Actualizando" AQUÍ en vez de al final del todo: el usuario
+ * ya ve sus datos, así que no tiene sentido seguir mostrando "trabajando"
+ * mientras solo se retocan bordes y nombres por detrás. NO se llama
+ * desde el toggle +/- (jsonTo3Matrices(..., reportId) sin este 4º
+ * argumento, ver toggleDracoCollapseAtCell) ni desde "Actualizar todos"
+ * (que muestra un único indicador para TODO el lote, no por informe).
+ */
+async function jsonTo3MatricesCore(context, json, reportIdOverride, onCellsPainted) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
     DracoLastJsonByReport.set(dracoStateKey(reportId), json); // cache para poder repintar en un toggle +/- sin re-consultar BigQuery
@@ -6411,6 +6426,16 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     await context.sync();
     tPerf = draco_perfMark(reportId, "── Sync grande: borrado + FACT + FILAS + COLUMNAS + totales ──", tPerf);
 
+    // Ver el comentario junto a la firma de la función: aquí es donde el
+    // usuario ya ve sus datos pintados; si hay callback, se invoca ahora
+    // (antes de fuente/número/bordes/rangos con nombre) para que
+    // actualizarInformeCore pueda ocultar el indicador "Actualizando" en
+    // este punto en vez de esperar a que termine también el vestido.
+    if (onCellsPainted) {
+        await onCellsPainted();
+        tPerf = draco_perfMark(reportId, "  (indicador ocultado aquí, si procedía)", tPerf);
+    }
+
     /* -------------------------------------------------------------
      * 4) RANGOS CON NOMBRE Draco_001_Rows / Draco_001_Cols / Draco_001_Values
      *    + formato general (Segoe UI 9, número en Values, bordes finos),
@@ -6720,15 +6745,14 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId, existingIte
         //      (externo + interior, restos de refrescos anteriores con otra
         //      forma/tamaño de tabla) y SOLO DESPUÉS se pinta el borde exterior
         //      fino nuevo. Hacerlo en el mismo lote sin sync intermedio hace
-        //      que Excel no aplique bien el cambio (probado), así que estas
-        //      DOS pasadas concretas siguen necesitando su propio
-        //      context.sync() cada una — lo que SÍ se ha quitado es la
-        //      vuelta de red APARTE que hacía falta antes solo para
-        //      redefinir los nombres: ahora "borrar nombres antiguos" viaja
-        //      pegado a "quitar bordes" (pasada 1), y "crear nombres nuevos"
-        //      viaja pegado a "pintar bordes" (pasada 2), aprovechando los
-        //      mismos 2 sync que las propias pruebas ya exigían para
-        //      bordes, en vez de sumar 2 sync MÁS aparte.
+        //      que Excel no aplique bien el cambio (probado).
+        //
+        // DIAGNÓSTICO TEMPORAL: se han separado aquí en 4 sync (en vez de
+        // los 2 habituales) para medir por separado bordes vs. nombres —
+        // esto es MÁS LENTO a propósito, solo para saber dónde pesan de
+        // verdad los ~700 ms observados. Una vez confirmado, se vuelve a
+        // fusionar en 2 (quitar bordes + borrar nombres juntos, pintar
+        // bordes + crear nombres juntos), como estaba antes de este mark.
         const ALL_BORDER_EDGES = [
             Excel.BorderIndex.edgeTop, Excel.BorderIndex.edgeBottom,
             Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight,
@@ -6739,21 +6763,24 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId, existingIte
             Excel.BorderIndex.edgeLeft, Excel.BorderIndex.edgeRight
         ];
 
-        // Pasada 1: quitar el borde del rango por completo + borrar los
-        // nombres antiguos (si existían).
+        // 1a: quitar bordes (+ fuente/número, que no necesitan sync propio).
         for (const r of [rowsRange, colsRange, valuesRange]) {
             for (const edge of ALL_BORDER_EDGES) {
                 r.format.borders.getItem(edge).style = Excel.BorderLineStyle.none;
             }
         }
+        draco_suspendScreenUpdating(context);
+        await context.sync();
+        tPerf = draco_perfMark(reportId, "  [diag] Quitar bordes (+fuente/número)", tPerf);
+
+        // 1b: borrar los 3 nombres antiguos (si existían).
         if (existingItems) {
             existingItems.forEach(it => { if (!it.isNullObject) it.delete(); });
         }
-        draco_suspendScreenUpdating(context);
         await context.sync();
+        tPerf = draco_perfMark(reportId, "  [diag] Borrar nombres antiguos", tPerf);
 
-        // Pasada 2: pintar el borde exterior fino, color RGB(13,23,42) +
-        // redefinir los 3 nombres apuntando a los rangos recién pintados.
+        // 2a: pintar el borde exterior fino, color RGB(13,23,42).
         for (const r of [rowsRange, colsRange, valuesRange]) {
             for (const edge of OUTER_BORDER_EDGES) {
                 const border = r.format.borders.getItem(edge);
@@ -6762,11 +6789,14 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId, existingIte
                 border.color = DRACO_BORDER_COLOR;
             }
         }
-        defs.forEach(d => context.workbook.names.add(d.name, d.range));
-
         draco_suspendScreenUpdating(context);
         await context.sync();
-        draco_perfMark(reportId, "  Fuente/número/bordes + rangos con nombre", tPerf);
+        tPerf = draco_perfMark(reportId, "  [diag] Pintar bordes", tPerf);
+
+        // 2b: crear los 3 nombres nuevos.
+        defs.forEach(d => context.workbook.names.add(d.name, d.range));
+        await context.sync();
+        draco_perfMark(reportId, "  [diag] Crear nombres nuevos", tPerf);
     } else {
         // Sin "Sobrescribir formatos": solo hay que (re)definir los 3
         // nombres, sin tocar fuente/número/bordes. Sigue haciendo falta
@@ -6985,8 +7015,18 @@ async function actualizarInformeCore(reportIdOverride) {
     tPerf = draco_perfMark(reportId, "Escribir SQL/JSON en EDIT_REPORT", tPerf);
 
     if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintando resultados"));
+    let indicatorHiddenEarly = false;
     await Excel.run(async (context) => {
-        await jsonTo3Matrices(context, json, reportId);
+        await jsonTo3Matrices(context, json, reportId, async () => {
+            // Ver el comentario junto a jsonTo3MatricesCore: en cuanto los
+            // NÚMEROS ya están pintados, se oculta el indicador aquí — lo
+            // que queda (fuente/número/bordes/rangos con nombre) es solo
+            // "vestir" la tabla, no haría falta seguir viendo "Actualizando".
+            if (window.BusyIndicator) {
+                await window.BusyIndicator.hide();
+                indicatorHiddenEarly = true;
+            }
+        });
     });
     tPerf = draco_perfMark(reportId, "Pintando resultados (total, ver desglose arriba)", tPerf);
 
@@ -6995,7 +7035,7 @@ async function actualizarInformeCore(reportIdOverride) {
         tPerf = draco_perfMark(reportId, "Candado cruzado de planificación (end)", tPerf);
         await draco_endManualCalculation();
         tPerf = draco_perfMark(reportId, "Restaurar cálculo automático", tPerf);
-        if (window.BusyIndicator) await window.BusyIndicator.hide();
+        if (window.BusyIndicator && !indicatorHiddenEarly) await window.BusyIndicator.hide();
         draco_perfMark(reportId, "Ocultar indicador (borrar forma)", tPerf);
         draco_perfMark(reportId, "══ TOTAL refresco completo ══", tRefreshStart);
         await endDracoPerfLog();
