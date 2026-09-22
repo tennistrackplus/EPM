@@ -188,6 +188,34 @@
         }
     }
 
-    window.BusyIndicator = { show, hide };
+    /**
+     * Cambia el texto del indicador ya visible (sin tocar el refCount ni
+     * reiniciar el conteo de frames de la animación) — para ir mostrando,
+     * DENTRO de una misma operación ya en curso (entre el show() y el
+     * hide() que la enmarcan), en qué fase concreta está en cada momento
+     * (p.ej. "001 - Generando SQL", luego "001 - Ejecutando consulta"...).
+     * No hace nada si el indicador no está visible (refCount a 0): show()
+     * no se ha llamado todavía, o ya se ocultó.
+     */
+    async function update(text) {
+        if (refCount <= 0 || !text) return;
+        label = text;
+        try {
+            await Excel.run(async (context) => {
+                const shape = await findShape(context);
+                if (!shape) return; // hide() ya lo quitó, o el usuario lo borró a mano
+                shape.textFrame.textRange.text = frameText();
+                await context.sync();
+            });
+        } catch (err) {
+            // No se interrumpe la operación en curso por esto: si el texto
+            // no llega a actualizarse en algún tick puntual, la próxima
+            // llamada a update() (o el propio tick() de la animación) lo
+            // intentará de nuevo con el texto ya corregido.
+            console.warn("[BusyIndicator] No se pudo actualizar el texto del indicador:", err);
+        }
+    }
+
+    window.BusyIndicator = { show, hide, update };
 
 })();

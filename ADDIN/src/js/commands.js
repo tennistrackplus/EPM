@@ -463,6 +463,16 @@ function pad3(n) {
     return String(n).padStart(3, "0");
 }
 
+// Etiqueta "00X - <fase>" para BusyIndicator.update() durante un
+// refresco (ver actualizarInformeCore/actualizarInformeFixedCore/
+// jsonTo3MatricesCore/actualizarTodosCore): identifica de qué informe es
+// cada fase cuando puede haber más de uno de por medio (p.ej. "Actualizar
+// todos"). reportId puede venir vacío/null (informe activo sin resolver
+// todavía); en ese caso se omite el prefijo en vez de mostrar "000 - ...".
+function busyStepLabel(reportId, phase) {
+    return reportId ? (pad3(reportId) + " - " + phase) : phase;
+}
+
 /**
  * Nombres de los 3 rangos con nombre de un informe concreto. Antes eran
  * literales fijos ("Draco_001_Rows/Cols/Values") compartidos por TODOS los
@@ -1720,7 +1730,7 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     // la vez: no se quita hasta que TODAS las llamadas a show() tengan su
     // hide(). if (window.BusyIndicator) por si esta página (commands.html
     // vs taskpane.html) no lo tiene cargado.
-    if (window.BusyIndicator) await window.BusyIndicator.show("Actualizando");
+    if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(reportId, "Generando SQL"));
 
     // Ver comentario junto a DracoSuppressPlanningPaintCount: mientras
     // dura todo este refresco (que borra y reescribe Draco_<id>_Values),
@@ -1747,6 +1757,7 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     });
 
     // 2) ExecuteSQL contra BigQuery
+    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
     const json = await executeSQL(sql);
 
     // [Punto 8] SQL y JSON generados ya NO se escriben en A1/B1 de la hoja
@@ -1765,6 +1776,7 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     });
 
     // 3) JSON_PaintValues
+    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintando resultados"));
     await Excel.run(async (context) => {
         await jsonPaintValues(context, json, reportId);
     });
@@ -6205,6 +6217,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // de los rangos con nombre Draco_<id>_Rows y Draco_<id>_Cols de ESTE
     // informe (donde se pintan sus filas/columnas), no de toda la hoja.
     if (reportProps.autoFitColumns) {
+        if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ajustando columnas"));
         try {
             const rn = dracoRangeNames(reportId);
             const rowsRangeName = context.workbook.names.getItemOrNullObject(rn.rows);
@@ -6597,7 +6610,7 @@ async function actualizarInformeCore(reportIdOverride) {
     // PLANIFICACIÓN > ver comentario igual en actualizarInformeFixedCore.
     await flushDracoPlanningModifiedCells();
 
-    if (window.BusyIndicator) await window.BusyIndicator.show("Actualizando");
+    if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(reportId, "Generando SQL"));
 
     // Ver comentario junto a DracoSuppressPlanningPaintCount.
     await beginSuppressPlanningPaint();
@@ -6629,6 +6642,7 @@ async function actualizarInformeCore(reportIdOverride) {
         await context.sync();
     });
 
+    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
     const json = await executeSQL(sql);
 
     console.log("JSON de BigQuery ->", json);
@@ -6645,6 +6659,7 @@ async function actualizarInformeCore(reportIdOverride) {
         await context.sync();
     });
 
+    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintando resultados"));
     await Excel.run(async (context) => {
         await jsonTo3Matrices(context, json, reportId);
     });
@@ -6780,6 +6795,7 @@ async function actualizarTodosCore(concurrency) {
     for (const r of reports) {
         try {
             const reportId = r.id;
+            if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Clasificando informe"));
             const isFixed = await Excel.run(async (context) => {
                 const grid = await getEditReportGrid(context, reportId);
                 const h12 = String(cellValue(grid, 12, 8)).trim().toUpperCase();
@@ -6791,6 +6807,7 @@ async function actualizarTodosCore(concurrency) {
                 fixedReports.push({ reportId, reportName: r.name });
             } else {
                 let sql;
+                if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Generando SQL"));
                 await Excel.run(async (context) => {
                     const editReportGrid = await getEditReportGrid(context, reportId);
                     const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
@@ -6810,21 +6827,41 @@ async function actualizarTodosCore(concurrency) {
 
     // 2) Consultas de los informes "Dinámicos" a BigQuery/Snowflake EN
     //    PARALELO (tope de concurrencia por defecto 4): es la parte lenta
-    //    (red, sin tocar Excel) y cada informe es independiente.
+    //    (red, sin tocar Excel) y cada informe es independiente. Al ir
+    //    varias a la vez, el indicador no puede mostrar un "en curso" por
+    //    cada una a la vez (un solo shape, un solo texto): se actualiza al
+    //    EMPEZAR cada consulta (así se ve cuál acaba de arrancar) y se
+    //    lleva la cuenta de cuántas han terminado ya, sin bajar la
+    //    concurrencia para conseguirlo.
+    let queriesDone = 0;
+    const totalQueries = dynamicJobs.length;
     await runWithConcurrency(dynamicJobs, concurrency || 4, async (job) => {
+        if (window.BusyIndicator) {
+            await window.BusyIndicator.update(
+                busyStepLabel(job.reportId, "Ejecutando consulta") + ` (${queriesDone}/${totalQueries} hechas)`
+            );
+        }
         try {
             job.json = await executeSQL(job.sql);
         } catch (err) {
             job.error = err;
             console.error(`[Draco] Error consultando datos del informe "${job.reportName}":`, err);
+        } finally {
+            queriesDone++;
         }
     });
 
     // 3) Pintar los "Dinámicos" en Excel EN SERIE: la API de Excel no
     //    admite escrituras concurrentes seguras sobre el mismo libro.
+    let paintedCount = 0;
     for (const job of dynamicJobs) {
         if (job.error || !job.json) continue;
         try {
+            if (window.BusyIndicator) {
+                await window.BusyIndicator.update(
+                    busyStepLabel(job.reportId, "Pintando resultados") + ` (${paintedCount + 1}/${totalQueries})`
+                );
+            }
             await Excel.run(async (context) => {
                 const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
                 const EXCEL_CELL_CHAR_LIMIT = 32000;
@@ -6834,6 +6871,7 @@ async function actualizarTodosCore(concurrency) {
                 editReportSheet.getRange("Y1").values = [[jsonForCell]];
                 await jsonTo3Matrices(context, job.json, job.reportId);
             });
+            paintedCount++;
         } catch (err) {
             console.error(`[Draco] Error pintando el informe "${job.reportName}":`, err);
         }
