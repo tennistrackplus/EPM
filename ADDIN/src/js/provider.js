@@ -3,9 +3,15 @@
  * EPM ADD-IN — CAPA DE ABSTRACCIÓN DE PROVEEDOR
  * ============================================================
  * El resto del add-in habla con "Provider", nunca directamente con
- * BQ o SF, así el explorador del modelo semántico (y, en una fase
- * posterior, el motor de informes) funciona igual sobre BigQuery o
- * sobre Snowflake. Mismo patrón que en Draco Planning.
+ * BQ, SF o FB, así el explorador del modelo semántico y el motor de
+ * informes funcionan igual sobre BigQuery, Snowflake o Microsoft Fabric
+ * (Lakehouse y Warehouse, que comparten SQL endpoint y dialecto T-SQL).
+ *
+ * Jerarquía de metadatos por proveedor:
+ *   BigQuery : proyecto      > dataset > tabla   -> `p.d.t`
+ *   Snowflake: base de datos > esquema > tabla   -> BD.ESQ.TABLA
+ *   Fabric   : item (LH/WH)  > schema  > tabla   -> [item].[schema].[tabla]
+ *              (el workspace va en la CONEXIÓN, no en el modelo)
  */
 const Provider = {
     key() {
@@ -14,28 +20,40 @@ const Provider = {
     setKey(k) {
         localStorage.setItem("draco_active_provider", k);
     },
+    isFabric() {
+        return this.key() === "fabric";
+    },
+    isSnowflake() {
+        return this.key() === "snowflake";
+    },
     label() {
-        return this.key() === "snowflake" ? "Snowflake" : "BigQuery";
+        if (this.isSnowflake()) return "Snowflake";
+        if (this.isFabric()) return "Microsoft Fabric";
+        return "BigQuery";
     },
-    /** Etiqueta del primer nivel de la jerarquía de metadatos ("proyecto" en BQ, "base de datos" en SF) */
+    /** Etiqueta del primer nivel de la jerarquía de metadatos */
     level1Label() {
-        return this.key() === "snowflake" ? "base de datos" : "proyecto";
+        if (this.isSnowflake()) return "base de datos";
+        if (this.isFabric()) return "lakehouse / warehouse";
+        return "proyecto";
     },
-    /** Etiqueta del segundo nivel ("dataset" en BQ, "esquema" en SF) */
+    /** Etiqueta del segundo nivel */
     level2Label() {
-        return this.key() === "snowflake" ? "esquema" : "dataset";
+        if (this.isSnowflake()) return "esquema";
+        if (this.isFabric()) return "schema";
+        return "dataset";
     },
 
     isConnected() {
-        return this.key() === "snowflake" ? SF.isConnected() : BQ.isConnected();
+        if (this.isSnowflake()) return SF.isConnected();
+        if (this.isFabric()) return FB.isConnected();
+        return BQ.isConnected();
     },
 
     logout() {
-        if (this.key() === "snowflake") {
-            SF.logout();
-        } else {
-            BQ.logout();
-        }
+        if (this.isSnowflake()) SF.logout();
+        else if (this.isFabric()) FB.logout();
+        else BQ.logout();
     },
 
     esc(v) {
@@ -46,18 +64,45 @@ const Provider = {
         return BQ.toIdentifier(v);
     },
 
-    /** Referencia totalmente cualificada a una tabla: proyecto.dataset.tabla (BQ) o BD.esquema.tabla (SF) */
+    /** Referencia totalmente cualificada a una tabla */
     qualify(c1, c2, table) {
-        if (this.key() === "snowflake") {
+        if (this.isSnowflake()) {
             return `${c1}.${c2}.${table}`;
+        }
+        if (this.isFabric()) {
+            return `${FB.quoteIdent(c1)}.${FB.quoteIdent(c2)}.${FB.quoteIdent(table)}`;
         }
         return `\`${c1}.${c2}.${table}\``;
     },
 
+    // -----------------------------------------------------------
+    // Diferencias de dialecto SQL
+    // -----------------------------------------------------------
+    /**
+     * Limita un SELECT a n filas: "... LIMIT n" en BigQuery/Snowflake,
+     * "SELECT [DISTINCT] TOP (n) ..." en T-SQL (Fabric).
+     */
+    limit(selectSql, n) {
+        const rows = parseInt(n, 10);
+        if (this.isFabric()) {
+            return String(selectSql).replace(/^\s*SELECT(\s+DISTINCT)?\s+/i, (m, distinct) =>
+                "SELECT" + (distinct ? " DISTINCT" : "") + ` TOP (${rows}) `);
+        }
+        return `${selectSql} LIMIT ${rows}`;
+    },
+
+    /** Tipo de texto para CAST(... AS <tipo>) */
+    stringType() {
+        return this.isFabric() ? "VARCHAR(4000)" : "STRING";
+    },
+
     /** Ejecuta SQL contra el proveedor activo y devuelve {fields:[{name}], rows:[{col: valor}]} */
     async runQuery(sql, level1Id, level2Id) {
-        if (this.key() === "snowflake") {
+        if (this.isSnowflake()) {
             return SF.runQuerySql(sql, { database: level1Id, schema: level2Id });
+        }
+        if (this.isFabric()) {
+            return FB.runQuerySql(sql, { database: level1Id });
         }
         // El "proyecto" usado para lanzar el job de BigQuery es el proyecto
         // de facturación si se indicó uno al crear la conexión (igual que en
@@ -71,10 +116,14 @@ const Provider = {
     // -----------------------------------------------------------
     // Explorador de metadatos (usado por semantic_model.js)
     // -----------------------------------------------------------
-    /** Nivel 1: proyectos (BQ) o bases de datos (SF). Devuelve [{id, label}] */
+    /** Nivel 1: proyectos (BQ), bases de datos (SF) o items del workspace (Fabric). Devuelve [{id, label}] */
     async listLevel1() {
-        if (this.key() === "snowflake") {
+        if (this.isSnowflake()) {
             const names = await SF.listDatabases();
+            return names.map(n => ({ id: n, label: n }));
+        }
+        if (this.isFabric()) {
+            const names = await FB.listItems();
             return names.map(n => ({ id: n, label: n }));
         }
         const projects = await BQ.listProjects();
@@ -84,10 +133,14 @@ const Provider = {
         });
     },
 
-    /** Nivel 2: datasets (BQ) o esquemas (SF) dentro del nivel 1 */
+    /** Nivel 2: datasets (BQ) o esquemas (SF / Fabric) dentro del nivel 1 */
     async listLevel2(level1Id) {
-        if (this.key() === "snowflake") {
+        if (this.isSnowflake()) {
             const names = await SF.listSchemas(level1Id);
+            return names.map(n => ({ id: n, label: n }));
+        }
+        if (this.isFabric()) {
+            const names = await FB.listSchemas(level1Id);
             return names.map(n => ({ id: n, label: n }));
         }
         const datasets = await BQ.listDatasets(level1Id);
@@ -99,8 +152,12 @@ const Provider = {
 
     /** Tablas dentro de nivel1/nivel2 */
     async listTables(level1Id, level2Id) {
-        if (this.key() === "snowflake") {
+        if (this.isSnowflake()) {
             const names = await SF.listTables(level1Id, level2Id);
+            return names.map(n => ({ id: n, label: n }));
+        }
+        if (this.isFabric()) {
+            const names = await FB.listTables(level1Id, level2Id);
             return names.map(n => ({ id: n, label: n }));
         }
         const tables = await BQ.listTables(level1Id, level2Id);
@@ -112,8 +169,11 @@ const Provider = {
 
     /** Campos de una tabla: [{name, type}] con el tipo ya normalizado */
     async getTableFields(level1Id, level2Id, tableId) {
-        if (this.key() === "snowflake") {
+        if (this.isSnowflake()) {
             return SF.getTableFields(level1Id, level2Id, tableId);
+        }
+        if (this.isFabric()) {
+            return FB.getTableFields(level1Id, level2Id, tableId);
         }
         return BQ.getTableFields(level1Id, level2Id, tableId);
     }

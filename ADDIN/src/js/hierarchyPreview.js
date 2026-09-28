@@ -115,8 +115,9 @@ async function runHierarchyPreview() {
     }
 
     const fieldList = levels.map(l => l.field).join(", ");
-    const sql = "SELECT DISTINCT " + fieldList + " FROM " + Provider.qualify(project, dataset, table) +
-        " ORDER BY " + fieldList + " LIMIT 500";
+    const sql = Provider.limit(
+        "SELECT DISTINCT " + fieldList + " FROM " + Provider.qualify(project, dataset, table) +
+        " ORDER BY " + fieldList, 500);
 
     try {
         const { rows } = await Provider.runQuery(sql, project, dataset);

@@ -229,6 +229,10 @@ async function executeSQLBigQuery(sql) {
         return svcRowsToPseudoBqJson(rows);
     }
 
+    if (Provider.key() === "fabric") {
+        return await FB.runQueryPseudoBqJson(sql);
+    }
+
     // BigQuery
     const token = localStorage.getItem("bigquery_access_token");
     const expires = localStorage.getItem("bigquery_token_expires");

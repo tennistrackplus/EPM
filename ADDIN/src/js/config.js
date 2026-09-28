@@ -31,5 +31,35 @@ const DracoConfig = {
 
     // Base de datos Snowflake por defecto si el usuario no indica otra
     // al conectar (puede sobreescribirse en el panel de login).
-    snowflakeDatabase: "DRACO"
+    snowflakeDatabase: "DRACO",
+
+    // ---------------------------------------------------------
+    // Microsoft Fabric (Entra ID OAuth 2.0 — Authorization Code + PKCE, SPA)
+    // ---------------------------------------------------------
+    // Id. de aplicación (cliente) del registro de app en Entra ID.
+    // La app debe ser MULTIINQUILINO y tener como plataforma
+    // "Aplicación de página única (SPA)" con redirect URI:
+    //   https://tennistrackplus.github.io/EPM/ADDIN/src/auth-callback-fabric.html
+    fabricClientId: "TU_FABRIC_CLIENT_ID",
+    // Tenant por defecto si la conexión no indica uno.
+    // "organizations" = cualquier cuenta de trabajo/escuela de cualquier tenant.
+    fabricDefaultTenant: "organizations",
+    // Token para el SQL endpoint de Fabric (audiencia de Azure SQL) +
+    // refresh token (offline_access) + nombre de usuario (openid profile).
+    fabricScopes: [
+        "https://database.windows.net//user_impersonation",
+        "offline_access",
+        "openid",
+        "profile"
+    ].join(" "),
+    // Permisos para la API REST de Fabric (listar workspaces y leer la
+    // definición de los modelos semánticos al "Abrir modelo semántico").
+    // Se piden en el MISMO login que el SQL (consentimiento único); el
+    // token para esta API se obtiene después con el refresh token.
+    fabricApiScopes: [
+        "https://api.fabric.microsoft.com/Workspace.Read.All",
+        "https://api.fabric.microsoft.com/SemanticModel.ReadWrite.All"
+    ].join(" "),
+    // URL del gateway TDS (carpeta gateway/ de este repo), sin barra final.
+    fabricGatewayUrl: "TU_FABRIC_GATEWAY_URL"
 };

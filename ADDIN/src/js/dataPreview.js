@@ -75,7 +75,7 @@ async function runDataPreview() {
         return;
     }
 
-    const sql = "SELECT * FROM " + Provider.qualify(project, dataset, table) + " LIMIT 500";
+    const sql = Provider.limit("SELECT * FROM " + Provider.qualify(project, dataset, table), 500);
 
     try {
         const { fields, rows } = await Provider.runQuery(sql, project, dataset);

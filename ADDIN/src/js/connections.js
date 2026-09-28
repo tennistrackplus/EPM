@@ -29,7 +29,7 @@ const Connections = {
 
     // Proveedores con flujo de conexión implementado hoy; el resto se
     // puede guardar como perfil pero mostrará "próximamente" al conectar.
-    IMPLEMENTED_PROVIDERS: ["bigquery", "snowflake"],
+    IMPLEMENTED_PROVIDERS: ["bigquery", "snowflake", "fabric"],
 
     labelFor(providerKey) {
         return this.PROVIDER_LABELS[providerKey] || providerKey;

@@ -20,7 +20,8 @@
  * que sí tiene ese acceso, quien lo guarda de verdad y cierra el diálogo.
  */
 
-let lkmlSelection = null; // { source: "local"|"server", file?: File, connectionId?, path?, name? }
+let lkmlSelection = null; // { source: "local"|"server"|"fabric", file?: File, connectionId?, path?, name?, workspaceId?, workspaceName?, modelId?, modelName? }
+let fabricWorkspacesLoaded = false;
 
 function showToast(message, type = "success", duration = 3500) {
 
@@ -68,9 +69,126 @@ function closeDialog() {
 function setLkmlActiveTab(tabId) {
     document.getElementById("lkmlTabServer").classList.toggle("active", tabId === "server");
     document.getElementById("lkmlTabLocal").classList.toggle("active", tabId === "local");
+    document.getElementById("lkmlTabFabric").classList.toggle("active", tabId === "fabric");
     document.getElementById("lkmlPanelServer").classList.toggle("active", tabId === "server");
     document.getElementById("lkmlPanelLocal").classList.toggle("active", tabId === "local");
+    document.getElementById("lkmlPanelFabric").classList.toggle("active", tabId === "fabric");
+    if (tabId === "fabric" && !fabricWorkspacesLoaded) {
+        loadFabricWorkspaces();
+    }
     updateLkmlConfirmButtonState();
+}
+
+/* ------------------------------------------------------------------------
+ * Pestaña "Microsoft Fabric": modelos semánticos de Power BI / Fabric.
+ * Usa la sesión de la conexión de Fabric (tokens en localStorage,
+ * compartidos con el resto del add-in) y js/fabricSemanticModel.js.
+ * ---------------------------------------------------------------------- */
+
+function setFabricModelListMessage(text) {
+    const list = document.getElementById("fabricModelList");
+    list.classList.add("is-empty");
+    list.innerHTML = "";
+    const span = document.createElement("span");
+    span.className = "lkml-empty-hint";
+    span.textContent = text;
+    list.appendChild(span);
+}
+
+async function loadFabricWorkspaces() {
+    const info = document.getElementById("fabricSessionInfo");
+    const select = document.getElementById("fabricWorkspaceSelect");
+
+    if (typeof FB === "undefined" || !FB.isConnected()) {
+        info.textContent = "No hay sesión de Microsoft Fabric. Crea o conecta una conexión de Microsoft Fabric en el panel de Conexiones y vuelve a abrir este diálogo.";
+        select.innerHTML = "<option value=\"\">— Sin sesión de Fabric —</option>";
+        select.disabled = true;
+        setFabricModelListMessage("Conecta primero con Microsoft Fabric.");
+        return;
+    }
+
+    const account = FB.getAccountName();
+    info.textContent = account ? `Sesión de Microsoft Fabric: ${account}` : "Sesión de Microsoft Fabric activa.";
+    select.disabled = true;
+    select.innerHTML = "<option value=\"\">— Cargando workspaces… —</option>";
+
+    try {
+        const workspaces = await FabricSemanticModel.listWorkspaces();
+        fabricWorkspacesLoaded = true;
+
+        select.innerHTML = "";
+        if (workspaces.length === 0) {
+            select.innerHTML = "<option value=\"\">— No tienes acceso a ningún workspace —</option>";
+            setFabricModelListMessage("No hay workspaces disponibles para tu usuario.");
+            return;
+        }
+
+        select.disabled = false;
+        const placeholder = document.createElement("option");
+        placeholder.value = "";
+        placeholder.textContent = "— Selecciona un workspace —";
+        select.appendChild(placeholder);
+        workspaces.forEach(w => {
+            const opt = document.createElement("option");
+            opt.value = w.id;
+            opt.textContent = w.name;
+            select.appendChild(opt);
+        });
+    } catch (err) {
+        console.error("Error al listar los workspaces de Fabric:", err);
+        select.innerHTML = "<option value=\"\">— Error al cargar —</option>";
+        setFabricModelListMessage(err.message || "Error al listar los workspaces.");
+    }
+}
+
+async function loadFabricModels() {
+    const select = document.getElementById("fabricWorkspaceSelect");
+    const workspaceId = select.value;
+    const workspaceName = select.selectedOptions[0] ? select.selectedOptions[0].textContent : "";
+
+    lkmlSelection = null;
+    updateLkmlConfirmButtonState();
+
+    if (!workspaceId) {
+        setFabricModelListMessage("Selecciona un workspace para ver sus modelos semánticos.");
+        return;
+    }
+
+    setFabricModelListMessage("Cargando…");
+
+    try {
+        const models = await FabricSemanticModel.listSemanticModels(workspaceId);
+        if (models.length === 0) {
+            setFabricModelListMessage("Este workspace no tiene modelos semánticos.");
+            return;
+        }
+
+        const list = document.getElementById("fabricModelList");
+        list.classList.remove("is-empty");
+        list.innerHTML = "";
+        models.forEach(m => {
+            const row = document.createElement("div");
+            row.className = "lkml-server-item";
+            const icon = document.createElement("span");
+            icon.textContent = "📊";
+            const label = document.createElement("span");
+            label.textContent = m.name;
+            if (m.description) row.title = m.description;
+            row.appendChild(icon);
+            row.appendChild(label);
+            row.addEventListener("click", () => {
+                list.querySelectorAll(".lkml-server-item.selected").forEach(el => el.classList.remove("selected"));
+                row.classList.add("selected");
+                lkmlSelection = { source: "fabric", workspaceId, workspaceName, modelId: m.id, modelName: m.name };
+                prefillModelName(m.name);
+                updateLkmlConfirmButtonState();
+            });
+            list.appendChild(row);
+        });
+    } catch (err) {
+        console.error("Error al listar los modelos semánticos:", err);
+        setFabricModelListMessage(err.message || "Error al listar los modelos semánticos.");
+    }
 }
 
 // Rellena el selector de conexiones: solo las que tienen un repositorio de
@@ -236,6 +354,8 @@ function initEvents() {
 
     document.getElementById("lkmlTabServer").addEventListener("click", () => setLkmlActiveTab("server"));
     document.getElementById("lkmlTabLocal").addEventListener("click", () => setLkmlActiveTab("local"));
+    document.getElementById("lkmlTabFabric").addEventListener("click", () => setLkmlActiveTab("fabric"));
+    document.getElementById("fabricWorkspaceSelect").addEventListener("change", loadFabricModels);
 
     document.getElementById("lkmlServerConnection").addEventListener("change", () => {
         lkmlSelection = null;
@@ -293,6 +413,39 @@ function initEvents() {
 
         if (!modelName) {
             showToast("Indica el nombre con el que se guardará el modelo semántico.", "error");
+            return;
+        }
+
+        // Modelo semántico de Microsoft Fabric: no hay fichero LookML, se lee
+        // la definición del modelo con la API de Fabric y se convierte al
+        // mismo formato { fact, fields } (ver js/fabricSemanticModel.js).
+        if (lkmlSelection.source === "fabric") {
+            setImporting(true, "Leyendo modelo…");
+            try {
+                const result = await FabricSemanticModel.importModel(
+                    {
+                        workspaceId: lkmlSelection.workspaceId,
+                        workspaceName: lkmlSelection.workspaceName,
+                        modelId: lkmlSelection.modelId,
+                        modelName: lkmlSelection.modelName
+                    },
+                    (status) => setImporting(true, status)
+                );
+
+                const { warnings, ...model } = result;
+                if (warnings && warnings.length) {
+                    console.warn("[Fabric] Avisos al importar el modelo:", warnings);
+                    showToast(warnings.join(" "), "error", 6000);
+                    await new Promise(r => setTimeout(r, 2500));
+                }
+
+                setImporting(true, "Guardando…");
+                Office.context.ui.messageParent(JSON.stringify({ modelName, model }));
+            } catch (err) {
+                console.error("Error al importar el modelo semántico de Fabric:", err);
+                setImporting(false);
+                showToast("Error al leer el modelo de Fabric: " + err.message, "error", 7000);
+            }
             return;
         }
 

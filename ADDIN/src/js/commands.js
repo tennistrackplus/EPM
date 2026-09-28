@@ -1527,6 +1527,41 @@ function buildIdArray(atributesGrid, defs, idFieldName) {
     return sql;
 }
 
+/**
+ * Equivalente T-SQL (Microsoft Fabric) de buildIdArray: T-SQL no tiene
+ * arrays, así que en vez de etiquetar cada fila con un ARRAY de IDs se
+ * genera una tabla derivada para CROSS APPLY con una fila por ID
+ * (NULL si la condición no se cumple), igual que el IFF + compactado de
+ * Snowflake. Los NULL se descartan después en el WHERE del SELECT final.
+ * Devuelve: "(VALUES (CASE WHEN ... THEN 1 END), ...) AS alias(ID_FIELD)"
+ */
+function buildIdValuesFabric(atributesGrid, defs, idFieldName, alias) {
+    const dict = new Map();
+
+    for (const v of defs) {
+        const key = String(v.R);
+        const condPart = v.AttributeName + "=" + sqlValue(atributesGrid, v.Dimension, v.AttributeName, v.Value);
+
+        if (!dict.has(key)) {
+            dict.set(key, [condPart]);
+        } else {
+            dict.get(key).push(condPart);
+        }
+    }
+
+    const items = [];
+    for (const [id, conds] of dict.entries()) {
+        items.push("(CASE WHEN " + conds.join(" AND ") + " THEN " + id + " END)");
+    }
+    // Sin definiciones: una única fila NULL -> no casa nada (igual que un array vacío)
+    if (items.length === 0) items.push("(CAST(NULL AS INT))");
+
+    let sql = "(VALUES" + CRLF;
+    sql += items.map(s => "        " + s).join("," + CRLF) + CRLF;
+    sql += "    ) AS " + alias + "(" + idFieldName + ")";
+    return sql;
+}
+
 async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid) {
     const rowsDefsRaw = await readRowDefinitions(context, editReportGrid, csvGrid);
     const colDefsRaw = await readColumnDefinitions(context, editReportGrid, csvGrid);
@@ -1567,8 +1602,9 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     const measureField = (measureRow && String(cellValue(measuresGrid, measureRow, 6)).trim())
         || measureName;
 
-    const rowIdsArray = buildIdArray(atributesGrid, rowsDefs, "ROW_ID");
-    const columnIdsArray = buildIdArray(atributesGrid, colDefs, "COLUMN_ID");
+    const isFabric = Provider.key() === "fabric";
+    const rowIdsArray = isFabric ? "" : buildIdArray(atributesGrid, rowsDefs, "ROW_ID");
+    const columnIdsArray = isFabric ? "" : buildIdArray(atributesGrid, colDefs, "COLUMN_ID");
 
     // Filtros del informe (zona "Filtros") + filtros "bloqueados" (Añadir
     // filtro, tanto los de ESTE informe como los globales de "Todos los
@@ -1595,6 +1631,24 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     sql += CRLF + CRLF;
     sql += buildGroupByBase(relGrid, rowsDefs, colDefs) + CRLF;
     sql += ")," + CRLF + CRLF;
+
+    if (isFabric) {
+        // T-SQL: sin arrays -> CROSS APPLY sobre BASE con una fila por
+        // ROW_ID/COLUMN_ID candidato, y se descartan los que no cumplen.
+        // Se quita la coma final del CTE BASE (no hay TAGGED).
+        sql = sql.replace(/\),\r?\n\r?\n$/, ")" + CRLF + CRLF);
+        sql += "SELECT" + CRLF;
+        sql += "    R.ROW_ID," + CRLF;
+        sql += "    C.COLUMN_ID," + CRLF;
+        sql += "    SUM(B.IMPORTE) AS IMPORTE" + CRLF;
+        sql += "FROM BASE B" + CRLF;
+        sql += "CROSS APPLY " + buildIdValuesFabric(atributesGrid, rowsDefs, "ROW_ID", "R") + CRLF;
+        sql += "CROSS APPLY " + buildIdValuesFabric(atributesGrid, colDefs, "COLUMN_ID", "C") + CRLF;
+        sql += "WHERE R.ROW_ID IS NOT NULL AND C.COLUMN_ID IS NOT NULL" + CRLF;
+        sql += "GROUP BY R.ROW_ID, C.COLUMN_ID" + CRLF;
+        sql += "ORDER BY R.ROW_ID, C.COLUMN_ID";
+        return sql;
+    }
 
     // ---- CTE TAGGED: etiqueta cada fila de BASE con los ROW_ID/COLUMN_ID
     //      que cumple, sin volver a escanear BASE por cada uno ----
@@ -1690,6 +1744,11 @@ async function executeSQL(sql, billingProjectId) {
     if (Provider.key() === "snowflake") {
         const rows = await SF.runQuery(sql);
         return snowflakeRowsToPseudoBqJson(rows);
+    }
+
+    if (Provider.key() === "fabric") {
+        // Mismo texto "pseudo JSON de BigQuery" que usan los parsers existentes
+        return await FB.runQueryPseudoBqJson(sql);
     }
 
     // BigQuery (comportamiento original, sin cambios)
@@ -2707,7 +2766,7 @@ function attributeNeedsStringCast(atributesGrid, dimension, attributeName) {
 function fieldFinalExpressionWithSubtotal(atributesGrid, field) {
     const flag = subtotalFlagName(field.AttributeName);
     const rawExpr = attributeNeedsStringCast(atributesGrid, field.Dimension, field.AttributeName)
-        ? ("CAST(" + field.AttributeName + " AS STRING)")
+        ? ("CAST(" + field.AttributeName + " AS " + Provider.stringType() + ")")
         : field.AttributeName;
     return "CASE WHEN " + flag + " = 1 THEN 'TOTAL' ELSE " + rawExpr + " END AS " + field.AttributeName;
 }
@@ -7957,7 +8016,7 @@ function dracoPlanningSqlLiteralForMeasureValue(value) {
  * tabla de hechos real, en vez de un proyecto de facturación fijo.
  */
 function projectIdFromQualifiedTable(qualifiedTable) {
-    if (Provider.key() === "snowflake") return null;
+    if (Provider.key() === "snowflake" || Provider.key() === "fabric") return null;
     const clean = String(qualifiedTable || "").replace(/`/g, "").trim();
     const parts = clean.split(".");
     return parts.length >= 3 ? parts[0] : null;

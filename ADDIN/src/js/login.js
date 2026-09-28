@@ -10,7 +10,8 @@
  *    base de datos/rol). Al guardar, se crea la conexión y se lanza
  *    el login del proveedor correspondiente.
  *
- * Soporta BigQuery (OAuth implícito) y Snowflake (OAuth PKCE) a
+ * Soporta BigQuery (OAuth implícito), Snowflake (OAuth PKCE) y
+ * Microsoft Fabric (Entra ID OAuth PKCE; Lakehouse y Warehouse) a
  * través de la capa Provider; el resto del add-in solo necesita
  * saber cuál está activo (Provider.key()).
  */
@@ -170,6 +171,11 @@ const LoginApp = {
         if (conn.provider === "snowflake") {
             return cfg.account ? `${label} · ${cfg.account}` : label;
         }
+        if (conn.provider === "fabric") {
+            const host = cfg.server ? cfg.server.split(".")[0] : "";
+            const item = cfg.defaultItem ? ` · ${cfg.defaultItem}` : "";
+            return host ? `${label} · ${host}${item}` : label;
+        }
         return label;
     },
 
@@ -224,6 +230,8 @@ const LoginApp = {
                 this.startBigQueryAuth();
             } else if (conn.provider === "snowflake") {
                 await this.startSnowflakeAuth();
+            } else if (conn.provider === "fabric") {
+                await this.startFabricAuth();
             }
         } catch (err) {
             console.error("Error al conectar:", err);
@@ -238,6 +246,8 @@ const LoginApp = {
 
         if (conn.provider === "snowflake") {
             SF.logout();
+        } else if (conn.provider === "fabric") {
+            FB.logout();
         } else {
             BQ.logout();
         }
@@ -256,6 +266,15 @@ const LoginApp = {
             SF.setWarehouse(cfg.warehouse || "");
             SF.setDatabase(cfg.database || DracoConfig.snowflakeDatabase);
             SF.setRole(cfg.role || "");
+        } else if (conn.provider === "fabric") {
+            // Si cambia el workspace o el tenant, la sesión anterior no sirve
+            const changed = FB.getServer() !== FB.normalizeServer(cfg.server || "")
+                || FB.getTenant() !== String(cfg.tenant || "").trim();
+            FB.setServer(cfg.server || "");
+            FB.setDefaultItem(cfg.defaultItem || "");
+            FB.setTenant(cfg.tenant || "");
+            FB.setGatewayOverride(cfg.gatewayUrl || "");
+            if (changed) FB.logout();
         }
     },
 
@@ -276,6 +295,10 @@ const LoginApp = {
         document.getElementById("sfWarehouse").value = "";
         document.getElementById("sfDatabase").value = "";
         document.getElementById("sfRole").value = "";
+        document.getElementById("fbServer").value = "";
+        document.getElementById("fbDefaultItem").value = "";
+        document.getElementById("fbTenant").value = "";
+        document.getElementById("fbGatewayUrl").value = "";
         document.querySelectorAll("#viewCreate .connector-card").forEach(c => c.classList.remove("selected"));
 
         const title = document.getElementById("createTitle");
@@ -300,6 +323,11 @@ const LoginApp = {
                 document.getElementById("sfWarehouse").value = cfg.warehouse || "";
                 document.getElementById("sfDatabase").value = cfg.database || "";
                 document.getElementById("sfRole").value = cfg.role || "";
+            } else if (conn.provider === "fabric") {
+                document.getElementById("fbServer").value = cfg.server || "";
+                document.getElementById("fbDefaultItem").value = cfg.defaultItem || "";
+                document.getElementById("fbTenant").value = cfg.tenant || "";
+                document.getElementById("fbGatewayUrl").value = cfg.gatewayUrl || "";
             }
 
             const card = document.querySelector(`#viewCreate .connector-card[data-provider="${conn.provider}"]`);
@@ -316,6 +344,7 @@ const LoginApp = {
     toggleProviderPanels() {
         document.getElementById("bigqueryConfigPanel").classList.toggle("visible", this.selectedProvider === "bigquery");
         document.getElementById("snowflakeConfigPanel").classList.toggle("visible", this.selectedProvider === "snowflake");
+        document.getElementById("fabricConfigPanel").classList.toggle("visible", this.selectedProvider === "fabric");
     },
 
     updateSaveButton() {
@@ -351,6 +380,14 @@ const LoginApp = {
                 role: document.getElementById("sfRole").value.trim()
             };
         }
+        if (this.selectedProvider === "fabric") {
+            return {
+                server: FB.normalizeServer(document.getElementById("fbServer").value),
+                defaultItem: document.getElementById("fbDefaultItem").value.trim(),
+                tenant: document.getElementById("fbTenant").value.trim(),
+                gatewayUrl: document.getElementById("fbGatewayUrl").value.trim().replace(/\/+$/, "")
+            };
+        }
         return {};
     },
 
@@ -358,6 +395,16 @@ const LoginApp = {
         if (provider === "snowflake") {
             if (!config.account || !config.warehouse) {
                 return "Indica al menos la cuenta y el warehouse de Snowflake.";
+            }
+        }
+        if (provider === "fabric") {
+            // El SQL endpoint es opcional: solo hace falta para consultar
+            // Lakehouse/Warehouse por SQL, no para abrir modelos semánticos.
+            if (config.server && !FB.isValidServer(config.server)) {
+                return "El SQL endpoint debe terminar en .datawarehouse.fabric.microsoft.com (o déjalo vacío).";
+            }
+            if (config.gatewayUrl && !/^https:\/\/[^\s/]+/i.test(config.gatewayUrl)) {
+                return "La URL del gateway propio debe empezar por https://";
             }
         }
         return null;
@@ -401,6 +448,8 @@ const LoginApp = {
                 this.startBigQueryAuth();
             } else if (conn.provider === "snowflake") {
                 await this.startSnowflakeAuth();
+            } else if (conn.provider === "fabric") {
+                await this.startFabricAuth();
             }
         } catch (err) {
             console.error("Error al iniciar la conexión:", err);
@@ -465,6 +514,12 @@ const LoginApp = {
         this.openAuthWindow(authUrl);
     },
 
+    /** Inicia el flujo OAuth 2.0 (Authorization Code + PKCE) contra Microsoft Entra ID para Fabric */
+    async startFabricAuth() {
+        const authUrl = await FB.buildAuthUrl();
+        this.openAuthWindow(authUrl);
+    },
+
     /**
      * Listener para recibir mensajes cuando se ejecuta fuera del entorno de Office (navegador estándar)
      */
@@ -525,6 +580,28 @@ const LoginApp = {
                 } else {
                     console.error("Error en autenticación:", response.error);
                     this.showAlert("Error de autenticación con Snowflake: " + (response.error || "Desconocido"), true);
+                }
+            } else if (response.provider === "fabric") {
+                if (response.status === "success" && response.code) {
+                    await FB.handleAuthCode(response.code, response.state);
+                    Provider.setKey("fabric");
+                    const who = FB.getAccountName();
+                    if (FB.isValidServer(FB.getServer()) && FB.isGatewayConfigured()) {
+                        // Prueba real contra el SQL endpoint: valida token, gateway y permisos
+                        try {
+                            const items = await FB.listItems();
+                            this.showAlert(`¡Conectado a Microsoft Fabric${who ? " como " + who : ""}! ${items.length} lakehouse/warehouse visibles en el workspace.`);
+                        } catch (testErr) {
+                            console.error("[Fabric] Login correcto pero falló la consulta de prueba:", testErr);
+                            this.showAlert("Sesión iniciada, pero no se pudo consultar el workspace por SQL: " + testErr.message, true);
+                        }
+                    } else {
+                        this.showAlert(`¡Conectado a Microsoft Fabric${who ? " como " + who : ""}! Ya puedes abrir sus modelos semánticos.`);
+                    }
+                    this.switchView("list");
+                } else {
+                    console.error("Error en autenticación:", response.error);
+                    this.showAlert("Error de autenticación con Microsoft Fabric: " + (response.error || "Desconocido"), true);
                 }
             }
         } catch (err) {
