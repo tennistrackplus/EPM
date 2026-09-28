@@ -1738,21 +1738,34 @@
                             <span class="tag-soon">Próximamente</span>
                         </div>
                         </div>
-
                         <!-- Microsoft Fabric -->
                         <div class="connector-item">
-                        <div class="connector-card" data-provider="fabric">
-                            <div class="connector-info">
-                                <div class="connector-icon">
-                                    <img src="https://community.fabric.microsoft.com/html/assets/fabric-expo-icon.svg" alt="Microsoft Fabric">
-                                </div>
-                                <div class="connector-details">
-                                    <h3>Microsoft Fabric</h3>
-                                    <span>OneLake / Power BI</span>
+                            <div class="connector-card" data-provider="fabric">
+                                <div class="connector-info">
+                                    <div class="connector-icon">
+                                        <img src="https://community.fabric.microsoft.com/html/assets/fabric-expo-icon.svg" alt="Microsoft Fabric">
+                                    </div>
+                                    <div class="connector-details">
+                                        <h3>Microsoft Fabric</h3>
+                                        <span>Lakehouse / Warehouse (OneLake)</span>
+                                    </div>
                                 </div>
                             </div>
-                            <span class="tag-soon">Próximamente</span>
-                        </div>
+                            <!-- Campos específicos de Fabric (acordeón bajo la propia opción) -->
+                            <div class="provider-config-panel" id="fabricConfigPanel">
+                                <label for="fbServer">SQL endpoint del workspace (opcional)</label>
+                                <input type="text" id="fbServer" placeholder="xxxx.datawarehouse.fabric.microsoft.com">
+                                <span class="hint">En Fabric: abre un Lakehouse (su punto de conexión SQL) o un Warehouse → Configuración → Cadena de conexión SQL. Es la misma para todos los items del workspace; puedes pegar la cadena completa. Solo hace falta para consultar Lakehouse/Warehouse por SQL; para abrir modelos semánticos puedes dejarlo vacío.</span>
+                                <label for="fbDefaultItem" style="margin-top:10px;">Lakehouse / Warehouse por defecto (opcional)</label>
+                                <input type="text" id="fbDefaultItem" placeholder="ej. Draco_LH">
+                                <span class="hint">Solo como contexto inicial de la conexión. En el modelo semántico eliges el item de cada tabla, así que puedes mezclar Lakehouses y Warehouses del mismo workspace.</span>
+                                <label for="fbGatewayUrl" style="margin-top:10px;">URL de gateway propia (opcional)</label>
+                                <input type="text" id="fbGatewayUrl" placeholder="https://gateway.miempresa.com">
+                                <span class="hint">Solo si tu equipo de IT ha desplegado su propio gateway de Draco. Déjalo vacío para usar el gateway de Draco.</span>
+                                <label for="fbTenant" style="margin-top:10px;">Tenant de Microsoft Entra ID (opcional)</label>
+                                <input type="text" id="fbTenant" placeholder="ej. contoso.onmicrosoft.com o Id. de inquilino">
+                                <span class="hint">Déjalo vacío para iniciar sesión con cualquier cuenta de trabajo.</span>
+                            </div>
                         </div>
 
                         <!-- SAP Datasphere -->
@@ -2006,6 +2019,7 @@
     <script src="js/gcsExport.js"></script>
     <script src="js/gcsSaveBridge.js"></script>
     <script src="js/snowflake.js"></script>
+    <script src="js/fabric.js"></script>
     <script src="js/provider.js"></script>
     <script src="js/connections.js"></script>
     <script src="js/semanticModelStore.js"></script>
