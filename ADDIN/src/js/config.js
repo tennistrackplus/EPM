@@ -40,7 +40,7 @@ const DracoConfig = {
     // La app debe ser MULTIINQUILINO y tener como plataforma
     // "Aplicación de página única (SPA)" con redirect URI:
     //   https://tennistrackplus.github.io/EPM/ADDIN/src/auth-callback-fabric.html
-    fabricClientId: "TU_FABRIC_CLIENT_ID",
+    fabricClientId: "8603265d-d2de-4ba6-90a3-46136b8abdaa",
     // Tenant por defecto si la conexión no indica uno.
     // "organizations" = cualquier cuenta de trabajo/escuela de cualquier tenant.
     fabricDefaultTenant: "organizations",
