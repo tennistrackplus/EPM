@@ -60,6 +60,11 @@ const DracoConfig = {
         "https://api.fabric.microsoft.com/Workspace.Read.All",
         "https://api.fabric.microsoft.com/SemanticModel.ReadWrite.All"
     ].join(" "),
+    // Permiso para la API REST de Power BI (executeQueries: consultas DAX
+    // contra modelos semánticos). No se pide en el login: basta con tenerlo
+    // concedido (consentimiento de administrador) en el registro de la app,
+    // y el token se obtiene con el refresh token cuando hace falta.
+    powerBiApiScopes: "https://analysis.windows.net/powerbi/api/Dataset.Read.All",
     // URL del gateway TDS (carpeta gateway/ de este repo), sin barra final.
     fabricGatewayUrl: "TU_FABRIC_GATEWAY_URL"
 };
