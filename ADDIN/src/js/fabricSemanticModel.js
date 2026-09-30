@@ -18,10 +18,13 @@
  *        - Medidas          = columnas con Σ (con su agregación: SUM, AVG...)
  *                             y medidas DAX visibles del modelo.
  *
- * Todavía NO se genera ninguna consulta (ni SQL ni DAX) contra estos
- * modelos: solo se importa su estructura. El objeto guardado lleva además
- * "source" con los identificadores del workspace y del modelo, para poder
- * consultarlo más adelante con DAX (executeQueries).
+ * Estos modelos NO se consultan con SQL: el objeto guardado lleva
+ * source.type = "fabric-semantic-model" y los identificadores del workspace
+ * y del modelo, para consultarlo con DAX (API executeQueries de Power BI).
+ * Por eso aquí no se imponen las reglas del generador SQL de Draco
+ * (dimensión = columna de la tabla de hechos, medidas solo en la tabla de
+ * hechos...): se replica el modelo tal cual lo muestra Power BI, y cada
+ * atributo y medida guarda su tabla y columna reales.
  *
  * Permisos: listar requiere rol Visor en el workspace; getDefinition
  * requiere permiso de escritura sobre el modelo semántico (rol
@@ -369,6 +372,7 @@
                     type: "MEASURE",
                     name: uniqueMeasureName(m.name, t.name),
                     aggregation: "dax",
+                    daxName: m.name,                // nombre real de la medida en Power BI ([Medida])
                     format: m.formatString || "",
                     expression: textOf(m.expression),
                     table: t.name
