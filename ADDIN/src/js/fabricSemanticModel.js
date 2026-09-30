@@ -168,11 +168,17 @@
         }
         if (!opId) throw new Error("Fabric no ha devuelto el identificador de la operación de lectura del modelo.");
 
-        let wait = Math.min(Math.max(parseInt((res.headers && res.headers.retryAfter) || "2", 10), 1), 10) * 1000;
-        for (let i = 0; i < 60; i++) {
-            await sleep(wait);
-            wait = 2000;
+        // Sondeo rápido. Fabric responde con "Retry-After: 20" (antes se
+        // respetaba hasta un máximo de 10 s, y era casi todo el tiempo de
+        // importación), pero leer la definición de un modelo normal tarda
+        // bastante menos de un segundo: se consulta enseguida y se va
+        // espaciando poco a poco (0,3 s, 0,5 s, 0,8 s, 1 s... hasta 3 s).
+        const schedule = [300, 500, 800, 1000, 1500, 2000];
+        const startedAt = Date.now();
+        for (let i = 0; ; i++) {
+            await sleep(i < schedule.length ? schedule[i] : 3000);
             const st = await call("GET", `/v1/operations/${opId}`);
+            if (st.status === 429) continue; // demasiadas consultas seguidas: se reintenta con la siguiente espera
             if (st.status !== 200) throw apiError(st, "consultar el estado de la lectura del modelo");
             const status = st.body && st.body.status;
             if (onStatus) onStatus(status);
@@ -181,7 +187,7 @@
                 const e = st.body.error || {};
                 throw new Error("Fabric no ha podido leer el modelo: " + (e.message || e.errorCode || "error desconocido"));
             }
-            if (i === 59) throw new Error("La lectura del modelo está tardando demasiado. Inténtalo de nuevo.");
+            if (Date.now() - startedAt > 120000) throw new Error("La lectura del modelo está tardando demasiado. Inténtalo de nuevo.");
         }
 
         const result = await call("GET", `/v1/operations/${opId}/result`);
