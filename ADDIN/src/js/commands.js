@@ -1741,6 +1741,13 @@ function snowflakeRowsToPseudoBqJson(rows) {
  *   billing (ver executeDracoPlanningInserts).
  */
 async function executeSQL(sql, billingProjectId) {
+    // Modelo semántico de Power BI/Fabric: la "consulta" es un objeto DAX
+    // (ver js/powerBiQuery.js), no un texto SQL. Devuelve el mismo pseudo
+    // JSON de BigQuery, así que el pintado no cambia.
+    if (sql && typeof sql === "object" && sql.kind === "powerbi-dax") {
+        return await window.PowerBIQuery.execute(sql);
+    }
+
     if (Provider.key() === "snowflake") {
         const rows = await SF.runQuery(sql);
         return snowflakeRowsToPseudoBqJson(rows);
@@ -1995,6 +2002,10 @@ async function actualizarInformeFixedCore(reportIdOverride) {
         tSub = draco_perfMark(reportId, "  Leer hoja de resultados (fórmulas)", tSub);
 
         loadReportDefinition(editReportGrid, reportId);
+
+        if (window.PowerBIQuery && window.PowerBIQuery.isActiveModel()) {
+            throw new Error("El modo Fijo (Filas y Columnas estáticas) todavía no está disponible para modelos de Power BI. Desmarca \"Estático\" en Filas o Columnas.");
+        }
 
         sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
         tSub = draco_perfMark(reportId, "  loadReportDefinition + buildSQLFixed (JS puro)", tSub);
@@ -7014,15 +7025,19 @@ async function actualizarInformeCore(reportIdOverride) {
         // marcado con subtotal en L/R (ver hasAnySubtotalMarked/buildSQL).
         const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
 
-        sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
+        // Modelo de Power BI/Fabric: consulta DAX en vez de SQL (ver js/powerBiQuery.js)
+        sql = (window.PowerBIQuery && window.PowerBIQuery.isActiveModel())
+            ? window.PowerBIQuery.buildDynamicQuery(ReportState, measuresGrid, atributesGrid, subtotalsOnTop)
+            : buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
         tSub = draco_perfMark(reportId, "  loadReportDefinition + buildSQL (JS puro)", tSub);
 
-        console.log("BuildSQL ->", sql);
+        const queryText = typeof sql === "string" ? sql : sql.text;
+        console.log("BuildSQL ->", queryText);
 
         // [Punto 8] SQL ya no se escribe en A1 de la hoja de resultados:
-        // se escribe en EDIT_REPORT!X1.
+        // se escribe en EDIT_REPORT!X1 (en modelos de Power BI, el DAX).
         const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-        editReportSheet.getRange("X1").values = [[sql]];
+        editReportSheet.getRange("X1").values = [[queryText]];
 
         await context.sync();
         draco_perfMark(reportId, "  Escribir X1 (sync)", tSub);
@@ -7220,7 +7235,10 @@ async function actualizarTodosCore(concurrency) {
                     loadReportDefinition(editReportGrid, reportId);
                     applyFilterMeasuresToDynamicReport();
                     const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
-                    sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
+                    // Modelo de Power BI/Fabric: consulta DAX (ver js/powerBiQuery.js)
+                    sql = (window.PowerBIQuery && window.PowerBIQuery.isActiveModel())
+                        ? window.PowerBIQuery.buildDynamicQuery(ReportState, measuresGrid, atributesGrid, subtotalsOnTop)
+                        : buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
                 });
                 dynamicJobs.push({ reportId, reportName: r.name, sql });
             }
