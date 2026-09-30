@@ -99,7 +99,7 @@ const FB = {
     },
 
     logout() {
-        ["fb_access_token", "fb_token_expires", "fb_refresh_token", "fb_pkce_verifier", "fb_oauth_state", "fb_account", "fb_api_token", "fb_api_token_expires"]
+        ["fb_access_token", "fb_token_expires", "fb_refresh_token", "fb_pkce_verifier", "fb_oauth_state", "fb_account", "fb_api_token", "fb_api_token_expires", "fb_pbi_token", "fb_pbi_token_expires"]
             .forEach(k => localStorage.removeItem(k));
     },
 
@@ -199,19 +199,18 @@ const FB = {
         return [DracoConfig.fabricScopes, DracoConfig.fabricApiScopes || ""].join(" ").trim();
     },
 
-    // ---------------------------------------------------------
-    // Token para la API REST de Fabric (api.fabric.microsoft.com)
-    // ---------------------------------------------------------
-    getApiTokenCached() {
-        const token = localStorage.getItem("fb_api_token");
-        const expires = localStorage.getItem("fb_api_token_expires");
-        if (!token || !expires || Date.now() >= parseInt(expires, 10)) return null;
-        return token;
-    },
-
-    async getApiToken() {
-        const cached = this.getApiTokenCached();
-        if (cached) return cached;
+    /**
+     * Token para otra API de Microsoft (Fabric o Power BI) obtenido con el
+     * refresh token de la sesión, cacheado en localStorage.
+     * @param {string} scopes     scopes de la API
+     * @param {string} tokenKey   clave de localStorage del token
+     * @param {string} expiresKey clave de localStorage de su caducidad
+     * @param {string} missingPermsMsg mensaje si falta el permiso/consentimiento
+     */
+    async _getResourceToken(scopes, tokenKey, expiresKey, missingPermsMsg) {
+        const token = localStorage.getItem(tokenKey);
+        const expires = localStorage.getItem(expiresKey);
+        if (token && expires && Date.now() < parseInt(expires, 10)) return token;
 
         const refresh = localStorage.getItem("fb_refresh_token");
         if (!refresh) {
@@ -224,7 +223,7 @@ const FB = {
             grant_type: "refresh_token",
             client_id: DracoConfig.fabricClientId,
             refresh_token: refresh,
-            scope: (DracoConfig.fabricApiScopes || "") + " offline_access"
+            scope: scopes + " offline_access"
         });
         const response = await fetch(this.tokenUrl(), {
             method: "POST",
@@ -236,17 +235,40 @@ const FB = {
             const desc = data.error_description || data.error || ("HTTP " + response.status);
             const err = new Error(
                 /AADSTS65001|consent/i.test(desc)
-                    ? "Faltan permisos para leer modelos semánticos. Vuelve a conectar tu conexión de Microsoft Fabric para aceptarlos."
-                    : "No se pudo obtener acceso a la API de Fabric: " + desc
+                    ? missingPermsMsg
+                    : "No se pudo obtener acceso a la API: " + desc
             );
             err.code = "NO_AUTH";
             throw err;
         }
-        localStorage.setItem("fb_api_token", data.access_token);
-        localStorage.setItem("fb_api_token_expires", String(Date.now() + (parseInt(data.expires_in || "3600", 10) - 60) * 1000));
+        localStorage.setItem(tokenKey, data.access_token);
+        localStorage.setItem(expiresKey, String(Date.now() + (parseInt(data.expires_in || "3600", 10) - 60) * 1000));
         // Entra rota el refresh token: guardamos el nuevo para no invalidar la sesión
         if (data.refresh_token) localStorage.setItem("fb_refresh_token", data.refresh_token);
         return data.access_token;
+    },
+
+    // ---------------------------------------------------------
+    // Token para la API REST de Fabric (api.fabric.microsoft.com)
+    // ---------------------------------------------------------
+    async getApiToken() {
+        return this._getResourceToken(
+            DracoConfig.fabricApiScopes || "",
+            "fb_api_token", "fb_api_token_expires",
+            "Faltan permisos para leer modelos semánticos. Vuelve a conectar tu conexión de Microsoft Fabric para aceptarlos."
+        );
+    },
+
+    // ---------------------------------------------------------
+    // Token para la API REST de Power BI (api.powerbi.com):
+    // executeQueries (consultas DAX contra modelos semánticos)
+    // ---------------------------------------------------------
+    async getPowerBiToken() {
+        return this._getResourceToken(
+            DracoConfig.powerBiApiScopes || "",
+            "fb_pbi_token", "fb_pbi_token_expires",
+            "Falta el permiso Dataset.Read.All de Power BI Service en el registro de la app (con consentimiento de administrador)."
+        );
     },
 
     // ---------------------------------------------------------
