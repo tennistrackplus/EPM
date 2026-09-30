@@ -523,6 +523,15 @@ async function loadModel(modelName)
 
     const model = window.SemanticModelStore.getModel(modelName);
 
+    // Los modelos importados de Power BI/Fabric se editan en Power BI: aquí
+    // no hay tabla de hechos que explorar (y el proveedor SQL no la
+    // encontraría). Para cambiarlo, edítalo en Power BI y vuelve a importarlo.
+    if (model && model.source && model.source.type === "fabric-semantic-model") {
+        setFactCardVisible(false);
+        showToast(`"${modelName}" es un modelo de Power BI: edítalo en Power BI y vuelve a importarlo desde "Abrir modelo semántico".`, "error", 7000);
+        return;
+    }
+
     if (model && model.fact) {
 
         document.getElementById("factProject").value=model.fact.project || "";
