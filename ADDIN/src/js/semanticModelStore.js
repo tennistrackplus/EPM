@@ -140,9 +140,17 @@
         return [modelName, fact.project || "", fact.dataset || "", fact.table || ""];
     }
 
-    function buildRelationshipRows(modelName, fact, fields) {
+    /** Modelo semántico de Power BI/Fabric (se consulta con DAX, no con SQL) */
+    function isPowerBiModel(model) {
+        return !!(model && model.source && model.source.type === "fabric-semantic-model");
+    }
+
+    function buildRelationshipRows(modelName, fact, fields, model) {
         fact = fact || {};
         const rows = [];
+        // En los modelos de Power BI las relaciones las resuelve el propio
+        // modelo al ejecutar el DAX: no hay JOINs que construir.
+        if (isPowerBiModel(model)) return rows;
         (fields || []).forEach((f, idx) => {
             if (!f.enabled || f.type !== "DIMENSION" || !f.relTable) return;
             const keyAttr = (f.attributes || []).find(a => a.isKey);
@@ -181,7 +189,12 @@
             if (!f.enabled || f.type !== "MEASURE") return;
             rows.push([
                 idx + 1, f.name,
-                fact.project, fact.dataset, fact.table, f.name,
+                // FACT_TABLE / FACT_FIELD: en los modelos de BigQuery la medida
+                // es siempre una columna de la tabla de hechos con su mismo
+                // nombre. En los de Power BI puede estar en cualquier tabla
+                // (f.table), ser una columna con Σ (f.field) o una medida DAX
+                // (f.daxName, con aggregation "dax").
+                fact.project, fact.dataset, f.table || fact.table, f.field || f.daxName || f.name,
                 f.aggregation, f.format, modelName
             ]);
         });
@@ -281,7 +294,7 @@
         }
 
         const builder = ROW_BUILDERS[sheetName];
-        const rows = builder ? builder(modelName, model.fact, model.fields) : [];
+        const rows = builder ? builder(modelName, model.fact, model.fields, model) : [];
         return { values: [header, ...rows], startRow: 0, startCol: 0 };
     }
 
