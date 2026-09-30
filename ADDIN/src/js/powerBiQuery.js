@@ -305,17 +305,38 @@
             sets.push(keys);
         });
 
-        if (withSubtotals) {
-            const colKeys = state.Columns.map((f, k) => "C" + k);
-            const rowKeys = state.Rows.map((f, i) => "R" + i);
-            state.Columns.forEach((c, idx) => {
-                if (c.Subtotal) sets.push([...colKeys.slice(0, idx), ...rowKeys]);
-            });
-            state.Rows.forEach((r, idx) => {
-                if (r.Subtotal) sets.push([...colKeys, ...rowKeys.slice(0, idx)]);
-            });
-        }
+        if (withSubtotals) extraSubtotalSets(state).forEach(k => sets.push(k));
         return sets;
+    }
+
+    /** Conjuntos extra de los subtotales marcados en L/R (buildConfigSetsWithSubtotals) */
+    function extraSubtotalSets(state) {
+        const sets = [];
+        const colKeys = state.Columns.map((f, k) => "C" + k);
+        const rowKeys = state.Rows.map((f, i) => "R" + i);
+        state.Columns.forEach((c, idx) => {
+            if (c.Subtotal) sets.push([...colKeys.slice(0, idx), ...rowKeys]);
+        });
+        state.Rows.forEach((r, idx) => {
+            if (r.Subtotal) sets.push([...colKeys, ...rowKeys.slice(0, idx)]);
+        });
+        return sets;
+    }
+
+    /**
+     * Tramos de jerarquía de un eje como listas de claves ("R0","R1"...):
+     * mismo criterio que hierarchyRunLengths (misma dimensión y NIVEL
+     * consecutivo).
+     */
+    function hierarchyRuns(fields, prefix) {
+        const lengths = hierarchyRunLengths(fields);
+        const runs = [];
+        let i = 0;
+        lengths.forEach(len => {
+            runs.push(fields.slice(i, i + len).map((f, j) => prefix + (i + j)));
+            i += len;
+        });
+        return runs;
     }
 
     // -----------------------------------------------------------------
@@ -364,44 +385,90 @@
             .map(f => buildFilterPredicate(atributesGrid, f))
             .filter(Boolean);
 
-        const sets = groupingSets(state, withSubtotals);
-
-        let dax = "DEFINE\n";
-        filters.forEach((f, i) => {
-            dax += `    VAR __F${i} = FILTER(ALL(${f.columns.join(", ")}), ${f.predicate})\n`;
-        });
-        if (filters.length === 0) dax = "";
-
-        const setExprs = sets.map((keys, s) => {
-            const groupBy = [];
-            const seen = new Set();
-            keys.forEach(k => {
-                const ref = byKey.get(k).ref;
-                if (!seen.has(ref)) { seen.add(ref); groupBy.push(ref); }
+        let dax = "";
+        if (filters.length > 0) {
+            dax += "DEFINE\n";
+            filters.forEach((f, i) => {
+                dax += `    VAR __F${i} = FILTER(ALL(${f.columns.join(", ")}), ${f.predicate})\n`;
             });
-            const args = [
-                ...groupBy,
-                ...filters.map((f, i) => `__F${i}`),
-                ...measures.map(m => `${daxString(m.alias)}, ${m.expr}`)
-            ];
+        }
+
+        const filterArgs = filters.map((f, i) => `__F${i}`);
+        const measureArgs = measures.map(m => `${daxString(m.alias)}, ${m.expr}`);
+        const measureCols = measures.map(m => `${daxString(m.alias)}, ${daxMeasureRef(m.alias)}`);
+
+        // Cada parte del UNION devuelve las mismas columnas: un indicador
+        // "fN" por campo (1 = ese campo está totalizado en esta fila, como
+        // GROUPING() en SQL), su valor "cN" y las medidas "mN".
+        const wrap = (args, cols) =>
+            `    SELECTCOLUMNS(\n        SUMMARIZECOLUMNS(\n            ${args.join(",\n            ")}\n        ),\n        ${cols.join(",\n        ")}\n    )`;
+
+        // Grouping set "plano" (sin subtotales internos): los campos que no
+        // están en keys van a BLANK() con su indicador a 1.
+        const plainPart = keys => {
+            const groupBy = [];
+            keys.forEach(k => { const ref = byKey.get(k).ref; if (!groupBy.includes(ref)) groupBy.push(ref); });
             const inSet = new Set(keys);
             const cols = [
-                `"g", ${s}`,
+                ...fields.map(f => `"f${f.alias.slice(1)}", ${inSet.has(f.key) ? 0 : 1}`),
                 ...fields.map(f => `${daxString(f.alias)}, ${inSet.has(f.key) ? f.ref : "BLANK()"}`),
-                ...measures.map(m => `${daxString(m.alias)}, ${daxMeasureRef(m.alias)}`)
+                ...measureCols
             ];
-            return `    SELECTCOLUMNS(\n        SUMMARIZECOLUMNS(\n            ${args.join(",\n            ")}\n        ),\n        ${cols.join(",\n        ")}\n    )`;
-        });
+            return wrap([...groupBy, ...filterArgs, ...measureArgs], cols);
+        };
 
-        dax += "EVALUATE\n" + (setExprs.length === 1 ? setExprs[0].replace(/^ {4}/gm, "") : "UNION(\n" + setExprs.join(",\n") + "\n)");
+        const refs = fields.map(f => f.ref);
+        const hasDuplicateRefs = new Set(refs).size !== refs.length;
+        const parts = [];
+
+        if (!hasDuplicateRefs) {
+            // Jerarquías con ROLLUPADDISSUBTOTAL: UNA sola agrupación calcula
+            // todos los niveles de todas las jerarquías y sus combinaciones
+            // (los mismos grouping sets que genera buildSQL). En cada tramo de
+            // jerarquía el primer nivel va como agrupación normal (Draco nunca
+            // pide el total general de una jerarquía) y el resto dentro de
+            // ROLLUPADDISSUBTOTAL, que los va totalizando de abajo arriba.
+            const runs = [...hierarchyRuns(state.Rows, "R"), ...hierarchyRuns(state.Columns, "C")];
+            const groupArgs = [];
+            const flagExpr = new Map(); // key -> expresión del indicador
+            runs.forEach((keys, r) => {
+                groupArgs.push(byKey.get(keys[0]).ref);
+                flagExpr.set(keys[0], "0");
+                if (keys.length > 1) {
+                    const pairs = keys.slice(1).map((k, i) => {
+                        const flagName = `__S${r}_${i}`;
+                        flagExpr.set(k, `IF([${flagName}], 1, 0)`);
+                        return `${byKey.get(k).ref}, ${daxString(flagName)}`;
+                    });
+                    groupArgs.push(`ROLLUPADDISSUBTOTAL(${pairs.join(", ")})`);
+                }
+            });
+            const cols = [
+                ...fields.map(f => `"f${f.alias.slice(1)}", ${flagExpr.get(f.key)}`),
+                ...fields.map(f => `${daxString(f.alias)}, ${f.ref}`),
+                ...measureCols
+            ];
+            parts.push(wrap([...groupArgs, ...filterArgs, ...measureArgs], cols));
+
+            // Subtotales marcados en L/R (prefijos de un eje x el otro eje
+            // completo): conjuntos adicionales, igual que buildConfigSetsWithSubtotals.
+            if (withSubtotals) extraSubtotalSets(state).forEach(keys => parts.push(plainPart(keys)));
+        } else {
+            // Un mismo campo repetido en el informe: no se puede agrupar dos
+            // veces por la misma columna en un SUMMARIZECOLUMNS, así que se
+            // vuelve al método de un grouping set por parte.
+            groupingSets(state, withSubtotals).forEach(keys => parts.push(plainPart(keys)));
+        }
+
+        dax += "EVALUATE\n" + (parts.length === 1 ? parts[0].replace(/^ {4}/gm, "") : "UNION(\n" + parts.join(",\n") + "\n)");
 
         return {
             kind: "powerbi-dax",
+            mode: "dynamic",
             text: dax,
             plan: {
                 workspaceId: model.source.workspaceId,
                 semanticModelId: model.source.semanticModelId,
-                sets,
                 withSubtotals,
                 subtotalsOnTop: !!subtotalsOnTop,
                 fields: fields.map(f => ({
@@ -411,6 +478,278 @@
                 measures: measures.map(m => ({ alias: m.alias, name: m.name }))
             }
         };
+    }
+
+    // -----------------------------------------------------------------
+    // 1b) Valores de un atributo o jerarquía (diálogos de filtro y
+    //     selector de miembros). Sustituye a buildAttributeSQL /
+    //     buildHierarchySQL de excelService.js.
+    // -----------------------------------------------------------------
+    /** MODEL_HIER: HIERARCHY(1) NIVEL(2) DIMENSION(3) DIM_TABLE(7) DIM_FIELD(8) */
+    function findHierarchyLevels(hierGrid, dimension, hierarchy) {
+        const rows = (hierGrid && hierGrid.values) || [];
+        const levels = [];
+        for (let r = 1; r < rows.length; r++) {
+            const row = rows[r];
+            if (up(row[3]) === up(dimension) && up(row[1]) === up(hierarchy)) {
+                levels.push({ level: Number(row[2]) || 0, table: String(row[7]), column: String(row[8]) });
+            }
+        }
+        return levels.sort((a, b) => a.level - b.level);
+    }
+
+    /**
+     * Consulta de los valores de "name" (atributo o jerarquía) de una
+     * dimensión, o "" si no existe (mismo contrato que buildFilterValuesSQL).
+     */
+    function buildMembersQuery(dimension, name, atributesGrid, hierGrid) {
+        const model = activeModel();
+        const source = model && model.source;
+
+        let columns = null;
+        try {
+            const info = findAttribute(atributesGrid, dimension, name);
+            columns = [{ table: info.table, column: info.column }];
+        } catch (e) {
+            const levels = findHierarchyLevels(hierGrid, dimension, name);
+            if (levels.length > 0) columns = levels;
+        }
+        if (!columns) return "";
+
+        const refs = columns.map(c => daxColumn(c.table, c.column));
+        const text = "EVALUATE\n" +
+            (refs.length === 1 ? `DISTINCT(${refs[0]})` : `SUMMARIZECOLUMNS(${refs.join(", ")})`) +
+            "\nORDER BY " + refs.join(", ");
+
+        return {
+            kind: "powerbi-dax",
+            mode: "members",
+            text,
+            plan: {
+                workspaceId: source.workspaceId,
+                semanticModelId: source.semanticModelId,
+                names: columns.map(c => c.column)
+            }
+        };
+    }
+
+    /**
+     * Mismo texto que un resultado de BigQuery con su "schema": loadJsonTree
+     * (filterModal.js) y parseMemberJsonTree (commands.js) leen los nombres
+     * de los campos ("name") y después los valores ("v") entre comillas.
+     * Los valores en blanco se envían como "" para no desalinear las columnas.
+     */
+    function membersToPseudoBqJson(rows, names) {
+        const fields = names.map(n => '{"name": "' + String(n).replace(/"/g, "") + '"}').join(",");
+        const out = rows.map(row => {
+            const keys = Object.keys(row);
+            const vals = names.map((n, i) => {
+                const v = keys[i] !== undefined ? row[keys[i]] : null;
+                const text = isNull(v) ? "" : String(v).replace(/\\/g, "\\\\").replace(/"/g, "'");
+                return '{"v": "' + text + '"}';
+            });
+            return '{"f":[' + vals.join(",") + "]}";
+        });
+        return '{"schema":{"fields":[' + fields + ']},"rows":[' + out.join(",") + "]}";
+    }
+
+    // -----------------------------------------------------------------
+    // 1c) Modo Fijo (Filas y Columnas estáticas: cabeceras EPM_VALUE).
+    //     Sustituye a buildSQLFixed: una celda por ROW_ID x COLUMN_ID.
+    // -----------------------------------------------------------------
+    const DATATABLE_TYPES = {
+        INTEGER: "INTEGER", INT64: "INTEGER",
+        FLOAT: "DOUBLE", DOUBLE: "DOUBLE", NUMERIC: "DOUBLE", BIGNUMERIC: "DOUBLE", DECIMAL: "DOUBLE",
+        BOOLEAN: "BOOLEAN", DATETIME: "DATETIME", DATE: "DATETIME"
+    };
+
+    function datatableLiteral(value, dtType) {
+        const s = String(value === null || value === undefined ? "" : value).trim();
+        if ((dtType === "INTEGER" || dtType === "DOUBLE") && s !== "" && !isNaN(Number(s))) return String(Number(s));
+        if (dtType === "BOOLEAN") return /^(true|1|verdadero|x)$/i.test(s) ? "TRUE" : "FALSE";
+        return daxString(s);
+    }
+
+    /**
+     * Agrupa las definiciones de un eje (una por celda EPM_VALUE) por su
+     * ROW_ID/COLUMN_ID y, después, por la combinación de columnas que
+     * filtran ("firma"; normalmente todas las del eje). Cada firma es un
+     * bloque: una DATATABLE con una fila por ID y sus valores.
+     */
+    function axisBlocks(defs, atributesGrid, idName, prefix) {
+        const byId = new Map();
+        defs.forEach(d => {
+            const id = Number(d.R);
+            const info = findAttribute(atributesGrid, d.Dimension, d.AttributeName);
+            if (!byId.has(id)) byId.set(id, new Map());
+            byId.get(id).set(info.table + "|" + info.column, { info, value: d.Value });
+        });
+
+        const bySignature = new Map();
+        byId.forEach((conds, id) => {
+            const sig = Array.from(conds.keys()).sort().join("||");
+            if (!bySignature.has(sig)) bySignature.set(sig, []);
+            bySignature.get(sig).push({ id, conds });
+        });
+
+        const blocks = [];
+        bySignature.forEach((items, sig) => {
+            const b = blocks.length;
+            const keys = sig.split("||");
+            const cols = keys.map((k, i) => {
+                const { info } = items[0].conds.get(k);
+                return {
+                    key: k,
+                    name: prefix + b + "_" + i,
+                    ref: daxColumn(info.table, info.column),
+                    dtType: DATATABLE_TYPES[info.dataType] || "STRING"
+                };
+            });
+            const header = [daxString(idName), "INTEGER", ...cols.flatMap(c => [daxString(c.name), c.dtType])].join(", ");
+            const dataRows = items.map(it =>
+                "{" + [String(it.id), ...keys.map((k, i) => datatableLiteral(it.conds.get(k).value, cols[i].dtType))].join(", ") + "}");
+            blocks.push({
+                varName: "__" + prefix.toUpperCase() + b,
+                table: `DATATABLE(${header}, {${dataRows.join(", ")}})`,
+                cols,
+                items: items.map(it => ({ id: it.id, values: keys.map((k, i) => normKey(it.conds.get(k).value, cols[i].dtType)) }))
+            });
+        });
+        return blocks;
+    }
+
+    /** Normaliza un valor para comparar cabeceras (EPM_VALUE) con resultados del DAX */
+    function normKey(v, dtType) {
+        if (isNull(v)) return "";
+        if (dtType === "INTEGER" || dtType === "DOUBLE") {
+            const n = Number(v);
+            return isNaN(n) ? String(v).trim() : String(n);
+        }
+        if (dtType === "BOOLEAN") return /^(true|1|verdadero|x)$/i.test(String(v)) ? "true" : "false";
+        if (dtType === "DATETIME") return String(v).trim().replace(/T00:00:00(\.0+)?Z?$/, "").replace(" 00:00:00", "");
+        return String(v);
+    }
+
+    /**
+     * Modo Fijo agregado, como el SQL (un escaneo por grupo, nada de celda
+     * a celda): por cada combinación de bloque de filas x bloque de
+     * columnas, UN SUMMARIZECOLUMNS agrupado por las columnas de ambos
+     * bloques y filtrado (TREATAS) a las combinaciones de valores de sus
+     * cabeceras. Como cada fila del resultado corresponde exactamente a una
+     * combinación ROW_ID x COLUMN_ID, el valor es exacto para cualquier
+     * medida (también DAX, promedios o recuentos distintos). El reparto a
+     * ROW_ID/COLUMN_ID se hace después en JS (fixedToPseudoBqJson).
+     *
+     * @param rowsDefs/colDefs definiciones leídas de las fórmulas EPM_VALUE
+     *        (readRowDefinitions/readColumnDefinitions), SIN la celda MEASURE
+     * @param measureName medida a calcular (mismo criterio que buildSQLFixed)
+     */
+    function buildFixedQuery(rowsDefs, colDefs, measureName, state, measuresGrid, atributesGrid) {
+        const model = activeModel();
+        const source = model && model.source;
+        if (!measureName) throw new Error("Añade al menos una medida al informe.");
+
+        const plan = { workspaceId: source.workspaceId, semanticModelId: source.semanticModelId };
+        if (rowsDefs.length === 0 || colDefs.length === 0) {
+            return { kind: "powerbi-dax", mode: "fixed", text: "(sin cabeceras de filas o columnas)", plan: Object.assign(plan, { empty: true }) };
+        }
+
+        const expr = measureExpression(measuresGrid, measureName);
+        const filters = (state.Filters || [])
+            .filter(f => String(f.Value).trim() !== "")
+            .map(f => buildFilterPredicate(atributesGrid, f))
+            .filter(Boolean);
+
+        const rowBlocks = axisBlocks(rowsDefs, atributesGrid, "r", "a");
+        const colBlocks = axisBlocks(colDefs, atributesGrid, "c", "b");
+
+        let dax = "DEFINE\n";
+        filters.forEach((f, i) => { dax += `    VAR __F${i} = FILTER(ALL(${f.columns.join(", ")}), ${f.predicate})\n`; });
+        [...rowBlocks, ...colBlocks].forEach(b => { dax += `    VAR ${b.varName} = ${b.table}\n`; });
+
+        const pairs = [];
+        rowBlocks.forEach((rb, ri) => colBlocks.forEach((cb, ci) => pairs.push({ ri, ci, rb, cb })));
+        const maxKeys = Math.max(...pairs.map(p => new Set([...p.rb.cols, ...p.cb.cols].map(c => c.ref)).size));
+
+        const planPairs = [];
+        const parts = pairs.map((p, pi) => {
+            // Columnas de agrupación (sin repetir si un campo está en los dos ejes)
+            const groupRefs = [];
+            [...p.rb.cols, ...p.cb.cols].forEach(c => { if (!groupRefs.includes(c.ref)) groupRefs.push(c.ref); });
+
+            const treatas = b => `TREATAS(SELECTCOLUMNS(${b.varName}, ${b.cols.map(c => `${daxString(c.name)}, [${c.name}]`).join(", ")}), ${b.cols.map(c => c.ref).join(", ")})`;
+
+            const args = [
+                ...groupRefs,
+                treatas(p.rb),
+                treatas(p.cb),
+                ...filters.map((f, i) => `__F${i}`),
+                `"v", ${expr}`
+            ];
+            const cols = [
+                `"p", ${pi}`,
+                ...Array.from({ length: maxKeys }, (_, k) => `"k${k}", ${k < groupRefs.length ? groupRefs[k] : "BLANK()"}`),
+                `"v", [v]`
+            ];
+
+            planPairs.push({
+                groupRefs,
+                rowIdx: p.rb.cols.map(c => groupRefs.indexOf(c.ref)),
+                colIdx: p.cb.cols.map(c => groupRefs.indexOf(c.ref)),
+                rowTypes: p.rb.cols.map(c => c.dtType),
+                colTypes: p.cb.cols.map(c => c.dtType),
+                rowItems: p.rb.items,
+                colItems: p.cb.items
+            });
+
+            return "    SELECTCOLUMNS(\n        SUMMARIZECOLUMNS(\n            " + args.join(",\n            ") +
+                "\n        ),\n        " + cols.join(",\n        ") + "\n    )";
+        });
+
+        dax += "EVALUATE\n" + (parts.length === 1 ? parts[0].replace(/^ {4}/gm, "") : "UNION(\n" + parts.join(",\n") + "\n)");
+
+        return { kind: "powerbi-dax", mode: "fixed", text: dax, plan: Object.assign(plan, { pairs: planPairs }) };
+    }
+
+    /**
+     * Reparte cada fila agrupada a sus ROW_ID/COLUMN_ID (puede haber
+     * cabeceras repetidas: una misma combinación en varias filas/columnas)
+     * y devuelve los triples ROW_ID, COLUMN_ID, IMPORTE ordenados, que es
+     * lo que lee parseJsonValueTriples.
+     */
+    function fixedToPseudoBqJson(rows, plan) {
+        const lookups = plan.pairs.map(pp => {
+            const index = (items) => {
+                const m = new Map();
+                items.forEach(it => {
+                    const k = it.values.join("\u0001");
+                    if (!m.has(k)) m.set(k, []);
+                    m.get(k).push(it.id);
+                });
+                return m;
+            };
+            return { rows: index(pp.rowItems), cols: index(pp.colItems) };
+        });
+
+        const cells = new Map();
+        rows.forEach(row => {
+            const v = cell(row, "v");
+            if (isNull(v)) return;
+            const pi = Number(cell(row, "p"));
+            const pp = plan.pairs[pi];
+            if (!pp) return;
+            const keyVals = pp.groupRefs.map((_, k) => cell(row, "k" + k));
+            const rk = pp.rowIdx.map((ix, i) => normKey(keyVals[ix], pp.rowTypes[i])).join("\u0001");
+            const ck = pp.colIdx.map((ix, i) => normKey(keyVals[ix], pp.colTypes[i])).join("\u0001");
+            const rIds = lookups[pi].rows.get(rk) || [];
+            const cIds = lookups[pi].cols.get(ck) || [];
+            rIds.forEach(r => cIds.forEach(c => cells.set(r + "_" + c, { r, c, v })));
+        });
+
+        const out = Array.from(cells.values())
+            .sort((a, b) => (a.r - b.r) || (a.c - b.c))
+            .map(x => '{"f":[{"v": "' + x.r + '"},{"v": "' + x.c + '"},{"v": "' + String(x.v) + '"}]}');
+        return '{"rows":[' + out.join(",") + "]}";
     }
 
     // -----------------------------------------------------------------
@@ -588,11 +927,9 @@
         const rowsHaveSubtotal = plan.withSubtotals && rowFields.some(f => f.subtotal);
 
         let records = rows.map(row => {
-            const g = Number(cell(row, "g"));
-            const inSet = new Set(plan.sets[g] || []);
             const values = {}, flags = {}, measures = {};
             plan.fields.forEach(f => {
-                const present = inSet.has(f.key);
+                const present = Number(cell(row, "f" + f.alias.slice(1))) !== 1;
                 values[f.alias] = present ? cell(row, f.alias) : null;
                 flags[f.alias] = present ? 0 : 1;
             });
@@ -618,17 +955,30 @@
     async function execute(query) {
         const fb = fabricSession();
         if (!fb) {
-            throw new Error("[powerBiQuery v2] No se encuentra FB: js/fabric.js no se ha cargado en esta página.");
+            throw new Error("[powerBiQuery v5] No se encuentra FB: js/fabric.js no se ha cargado en esta página.");
         }
         if (typeof fb.getPowerBiToken !== "function") {
-            throw new Error("[powerBiQuery v2] El js/fabric.js cargado es una versión antigua (sin getPowerBiToken). Probablemente Office tiene la versión anterior en caché.");
+            throw new Error("[powerBiQuery v5] El js/fabric.js cargado es una versión antigua (sin getPowerBiToken). Probablemente Office tiene la versión anterior en caché.");
         }
+        if (query.mode === "fixed" && query.plan.empty) return '{"rows":[]}';
         const token = await fb.getPowerBiToken();
         const rows = await postExecuteQueries(query.plan, query.text, token);
+        if (query.mode === "members") return membersToPseudoBqJson(rows, query.plan.names);
+        if (query.mode === "fixed") return fixedToPseudoBqJson(rows, query.plan);
         return shapeResult(rows, query.plan);
     }
 
-    const api = { version: 2, isActiveModel, buildDynamicQuery, execute, _shapeResult: shapeResult };
+    const api = {
+        version: 5,
+        isActiveModel,
+        buildDynamicQuery,
+        buildMembersQuery,
+        buildFixedQuery,
+        execute,
+        _shapeResult: shapeResult,
+        _membersToPseudoBqJson: membersToPseudoBqJson,
+        _fixedToPseudoBqJson: fixedToPseudoBqJson
+    };
     if (typeof window !== "undefined") window.PowerBIQuery = api;
     if (typeof module !== "undefined") module.exports = api;
 
