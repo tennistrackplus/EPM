@@ -1602,6 +1602,12 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     const measureField = (measureRow && String(cellValue(measuresGrid, measureRow, 6)).trim())
         || measureName;
 
+    // Modelo de Power BI/Fabric: consulta DAX con una celda por
+    // ROW_ID x COLUMN_ID (ver PowerBIQuery.buildFixedQuery).
+    if (window.PowerBIQuery && window.PowerBIQuery.isActiveModel()) {
+        return window.PowerBIQuery.buildFixedQuery(rowsDefs, colDefs, measureName, ReportState, measuresGrid, atributesGrid);
+    }
+
     const isFabric = Provider.key() === "fabric";
     const rowIdsArray = isFabric ? "" : buildIdArray(atributesGrid, rowsDefs, "ROW_ID");
     const columnIdsArray = isFabric ? "" : buildIdArray(atributesGrid, colDefs, "COLUMN_ID");
@@ -2003,10 +2009,6 @@ async function actualizarInformeFixedCore(reportIdOverride) {
 
         loadReportDefinition(editReportGrid, reportId);
 
-        if (window.PowerBIQuery && window.PowerBIQuery.isActiveModel()) {
-            throw new Error("El modo Fijo (Filas y Columnas estáticas) todavía no está disponible para modelos de Power BI. Desmarca \"Estático\" en Filas o Columnas.");
-        }
-
         sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
         tSub = draco_perfMark(reportId, "  loadReportDefinition + buildSQLFixed (JS puro)", tSub);
 
@@ -2024,7 +2026,8 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     // de resultados: se escriben en EDIT_REPORT!X1 (SQL) e Y1 (JSON).
     await Excel.run(async (context) => {
         const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-        editReportSheet.getRange("X1").values = [[sql]];
+        // En modelos de Power BI "sql" es un objeto con el DAX en .text
+        editReportSheet.getRange("X1").values = [[typeof sql === "string" ? sql : sql.text]];
 
         const EXCEL_CELL_CHAR_LIMIT = 32000; // límite real de Excel: 32767
         const jsonForCell = json.length > EXCEL_CELL_CHAR_LIMIT
@@ -8225,6 +8228,15 @@ function showPlanningValidationBadge(isValid, detalle, titulo, subtitulo) {
 async function guardarPlanificacion(event) {
     try {
         console.log("Guardar planificación: ejecuta el INSERT contra el proveedor activo y refresca los informes afectados.");
+
+        // Los modelos semánticos de Power BI/Fabric son de solo lectura:
+        // no hay tabla de hechos en la que escribir.
+        if (window.PowerBIQuery && window.PowerBIQuery.isActiveModel()) {
+            showPlanningValidationBadge(false,
+                "Los modelos semánticos de Power BI son de solo lectura: la planificación no está disponible para ellos.",
+                "Planificación no disponible", "Modelo de Power BI");
+            return;
+        }
 
         // Descarta las celdas marcadas en cian que en realidad no cambiaron
         // de valor respecto al último refresco (ver comentario de la
