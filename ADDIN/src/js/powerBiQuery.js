@@ -29,6 +29,13 @@
 
     const PBI_API = "https://api.powerbi.com/v1.0/myorg";
 
+    // fabric.js declara "const FB" en el ámbito global del script: es
+    // accesible por su nombre, pero NO como window.FB.
+    function fabricSession() {
+        if (typeof FB !== "undefined") return FB;
+        return window.FB || null;
+    }
+
     // -----------------------------------------------------------------
     // Modelo activo
     // -----------------------------------------------------------------
@@ -442,11 +449,12 @@
             // TypeError = el navegador ha bloqueado la llamada (CORS o red):
             // se repite a través del gateway de Draco, si hay uno configurado.
             if (!(err instanceof TypeError)) throw err;
-            if (!window.FB || !FB.isGatewayConfigured || !FB.isGatewayConfigured()) {
+            const fb = fabricSession();
+            if (!fb || !fb.isGatewayConfigured || !fb.isGatewayConfigured()) {
                 throw new Error("El navegador ha bloqueado la llamada a la API de Power BI y no hay un gateway configurado (fabricGatewayUrl en config.js).");
             }
             console.warn("[Power BI] Llamada directa bloqueada, se usa el gateway:", err.message);
-            response = await fetch(FB.gatewayUrl() + "/powerbi/executeQueries", {
+            response = await fetch(fb.gatewayUrl() + "/powerbi/executeQueries", {
                 method: "POST",
                 headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
                 body: JSON.stringify({ workspaceId: plan.workspaceId, datasetId: plan.semanticModelId, query: dax })
@@ -608,10 +616,11 @@
      * "pseudo JSON de BigQuery" que espera jsonTo3Matrices.
      */
     async function execute(query) {
-        if (!window.FB || typeof FB.getPowerBiToken !== "function") {
+        const fb = fabricSession();
+        if (!fb || typeof fb.getPowerBiToken !== "function") {
             throw new Error("Falta js/fabric.js actualizado (FB.getPowerBiToken).");
         }
-        const token = await FB.getPowerBiToken();
+        const token = await fb.getPowerBiToken();
         const rows = await postExecuteQueries(query.plan, query.text, token);
         return shapeResult(rows, query.plan);
     }
