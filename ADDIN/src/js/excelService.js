@@ -398,6 +398,11 @@ const ExcelService = {
         const atribGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
         const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
 
+        // Modelo de Power BI/Fabric: consulta DAX (objeto) en vez de SQL
+        if (window.PowerBIQuery && window.PowerBIQuery.isActiveModel()) {
+            return window.PowerBIQuery.buildMembersQuery(dimension, name, atribGrid, hierGrid);
+        }
+
         if (existsAttribute(atribGrid, dimension, name)) {
             return buildAttributeSQL(atribGrid, dimension, name);
         }
@@ -432,6 +437,10 @@ const ExcelService = {
     },
 
     async executeSQL(sql) {
+        // Modelo de Power BI/Fabric: la consulta es un objeto DAX (ver js/powerBiQuery.js)
+        if (sql && typeof sql === "object" && sql.kind === "powerbi-dax") {
+            return await window.PowerBIQuery.execute(sql);
+        }
         return await executeSQLBigQuery(sql);
     },
 
