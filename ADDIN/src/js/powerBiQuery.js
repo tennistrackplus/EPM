@@ -617,15 +617,18 @@
      */
     async function execute(query) {
         const fb = fabricSession();
-        if (!fb || typeof fb.getPowerBiToken !== "function") {
-            throw new Error("Falta js/fabric.js actualizado (FB.getPowerBiToken).");
+        if (!fb) {
+            throw new Error("[powerBiQuery v2] No se encuentra FB: js/fabric.js no se ha cargado en esta página.");
+        }
+        if (typeof fb.getPowerBiToken !== "function") {
+            throw new Error("[powerBiQuery v2] El js/fabric.js cargado es una versión antigua (sin getPowerBiToken). Probablemente Office tiene la versión anterior en caché.");
         }
         const token = await fb.getPowerBiToken();
         const rows = await postExecuteQueries(query.plan, query.text, token);
         return shapeResult(rows, query.plan);
     }
 
-    const api = { isActiveModel, buildDynamicQuery, execute, _shapeResult: shapeResult };
+    const api = { version: 2, isActiveModel, buildDynamicQuery, execute, _shapeResult: shapeResult };
     if (typeof window !== "undefined") window.PowerBIQuery = api;
     if (typeof module !== "undefined") module.exports = api;
 
