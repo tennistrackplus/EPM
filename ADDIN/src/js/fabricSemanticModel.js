@@ -8,15 +8,15 @@
  *   2. Descarga la definición del modelo (getDefinition, formato TMSL:
  *      model.bim) con tablas, columnas, jerarquías, medidas y relaciones.
  *   3. La convierte al MISMO objeto { fact, fields } que genera
- *      LkmlImport.parseContent / semantic_model.js, así que
- *      SemanticModelStore y el taskpane lo muestran sin cambios:
+ *      LkmlImport.parseContent / semantic_model.js, replicando la lista
+ *      de campos de Power BI:
  *        - Tabla de hechos  = la tabla del lado "varios" de las relaciones.
- *        - Dimensiones      = cada tabla relacionada con la de hechos
- *                             (nombre = columna de la tabla de hechos,
- *                             igual que en los modelos de BigQuery).
- *        - Atributos        = columnas visibles de cada dimensión (+ la clave).
+ *        - Cajas            = una por tabla visible, INCLUIDA la de hechos
+ *                             (nombre = nombre de la tabla en Power BI).
+ *        - Atributos        = columnas visibles sin Σ (+ la clave de la relación).
  *        - Jerarquías       = jerarquías definidas en el modelo de Power BI.
- *        - Medidas          = medidas DAX visibles del modelo.
+ *        - Medidas          = columnas con Σ (con su agregación: SUM, AVG...)
+ *                             y medidas DAX visibles del modelo.
  *
  * Todavía NO se genera ninguna consulta (ni SQL ni DAX) contra estos
  * modelos: solo se importa su estructura. El objeto guardado lleva además
@@ -204,6 +204,14 @@
     // -----------------------------------------------------------------
     // Conversión TMSL (model.bim) -> modelo Draco { fact, fields }
     // -----------------------------------------------------------------
+    // Se replica la lista de campos de Power BI:
+    //   - Una caja (DIMENSION) por cada tabla visible del modelo, incluida
+    //     la tabla de hechos, con sus columnas como atributos.
+    //   - Las columnas numéricas que Power BI resume (símbolo Σ, es decir,
+    //     summarizeBy distinto de "none") se importan como MEDIDAS con su
+    //     agregación, y no como atributos.
+    //   - Las medidas DAX del modelo se importan como medidas "dax".
+    // -----------------------------------------------------------------
     function mapTmslType(t) {
         switch (String(t || "").toLowerCase()) {
             case "string": return "STRING";
@@ -214,6 +222,32 @@
             case "datetime": return "DATETIME";
             default: return String(t || "").toUpperCase();
         }
+    }
+
+    const NUMERIC_TYPES = ["int64", "double", "decimal"];
+
+    // summarizeBy de TMSL -> agregación SQL de Draco (columna AGGREGATION)
+    const AGGREGATION_BY_SUMMARIZE = {
+        sum: "SUM",
+        average: "AVG",
+        min: "MIN",
+        max: "MAX",
+        count: "COUNT",
+        distinctcount: "COUNT_DISTINCT"
+    };
+
+    /**
+     * Agregación con la que Power BI resume la columna (la que muestra con Σ),
+     * o null si la columna no se resume. En TMSL, si summarizeBy falta o vale
+     * "default", Power BI suma las columnas numéricas.
+     */
+    function aggregationOf(column) {
+        const s = String(column.summarizeBy || "default").toLowerCase();
+        if (s === "none") return null;
+        if (s === "default") {
+            return NUMERIC_TYPES.includes(String(column.dataType || "").toLowerCase()) ? "SUM" : null;
+        }
+        return AGGREGATION_BY_SUMMARIZE[s] || null;
     }
 
     function textOf(expr) {
@@ -230,6 +264,17 @@
         return null;
     }
 
+    /** Tablas internas que Power BI no enseña en la lista de campos */
+    function isSystemTable(t) {
+        return !!t.isHidden || !!t.isPrivate ||
+            /^(LocalDateTable_|DateTableTemplate_)/.test(t.name || "");
+    }
+
+    /** Columnas que Power BI enseña en la lista de campos */
+    function isVisibleColumn(c) {
+        return c && c.name && !c.isHidden && c.type !== "rowNumber" && !/^RowNumber-/.test(c.name);
+    }
+
     /**
      * @param {object} bim  JSON de model.bim
      * @param {object} meta { workspaceId, workspaceName, modelId, modelName }
@@ -237,7 +282,7 @@
      */
     function convertTmslToDraco(bim, meta) {
         const model = (bim && bim.model) || {};
-        const tables = (model.tables || []).filter(t => t && t.name);
+        const tables = (model.tables || []).filter(t => t && t.name && !isSystemTable(t));
         const byName = {};
         tables.forEach(t => { byName[t.name] = t; });
 
@@ -249,35 +294,90 @@
         const warnings = [];
 
         // Tabla de hechos: la que más veces aparece en el lado "varios";
-        // si no hay relaciones, la que tiene más medidas.
+        // si no hay relaciones, la que tiene más medidas y columnas con Σ.
         const manySideCount = {};
-        relationships.forEach(r => { manySideCount[r.fromTable] = (manySideCount[r.fromTable] || 0) + 1; });
+        relationships.forEach(r => {
+            if (byName[r.fromTable]) manySideCount[r.fromTable] = (manySideCount[r.fromTable] || 0) + 1;
+        });
         let factName = Object.keys(manySideCount).sort((a, b) => manySideCount[b] - manySideCount[a])[0];
         if (!factName) {
-            const withMeasures = tables.slice().sort((a, b) => (b.measures || []).length - (a.measures || []).length);
-            factName = withMeasures[0] ? withMeasures[0].name : "";
-            warnings.push("El modelo no tiene relaciones: solo se importan las medidas.");
+            const score = t => (t.measures || []).length + (t.columns || []).filter(c => isVisibleColumn(c) && aggregationOf(c)).length;
+            const ranked = tables.slice().sort((a, b) => score(b) - score(a));
+            factName = ranked[0] ? ranked[0].name : "";
+            warnings.push("El modelo no tiene relaciones: las tablas se importan sin enlazar con la de hechos.");
         }
 
-        const fields = [];
-
-        // Dimensiones (una por relación activa desde la tabla de hechos)
+        // Relación de cada tabla con la de hechos (clave en la dimensión)
+        const relToFact = {};
         relationships.filter(r => r.fromTable === factName).forEach(r => {
-            const dim = byName[r.toTable];
-            if (!dim) return;
+            if (!relToFact[r.toTable]) relToFact[r.toTable] = r;
+        });
 
-            const attributes = (dim.columns || [])
-                .filter(c => c.type !== "rowNumber" && !/^RowNumber-/.test(c.name))
-                .filter(c => !c.isHidden || c.name === r.toColumn)
+        // Orden de las cajas: hechos, dimensiones relacionadas y el resto
+        const ordered = [];
+        if (byName[factName]) ordered.push(byName[factName]);
+        tables.filter(t => relToFact[t.name]).forEach(t => ordered.push(t));
+        tables.filter(t => t.name !== factName && !relToFact[t.name]).forEach(t => ordered.push(t));
+
+        const dimensions = [];
+        const measures = [];
+        const usedMeasureNames = new Set();
+        const uniqueMeasureName = (name, table) => {
+            let n = name;
+            if (usedMeasureNames.has(n)) n = `${name} (${table})`;
+            let i = 2;
+            while (usedMeasureNames.has(n)) n = `${name} (${table}) ${i++}`;
+            usedMeasureNames.add(n);
+            return n;
+        };
+
+        ordered.forEach(t => {
+            const isFact = t.name === factName;
+            const rel = relToFact[t.name] || null;
+            const columns = (t.columns || []).filter(c => c && c.name && c.type !== "rowNumber" && !/^RowNumber-/.test(c.name));
+
+            // Atributos: columnas visibles sin Σ (+ la clave de la relación,
+            // aunque esté oculta, porque Draco la necesita para enlazar)
+            const attributes = columns
+                .filter(c => (isVisibleColumn(c) && !aggregationOf(c)) || (rel && c.name === rel.toColumn))
                 .map(c => ({
                     name: c.name,
                     alias: c.name,
                     dataType: mapTmslType(c.dataType),
-                    isKey: c.name === r.toColumn,
+                    isKey: !!rel && c.name === rel.toColumn,
                     enabled: true
                 }));
 
-            const hierarchies = (dim.hierarchies || [])
+            // Medidas: columnas visibles con Σ, con su agregación
+            columns.filter(c => isVisibleColumn(c) && aggregationOf(c)).forEach(c => {
+                measures.push({
+                    enabled: true,
+                    type: "MEASURE",
+                    name: uniqueMeasureName(c.name, t.name),
+                    aggregation: aggregationOf(c),
+                    field: c.name,                  // columna real (FACT_FIELD)
+                    table: t.name,
+                    format: c.formatString || "",
+                    dataType: mapTmslType(c.dataType)
+                });
+            });
+
+            // Medidas DAX de la tabla
+            (t.measures || []).filter(m => !m.isHidden).forEach(m => {
+                measures.push({
+                    enabled: true,
+                    type: "MEASURE",
+                    name: uniqueMeasureName(m.name, t.name),
+                    aggregation: "dax",
+                    format: m.formatString || "",
+                    expression: textOf(m.expression),
+                    table: t.name
+                });
+            });
+
+            if (attributes.length === 0) return; // p. ej. una tabla solo de medidas
+
+            const hierarchies = (t.hierarchies || [])
                 .filter(h => !h.isHidden)
                 .map(h => ({
                     name: h.name,
@@ -288,42 +388,31 @@
                 }))
                 .filter(h => h.levels.length > 0);
 
-            const physical = sourceTableOf(dim);
-
-            fields.push({
+            dimensions.push({
                 enabled: true,
                 type: "DIMENSION",
-                name: r.fromColumn,               // columna de la tabla de hechos (igual que en BigQuery)
+                name: t.name,                         // igual que en la lista de campos de Power BI
                 relProject: meta.workspaceName,
                 relDataset: meta.modelName,
-                relTable: dim.name,               // tabla del modelo semántico
-                sourceTable: physical,            // tabla física (Lakehouse), para uso futuro
+                relTable: t.name,                     // tabla del modelo semántico
+                isFactTable: isFact,                  // caja de la propia tabla de hechos
+                joinColumn: rel ? rel.fromColumn : null,  // columna de la tabla de hechos que enlaza
+                keyColumn: rel ? rel.toColumn : null,     // clave en esta tabla
+                related: isFact || !!rel,
+                sourceTable: sourceTableOf(t),        // tabla física (Lakehouse), para uso futuro
                 attributes,
                 hierarchies
             });
+
+            if (!isFact && !rel) {
+                warnings.push(`La tabla "${t.name}" no está relacionada con "${factName}": se importa, pero no filtrará los datos.`);
+            }
         });
 
-        // Medidas visibles de todo el modelo (suelen estar en la tabla de hechos
-        // o en una tabla de medidas)
-        tables.forEach(t => {
-            (t.measures || []).filter(m => !m.isHidden).forEach(m => {
-                fields.push({
-                    enabled: true,
-                    type: "MEASURE",
-                    name: m.name,
-                    aggregation: "dax",
-                    format: m.formatString || "",
-                    expression: textOf(m.expression),
-                    table: t.name
-                });
-            });
-        });
+        const fields = [...dimensions, ...measures];
 
-        if (!fields.some(f => f.type === "MEASURE")) {
-            warnings.push("El modelo no tiene medidas visibles. Crea al menos una medida (p. ej. SUM del importe) en Fabric.");
-        }
-        if (!fields.some(f => f.type === "DIMENSION")) {
-            warnings.push("No se han encontrado tablas de atributos relacionadas con la tabla de hechos.");
+        if (measures.length === 0) {
+            warnings.push("El modelo no tiene medidas ni columnas numéricas resumibles (Σ).");
         }
 
         return {
