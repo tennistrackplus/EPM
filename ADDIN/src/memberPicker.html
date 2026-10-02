@@ -64,23 +64,40 @@
     </div>
 
     <script>
-        // Buscador de miembros mostrado como Office Dialog (ventana propia,
-        // centrada sobre Excel) para no tener que abrir el taskpane solo
-        // para elegir un valor. Se comunica con el host (commands.js, en el
-        // shared runtime del taskpane) por mensajes, ya que un diálogo NO
-        // tiene acceso al modelo de objetos de Excel (no puede llamar a
-        // Excel.run por sí mismo).
+        // Buscador de miembros como Office Dialog (v4). Protocolo con el
+        // host (openMemberRecognitionPicker en js/commands.js):
+        //   diálogo -> host: ready (se repite hasta tener datos), resend,
+        //                    loaded (acuse), select, cancel, log
+        //   host -> diálogo: begin {round,total,...} + chunk {round,seq,part}
+        //                    | error {round,message}
+        // IMPORTANTE: el handler de mensajes del host se registra ANTES de
+        // mandar "ready" (antes era al revés y, si la consulta ya estaba
+        // lista, la respuesta llegaba sin nadie escuchando -> "Cargando…"
+        // para siempre).
+        const PICKER_BUILD = "2026-10-02-picker-v4";
         let allItems = [];
+        let gotData = false;      // datos o error ya pintados
+        let sentResult = false;   // ya se ha mandado select/cancel
+        let rx = null;            // { round, total, parts[], meta, timer }
+        let readyTimer = null;
+        let readyTries = 0;
 
-        // Deshabilitado mientras no haya datos (mientras se ve el
-        // spinner "Cargando…" o el aviso de error): no tiene sentido
-        // dejar buscar sobre una lista vacía.
         document.getElementById("searchInput").disabled = true;
 
-        function log(...args) {
-            // Aparece en la consola de ESTA ventana de diálogo (F12 sobre
-            // la propia ventana emergente, no sobre el taskpane).
-            console.log("[MemberPicker]", ...args);
+        function send(obj) {
+            try { Office.context.ui.messageParent(JSON.stringify(obj)); }
+            catch (e) { console.error("[MemberPicker] messageParent falló:", e); }
+        }
+
+        function log(msg) {
+            console.log("[MemberPicker]", msg);
+            send({ type: "log", msg: String(msg) });
+        }
+
+        function sendResult(obj) {
+            if (sentResult) return;
+            sentResult = true;
+            send(obj);
         }
 
         function render(items) {
@@ -90,17 +107,25 @@
                 container.innerHTML = "<div class='empty'>Sin resultados.</div>";
                 return;
             }
-            for (const it of items) {
+            // Pintar decenas de miles de filas bloquea la ventana: se limita
+            // y se pide afinar con el buscador.
+            const MAX = 2000;
+            const frag = document.createDocumentFragment();
+            for (const it of items.slice(0, MAX)) {
                 const div = document.createElement("div");
                 div.className = "item";
                 div.textContent = it.text;
                 div.addEventListener("click", () => {
-                    log("Selección de usuario:", it);
-                    Office.context.ui.messageParent(JSON.stringify({
-                        type: "select", value: it.value, attribute: it.attribute
-                    }));
+                    sendResult({ type: "select", value: it.value, attribute: it.attribute });
                 });
-                container.appendChild(div);
+                frag.appendChild(div);
+            }
+            container.appendChild(frag);
+            if (items.length > MAX) {
+                const more = document.createElement("div");
+                more.className = "empty";
+                more.textContent = "Mostrando " + MAX + " de " + items.length + ". Escribe en el buscador para afinar.";
+                container.appendChild(more);
             }
         }
 
@@ -121,60 +146,102 @@
             msg.textContent = message;
             const btn = document.createElement("button");
             btn.textContent = "Cerrar";
-            btn.addEventListener("click", () => {
-                log("Cerrado tras error por el usuario.");
-                Office.context.ui.messageParent(JSON.stringify({ type: "cancel" }));
-            });
+            btn.addEventListener("click", () => sendResult({ type: "cancel" }));
             div.appendChild(msg);
             div.appendChild(btn);
             container.appendChild(div);
         }
 
-        document.getElementById("searchInput").addEventListener("input", (e) => applySearch(e.target.value));
-        document.getElementById("btnCancel").addEventListener("click", () => {
-            log("Cancelado por el usuario.");
-            Office.context.ui.messageParent(JSON.stringify({ type: "cancel" }));
-        });
+        function stopReady() {
+            if (readyTimer) { clearInterval(readyTimer); readyTimer = null; }
+        }
 
-        Office.onReady(() => {
-            log("Office.onReady en el diálogo. Enviando 'ready' al host…");
-            try {
-                // Mensaje inicial al padre: "ya estoy listo para recibir los
-                // items" (el host los precarga con Excel.run/BigQuery ANTES
-                // de abrir este diálogo y los envía con dialog.messageChild).
-                Office.context.ui.messageParent(JSON.stringify({ type: "ready" }));
-            } catch (err) {
-                log("Error enviando 'ready':", err);
+        function onData(meta, items) {
+            gotData = true;
+            stopReady();
+            allItems = Array.isArray(items) ? items : [];
+            const input = document.getElementById("searchInput");
+            input.disabled = false;
+            input.value = meta.initialSearch || "";
+            if (meta.title) document.title = meta.title;
+            applySearch(meta.initialSearch || "");
+            input.focus();
+            send({ type: "loaded", count: allItems.length });
+        }
+
+        function handleHostMessage(arg) {
+            let payload;
+            try { payload = JSON.parse(arg.message); }
+            catch (err) { log("mensaje del host no es JSON"); return; }
+            if (!payload || gotData) return;
+
+            if (payload.type === "error") {
+                gotData = true;
+                stopReady();
+                showError(payload.message || "Error cargando los valores.");
+                send({ type: "loaded", count: -1 });
+                return;
             }
 
-            Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg) => {
-                log("Mensaje recibido del host:", arg.message);
-                let payload;
-                try {
-                    payload = JSON.parse(arg.message);
-                } catch (err) {
-                    log("Error parseando mensaje del host:", err);
-                    showError("Error cargando los valores.");
-                    return;
-                }
+            if (payload.type === "begin") {
+                if (rx && rx.timer) clearTimeout(rx.timer);
+                rx = { round: payload.round, total: payload.total, parts: new Array(payload.total), got: 0, meta: payload };
+                // Si en 5 s no han llegado todos los trozos, se pide reenvío.
+                rx.timer = setTimeout(() => {
+                    if (!gotData && rx) {
+                        log("ronda " + rx.round + " incompleta (" + rx.got + "/" + rx.total + "), pido reenvío");
+                        send({ type: "resend", round: rx.round });
+                    }
+                }, 5000);
+                if (payload.total === 0) { clearTimeout(rx.timer); onData(payload, []); }
+                return;
+            }
 
-                // El host manda {type:"data",...} si la consulta fue bien,
-                // o {type:"error", message} si falló (ver
-                // sendPickerResultIfReady en commands.js). Hasta que no
-                // llegue uno de los dos, seguimos en el estado de
-                // "Cargando…" inicial.
-                if (payload.type === "data") {
-                    allItems = payload.items || [];
-                    document.getElementById("searchInput").disabled = false;
-                    document.getElementById("searchInput").value = payload.initialSearch || "";
-                    if (payload.title) document.title = payload.title;
-                    applySearch(payload.initialSearch || "");
-                } else if (payload.type === "error") {
-                    showError(payload.message || "Error cargando los valores.");
-                } else {
-                    log("Mensaje del host con type desconocido, se ignora:", payload.type);
+            if (payload.type === "chunk") {
+                if (!rx || payload.round !== rx.round) return; // resto de un envío anterior
+                if (rx.parts[payload.seq] === undefined) { rx.parts[payload.seq] = payload.part; rx.got++; }
+                if (rx.got === rx.total) {
+                    clearTimeout(rx.timer);
+                    let items;
+                    try { items = JSON.parse(rx.parts.join("")); }
+                    catch (e) {
+                        log("error parseando items de la ronda " + rx.round + ": " + e.message);
+                        send({ type: "resend", round: rx.round });
+                        return;
+                    }
+                    onData(rx.meta, items);
                 }
-            });
+                return;
+            }
+        }
+
+        document.getElementById("searchInput").addEventListener("input", (e) => applySearch(e.target.value));
+        document.getElementById("btnCancel").addEventListener("click", () => sendResult({ type: "cancel" }));
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") sendResult({ type: "cancel" }); });
+
+        Office.onReady(() => {
+            Office.context.ui.addHandlerAsync(
+                Office.EventType.DialogParentMessageReceived,
+                handleHostMessage,
+                (res) => {
+                    if (res.status === Office.AsyncResultStatus.Failed) {
+                        // Sin DialogApi 1.2 no hay messageChild: no hay forma de recibir datos.
+                        showError("Esta versión de Excel no permite enviar datos al buscador (DialogApi 1.2).");
+                        log("addHandlerAsync falló: " + (res.error && res.error.message));
+                        return;
+                    }
+                    // Ahora sí: ya hay alguien escuchando. "ready" se repite por si
+                    // se pierde algún mensaje; el host ignora los repetidos una vez
+                    // ha recibido "loaded".
+                    const sendReady = () => {
+                        if (gotData || readyTries >= 40) { stopReady(); return; }
+                        readyTries++;
+                        send({ type: "ready", build: PICKER_BUILD, tries: readyTries });
+                    };
+                    sendReady();
+                    readyTimer = setInterval(sendReady, 1500);
+                }
+            );
         });
     </script>
 </body>
