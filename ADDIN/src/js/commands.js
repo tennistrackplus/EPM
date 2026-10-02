@@ -22,6 +22,86 @@ Office.onReady(() => {
     // Se ha eliminado por completo del fichero.
 });
 
+/* ==========================================================================
+ * LOG DE DIAGNÓSTICO EN EDIT_REPORT!AA1:AA151
+ * --------------------------------------------------------------------------
+ * dracoLog(...) escribe en consola y en un buffer en memoria que se vuelca
+ * (con debounce, en UN solo Excel.run) a EDIT_REPORT!AA1:AA151, la línea
+ * más reciente arriba. AA1 lleva el BUILD cargado: si después de publicar
+ * en GitHub Pages no ves el build nuevo en AA1, Excel sigue usando la
+ * versión en caché (y cualquier "arreglo" no se está probando de verdad).
+ * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
+ * Para desactivarlo: DRACO_LOG_ENABLED = false.
+ * ========================================================================== */
+const DRACO_BUILD = "2026-10-02-picker-v4";
+const DRACO_LOG_ENABLED = true;
+const DRACO_LOG_SHEET = "EDIT_REPORT";
+const DRACO_LOG_COL = "AA";
+const DRACO_LOG_MAX = 150;
+const DracoLogLines = [];
+let DracoLogFlushTimer = null;
+let DracoLogFlushing = false;
+let DracoLogDirty = false;
+
+function dracoErrMsg(e) {
+    if (!e) return "(error vacío)";
+    if (typeof e === "string") return e;
+    return (e.code ? e.code + ": " : "") + (e.message || String(e));
+}
+
+function dracoLog(...args) {
+    const d = new Date();
+    const ts = d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0");
+    const msg = args.map((a) => {
+        if (typeof a === "string") return a;
+        try { return JSON.stringify(a); } catch (e) { return String(a); }
+    }).join(" ");
+    console.log("[DracoLog]", ts, msg);
+    if (!DRACO_LOG_ENABLED) return;
+    DracoLogLines.unshift(ts + " | " + msg.slice(0, 600));
+    if (DracoLogLines.length > DRACO_LOG_MAX) DracoLogLines.length = DRACO_LOG_MAX;
+    DracoLogDirty = true;
+    scheduleDracoLogFlush();
+}
+window.dracoLog = dracoLog;
+
+function scheduleDracoLogFlush() {
+    if (DracoLogFlushTimer) return;
+    DracoLogFlushTimer = setTimeout(flushDracoLog, 700);
+}
+
+async function flushDracoLog() {
+    DracoLogFlushTimer = null;
+    if (DracoLogFlushing) { scheduleDracoLogFlush(); return; }
+    if (!DracoLogDirty) return;
+    DracoLogFlushing = true;
+    DracoLogDirty = false;
+    const snapshot = DracoLogLines.slice();
+    try {
+        await Excel.run(async (context) => {
+            const sh = context.workbook.worksheets.getItemOrNullObject(DRACO_LOG_SHEET);
+            sh.load("isNullObject");
+            await context.sync();
+            if (sh.isNullObject) return;
+            const values = [["LOG DRACO | build " + DRACO_BUILD + " | más reciente arriba"]];
+            for (let i = 0; i < DRACO_LOG_MAX; i++) values.push([snapshot[i] || ""]);
+            const rng = sh.getRange(DRACO_LOG_COL + "1:" + DRACO_LOG_COL + (DRACO_LOG_MAX + 1));
+            rng.numberFormat = values.map(() => ["@"]); // texto: que nada se interprete como fórmula/fecha
+            rng.values = values;
+            await context.sync();
+        });
+    } catch (e) {
+        console.warn("[DracoLog] No se pudo volcar el log a EDIT_REPORT:", e);
+    } finally {
+        DracoLogFlushing = false;
+        if (DracoLogDirty) scheduleDracoLogFlush();
+    }
+}
+
+Office.onReady(() => {
+    dracoLog("Add-in cargado. BUILD=" + DRACO_BUILD + " | url=" + window.location.pathname);
+});
+
 /**
  * Asegura que exista la hoja técnica EDIT_REPORT (estado del diseño del
  * informe: filtros/filas/columnas), igual que ensureCoreModelSheets() en
@@ -5086,201 +5166,308 @@ function parseMemberJsonTree(json) {
     return items;
 }
 
+/* ==========================================================================
+ * BUSCADOR DE MIEMBROS (diálogo de Office) — versión v4
+ * --------------------------------------------------------------------------
+ * Problemas de la versión anterior que explican el "se queda en Cargando…"
+ * y el "a veces sí, a veces no":
+ *
+ *  1) CARRERA en memberPicker.html: mandaba "ready" ANTES de registrar su
+ *     handler de DialogParentMessageReceived (addHandlerAsync es asíncrono).
+ *     Si la consulta ya estaba resuelta (dimensión pequeña o caché de
+ *     BigQuery = las RÁPIDAS), el host contestaba al instante y el mensaje
+ *     se perdía -> "Cargando…" para siempre. Las lentas sí funcionaban.
+ *     Ahora el diálogo registra el handler primero y repite "ready" hasta
+ *     recibir los datos; el host reenvía en cada "ready" hasta recibir
+ *     "loaded" (acuse de recibo).
+ *  2) Los items iban en UN solo messageChild: con dimensiones grandes el
+ *     mensaje es enorme. Ahora van troceados (begin + chunks, con número de
+ *     ronda para descartar restos de envíos anteriores).
+ *  3) handleDracoPickerFlagRequest mantenía su Excel.run abierto TODO el
+ *     rato que el diálogo estaba abierto, con un flag "busy" que IGNORABA
+ *     los dobles clics que llegaban mientras tanto, y al terminar BORRABA
+ *     T2:V2... borrando la petición del siguiente doble clic. Justo el caso
+ *     "elijo valor y doble clic en la celda de al lado -> no pasa nada".
+ *     Ahora T2:V2 se lee y se limpia AL MOMENTO (Excel.run corto), la
+ *     petición va a una cola de un hueco ("gana la última") y, si hay un
+ *     picker abierto, se cierra para abrir el nuevo.
+ *  4) Reabrir un diálogo justo después de cerrar otro puede fallar con
+ *     12007 ("ya hay un diálogo abierto"): antes se perdía en silencio.
+ *     Ahora se espera un poco y se reintenta.
+ *  5) Caché de valores por proveedor+dim+attr (5 min) y deduplicación de
+ *     consultas en curso: doble clic en otra celda del mismo campo = al
+ *     instante.
+ * ========================================================================== */
+
+let DracoCurrentPicker = null;          // { id, close(reason) } del diálogo abierto
+let DracoPickerSeq = 0;
+let DracoLastDialogClosedAt = 0;
+const DracoPickerItemsCache = new Map();    // key -> { at, items }
+const DracoPickerItemsInflight = new Map(); // key -> Promise<items>
+const DRACO_PICKER_CACHE_TTL_MS = 5 * 60 * 1000;
+const DRACO_PICKER_QUERY_TIMEOUT_MS = 120 * 1000;
+const DRACO_PICKER_CHUNK_CHARS = 16000;
+
+function dracoSleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+function dracoPickerCacheKey(located) {
+    let prov = "";
+    try { prov = (window.Provider && typeof Provider.key === "function") ? Provider.key() : ""; } catch (e) { /* nada */ }
+    return prov + "|" + String(located.dim).toUpperCase() + "|" + String(located.attr).toUpperCase();
+}
+
+/** Vacía la caché de valores del picker (p.ej. tras cambiar de modelo/conexión). */
+function clearDracoPickerCache() {
+    DracoPickerItemsCache.clear();
+    dracoLog("Caché del picker vaciada.");
+}
+window.clearDracoPickerCache = clearDracoPickerCache;
+
+async function loadDracoPickerItems(located, tag) {
+    const key = dracoPickerCacheKey(located);
+    const cached = DracoPickerItemsCache.get(key);
+    if (cached && Date.now() - cached.at < DRACO_PICKER_CACHE_TTL_MS) {
+        dracoLog(tag, "valores desde caché (" + cached.items.length + " items) " + key);
+        return cached.items;
+    }
+
+    let p = DracoPickerItemsInflight.get(key);
+    if (p) {
+        dracoLog(tag, "reutilizo consulta ya en curso para " + key);
+    } else {
+        p = (async () => {
+            const t0 = Date.now();
+            const sql = await window.ExcelService.buildFilterValuesSQL(located.dim, located.attr);
+            dracoLog(tag, "SQL construida en " + (Date.now() - t0) + " ms" + (sql ? "" : " -> VACÍA (dim/attr no encontrados en MODEL_ATRIBUTES/MODEL_HIER)"));
+            if (!sql) {
+                throw new Error("No se ha encontrado " + located.dim + " / " + located.attr + " en el modelo (atributo o jerarquía).");
+            }
+            const t1 = Date.now();
+            let json = await window.ExcelService.executeSQL(sql);
+            if (typeof json !== "string") json = JSON.stringify(json);
+            const items = parseMemberJsonTree(json);
+            dracoLog(tag, "consulta OK en " + (Date.now() - t1) + " ms | respuesta " + json.length + " chars | " + items.length + " items");
+            DracoPickerItemsCache.set(key, { at: Date.now(), items });
+            return items;
+        })();
+        DracoPickerItemsInflight.set(key, p);
+        p.then(() => DracoPickerItemsInflight.delete(key), () => DracoPickerItemsInflight.delete(key));
+    }
+
+    let timer;
+    const timeout = new Promise((_, rej) => {
+        timer = setTimeout(() => rej(new Error("La consulta de valores ha tardado más de " + (DRACO_PICKER_QUERY_TIMEOUT_MS / 1000) + " s.")), DRACO_PICKER_QUERY_TIMEOUT_MS);
+    });
+    try {
+        return await Promise.race([p, timeout]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+function displayDracoDialogOnce(url, options) {
+    return new Promise((resolve) => {
+        try {
+            Office.context.ui.displayDialogAsync(url, options, (res) => resolve(res));
+        } catch (e) {
+            resolve({ status: Office.AsyncResultStatus.Failed, error: { code: "EXC", message: dracoErrMsg(e) } });
+        }
+    });
+}
+
 /**
- * Abre el buscador de miembros como una ventana de DIÁLOGO de Office
- * (Office.context.ui.displayDialogAsync): aparece centrada sobre la
- * ventana de Excel, en SU PROPIA ventana, sin necesidad de mostrar el
- * taskpane en absoluto (a diferencia de FilterModal, que vive dentro del
- * DOM de taskpane.html).
- *
- * Un diálogo no tiene acceso al modelo de objetos de Excel, así que:
- *   1) El diálogo (memberPicker.html) se abre YA, sin esperar a nada.
- *      En PARALELO se lanza la consulta de valores (buildFilterValuesSQL
- *      + executeSQL, igual que FilterModal) — es una llamada de red
- *      (BigQuery/Snowflake) y puede tardar; el usuario ve la ventana
- *      (con su propio estado de carga) mientras tanto, en vez de una
- *      pausa "muerta" en Excel antes de que aparezca nada.
- *   2) En cuanto el diálogo avisa "ready" Y la consulta ya ha resuelto
- *      (en cualquier orden: puede llegar antes el "ready" o antes la
- *      SQL), se le manda por mensaje el resultado: {type:"data", items,
- *      initialSearch, title} si fue bien, o {type:"error", message} si
- *      falló. Si solo una de las dos cosas está lista, no se manda nada
- *      todavía: se manda en cuanto la otra también lo esté.
- *   3) Cuando el usuario elige un valor (o cancela), el diálogo manda un
- *      mensaje de vuelta (DialogMessageReceived) y aquí se escribe la
- *      fórmula EPM_VALUE y se cierra el diálogo. Esta parte no cambia.
- *
- * IMPORTANTE: memberPicker.html tiene que saber pintar un estado de
- * carga (spinner / "Cargando…") desde el primer instante — hasta ahora
- * podía asumir que el primer mensaje del padre ya traía los items,
- * porque la SQL siempre estaba resuelta antes de abrirse. Ahora debe
- * distinguir type:"data" (rellenar lista) de type:"error" (mostrar el
- * mensaje de error, con opción de cerrar -> mandar {type:"cancel"}).
- *
- * NOTA: Office.js no permite "anclar" un diálogo a la posición de una
- * celda concreta (no hay API para eso); displayDialogAsync solo permite
- * centrarlo sobre la ventana de Excel con un tamaño (%) dado, que es lo
- * más parecido a "en medio del Excel" que soporta la plataforma.
+ * Abre el buscador de miembros y devuelve una promesa que se resuelve
+ * cuando el diálogo se ha cerrado DEL TODO (elegido/cancelado/X/sustituido
+ * por otra petición), con la fórmula ya escrita si se eligió un valor.
  */
 async function openMemberRecognitionPicker(addr, located, initialSearch) {
-    console.log("[Draco] openMemberRecognitionPicker: iniciando para", addr, located);
+    const id = ++DracoPickerSeq;
+    const tag = "[picker#" + id + "]";
+    const t0 = Date.now();
+    dracoLog(tag, "abrir para " + addr + " -> " + located.dim + "." + located.attr +
+        " (informe " + located.reportId + (located.growth ? ", zona crecimiento" : "") + ") texto='" + (initialSearch || "") + "'");
 
-    if (DracoMemberPickerOpen) {
-        console.log("[Draco] Ya hay un buscador de miembros abierto: se ignora esta petición duplicada para", addr);
-        return;
+    // Si había otro abierto, se cierra (gana la última petición).
+    if (DracoCurrentPicker) {
+        dracoLog(tag, "había otro picker abierto (#" + DracoCurrentPicker.id + "): se cierra");
+        await DracoCurrentPicker.close("sustituido por picker#" + id);
     }
-    DracoMemberPickerOpen = true;
 
-    // Estado compartido entre la carga de valores (en paralelo) y el
-    // diálogo (que puede avisar "ready" antes o después de que la SQL
-    // resuelva). dialogRef se rellena en cuanto displayDialogAsync tiene
-    // éxito; dialogReadySeen, en cuanto llega el mensaje "ready".
-    let itemsPayload = null; // { items, initialSearch, title } si la SQL fue bien
-    let itemsError = null;   // string si la SQL falló
+    let resolveDone;
+    const done = new Promise((r) => { resolveDone = r; });
+    let finished = false;
     let dialogRef = null;
     let dialogReadySeen = false;
+    let delivered = false;
+    let round = 0;
+    let itemsPayload = null;
+    let itemsError = null;
+    let readyWatchdog = null;
 
-    // Manda al diálogo el resultado (datos o error) SOLO si ya está
-    // disponible; si todavía no hay ni datos ni error, no hace nada (se
-    // volverá a llamar en cuanto lo que falte esté listo).
-    function sendPickerResultIfReady() {
-        if (!dialogRef || !dialogReadySeen) return;
-        if (itemsError) {
-            dialogRef.messageChild(JSON.stringify({ type: "error", message: itemsError }));
-        } else if (itemsPayload) {
-            dialogRef.messageChild(JSON.stringify(Object.assign({ type: "data" }, itemsPayload)));
+    const finish = async (reason, after) => {
+        if (finished) return done;
+        finished = true;
+        clearTimeout(readyWatchdog);
+        if (dialogRef) {
+            try { dialogRef.close(); } catch (e) { /* ya cerrado */ }
+            DracoLastDialogClosedAt = Date.now();
         }
-    }
+        if (DracoCurrentPicker && DracoCurrentPicker.id === id) DracoCurrentPicker = null;
+        if (after) {
+            try { await after(); } catch (e) { dracoLog(tag, "ERROR tras cerrar: " + dracoErrMsg(e)); }
+        }
+        DracoMemberPickerOpen = !!DracoCurrentPicker;
+        dracoLog(tag, "cerrado: " + reason + " (" + (Date.now() - t0) + " ms en total)");
+        resolveDone();
+        return done;
+    };
 
-    // Consulta de valores (buildFilterValuesSQL + executeSQL): se lanza
-    // ya, sin bloquear la apertura del diálogo. Su propio try/catch deja
-    // el resultado (o el error) en las variables de arriba y, si el
-    // diálogo ya avisó "ready", se lo manda de inmediato.
-    (async () => {
+    DracoCurrentPicker = { id, close: (reason) => finish(reason) };
+    DracoMemberPickerOpen = true;
+
+    let lastSendAt = 0;
+    let loggedWaiting = false;
+    const sendIfReady = (trigger) => {
+        if (finished || !dialogRef || !dialogReadySeen || delivered) return;
+        // Los "ready" repetidos no reenvían si se acaba de mandar (el
+        // diálogo puede estar todavía montando la lista); "resend" sí.
+        if (trigger === "ready" && round > 0 && Date.now() - lastSendAt < 4000) return;
+        if (!itemsPayload && !itemsError) {
+            if (!loggedWaiting) dracoLog(tag, "diálogo listo, la consulta aún no ha terminado");
+            loggedWaiting = true;
+            return;
+        }
+        round++;
+        lastSendAt = Date.now();
         try {
-            const sql = await window.ExcelService.buildFilterValuesSQL(located.dim, located.attr);
-            console.log("[Draco] SQL de valores construida:", sql);
-            if (!sql) {
-                console.warn("[Draco] No se ha podido construir el SQL (dim/attr no reconocidos):", located);
-                itemsError = "No se ha podido construir la consulta para este campo.";
+            if (itemsError) {
+                dialogRef.messageChild(JSON.stringify({ type: "error", round, message: itemsError }));
+                dracoLog(tag, "error enviado al diálogo (ronda " + round + ", " + trigger + ")");
                 return;
             }
-            const json = await window.ExcelService.executeSQL(sql);
-            const items = parseMemberJsonTree(json);
-            console.log("[Draco] Nº de items recibidos para el picker:", items.length);
-            itemsPayload = {
-                items,
-                initialSearch,
-                title: `${located.dim} / ${located.attr}`
-            };
-        } catch (err) {
-            console.error("[Draco] Error obteniendo los valores del picker:", err);
-            itemsError = (err && err.message) || "Error al cargar los valores del picker.";
-        } finally {
-            sendPickerResultIfReady();
+            const body = JSON.stringify(itemsPayload.items);
+            const parts = [];
+            for (let i = 0; i < body.length; i += DRACO_PICKER_CHUNK_CHARS) parts.push(body.slice(i, i + DRACO_PICKER_CHUNK_CHARS));
+            dialogRef.messageChild(JSON.stringify({
+                type: "begin", round, total: parts.length,
+                initialSearch: itemsPayload.initialSearch, title: itemsPayload.title
+            }));
+            parts.forEach((part, seq) => dialogRef.messageChild(JSON.stringify({ type: "chunk", round, seq, part })));
+            dracoLog(tag, "enviados " + itemsPayload.items.length + " items en " + parts.length +
+                " trozos (" + body.length + " chars), ronda " + round + " (" + trigger + ")");
+        } catch (e) {
+            dracoLog(tag, "ERROR en messageChild: " + dracoErrMsg(e));
         }
-    })();
+    };
 
-    const dialogUrl = new URL("memberPicker.html", window.location.href).href;
-    console.log("[Draco] Abriendo diálogo del picker en:", dialogUrl);
+    // Consulta en paralelo con la apertura del diálogo.
+    loadDracoPickerItems(located, tag).then(
+        (items) => {
+            itemsPayload = { items, initialSearch: initialSearch || "", title: located.dim + " / " + located.attr };
+            sendIfReady("consulta terminada");
+        },
+        (err) => {
+            itemsError = dracoErrMsg(err);
+            dracoLog(tag, "ERROR en la consulta: " + itemsError);
+            sendIfReady("consulta con error");
+        }
+    );
 
-    await new Promise((resolve) => {
-        Office.context.ui.displayDialogAsync(
-            dialogUrl,
-            { height: 55, width: 28, displayInIframe: false },
-            (asyncResult) => {
-                if (asyncResult.status === Office.AsyncResultStatus.Failed) {
-                    console.error(
-                        "[Draco] displayDialogAsync ha fallado:",
-                        asyncResult.error && asyncResult.error.code,
-                        asyncResult.error && asyncResult.error.message
-                    );
-                    DracoMemberPickerOpen = false;
-                    resolve();
-                    return;
-                }
+    // Deja respirar a Office si se acaba de cerrar otro diálogo (evita 12007).
+    const sinceClose = Date.now() - DracoLastDialogClosedAt;
+    if (sinceClose < 400) await dracoSleep(400 - sinceClose);
+    if (finished) return done;
 
-                console.log("[Draco] Diálogo abierto correctamente.");
-                const dialog = asyncResult.value;
-                dialogRef = dialog;
-                let settled = false;
+    const dialogUrl = new URL("memberPicker.html", window.location.href).href +
+        "?v=" + encodeURIComponent(DRACO_BUILD) + "&pid=" + id;
 
-                const closeDialog = () => {
-                    try { dialog.close(); } catch (e) { /* ya cerrado */ }
-                };
+    let res = null;
+    for (let attempt = 1; attempt <= 6; attempt++) {
+        res = await displayDracoDialogOnce(dialogUrl, { height: 55, width: 28, displayInIframe: false });
+        if (res.status !== Office.AsyncResultStatus.Failed) break;
+        const code = res.error && res.error.code;
+        dracoLog(tag, "displayDialogAsync falló (intento " + attempt + "): " + code + " " + (res.error && res.error.message));
+        if (code !== 12007 || finished) break; // 12007 = ya hay un diálogo abierto -> reintentar
+        await dracoSleep(250 * attempt);
+    }
+    if (!res || res.status === Office.AsyncResultStatus.Failed) {
+        return finish("no se pudo abrir el diálogo");
+    }
 
-                dialog.addEventHandler(Office.EventType.DialogMessageReceived, async (arg) => {
-                    console.log("[Draco] Mensaje recibido del diálogo:", arg.message);
-                    let payload;
-                    try {
-                        payload = JSON.parse(arg.message);
-                    } catch (err) {
-                        console.error("[Draco] Mensaje del diálogo no es JSON válido:", err);
-                        return;
-                    }
+    dialogRef = res.value;
+    if (finished) { // sustituido mientras se abría
+        try { dialogRef.close(); } catch (e) { /* nada */ }
+        DracoLastDialogClosedAt = Date.now();
+        return done;
+    }
+    dracoLog(tag, "diálogo abierto en " + (Date.now() - t0) + " ms");
 
-                    if (payload.type === "ready") {
-                        dialogReadySeen = true;
-                        console.log("[Draco] Diálogo listo: enviando datos si ya están (si no, se mandarán en cuanto la SQL resuelva)…");
-                        sendPickerResultIfReady();
-                        return;
-                    }
+    readyWatchdog = setTimeout(() => {
+        if (!dialogReadySeen && !finished) {
+            dracoLog(tag, "AVISO: 15 s sin 'ready' del diálogo. ¿memberPicker.html antiguo en caché o office.js sin cargar?");
+        }
+    }, 15000);
 
-                    if (payload.type === "select") {
-                        console.log("[Draco] Valor elegido:", payload.value, "/", payload.attribute);
-                        settled = true;
-                        closeDialog();
-                        try {
-                            await Excel.run(async (context) => {
-                                // Si el clic que abrió este picker cayó en la
-                                // zona de crecimiento de un informe (fuera
-                                // todavía de su rango con nombre actual), hay
-                                // que ampliar de verdad ese rango con nombre
-                                // ANTES de escribir la fórmula, para que la
-                                // celda pase a pertenecer de verdad al
-                                // informe (ver findDracoAxisRangeOrGrowthZoneForCell).
-                                if (located.growth) {
-                                    const g = located.growth;
-                                    console.log("[Draco] Ampliando rango con nombre", g.rangeName, "para incluir", addr);
-                                    await growDracoNamedRange(
-                                        context, g.sheetName, g.rangeName, g.axisSuffix,
-                                        g.axisStart, g.requiredCount, g.crossIndex, g.crossCount
-                                    );
-                                }
+    dialogRef.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+        let payload;
+        try { payload = JSON.parse(arg.message); } catch (e) {
+            dracoLog(tag, "mensaje no JSON del diálogo: " + String(arg.message).slice(0, 200));
+            return;
+        }
+        if (!payload) return;
 
-                                const resultSheetName = await getDracoResultSheetName(context, located.reportId);
-                                const sheet = context.workbook.worksheets.getItem(resultSheetName);
-                                const cell = sheet.getRange(addr);
-                                cell.values = [[buildEpmValueFormula(located.dim, payload.attribute, payload.value)]];
-                                await context.sync();
-                            });
-                            console.log("[Draco] Fórmula EPM_VALUE escrita correctamente en", addr);
-                        } catch (err) {
-                            console.error("[Draco] Error escribiendo la fórmula EPM_VALUE:", err);
+        switch (payload.type) {
+            case "log":
+                dracoLog(tag, "[diálogo] " + payload.msg);
+                return;
+            case "ready":
+                if (!dialogReadySeen) dracoLog(tag, "'ready' del diálogo (build diálogo=" + (payload.build || "?") + ") a los " + (Date.now() - t0) + " ms");
+                dialogReadySeen = true;
+                sendIfReady("ready");
+                return;
+            case "resend":
+                dracoLog(tag, "el diálogo pide reenvío (ronda " + payload.round + " incompleta)");
+                delivered = false;
+                sendIfReady("resend");
+                return;
+            case "loaded":
+                if (!delivered) dracoLog(tag, "el diálogo confirma datos pintados (" + payload.count + " items) a los " + (Date.now() - t0) + " ms");
+                delivered = true;
+                return;
+            case "select":
+                dracoLog(tag, "valor elegido: " + payload.attribute + " = " + payload.value);
+                finish("valor elegido", async () => {
+                    await Excel.run(async (context) => {
+                        if (located.growth) {
+                            const g = located.growth;
+                            dracoLog(tag, "ampliando " + g.rangeName + " para incluir " + addr);
+                            await growDracoNamedRange(
+                                context, g.sheetName, g.rangeName, g.axisSuffix,
+                                g.axisStart, g.requiredCount, g.crossIndex, g.crossCount
+                            );
                         }
-                        DracoMemberPickerOpen = false;
-                        resolve();
-                        return;
-                    }
-
-                    if (payload.type === "cancel") {
-                        console.log("[Draco] Selección cancelada por el usuario.");
-                        settled = true;
-                        closeDialog();
-                        DracoMemberPickerOpen = false;
-                        resolve();
-                    }
+                        const resultSheetName = await getDracoResultSheetName(context, located.reportId);
+                        const sheet = context.workbook.worksheets.getItem(resultSheetName);
+                        sheet.getRange(addr).values = [[buildEpmValueFormula(located.dim, payload.attribute, payload.value)]];
+                        await context.sync();
+                    });
+                    dracoLog(tag, "EPM_VALUE escrita en " + addr);
                 });
-
-                dialog.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
-                    // 12006 = el usuario cerró el diálogo con la X.
-                    console.warn("[Draco] DialogEventReceived:", arg.error);
-                    DracoMemberPickerOpen = false;
-                    if (!settled) resolve();
-                });
-            }
-        );
+                return;
+            case "cancel":
+                finish("cancelado por el usuario");
+                return;
+            default:
+                dracoLog(tag, "mensaje desconocido del diálogo: " + payload.type);
+        }
     });
+
+    dialogRef.addEventHandler(Office.EventType.DialogEventReceived, (arg) => {
+        // 12006 = cerrado con la X; 12002/12003 = no se pudo cargar la página.
+        finish("evento del diálogo " + (arg && arg.error));
+    });
+
+    return done;
 }
 
 
@@ -5388,6 +5575,7 @@ const DRACO_PICKER_FLAG_CELL = "V2"; // "REC" = reconocimiento de miembros (tecl
 async function runDracoDoubleClickAction(context, addr, located, indentLevel, cellText) {
     let accionTexto;
     let fieldLocated = null;
+    let pickerTarget = null;
 
     fieldLocated = await resolveDracoFieldForAxisLevel(
         context, located.reportId, located.axis, located.level, indentLevel
@@ -5404,12 +5592,14 @@ async function runDracoDoubleClickAction(context, addr, located, indentLevel, ce
         accionTexto = located.exact
             ? " | Accion: buscador de miembros abierto (doble clic)"
             : " | Accion: buscador de miembros abierto (doble clic, ampliará el rango si se confirma un valor)";
-        await openMemberRecognitionPicker(addr, fieldLocated, cellText);
+        // v4: ya NO se abre aquí (con el Excel.run abierto); se devuelve
+        // el destino y lo abre runDracoPickerLoop fuera de Excel.run.
+        pickerTarget = { addr, fieldLocated, initialSearch: cellText };
     } else {
         accionTexto = " | Accion: doble clic fuera de Filas/Columnas del informe";
     }
 
-    return { fieldLocated, accionTexto };
+    return { fieldLocated, accionTexto, pickerTarget };
 }
 
 /**
@@ -5423,18 +5613,19 @@ async function runDracoDoubleClickAction(context, addr, located, indentLevel, ce
  * para el doble clic con V2="DC" (ver handleDracoPickerFlagRequest, que
  * llama a esta función).
  */
-async function runDracoMemberRecognitionAction(context, sheetName, targetAddr) {
+async function runDracoMemberRecognitionAction(context, sheetName, targetAddr, tag) {
+    tag = tag || "[REC]";
     let addr = String(targetAddr || "");
     if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
     addr = addr.replace(/\$/g, "").toUpperCase();
     if (!addr) {
-        console.warn("[Draco] Reconocimiento de miembros: sin celda (EDIT_REPORT!U2 vacío).");
+        dracoLog(tag, "REC: sin celda (EDIT_REPORT!U2 vacío).");
         return;
     }
 
     const recognitionActive = await isDracoMemberRecognitionActive(context);
     if (!recognitionActive) {
-        console.log("[Draco] Reconocimiento de miembros: EDIT_REPORT!B1 desactivado, se ignora la petición para", sheetName, addr);
+        dracoLog(tag, "REC: EDIT_REPORT!B1 desactivado, se ignora la petición para", sheetName, addr);
         return;
     }
 
@@ -5442,7 +5633,7 @@ async function runDracoMemberRecognitionAction(context, sheetName, targetAddr) {
     sheet.load(["isNullObject", "id"]);
     await context.sync();
     if (sheet.isNullObject) {
-        console.warn("[Draco] Reconocimiento de miembros: la hoja indicada en EDIT_REPORT!T2 no existe:", sheetName);
+        dracoLog(tag, "REC: la hoja indicada en EDIT_REPORT!T2 no existe:", sheetName);
         return;
     }
 
@@ -5453,27 +5644,27 @@ async function runDracoMemberRecognitionAction(context, sheetName, targetAddr) {
 
     // Varias celdas a la vez (pegado/relleno): se ignora.
     if (cell.rowCount !== 1 || cell.columnCount !== 1) {
-        console.log("[Draco] Reconocimiento de miembros: varias celdas a la vez (pegado/relleno), se ignora:", sheetName, addr);
+        dracoLog(tag, "REC: varias celdas a la vez (pegado/relleno), se ignora:", sheetName, addr);
         return;
     }
 
     const value = cell.values[0][0];
     const formula = cell.formulas[0][0];
     if (value === "" || value === null || value === undefined) {
-        console.log("[Draco] Reconocimiento de miembros: valor vacío, se ignora:", sheetName, addr);
+        dracoLog(tag, "REC: valor vacío, se ignora:", sheetName, addr);
         return;
     }
     // Ya es EPM_VALUE (tecleada, pegada, o escrita por nosotros mismos
     // hace un instante): salir para no reabrir el buscador en bucle.
     if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) {
-        console.log("[Draco] Reconocimiento de miembros: la celda ya es una fórmula EPM_VALUE, se ignora:", sheetName, addr);
+        dracoLog(tag, "REC: la celda ya es una fórmula EPM_VALUE, se ignora:", sheetName, addr);
         return;
     }
     const currentText = String(value);
 
     const located = await findDracoRowsNamedRangeForCell(context, sheet.id, addr);
     if (!located) {
-        console.log("[Draco] Reconocimiento de miembros: fuera de cualquier Draco_XXX_Rows/Cols:", sheetName, addr);
+        dracoLog(tag, "REC: fuera de cualquier Draco_XXX_Rows/Cols:", sheetName, addr);
         return;
     }
 
@@ -5481,7 +5672,7 @@ async function runDracoMemberRecognitionAction(context, sheetName, targetAddr) {
         context, located.reportId, located.axis, located.level, cell.format.indentLevel
     );
     if (!fieldLocated) {
-        console.log(`[Draco] Reconocimiento de miembros: informe ${located.reportId}, eje ${located.axis}, nivel ${located.level} sin dim/attr configurado, se ignora.`);
+        dracoLog(tag, `REC: informe ${located.reportId}, eje ${located.axis}, nivel ${located.level} sin dim/attr configurado, se ignora.`);
         return;
     }
 
@@ -5492,8 +5683,8 @@ async function runDracoMemberRecognitionAction(context, sheetName, targetAddr) {
     fieldLocated.reportId = located.reportId;
     fieldLocated.growth = located.growth || null;
 
-    console.log(`[Draco] Reconocimiento de miembros: abriendo picker (${fieldLocated.dim} / ${fieldLocated.attr}) para ${sheetName}!${addr}...`);
-    await openMemberRecognitionPicker(addr, fieldLocated, currentText);
+    dracoLog(tag, `REC: abriendo picker (${fieldLocated.dim} / ${fieldLocated.attr}) para ${sheetName}!${addr}...`);
+    return { addr, fieldLocated, initialSearch: currentText };
 }
 
 /**
@@ -5505,12 +5696,13 @@ async function runDracoMemberRecognitionAction(context, sheetName, targetAddr) {
  * doble clic físico) — el VBA solo necesita acertar de forma aproximada,
  * el filtrado fino se hace aquí.
  */
-async function runDracoSimulatedDoubleClick(context, sheetName, targetAddr) {
+async function runDracoSimulatedDoubleClick(context, sheetName, targetAddr, tag) {
+    tag = tag || "[DC]";
     let addr = String(targetAddr || "");
     if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
     addr = addr.replace(/\$/g, "").toUpperCase();
     if (!addr) {
-        console.warn("[Draco] Doble clic simulado sin celda (EDIT_REPORT!U2 vacío).");
+        dracoLog(tag, "DC sin celda (EDIT_REPORT!U2 vacío).");
         return;
     }
 
@@ -5518,13 +5710,13 @@ async function runDracoSimulatedDoubleClick(context, sheetName, targetAddr) {
     sheet.load(["isNullObject", "id"]);
     await context.sync();
     if (sheet.isNullObject) {
-        console.warn("[Draco] Doble clic simulado: la hoja indicada en EDIT_REPORT!T2 no existe:", sheetName);
+        dracoLog(tag, "DC: la hoja indicada en EDIT_REPORT!T2 no existe:", sheetName);
         return;
     }
 
     const located = await findDracoRowsNamedRangeForCell(context, sheet.id, addr);
     if (!located) {
-        console.log("[Draco] Doble clic simulado fuera de rango:", sheetName, addr);
+        dracoLog(tag, "DC fuera de cualquier Draco_*_Rows/Cols (ni zona de crecimiento): " + sheetName + "!" + addr);
         return;
     }
 
@@ -5534,110 +5726,121 @@ async function runDracoSimulatedDoubleClick(context, sheetName, targetAddr) {
     const cellText = String((cell.values && cell.values[0] && cell.values[0][0]) || "");
 
     const result = await runDracoDoubleClickAction(context, addr, located, cell.format.indentLevel, cellText);
-    console.log(`[Draco] Doble clic simulado en ${sheetName}!${addr} (${located.rangeName}):${result.accionTexto}`);
+    dracoLog(tag, `DC en ${sheetName}!${addr} (${located.rangeName}, eje ${located.axis}, nivel ${located.level}, sangría ${cell.format.indentLevel})` +
+        (result.fieldLocated ? ` -> ${result.fieldLocated.dim}.${result.fieldLocated.attr}` : " -> SIN dim/attr para ese nivel (resolveDracoFieldForAxisLevel = null)"));
+    return result.pickerTarget;
 }
 
 /**
- * Se dispara con onChanged de EDIT_REPORT al tocar T2, U2 o V2 (o un
- * rango que las incluya). Actúa según el valor exacto de V2:
- *   - "DC"  -> simula un doble clic real sobre T2!U2 (lo que escribe
- *              Workbook_SheetBeforeDoubleClick del XLAM justo antes de
- *              poner Cancel = True).
- *   - "REC" -> reconocimiento de miembros: el XLAM ha detectado que se
- *              ha tecleado un valor en T2!U2 (Worksheet_Change) y pide
- *              que se compruebe si toca abrir el buscador.
- *   - cualquier otro valor (o vacío): no hay ningún picker que abrir
- *     para él, se limpia igualmente.
+ * onChanged de EDIT_REPORT. El VBA del XLAM escribe en T2 (hoja), U2
+ * (celda) y V2 ("DC" doble clic | "REC" reconocimiento al teclear).
  *
- * En los casos REC/DC se espera (await) a que
- * runDracoMemberRecognitionAction/runDracoSimulatedDoubleClick
- * terminen, y éstas a su vez esperan a que se cierre openMemberRecognitionPicker
- * (aceptar/cancelar/X) — así el `finally` de aquí abajo, que deja T2:V2
- * en blanco, SIEMPRE se ejecuta DESPUÉS de que el picker se haya cerrado
- * de verdad. Se usa DracoSuppressChangeEvents al limpiar para no
- * reaccionar a nuestra propia escritura.
+ * v4: se lee y se LIMPIA T2:V2 al momento (Excel.run corto, serializado),
+ * se deja la petición en una cola de un solo hueco (gana la última) y se
+ * procesa en runDracoPickerLoop SIN mantener ningún Excel.run abierto
+ * mientras el diálogo está en pantalla. Así un doble clic que llega con
+ * un picker abierto ya no se pierde: cierra ese picker y abre el nuevo.
  */
+let DracoPickerPending = null;
+let DracoPickerLoopRunning = false;
+let DracoPickerReadChain = Promise.resolve();
+let DracoPickerReqSeq = 0;
+
 async function handleDracoPickerFlagRequest(eventArgs) {
-    try {
-        if (DracoSuppressChangeEvents) return;
-        if (!eventArgs || !eventArgs.address) return;
+    if (!eventArgs || !eventArgs.address) return;
 
-        let addr = String(eventArgs.address);
-        if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
-        if (!addr) return;
+    let addr = String(eventArgs.address);
+    if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+    if (!addr) return;
 
-        const touchedRange = parseAddressRange(addr);
-        const controlCells = [DRACO_PICKER_SHEET_CELL, DRACO_PICKER_TARGET_CELL, DRACO_PICKER_FLAG_CELL]
-            .map(parseAddress);
-        const touchesControlZone = controlCells.some(p =>
-            p.row >= touchedRange.r1 && p.row <= touchedRange.r2 &&
-            p.col >= touchedRange.c1 && p.col <= touchedRange.c2
-        );
-        if (!touchesControlZone) return;
+    const touchedRange = parseAddressRange(addr);
+    const controlCells = [DRACO_PICKER_SHEET_CELL, DRACO_PICKER_TARGET_CELL, DRACO_PICKER_FLAG_CELL]
+        .map(parseAddress);
+    const touchesControlZone = controlCells.some(p =>
+        p.row >= touchedRange.r1 && p.row <= touchedRange.r2 &&
+        p.col >= touchedRange.c1 && p.col <= touchedRange.c2
+    );
+    if (!touchesControlZone) return;
 
-        // Ya hay una petición DC/REC en curso (p.ej. varios dobles clics
-        // rápidos seguidos sobre distintas celdas): se ignora esta nueva
-        // notificación SIN llegar a abrir Excel.run. La que ya está en
-        // marcha limpiará T2:V2 al terminar (picker cerrado); a partir de
-        // ahí, el siguiente doble clic disparará su propio onChanged y se
-        // procesará con normalidad.
-        if (DracoPickerFlagRequestBusy) {
-            console.log("[Draco] Ya hay una petición DC/REC en curso: se ignora esta hasta que termine (clic rápido repetido).");
+    // Se anota AHORA si estábamos pintando (para descartar REC provocados
+    // por nuestras propias escrituras), antes de encolar la lectura.
+    const suppressedAtEvent = DracoSuppressChangeEvents;
+
+    DracoPickerReadChain = DracoPickerReadChain
+        .then(() => readAndClearDracoPickerRequest(addr, suppressedAtEvent))
+        .catch((e) => dracoLog("ERROR leyendo/limpiando EDIT_REPORT!T2:V2: " + dracoErrMsg(e)));
+    return DracoPickerReadChain;
+}
+
+async function readAndClearDracoPickerRequest(eventAddr, suppressedAtEvent) {
+    let req = null;
+    await Excel.run(async (context) => {
+        const ctrl = context.workbook.worksheets.getItem("EDIT_REPORT")
+            .getRange(DRACO_PICKER_SHEET_CELL + ":" + DRACO_PICKER_FLAG_CELL);
+        ctrl.load("values");
+        await context.sync();
+
+        const sheetName = String(ctrl.values[0][0] || "").trim();
+        const targetAddr = String(ctrl.values[0][1] || "").trim();
+        const flag = String(ctrl.values[0][2] || "").trim().toUpperCase();
+
+        if (!sheetName && !targetAddr && !flag) return; // vacío: nuestra propia limpieza (o ya procesado)
+
+        if (!sheetName || !targetAddr || (flag !== "DC" && flag !== "REC")) {
+            dracoLog("T2:V2 incompleto o flag desconocido (evento " + eventAddr + "), NO se toca: [" +
+                sheetName + "] [" + targetAddr + "] [" + flag + "]");
             return;
         }
-        DracoPickerFlagRequestBusy = true;
 
-        await Excel.run(async (context) => {
-            const editReport = context.workbook.worksheets.getItem("EDIT_REPORT");
-            const ctrl = editReport.getRange(
-                DRACO_PICKER_SHEET_CELL + ":" + DRACO_PICKER_FLAG_CELL
-            );
-            ctrl.load("values");
-            await context.sync();
+        ctrl.clear(Excel.ClearApplyTo.contents);
+        await context.sync();
+        req = { id: ++DracoPickerReqSeq, sheetName, targetAddr, flag };
+    });
+    if (!req) return;
 
-            const sheetName = String(ctrl.values[0][0] || "").trim();
-            const targetAddr = String(ctrl.values[0][1] || "").trim();
-            const flag = String(ctrl.values[0][2] || "").trim().toUpperCase();
+    const tag = "[req#" + req.id + "]";
+    if (req.flag === "REC" && suppressedAtEvent) {
+        dracoLog(tag, "REC " + req.sheetName + "!" + req.targetAddr + " ignorado (lo provocó un repintado del add-in)");
+        return;
+    }
 
-            // Solo se limpia T2:V2 cuando el flag era uno de los que
-            // realmente gestionamos (DC/REC), haya ido bien o mal la
-            // acción. Si el flag no se reconoce (p.ej. todavía no se ha
-            // actualizado el VBA, o alguien ha escrito otra cosa a mano),
-            // NO tocamos nada: se deja tal cual para poder depurarlo.
-            let shouldClear = false;
+    dracoLog(tag, "recibido " + req.flag + " " + req.sheetName + "!" + req.targetAddr);
+    if (DracoPickerPending) dracoLog("[req#" + DracoPickerPending.id + "] descartado: sustituido por req#" + req.id);
+    DracoPickerPending = req;
 
+    if (DracoCurrentPicker) DracoCurrentPicker.close("nuevo " + req.flag + " (req#" + req.id + ")");
+    runDracoPickerLoop();
+}
+
+async function runDracoPickerLoop() {
+    if (DracoPickerLoopRunning) return;
+    DracoPickerLoopRunning = true;
+    try {
+        while (DracoPickerPending) {
+            const req = DracoPickerPending;
+            DracoPickerPending = null;
+            const tag = "[req#" + req.id + "]";
             try {
-                if (sheetName && targetAddr && flag === "DC") {
-                    console.log("[Draco] Petición de doble clic simulado desde EDIT_REPORT:", { sheetName, targetAddr });
-                    shouldClear = true;
-                    await runDracoSimulatedDoubleClick(context, sheetName, targetAddr);
-                } else if (sheetName && targetAddr && flag === "REC") {
-                    console.log("[Draco] Petición de reconocimiento de miembros desde EDIT_REPORT:", { sheetName, targetAddr });
-                    shouldClear = true;
-                    await runDracoMemberRecognitionAction(context, sheetName, targetAddr);
-                } else if (flag) {
-                    console.warn("[Draco] EDIT_REPORT!V2 tiene un valor que no es ni \"REC\" ni \"DC\", se ignora SIN limpiar:", flag);
+                const t0 = Date.now();
+                let target = null;
+                await Excel.run(async (context) => {
+                    target = req.flag === "DC"
+                        ? await runDracoSimulatedDoubleClick(context, req.sheetName, req.targetAddr, tag)
+                        : await runDracoMemberRecognitionAction(context, req.sheetName, req.targetAddr, tag);
+                });
+                dracoLog(tag, "resuelto en " + (Date.now() - t0) + " ms" + (target ? "" : " -> no se abre picker"));
+                if (!target) continue;
+                if (DracoPickerPending) {
+                    dracoLog(tag, "no se abre: ya ha llegado una petición más nueva");
+                    continue;
                 }
-            } finally {
-                // Se vacía solo si el flag era DC/REC (haya procedido bien
-                // o mal, y solo cuando el picker -si lo hubo- ya se ha
-                // cerrado de verdad): es lo que evita que el flag se quede
-                // puesto tras una petición válida, sin borrar valores que
-                // el add-in no ha llegado a interpretar.
-                if (shouldClear) {
-                    DracoSuppressChangeEvents = true;
-                    editReport.getRange(
-                        DRACO_PICKER_SHEET_CELL + ":" + DRACO_PICKER_FLAG_CELL
-                    ).clear(Excel.ClearApplyTo.contents);
-                    await context.sync();
-                }
+                await openMemberRecognitionPicker(target.addr, target.fieldLocated, target.initialSearch);
+            } catch (e) {
+                dracoLog(tag, "ERROR procesando la petición: " + dracoErrMsg(e));
             }
-        });
-    } catch (e) {
-        console.error("[Draco] Error gestionando la petición del picker desde EDIT_REPORT!T2:V2:", e);
+        }
     } finally {
-        DracoSuppressChangeEvents = false;
-        DracoPickerFlagRequestBusy = false;
+        DracoPickerLoopRunning = false;
     }
 }
 
@@ -5653,8 +5856,20 @@ async function handleDracoPickerFlagRequest(eventArgs) {
  * existiera. Con esta función aparte, ensureDracoHandlersRegistered puede
  * engancharla sin depender de que exista CSV_RESULT.
  */
+let DracoEditReportHandlerRegistering = false;
 async function registerEditReportPickerHandler(context) {
-    if (DracoEditReportHandlerRegistered) return;
+    // v4: el flag se reserva ANTES del primer await para que dos llamadas
+    // casi simultáneas no registren el handler dos veces.
+    if (DracoEditReportHandlerRegistered || DracoEditReportHandlerRegistering) return;
+    DracoEditReportHandlerRegistering = true;
+    try {
+        await registerEditReportPickerHandlerInner(context);
+    } finally {
+        DracoEditReportHandlerRegistering = false;
+    }
+}
+
+async function registerEditReportPickerHandlerInner(context) {
 
     const editReport = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
     editReport.load("isNullObject");
@@ -5673,7 +5888,7 @@ async function registerEditReportPickerHandler(context) {
     await context.sync();
 
     DracoEditReportHandlerRegistered = true;
-    console.log("[Draco] Listener de EDIT_REPORT registrado: T2:V2 (REC/DC, buscador de miembros).");
+    dracoLog("Listener de EDIT_REPORT!T2:V2 (DC/REC) registrado.");
 }
 
 // NOTA: aquí existía handleDracoPlanningValueChanged (onChanged de cada
