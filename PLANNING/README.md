@@ -308,6 +308,10 @@ python/flow_runner.py                      Orquestador de un flujo (cadena de in
 sql/00_control_schema.sql             Script SQL de referencia (ambos motores)
 sql/01_snowflake_oauth_integration.sql Alta del cliente OAuth en Snowflake
 proxy/cloudflare-worker.js             Proxy CORS opcional para Snowflake
+generador.html / visor.html           Informes: diseñar y abrir (ver 7quater)
+informes-herramienta.html             Herramienta de informes embebida en las dos páginas
+js/informes.js, js/generador-app.js,
+js/visor-app.js, css/informes.css     Módulo y estilos de Informes
 ```
 
 ## 7bis. Ejecución de flujos (nuevo)
@@ -480,6 +484,127 @@ Hay dos niveles de monitorización, iguales que en Snowflake:
 - ❌ No hace falta ninguna `SECURITY INTEGRATION`, `STAGE` ni
   `FILE_UPLOAD_CHUNKS` — eso es solo la parte de Snowflake
   (`sql/02_snowflake_file_upload.sql` no aplica aquí).
+
+## 7quater. Informes: generador y visor (nuevo)
+
+Páginas de informe (KPIs, gráficos, tablas, textos) que se **diseñan** en
+`generador.html` y se **abren** en `visor.html`, con el login de Draco y
+siempre dentro de un proyecto.
+
+**Qué se guarda.** Solo la *definición* del informe en JSON (la que genera la
+herramienta de informes, incluyendo su tema de marca), nunca el HTML: el visor
+construye el HTML cada vez que se abre. Dos tablas nuevas en `DRACO_CONTROL`
+(se crean solas con el bootstrap al iniciar sesión, y además `Informes` las
+garantiza la primera vez que se usan en cada pestaña):
+
+| Tabla                | Columnas clave                                                                              |
+|----------------------|----------------------------------------------------------------------------------------------|
+| `INFORMES`           | INFORME_ID, **PROYECTO_ID**, NOMBRE, DESCRIPCION, SPEC_JSON, USUARIO, FECHA_CREACION, FECHA_MODIFICACION |
+| `INFORMES_FAVORITOS` | **PROYECTO_ID**, INFORME_ID, USUARIO, FECHA_ALTA (favoritos de cada usuario)                |
+
+**Archivos.**
+
+```
+generador.html            Diseñar y guardar informes (selector de proyecto + herramienta)
+visor.html                Lista del proyecto (buscador, favoritos) y apertura de informes
+informes-herramienta.html La herramienta de informes (un único archivo; ver "Actualizar la herramienta")
+css/informes.css          Estilos de las dos páginas
+js/informes.js            Acceso a datos (INFORMES, INFORMES_FAVORITOS) vía Provider
+js/generador-app.js       Controlador de generador.html + puente con la herramienta
+js/visor-app.js           Controlador de visor.html + puente con la herramienta
+js/informes-datos.js     Actualización de tablas dentro de un informe (puente con TableUpdates)
+```
+
+**Cómo funciona.**
+
+- Mismo patrón que `task.html`: sin sesión válida redirige a `index.html`; el
+  selector solo elige proyecto (recuerda `draco_current_project`).
+- La herramienta corre en un iframe del mismo origen y **no toca la base de
+  datos**: pide las operaciones por `postMessage` (`list`, `get`, `save`,
+  `delete`) y el controlador las ejecuta con la sesión del usuario (`Informes`
+  -> `Provider`), filtrando siempre por el proyecto seleccionado. Funciona igual
+  en BigQuery y Snowflake.
+- **Generador** (`informes-herramienta.html?host=draco`): botones *Guardar*,
+  *Guardar como…* y *Abrir del proyecto…*; indicador de cambios sin guardar;
+  nombre único por proyecto; tope de tamaño de 500 KB (`Informes.MAX_BYTES`).
+  Un solo diseñador por informe: guardar sobrescribe (sin versiones).
+- **Visor** (`informes-herramienta.html?mode=viewer`): sin interfaz; recibe la
+  definición y genera la página. Siempre usa **el tema guardado en el informe**,
+  no el perfil de marca del navegador. Enlace directo: `visor.html?informe_id=<id>`.
+- **Sesión caducada**: el token se lee de `localStorage` en cada petición. Si
+  caduca a mitad de trabajo, la herramienta avisa; basta con iniciar sesión en
+  Draco en otra pestaña y pulsar *Reintentar* (no se pierde nada).
+- **Permisos**: los de `DRACO_CONTROL`; sin módulo de roles, cualquiera con
+  acceso a ese esquema ve y edita los informes del proyecto. Los favoritos son
+  por usuario (`SESSION_USER()` / `CURRENT_USER()`).
+
+**Seguridad.** El informe se pinta dentro de un segundo iframe con `sandbox`
+(sin `allow-same-origin`): la página generada no puede leer el token de
+`localStorage`. La definición pasa un validador que rechaza HTML y scripts, y
+todo texto se escapa al pintarse. Cuando el informe necesite datos o abrir
+tablas/SQL, lo pedirá por mensajes (`{dp:'draco'}` -> herramienta -> host) y lo
+ejecutará el controlador con la sesión del usuario; hoy ese puente existe pero
+responde `NOT_AVAILABLE`.
+
+**Siguientes pasos previstos** (no incluidos): bloques que referencien objetos
+de Draco (p. ej. una *Actualización de tablas*, que se abriría con
+`TableUpdates.startRun(record)` como hace `my-tasks.js`); y dar catálogo a las
+tareas de Workflows de tipo `HTML` ("Páginas HTML") y `PLANTILLA_WEB`, que hoy
+no tienen ejecución, para que abran `visor.html?informe_id=...`.
+
+**Editor con barras laterales (herramienta).** Al haber una página, la herramienta
+se abre en *modo diseño*: a la izquierda, **Componentes** (paleta de iconos por
+grupos: Estructura, Textos, Datos, Acciones, Disposición) y **Estructura** (árbol:
+página, menú, cabecera y secciones con su etiqueta, título, subtítulo y botones,
+filas y columnas, bloques, pestañas y cifras); a la derecha, **Propiedades**. Las
+dos barras y cada bloque se contraen y se recuerda el estado (`localStorage.gp_sb`).
+Clic en el árbol o en la página selecciona el mismo elemento; los componentes se
+añaden donde esté la selección o se arrastran al árbol, que también permite
+reordenar y mover bloques entre secciones. El botón **Vista previa** oculta las
+barras para probar la página. Con `?editdef=0` (o `localStorage.gp_editdef=0`) se
+arranca en vista previa.
+
+**Actualización de tablas dentro de un informe.** El componente *Actualizar tabla*
+(junto a *Tabla*, solo dentro de Draco) añade un bloque `tableUpdate`
+(`{type, title, ref, refName, values, tools, maxHeight}`): `ref` es el
+`ACTUALIZACION_ID` de una vista de Actualización de tablas del proyecto y
+`values` los valores de sus variables (único: texto; rango: `{low,high}`;
+varios/cualquiera: `[{sign,option,low,high}]`; booleano). En *Propiedades* se
+elige la vista y se piden sus variables. En el informe se pinta una rejilla con
+los estilos del libro y el mismo comportamiento que `js/table-updates.js`
+(filtro y orden por columna, añadir/eliminar filas, pegar desde Excel,
+listbox/buscador/casilla con texto, importar y exportar CSV/Excel, validación de
+clave duplicada y campos obligatorios, grabar con confirmación y resumen).
+
+- **Quién hace qué.** La página corre aislada (sin sesión), así que pide por
+  mensajes (`tu.list`, `tu.describe`, `tu.load`, `tu.preview`, `tu.commit`,
+  `tu.export`, `tu.parse`) y `js/informes-datos.js` (en `generador.html` y
+  `visor.html`) las ejecuta con la sesión del usuario. Reutiliza TableUpdates:
+  por cada vista crea una sesión `Object.create(TableUpdates)` con estado propio
+  y llama a los mismos métodos (`buildWhere`, `resolveValidationOptions`,
+  `computeDiff`, `getKeyColumns`...), ninguno toca el DOM.
+- **Seguridad.** El informe nunca manda SQL, tabla ni filtro: solo `ref` y
+  `values`. Tabla, columnas y WHERE se recalculan en Draco desde la definición
+  guardada y siempre dentro del proyecto activo; todo valor va por `Provider.esc`
+  y las variables se validan antes de consultar.
+- **Grabar** usa la misma estrategia que la pantalla original (borrar el
+  subconjunto filtrado y reinsertarlo; sin transacción) y, si el INSERT falla,
+  intenta restaurar las filas anteriores. Un grabado solo toca lo que selecciona
+  el filtro de la vista. Tope de 50.000 filas (`InformesDatos.MAX_ROWS`).
+- **Diferencias con la pantalla original:** las variables se rellenan al diseñar
+  (no se piden al abrir), se ignoran las de tipo archivo, no hay redimensionado
+  de columnas, los CSV se importan como texto literal (la original convierte
+  `2026-01` en fecha) y se empareja por la clave completa (no por la primera
+  columna).
+- **Exportaciones.** En diapositivas, PDF y PowerPoint el bloque se sustituye por
+  una nota; el HTML suelto avisa de que la tabla se edita desde Draco.
+- El estado de la rejilla vive fuera del DOM, así que no se pierde lo editado al
+  cambiar de pestaña del informe.
+
+**Actualizar la herramienta.** `informes-herramienta.html` es un único archivo
+autocontenido, que fuera de Draco funciona también por sí solo. Para actualizar
+la herramienta basta con sustituir ese archivo por la nueva versión; el
+contrato con Draco son los mensajes descritos arriba.
 
 ## 8. Modelo semántico (YAML)
 
