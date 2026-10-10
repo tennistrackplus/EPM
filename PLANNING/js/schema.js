@@ -7,6 +7,7 @@
  *   - DRACO_CONTROL.PROYECTOS
  *   - DRACO_CONTROL.DIMENSIONES
  *   - DRACO_CONTROL.CUBOS
+ *   - ... (ver TABLES) incluidas INFORMES e INFORMES_FAVORITOS (generador/visor de informes)
  */
 const DracoSchema = {
 
@@ -374,6 +375,25 @@ const DracoSchema = {
                     USUARIO STRING,
                     FECHA_CREACION TIMESTAMP,
                     FECHA_MODIFICACION TIMESTAMP
+                )`,
+            // Informes (generador/visor de páginas): ver js/informes.js, generador.html y visor.html.
+            INFORMES: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    INFORME_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    NOMBRE STRING NOT NULL,
+                    DESCRIPCION STRING,
+                    SPEC_JSON STRING,            -- definición del informe (JSON v3 de la herramienta de informes, incluye su tema)
+                    USUARIO STRING,
+                    FECHA_CREACION TIMESTAMP,
+                    FECHA_MODIFICACION TIMESTAMP
+                )`,
+            INFORMES_FAVORITOS: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    PROYECTO_ID STRING NOT NULL,
+                    INFORME_ID STRING NOT NULL,
+                    USUARIO STRING NOT NULL,
+                    FECHA_ALTA TIMESTAMP
                 )`
         };
         return ddl[table];
@@ -386,7 +406,8 @@ const DracoSchema = {
              "WORKFLOWS", "WORKFLOWS_PASOS", "WORKFLOWS_PASOS_DRIVER_VALORES", "WORKFLOWS_PASOS_VARIABLES",
              "WORKFLOWS_PASOS_BLOQUES", "WORKFLOWS_PASOS_TAREAS", "WORKFLOWS_PASOS_TAREAS_VALORES",
              "WORKFLOWS_RUNS", "WORKFLOWS_RUNS_INSTANCIAS", "WORKFLOWS_RUNS_VARIABLES",
-             "ACTUALIZACIONES", "FUNCIONES", "FUNCIONES_RUNS", "WIDGETS"],
+             "ACTUALIZACIONES", "FUNCIONES", "FUNCIONES_RUNS", "WIDGETS",
+             "INFORMES", "INFORMES_FAVORITOS"],
 
     /**
      * Comprobación ligera para la puerta de instalación (usada hoy solo
