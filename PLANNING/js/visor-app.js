@@ -17,6 +17,12 @@
  *   visor -> aquí    { dpTool:1, op:'ready' | 'loaded' | 'error' | 'page' }
  *
  * Enlace directo a un informe: visor.html?informe_id=<id>
+ *   - Sin más parámetros se abre en modo "solo el informe": sin barra de Draco, selector
+ *     de proyecto, lista ni barra de herramientas (clase html.vw-full, puesta ya en el <head>
+ *     para que no parpadee). Un botón discreto abajo a la derecha permite pasar a pantalla
+ *     completa del navegador (Esc para salir) o volver al visor con la lista.
+ *   - Con &lista=1 se abre el visor normal. Al abrir un informe desde la lista, la dirección
+ *     se escribe con &lista=1 para que recargar mantenga la vista; "Enlace" copia la limpia.
  */
 const VisorApp = {
     currentProject: null,   // { PROYECTO_ID, PROYECTO, DESCRIPCION, DATASET }
@@ -27,6 +33,8 @@ const VisorApp = {
     viewerReady: null,      // Promise que se resuelve cuando la herramienta avisa "ready"
     _resolveReady: null,
     sideHidden: false,
+    fullMode: false,        // true = solo el informe (enlace directo limpio)
+    notFound: false,        // el informe pedido en el enlace no existe
 
     async init() {
         if (Provider.key() === "snowflake") {
@@ -40,6 +48,7 @@ const VisorApp = {
         document.getElementById("gcpProjectLabel").textContent = Provider.homeLabel();
         document.getElementById("connStatus").innerHTML = `<span class="dot"></span>${Provider.label()}`;
         this.pendingInformeId = new URLSearchParams(window.location.search).get("informe_id");
+        this.fullMode = document.documentElement.classList.contains("vw-full");
 
         this.bindTopbar();
         this.bindProjectBar();
@@ -70,6 +79,10 @@ const VisorApp = {
         document.getElementById("btnToggleSide").addEventListener("click", () => this.toggleSide());
         document.getElementById("btnFav").addEventListener("click", () => { if (this.currentId) this.toggleFavorite(this.currentId); });
         document.getElementById("btnReload").addEventListener("click", () => { if (this.currentId) this.openInforme(this.currentId); });
+        document.getElementById("btnFull").addEventListener("click", () => { if (this.currentId) this.setFull(true); });
+        document.getElementById("btnLink").addEventListener("click", () => this.copyLink());
+        document.getElementById("fabFs").addEventListener("click", () => this.toggleFullscreen());
+        document.getElementById("fabExit").addEventListener("click", () => this.setFull(false));
         document.getElementById("btnEditar").addEventListener("click", () => {
             if (this.currentId) window.open("generador.html?informe_id=" + encodeURIComponent(this.currentId), "_blank");
         });
@@ -101,7 +114,7 @@ const VisorApp = {
                 try {
                     const meta = await Informes.getMeta(this.pendingInformeId);
                     if (this.projects.some(p => p.PROYECTO_ID === meta.proyectoId)) wantedId = meta.proyectoId;
-                } catch (e) { this.showViewerMessage("No se ha encontrado el informe pedido en el enlace."); this.pendingInformeId = null; }
+                } catch (e) { this.notFound = true; this.pendingInformeId = null; }
             }
             const toSelect = this.projects.find(p => p.PROYECTO_ID === wantedId) || this.projects[0];
             select.value = toSelect.PROYECTO_ID;
@@ -205,6 +218,45 @@ const VisorApp = {
         }
     },
 
+    // ---------------------------------------------------------
+    // Modo "solo el informe"
+    // ---------------------------------------------------------
+    /** Dirección limpia (solo el informe) del informe abierto. */
+    cleanLink() {
+        return window.location.origin + window.location.pathname + "?informe_id=" + encodeURIComponent(this.currentId);
+    },
+
+    /** Mantiene la dirección de la barra coherente con el modo (en modo lista lleva &lista=1). */
+    syncUrl() {
+        if (!this.currentId) return;
+        try { history.replaceState(null, "", "?informe_id=" + encodeURIComponent(this.currentId) + (this.fullMode ? "" : "&lista=1")); } catch (e) { /* sin historial */ }
+    },
+
+    setFull(on) {
+        if (!on && !this.currentId) { window.location.href = "visor.html"; return; }
+        this.fullMode = !!on;
+        document.documentElement.classList.toggle("vw-full", this.fullMode);
+        if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+        this.syncUrl();
+    },
+
+    toggleFullscreen() {
+        if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); return; }
+        document.documentElement.requestFullscreen().catch(() => {
+            UI.toast("El navegador no ha permitido la pantalla completa. Prueba con F11.", "info");
+        });
+    },
+
+    async copyLink() {
+        if (!this.currentId) return;
+        try {
+            await navigator.clipboard.writeText(this.cleanLink());
+            UI.toast("Enlace copiado: abre solo el informe.", "success");
+        } catch (e) {
+            window.prompt("Copia este enlace (abre solo el informe):", this.cleanLink());
+        }
+    },
+
     toggleSide() {
         this.sideHidden = !this.sideHidden;
         document.getElementById("vwLayout").classList.toggle("side-hidden", this.sideHidden);
@@ -216,7 +268,9 @@ const VisorApp = {
     clearViewer() {
         document.getElementById("viewerFrame").hidden = true;
         document.getElementById("vwToolbar").hidden = true;
-        this.showViewerMessage("Selecciona un informe de la lista para abrirlo.");
+        this.showViewerMessage(this.notFound
+            ? "No se ha encontrado el informe de este enlace (puede que lo hayan eliminado)." + (this.fullMode ? " Pulsa ☰ (abajo a la derecha) para ver la lista de informes." : "")
+            : "Selecciona un informe de la lista para abrirlo.");
     },
 
     showViewerMessage(text, retry) {
@@ -242,7 +296,7 @@ const VisorApp = {
         const frame = document.getElementById("viewerFrame");
         if (this.viewerReady) return this.viewerReady;
         this.viewerReady = new Promise((resolve) => { this._resolveReady = resolve; });
-        frame.src = "informes-herramienta.html?mode=viewer";
+        frame.src = "informes-herramienta.html?mode=viewer&v=20261010b";   // la versión evita una herramienta antigua en caché
         return this.viewerReady;
     },
 
@@ -250,6 +304,7 @@ const VisorApp = {
         if (!this.currentProject) return;
         const retry = () => this.openInforme(id);
         this.currentId = id;
+        this.notFound = false;
         this.renderList();
         this.updateToolbar();
         this.showViewerMessage("Abriendo informe…");
@@ -260,7 +315,7 @@ const VisorApp = {
             frame.hidden = false;
             frame.contentWindow.postMessage({ dpHost: 1, op: "load", spec: r.spec, nombre: r.nombre }, window.location.origin);
             document.getElementById("vwEmpty").hidden = true;
-            try { history.replaceState(null, "", "?informe_id=" + encodeURIComponent(id)); } catch (e) { /* sin historial */ }
+            this.syncUrl();
         } catch (err) {
             document.getElementById("viewerFrame").hidden = true;
             if (err.code === "NO_AUTH") {
