@@ -6,6 +6,9 @@ No hay que tocar `config.js` ni instalar nada: es JavaScript puro como el resto.
 ## Novedad de esta versión: editor con barras laterales
 `PLANNING/informes-herramienta.html` incluye ahora una barra izquierda (**Componentes** en iconos + **Estructura** en árbol con filas y columnas) y la barra derecha de **Propiedades**; las dos se contraen y expanden. Se arrastra y suelta en el árbol (reordenar, mover bloques entre secciones, soltar componentes de la paleta). Dentro de Draco se abre directamente en modo diseño. Ver README §7quater.
 
+## Novedad: enlace directo «solo el informe»
+`visor.html?informe_id=<id>` abre ahora el informe SIN barras (ni la de Draco, ni el selector de proyecto, ni la lista), con un botón discreto abajo a la derecha: ⛶ pantalla completa del navegador (Esc para salir) y ☰ volver al visor con lista. `&lista=1` abre el visor normal; en el visor, *⛶ Completo* y *🔗 Enlace* (copia la dirección limpia). Cambia solo `visor.html`, `js/visor-app.js` y `css/informes.css`.
+
 ## Novedad: «Actualizar tabla» dentro de un informe
 Nuevo componente junto a *Tabla* (solo dentro de Draco). En *Propiedades* eliges una **vista de Actualización de tablas** del proyecto y rellenas **sus variables**; en el informe se muestra una rejilla editable con los estilos del libro y el mismo comportamiento que la pantalla de Actualización de tablas (filtro/orden, añadir/eliminar, pegar de Excel, desplegables y búsqueda con texto, importar/exportar, claves y obligatorios, grabar con resumen).
 

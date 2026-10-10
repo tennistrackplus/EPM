@@ -4,10 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Draco Planning — Informes · Visor</title>
+    <script>if(new URLSearchParams(location.search).get("informe_id")&&new URLSearchParams(location.search).get("lista")!=="1") document.documentElement.classList.add("vw-full");</script>
     <link rel="stylesheet" href="css/theme.css?v=20260830c">
     <link rel="stylesheet" href="css/modal.css?v=20260830c">
     <link rel="stylesheet" href="css/app.css?v=20260831b">
-    <link rel="stylesheet" href="css/informes.css?v=20261009a">
+    <link rel="stylesheet" href="css/informes.css?v=20261010c">
 </head>
 <body class="informes-page">
 
@@ -66,6 +67,8 @@
                 <div class="vw-title" id="vwTitle"></div>
                 <button class="btn btn-secondary btn-sm" id="btnFav" title="Marcar como favorito">☆ Favorito</button>
                 <button class="btn btn-secondary btn-sm" id="btnReload" title="Volver a cargar el informe">↻ Recargar</button>
+                <button class="btn btn-secondary btn-sm" id="btnFull" title="Ver solo el informe, sin barras">⛶ Completo</button>
+                <button class="btn btn-secondary btn-sm" id="btnLink" title="Copiar el enlace directo (muestra solo el informe)">🔗 Enlace</button>
                 <button class="btn btn-secondary btn-sm" id="btnEditar" title="Abrir en el generador (nueva pestaña)">✎ Editar</button>
             </div>
             <div class="vw-view">
@@ -73,6 +76,11 @@
                 <iframe id="viewerFrame" title="Informe" hidden></iframe>
             </div>
         </section>
+    </div>
+
+    <div class="vw-fab" id="vwFab">
+        <button type="button" id="fabFs" title="Pantalla completa del navegador (Esc para salir)" aria-label="Pantalla completa">⛶</button>
+        <button type="button" id="fabExit" title="Volver al visor con la lista de informes" aria-label="Volver al visor">☰</button>
     </div>
 
     <div class="toast-container" id="toastContainer"></div>
@@ -85,9 +93,9 @@
     <script src="js/schema.js?v=20261009a"></script>
     <script src="js/ui.js?v=20260907a"></script>
     <script src="js/table-updates.js?v=20260901a"></script>
-    <script src="js/informes.js?v=20261009a"></script>
-    <script src="js/informes-datos.js?v=20261010a"></script>
-    <script src="js/visor-app.js?v=20261009a"></script>
+    <script src="js/informes.js?v=20261010c"></script>
+    <script src="js/informes-datos.js?v=20261010c"></script>
+    <script src="js/visor-app.js?v=20261010c"></script>
     <script>VisorApp.init();</script>
 </body>
 </html>

@@ -528,6 +528,12 @@ js/informes-datos.js     Actualización de tablas dentro de un informe (puente c
   *Guardar como…* y *Abrir del proyecto…*; indicador de cambios sin guardar;
   nombre único por proyecto; tope de tamaño de 500 KB (`Informes.MAX_BYTES`).
   Un solo diseñador por informe: guardar sobrescribe (sin versiones).
+- **Visor, modo "solo el informe":** `visor.html?informe_id=<id>` (sin más
+  parámetros) abre el informe sin barra de Draco, selector de proyecto, lista ni
+  barra de herramientas; abajo a la derecha hay un botón discreto para la pantalla
+  completa del navegador (Esc para salir) y otro (☰) para volver al visor con la
+  lista. `&lista=1` abre el visor normal (así lo escribe el propio visor al abrir
+  un informe desde la lista, y el botón *🔗 Enlace* copia la dirección limpia).
 - **Visor** (`informes-herramienta.html?mode=viewer`): sin interfaz; recibe la
   definición y genera la página. Siempre usa **el tema guardado en el informe**,
   no el perfil de marca del navegador. Enlace directo: `visor.html?informe_id=<id>`.
