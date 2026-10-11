@@ -653,7 +653,7 @@ const MyTasks = {
             if (!task.refId) { UI.toast("Esta tarea no tiene una actualización de tablas asignada.", "error"); return; }
             try {
                 const rows = await Provider.runQuery(`
-                    SELECT ACTUALIZACION_ID, NOMBRE, DESCRIPCION, TABLA, VARIABLES_JSON, CAMPOS_JSON
+                    SELECT *
                     FROM ${Provider.qualifyControl("ACTUALIZACIONES")}
                     WHERE ACTUALIZACION_ID = '${Provider.esc(task.refId)}'`);
                 if (!rows.length) { UI.toast("No se ha encontrado la actualización de tablas de referencia.", "error"); return; }

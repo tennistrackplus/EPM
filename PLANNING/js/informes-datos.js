@@ -40,7 +40,11 @@
  * originales (la pantalla original no lo hace).
  *
  * Los errores llevan un `code`: NO_AUTH, NOT_FOUND, BAD_INPUT, BAD_VARS,
- * TOO_MANY, DUP_KEYS, EMPTY_NOT_ALLOWED, SAVE_FAILED, NOT_AVAILABLE.
+ * TOO_MANY, DUP_KEYS, EMPTY_NOT_ALLOWED, FIXED_ROWS, SAVE_FAILED, NOT_AVAILABLE.
+ *
+ * Filas fijas y "Completar con todos los valores": la lógica vive en TableUpdates
+ * (completeRows, isFixedRows...) y se reutiliza tal cual; aquí solo se aplica al cargar
+ * y se hace cumplir al grabar.
  */
 const InformesDatos = {
     MAX_ROWS: 50000,
@@ -63,7 +67,8 @@ const InformesDatos = {
     // ---------------------------------------------------------
     async record(project, ref) {
         if (!ref || typeof ref !== "string") throw this.fail("BAD_INPUT", "Falta elegir la vista de actualización.");
-        const rows = await Provider.runQuery(`SELECT ACTUALIZACION_ID, NOMBRE, DESCRIPCION, TABLA, VARIABLES_JSON, CAMPOS_JSON
+        // SELECT *: así funciona aunque la columna OPCIONES_JSON (filas fijas) aún no exista en este entorno.
+        const rows = await Provider.runQuery(`SELECT *
             FROM ${Provider.qualifyControl("ACTUALIZACIONES")}
             WHERE PROYECTO_ID = '${Provider.esc(project.PROYECTO_ID)}'
               AND ACTUALIZACION_ID = '${Provider.esc(ref)}'`);
@@ -104,6 +109,7 @@ const InformesDatos = {
         T.runScreen = T.parseScreen(record.VARIABLES_JSON);
         T.runFields = T.safeParse(record.CAMPOS_JSON, []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         T.vars = T.flatVars(T.runScreen);
+        T.runOptions = T.parseOptions(record);          // opciones de la actualización (filas fijas)
         // La clave se recalcula en vivo desde Parametrización, igual que en startRun().
         const keysP = T.getParamKeyColumns(record.TABLA).then(k => T.applyParamKeys(T.runFields, k));
         await dimsP;
@@ -120,7 +126,9 @@ const InformesDatos = {
         T.fieldOptions = {};
         await Promise.all(T.runFields.filter(f => f.validation && f.validation.type !== "NONE").map(async f => {
             const opts = await T.resolveValidationOptions(f.validation);
-            T.fieldOptions[f.name] = opts.slice(0, this.MAX_OPTIONS).map(o => ({ id: String(o.id), desc: o.desc || "" }));
+            // "Completar con todos los valores" genera una fila por valor: sin recortar la lista.
+            const all = f.validation.showAll ? opts : opts.slice(0, this.MAX_OPTIONS);
+            T.fieldOptions[f.name] = all.map(o => ({ id: String(o.id), desc: o.desc || "" }));
         }));
     },
 
@@ -130,7 +138,7 @@ const InformesDatos = {
     async list(project) {
         await Informes.guard();
         try { await Provider.runQuery(DracoSchema.ddl("ACTUALIZACIONES")); } catch (e) { /* ver TableUpdates.loadList */ }
-        const rows = await Provider.runQuery(`SELECT ACTUALIZACION_ID, NOMBRE, DESCRIPCION, TABLA, VARIABLES_JSON, CAMPOS_JSON
+        const rows = await Provider.runQuery(`SELECT *
             FROM ${Provider.qualifyControl("ACTUALIZACIONES")}
             WHERE PROYECTO_ID = '${Provider.esc(project.PROYECTO_ID)}'
             ORDER BY NOMBRE`);
@@ -144,9 +152,15 @@ const InformesDatos = {
         }));
     },
 
+    /** Tabla multidimensional de la vista ({rows,cols,value} con nombres de campo) o null. */
+    pivotInfo(T) {
+        const pv = T.parsePivot(T.runOptions, T.runFields);
+        return pv ? { rows: pv.rows.map(f => f.name), cols: pv.cols.map(f => f.name), value: pv.value.name } : null;
+    },
+
     validationSummary(v) {
         if (!v || v.type === "NONE") return null;
-        return { type: v.type, allowEmpty: v.allowEmpty !== false, showText: !!v.showText, searchHelp: v.searchHelp || "LISTBOX" };
+        return { type: v.type, allowEmpty: v.allowEmpty !== false, showText: !!v.showText, showAll: !!v.showAll, searchHelp: v.searchHelp || "LISTBOX" };
     },
 
     async describe(project, ref) {
@@ -164,14 +178,15 @@ const InformesDatos = {
                 optionsTruncated: opts.length > this.MAX_OPTIONS
             };
         });
+        const descKeys = T.getKeyColumns({ fields: T.runFields, columns: T.runFields.map(f => f.name) });
         const fields = T.runFields.map(f => ({
-            name: f.name, label: f.description || f.name, key: !!f.key,
+            name: f.name, label: f.description || f.name, key: descKeys.includes(f.name),
             filter: (f.filter && f.filter.type === "VAR") ? { type: "VAR", variable: T.varNameById(f.filter.value) }
                   : (f.filter && f.filter.type === "CONST" && f.filter.value !== "" && f.filter.value != null) ? { type: "CONST", value: String(f.filter.value) }
                   : { type: "NONE" },
             validation: this.validationSummary(f.validation)
         }));
-        return { id: ref, name: T.runRecord.NOMBRE, description: T.runRecord.DESCRIPCION || "", table: T.runRecord.TABLA, title: T.runScreen.title || T.runRecord.NOMBRE, vars, fields };
+        return { id: ref, name: T.runRecord.NOMBRE, description: T.runRecord.DESCRIPCION || "", table: T.runRecord.TABLA, title: T.runScreen.title || T.runRecord.NOMBRE, fixedRows: T.isFixedRows(T.runOptions, T.runFields), pivot: this.pivotInfo(T), vars, fields };
     },
 
     // ---------------------------------------------------------
@@ -241,11 +256,15 @@ const InformesDatos = {
         const where = T.buildWhere(T.runFields, vals);
         const [{ rows }] = await Promise.all([this.readRows(T, where), T.metaP]);   // datos y metadatos a la vez
         const columns = T.runFields.map(f => f.name);
-        const objs = this.toObjects(columns, rows);
+        // Filas fijas / "Completar con todos los valores": las filas salen de los valores posibles
+        const comp = T.completeRows(T.runFields, T.fieldOptions, this.toObjects(columns, rows), vals);
+        const objs = this.toObjects(columns, comp.rows);
         const keyCols = T.getKeyColumns({ fields: T.runFields, columns });
         return {
             name: T.runRecord.NOMBRE, table: T.runRecord.TABLA, columns, keyCols,
-            fields: T.runFields.map(f => ({ name: f.name, label: f.description || f.name, key: !!f.key, validation: this.validationSummary(f.validation) })),
+            fixedRows: T.isFixedRows(T.runOptions, T.runFields),
+            pivot: this.pivotInfo(T),
+            fields: T.runFields.map(f => ({ name: f.name, label: f.description || f.name, key: keyCols.includes(f.name), validation: this.validationSummary(f.validation) })),
             optionsByField: T.fieldOptions,
             rows: objs.map(o => columns.map(c => o[c]))
         };
@@ -314,6 +333,17 @@ const InformesDatos = {
         T.gridState = state;
         const diff = T.computeDiff();
         const keyCols = T.getKeyColumns(state);
+        // Filas fijas: el servidor lo hace cumplir (no se fía de la página). Con "Completar con todos los
+        // valores" solo pueden ser nuevas las combinaciones de valores; sin él, no puede haber altas ni bajas.
+        if (T.isFixedRows(T.runOptions, T.runFields)) {
+            const comp = T.completeRows(T.runFields, T.fieldOptions, original, vals);
+            const bad = comp.universeKeys
+                ? diff.added.filter(r => !comp.universeKeys.has(T.rowKeyValue(r, keyCols)))
+                : diff.added.concat(diff.deleted);
+            if (bad.length) {
+                throw this.fail("FIXED_ROWS", "No se puede grabar: esta tabla tiene filas fijas y no admite crear ni eliminar filas.");
+            }
+        }
         const label = (r) => T.rowKeyLabel(r, keyCols);
         const cap = (a) => a.slice(0, 300).map(label);
         const summary = {

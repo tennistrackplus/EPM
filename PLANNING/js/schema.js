@@ -307,6 +307,7 @@ const DracoSchema = {
                     DESCRIPCION STRING,
                     TABLA STRING NOT NULL,       -- tabla física dentro del esquema del proyecto
                     VARIABLES_JSON STRING,       -- [{id,name,label,type}]  (pantalla de selección)
+                    OPCIONES_JSON STRING,          -- opciones de la actualización: {fixedRows} (filas fijas)
                     CAMPOS_JSON STRING,          -- [{name,description,order,filter,validation,allowEmpty,showText,searchHelp}]
                     USUARIO STRING,
                     FECHA_CREACION TIMESTAMP,
@@ -457,7 +458,9 @@ const DracoSchema = {
         const workflowsRunsInstancias = Provider.qualifyControl("WORKFLOWS_RUNS_INSTANCIAS");
         const workflowsPasos = Provider.qualifyControl("WORKFLOWS_PASOS");
         const flujosScreenVariables = Provider.qualifyControl("FLUJOS_SCREEN_VARIABLES");
+        const actualizaciones = Provider.qualifyControl("ACTUALIZACIONES");
         await Promise.all([
+            Provider.runQuery(`ALTER TABLE ${actualizaciones} ADD COLUMN IF NOT EXISTS OPCIONES_JSON STRING`),
             Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_PATH STRING`),
             Provider.runQuery(`ALTER TABLE ${cubos} ADD COLUMN IF NOT EXISTS MODELO_YAML_FECHA TIMESTAMP`),
             Provider.runQuery(`ALTER TABLE ${workflowsRuns} ADD COLUMN IF NOT EXISTS DESCRIPCION STRING`),

@@ -122,6 +122,21 @@ const TableUpdates = {
         await this.loadList();
     },
 
+    /**
+     * Garantiza la columna OPCIONES_JSON (opciones de la actualización: filas fijas). La crea evolve()
+     * al iniciar sesión; esto cubre una sesión abierta antes de desplegar esta versión.
+     */
+    async ensureOptionsColumn() {
+        if (this._optsColumnOk) return true;
+        try {
+            await Provider.runQuery(`ALTER TABLE ${Provider.qualifyControl(this.TABLE)} ADD COLUMN IF NOT EXISTS OPCIONES_JSON STRING`);
+            this._optsColumnOk = true;
+        } catch (e) {
+            console.error("No se pudo verificar/crear la columna OPCIONES_JSON de ACTUALIZACIONES:", e);
+        }
+        return !!this._optsColumnOk;
+    },
+
     async loadList() {
         const wrap = document.getElementById("actualizacionesListWrap");
         try {
@@ -135,7 +150,8 @@ const TableUpdates = {
                 console.error("No se pudo verificar/crear la tabla de control ACTUALIZACIONES:", ddlErr);
             }
 
-            const sql = `SELECT ${this.ID_COL}, ${this.NAME_COL}, DESCRIPCION, TABLA, VARIABLES_JSON, CAMPOS_JSON
+            const hasOpts = await this.ensureOptionsColumn();
+            const sql = `SELECT ${this.ID_COL}, ${this.NAME_COL}, DESCRIPCION, TABLA, VARIABLES_JSON, CAMPOS_JSON${hasOpts ? ", OPCIONES_JSON" : ""}
                          FROM ${Provider.qualifyControl(this.TABLE)}
                          WHERE PROYECTO_ID = '${Provider.esc(this.project.PROYECTO_ID)}'
                          ORDER BY ${this.NAME_COL}`;
@@ -287,6 +303,7 @@ const TableUpdates = {
         this.editing = record;
         this.editingIsNew = !this.list.some(r => r[this.ID_COL] === record[this.ID_COL]);
         this.screen = this.parseScreen(record.VARIABLES_JSON);
+        this.options = this.parseOptions(record);          // opciones de la actualización (filas fijas)
         const savedFields = this.safeParse(record.CAMPOS_JSON, []);
 
         await this.loadDimensions();
@@ -372,6 +389,7 @@ const TableUpdates = {
                 hierarchyName: "", level: 1, node: "",
                 allowEmpty: true,
                 showText: false,
+                showAll: false,
                 searchHelp: "LISTBOX"
             }
         };
@@ -408,6 +426,238 @@ const TableUpdates = {
             console.error("No se pudo comprobar si la tabla proviene de Parametrización:", err);
             return null;
         }
+    },
+
+    // ================================================================
+    // FILAS FIJAS y "COMPLETAR CON TODOS LOS VALORES"
+    //  - Opción de la actualización (OPCIONES_JSON = {fixedRows}): no se pueden
+    //    añadir ni eliminar filas, solo editar valores.
+    //  - Opción de la validación de un campo (validation.showAll): la tabla
+    //    muestra una fila por cada valor posible del campo (si hay varios campos
+    //    marcados, todas las combinaciones), cruzada con lo que haya grabado
+    //    (si no hay registro, el resto de campos aparece vacío). Los campos
+    //    marcados pasan a ser la CLAVE de la tabla y las filas quedan fijas.
+    //    Los valores respetan los filtros de las variables. Se graba todo,
+    //    igual que siempre (borrar el subconjunto filtrado y reinsertar).
+    // Todo es lógica pura (sin DOM): la reutiliza también js/informes-datos.js.
+    // ================================================================
+    parseOptions(record) {
+        const o = this.safeParse(record && record.OPCIONES_JSON, {});
+        return (o && typeof o === "object" && !Array.isArray(o)) ? o : {};
+    },
+
+    /** Campos marcados "Completar con todos los valores" (con una validación que da valores). */
+    completeFieldsOf(fields) {
+        return (fields || []).filter(f => f.validation && f.validation.type !== "NONE" && f.validation.showAll);
+    },
+
+    isFixedRows(options, fields) {
+        return !!(options && options.fixedRows) || this.completeFieldsOf(fields).length > 0;
+    },
+
+    SELOPT_KNOWN: ["EQ", "NE", "GT", "GE", "LT", "LE", "BT", "NB", "CP", "NP"],
+
+    /** Misma condición que selOptRowSql(), evaluada en JavaScript sobre un valor. */
+    selOptRowMatches(id, row) {
+        const low = String(row.low ?? ""), high = String(row.high ?? "");
+        const like = (pat) => new RegExp("^" + pat.replace(/\*/g, "%").split("").map(ch =>
+            ch === "%" ? ".*" : (ch === "_" ? "." : ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).join("") + "$", "s").test(id);
+        switch (row.option) {
+            case "EQ": return id === low;
+            case "NE": return id !== low;
+            case "GT": return id > low;
+            case "GE": return id >= low;
+            case "LT": return id < low;
+            case "LE": return id <= low;
+            case "BT": return id >= low && id <= high;
+            case "NB": return !(id >= low && id <= high);
+            case "CP": return like(low);
+            case "NP": return !like(low);
+            default: return true;
+        }
+    },
+
+    /** Misma lógica que selOptTableSql(): incluidos en OR, excluidos como AND NOT. */
+    selOptTableMatches(id, rows) {
+        const ok = (r) => (r.low ?? "").toString().trim() !== "" && this.SELOPT_KNOWN.includes(r.option);
+        const inc = (rows || []).filter(r => r.sign !== "E" && ok(r));
+        const exc = (rows || []).filter(r => r.sign === "E" && ok(r));
+        if (inc.length && !inc.some(r => this.selOptRowMatches(id, r))) return false;
+        return !exc.some(r => this.selOptRowMatches(id, r));
+    },
+
+    /** ¿Deja pasar el filtro del campo (constante o variable) este valor? Misma lógica que buildWhere(). */
+    fieldFilterAllows(f, id, variableValues) {
+        id = String(id ?? "");
+        if (!f.filter || f.filter.type === "NONE") return true;
+        if (f.filter.type === "CONST") {
+            const c = f.filter.value;
+            return (c === null || c === undefined || c === "") ? true : id === String(c);
+        }
+        if (f.filter.type === "VAR") {
+            const val = (variableValues || {})[this.varNameById(f.filter.value)];
+            if (Array.isArray(val)) return this.selOptTableMatches(id, val);
+            if (val && typeof val === "object" && ("low" in val || "high" in val)) {
+                const low = (val.low || "").toString().trim(), high = (val.high || "").toString().trim();
+                if (low !== "" && high !== "") return id >= low && id <= high;
+                if (low !== "") return id >= low;
+                if (high !== "") return id <= high;
+                return true;
+            }
+            if (val !== null && val !== undefined && val !== "") return id === String(val);
+        }
+        return true;
+    },
+
+    /**
+     * Filas de una actualización con "Completar con todos los valores": producto de los valores
+     * (ya filtrados por las variables) de los campos marcados, cruzado por esa clave con las filas
+     * grabadas. Sin ningún campo marcado devuelve las filas tal cual.
+     * Devuelve { rows, universeKeys } (universeKeys: claves permitidas, o null si no aplica).
+     */
+    completeRows(fields, optionsByField, dbRows, variableValues) {
+        const axes = this.completeFieldsOf(fields);
+        if (!axes.length) return { rows: dbRows, universeKeys: null };
+        const lists = axes.map(f => {
+            const seen = new Set(), ids = [];
+            (optionsByField[f.name] || []).forEach(o => {
+                const id = String(o.id ?? "");
+                if (id === "" || seen.has(id)) return;
+                seen.add(id);
+                if (this.fieldFilterAllows(f, id, variableValues)) ids.push(id);
+            });
+            return ids;
+        });
+        const cols = fields.map(f => f.name), keyCols = axes.map(f => f.name);
+        const byKey = new Map();
+        dbRows.forEach(r => { const k = this.rowKeyValue(r, keyCols); if (!byKey.has(k)) byKey.set(k, r); });
+        const rows = [], universeKeys = new Set(), acc = [];
+        const build = (i) => {
+            if (i === axes.length) {
+                const base = {};
+                keyCols.forEach((c, j) => { base[c] = acc[j]; });
+                const k = this.rowKeyValue(base, keyCols);
+                universeKeys.add(k);
+                const db = byKey.get(k), row = {};
+                cols.forEach(c => { row[c] = db ? (db[c] ?? "") : ""; });
+                keyCols.forEach((c, j) => { row[c] = acc[j]; });
+                rows.push(row);
+                return;
+            }
+            lists[i].forEach(id => { acc[i] = id; build(i + 1); });
+        };
+        build(0);
+        return { rows, universeKeys };
+    },
+
+    // ================================================================
+    // TABLA MULTIDIMENSIONAL  (OPCIONES_JSON.pivot = { rows:[campos], cols:[campos], value:campo })
+    //  Otra forma de VER y EDITAR las mismas filas de "Completar con todos los valores": los campos de
+    //  Filas y de Columnas son los ejes (la clave; todos con showAll) y en cada cruce se edita el único
+    //  campo de Valor. Todos los campos tienen que estar en una zona. Grabar, validar y las reglas de
+    //  filas fijas no cambian: debajo siguen siendo filas planas (exportar/importar también).
+    //  Lógica pura (sin DOM): la pantalla y js/informes-datos.js la reutilizan.
+    // ================================================================
+    /** Motivos por los que una configuración multidimensional no es válida (lista vacía = correcta). */
+    pivotErrors(fields, pivot) {
+        const errs = [];
+        if (!pivot) return errs;
+        const rows = pivot.rows || [], cols = pivot.cols || [], value = pivot.value || "";
+        const all = [...rows, ...cols, ...(value ? [value] : [])];
+        const missing = (fields || []).map(f => f.name).filter(n => !all.includes(n));
+        if (missing.length) errs.push(`Falta colocar: ${missing.join(", ")}.`);
+        const dup = all.filter((n, i) => all.indexOf(n) !== i);
+        if (dup.length) errs.push(`Hay campos en más de una zona: ${[...new Set(dup)].join(", ")}.`);
+        if (!value) errs.push("Falta el campo de la zona Valor (tiene que haber exactamente uno).");
+        if (!rows.length) errs.push("Hace falta al menos un campo en Filas.");
+        if (!cols.length) errs.push("Hace falta al menos un campo en Columnas.");
+        const byName = new Map((fields || []).map(f => [f.name, f]));
+        [...rows, ...cols].forEach(n => {
+            const f = byName.get(n);
+            if (f && (!f.validation || f.validation.type === "NONE")) {
+                errs.push(`${n} necesita una validación (maestro, jerarquía o constante) para poder ser fila o columna.`);
+            }
+        });
+        return errs;
+    },
+
+    /** Configuración multidimensional lista para usar ({rows,cols,value} con los campos), o null si no hay o no es válida. */
+    parsePivot(options, fields) {
+        const p = options && options.pivot;
+        if (!p || typeof p !== "object") return null;
+        const rows = Array.isArray(p.rows) ? p.rows : [], cols = Array.isArray(p.cols) ? p.cols : [], value = p.value || "";
+        const byName = new Map((fields || []).map(f => [f.name, f]));
+        if ([...rows, ...cols, value].some(n => !byName.has(n))) return null;
+        if (this.pivotErrors(fields, { rows, cols, value }).length) return null;
+        // Los ejes de "Completar con todos los valores" tienen que ser exactamente las filas y columnas.
+        const axes = new Set(this.completeFieldsOf(fields).map(f => f.name));
+        const zones = new Set([...rows, ...cols]);
+        if (axes.size !== zones.size || [...axes].some(n => !zones.has(n))) return null;
+        return { rows: rows.map(n => byName.get(n)), cols: cols.map(n => byName.get(n)), value: byName.get(value) };
+    },
+
+    /** Valores distintos (ordenados como aparecen) de un campo en las filas generadas. */
+    pivotAxisIds(rows, name) {
+        const seen = new Set(), ids = [];
+        (rows || []).forEach(r => { const v = String(r[name] ?? ""); if (v !== "" && !seen.has(v)) { seen.add(v); ids.push(v); } });
+        return ids;
+    },
+
+    /** Combinaciones (tuplas) de los valores de una lista de campos, en el orden de la zona. */
+    pivotTuples(rows, fields) {
+        return (fields || []).reduce((acc, f) => {
+            const ids = this.pivotAxisIds(rows, f.name), out = [];
+            acc.forEach(t => ids.forEach(id => out.push(t.concat([id]))));
+            return out;
+        }, [[]]);
+    },
+
+    /** Ejes y matriz de celdas: matrix[r][c] es la fila plana de esa combinación (o null). */
+    pivotLayout(rows, pivot, keyCols) {
+        const rowTuples = this.pivotTuples(rows, pivot.rows), colTuples = this.pivotTuples(rows, pivot.cols);
+        const byKey = new Map((rows || []).map(r => [this.rowKeyValue(r, keyCols), r]));
+        const matrix = rowTuples.map(rt => colTuples.map(ct => {
+            const probe = {};
+            pivot.rows.forEach((f, i) => { probe[f.name] = rt[i]; });
+            pivot.cols.forEach((f, i) => { probe[f.name] = ct[i]; });
+            return byKey.get(this.rowKeyValue(probe, keyCols)) || null;
+        }));
+        return { rowTuples, colTuples, matrix };
+    },
+
+    /** Cabeceras agrupadas por nivel: [{id, span, start}] para cada nivel de las tuplas de columnas. */
+    pivotColGroups(tuples, levels) {
+        const out = [];
+        for (let k = 0; k < levels; k++) {
+            const groups = [];
+            let i = 0;
+            while (i < tuples.length) {
+                const prefix = tuples[i].slice(0, k + 1).join("\u0001");
+                let j = i + 1;
+                while (j < tuples.length && tuples[j].slice(0, k + 1).join("\u0001") === prefix) j++;
+                groups.push({ id: tuples[i][k], span: j - i, start: i });
+                i = j;
+            }
+            out.push(groups);
+        }
+        return out;
+    },
+
+    /** rowspan de cada etiqueta de fila: spans[r][k] = nº de filas que ocupa (0 si ya la cubre la de arriba). */
+    pivotRowSpans(tuples, levels) {
+        const spans = tuples.map(() => new Array(levels).fill(1));
+        for (let k = 0; k < levels - 1; k++) {
+            let i = 0;
+            while (i < tuples.length) {
+                const prefix = tuples[i].slice(0, k + 1).join("\u0001");
+                let j = i + 1;
+                while (j < tuples.length && tuples[j].slice(0, k + 1).join("\u0001") === prefix) j++;
+                spans[i][k] = j - i;
+                for (let m = i + 1; m < j; m++) spans[m][k] = 0;
+                i = j;
+            }
+        }
+        return spans;
     },
 
     /** Aplica (o quita) la herencia automática de "Clave" desde Parametrización sobre una lista de fields. */
@@ -770,16 +1020,132 @@ const TableUpdates = {
     renderFieldsBlock() {
         const part = document.getElementById("actUpdFieldsPart");
         const isParamTable = this.fields.some(f => f.keyFromParam);
+        const hasAxes = this.completeFieldsOf(this.fields).length > 0;
         part.innerHTML = `
             <div class="flow-screen-header"><strong>Campos</strong>
                 <span class="flow-screen-hint">Arrastra para ordenar · el orden aquí es el orden de columnas al ejecutar · marca "Clave" en uno o varios campos para identificar cada fila al grabar (se admite clave compuesta)</span>
             </div>
             ${isParamTable ? `<p class="form-hint actupd-param-hint">🔒 Esta tabla proviene de una <strong>Tabla de parametrización</strong>: la columna "Clave" se toma automáticamente de su definición (Administración → Parametrización) y no se puede editar aquí. Para cambiarla, edita la clave en Parametrización.</p>` : ""}
+            <div class="actupd-fixed-opt" style="margin:8px 0 10px;">
+                <label title="Con esta opción, al ejecutar solo se podrán editar los valores de las filas existentes (no se pueden añadir ni eliminar filas, ni cambiar su clave)."><input type="checkbox" id="actUpdFixedRows" ${(this.options && this.options.fixedRows) || hasAxes ? "checked" : ""} ${hasAxes ? "disabled" : ""}> <strong>Filas fijas</strong> — no se pueden añadir ni eliminar filas al ejecutar</label>
+                ${hasAxes ? `<p class="form-hint">🔒 Hay campos con <strong>"Completar con todos los valores"</strong> (∀): las filas se generan solas, la clave son esos campos y las filas quedan fijas.</p>` : ""}
+            </div>
+            <div class="actupd-pivot-opt" style="margin:0 0 10px;display:${((this.options && this.options.fixedRows) || hasAxes) ? "block" : "none"};">
+                <label title="Muestra la tabla con campos en filas, columnas y un valor editable en cada cruce."><input type="checkbox" id="actUpdPivotOn" ${(this.options && this.options.pivot) ? "checked" : ""}> <strong>Tabla multidimensional</strong> — campos en filas, columnas y un valor</label>
+            </div>
             <div class="actupd-fields-header">
                 <span></span><span>Clave</span><span>Campo</span><span>Descripción</span><span>Filtro</span><span>Validación</span>
             </div>
-            <div id="actUpdFieldsRows" class="actupd-fields-rows"></div>`;
+            <div id="actUpdFieldsRows" class="actupd-fields-rows"></div>
+            <div id="actUpdPivotPart"></div>`;
+        const fixedCb = document.getElementById("actUpdFixedRows");
+        if (fixedCb) fixedCb.addEventListener("change", () => {
+            this.options = Object.assign({}, this.options, { fixedRows: fixedCb.checked });
+            if (!fixedCb.checked) delete this.options.pivot;       // sin filas fijas no hay tabla multidimensional
+            this.renderFieldsBlock();
+        });
+        const pivotCb = document.getElementById("actUpdPivotOn");
+        if (pivotCb) pivotCb.addEventListener("change", () => {
+            if (pivotCb.checked) this.pivotInit(); else { delete this.options.pivot; }
+            this.renderFieldsBlock();
+        });
         this.renderFieldRows();
+        this.renderPivotZones();
+    },
+
+    /** Colocación inicial al activar la tabla multidimensional: los ejes (∀) a filas/columnas y el último campo sin eje a Valor. */
+    pivotInit() {
+        const axes = this.completeFieldsOf(this.fields).map(f => f.name);
+        const others = this.fields.map(f => f.name).filter(n => !axes.includes(n));
+        this.options = Object.assign({}, this.options, {
+            fixedRows: true,
+            pivot: { rows: axes.slice(0, 1), cols: axes.slice(1), value: others.length ? others[others.length - 1] : "" }
+        });
+        this.pivotNormalize();
+    },
+
+    /** Las zonas mandan: Filas/Columnas = ejes ("Completar con todos los valores"); Valor y "sin colocar" = no ejes. */
+    pivotNormalize() {
+        const p = this.options && this.options.pivot;
+        if (!p) return;
+        const byName = new Map(this.fields.map(f => [f.name, f]));
+        const canAxis = (n) => { const f = byName.get(n); return !!(f && f.validation && f.validation.type !== "NONE"); };
+        p.rows = (p.rows || []).filter(n => canAxis(n));
+        p.cols = (p.cols || []).filter(n => canAxis(n) && !p.rows.includes(n));
+        if (!byName.has(p.value) || p.rows.includes(p.value) || p.cols.includes(p.value)) p.value = "";
+        const axisSet = new Set([...p.rows, ...p.cols]);
+        this.fields.forEach(f => { if (f.validation) f.validation.showAll = axisSet.has(f.name) && f.validation.type !== "NONE"; });
+    },
+
+    /** Mueve un campo a una zona (rows | cols | value | tray), opcionalmente antes de otro campo de esa zona. */
+    pivotMove(name, zone, beforeName) {
+        const p = this.options && this.options.pivot;
+        const f = this.fields.find(x => x.name === name);
+        if (!p || !f) return false;
+        if ((zone === "rows" || zone === "cols") && (!f.validation || f.validation.type === "NONE")) {
+            UI.toast(`"${name}" necesita una validación (maestro, jerarquía o constante) para poder ser fila o columna. Defínela con el botón ✓ del campo.`, "error");
+            return false;
+        }
+        p.rows = (p.rows || []).filter(n => n !== name);
+        p.cols = (p.cols || []).filter(n => n !== name);
+        if (p.value === name) p.value = "";
+        if (zone === "rows" || zone === "cols") {
+            const arr = p[zone], i = beforeName ? arr.indexOf(beforeName) : -1;
+            if (i >= 0) arr.splice(i, 0, name); else arr.push(name);
+        } else if (zone === "value") {
+            p.value = name;          // el que hubiera en Valor vuelve a "sin colocar"
+        }
+        this.pivotNormalize();
+        this.renderFieldsBlock();
+        return true;
+    },
+
+    renderPivotZones() {
+        const part = document.getElementById("actUpdPivotPart");
+        if (!part) return;
+        const p = this.options && this.options.pivot;
+        if (!p) { part.innerHTML = ""; return; }
+        this.pivotNormalize();
+        const used = new Set([...(p.rows || []), ...(p.cols || []), ...(p.value ? [p.value] : [])]);
+        const tray = this.fields.map(f => f.name).filter(n => !used.has(n));
+        const chip = (n) => `<span class="actupd-pv-chip" draggable="true" data-pv-field="${UI.escapeHtml(n)}">⠿ ${UI.escapeHtml(n)}</span>`;
+        const zone = (key, title, hint, items) => `
+            <div class="actupd-pv-zone" data-pv-zone="${key}">
+                <div class="actupd-pv-title">${title}<small>${hint}</small></div>
+                <div class="actupd-pv-body">${items.length ? items.map(chip).join("") : '<span class="actupd-pv-empty">Arrastra campos aquí</span>'}</div>
+            </div>`;
+        const errs = this.pivotErrors(this.fields, p);
+        part.innerHTML = `
+            <div class="actupd-pv">
+                <div class="flow-screen-header"><strong>Tabla multidimensional</strong>
+                    <span class="flow-screen-hint">Arrastra los campos a Filas, Columnas o Valor. Todos tienen que estar colocados; en Valor solo puede haber uno; los de Filas y Columnas completan con todos sus valores y forman la clave.</span>
+                </div>
+                <div class="actupd-pv-grid">
+                    ${zone("tray", "Sin colocar", "", tray)}
+                    ${zone("rows", "Filas", "varios = columnas de etiquetas", p.rows || [])}
+                    ${zone("cols", "Columnas", "varios = cabeceras agrupadas", p.cols || [])}
+                    ${zone("value", "Valor", "solo uno", p.value ? [p.value] : [])}
+                </div>
+                ${errs.length
+                    ? `<ul class="actupd-pv-errs" id="actUpdPivotErrs">${errs.map(e => `<li>${UI.escapeHtml(e)}</li>`).join("")}</ul>`
+                    : `<p class="form-hint" id="actUpdPivotOk">✔ Configuración válida.</p>`}
+            </div>`;
+
+        part.querySelectorAll("[data-pv-field]").forEach(el => {
+            el.addEventListener("dragstart", (e) => { this.pvDrag = el.dataset.pvField; el.classList.add("dragging"); try { e.dataTransfer.setData("text/plain", this.pvDrag); } catch (x) { /* nada */ } });
+            el.addEventListener("dragend", () => { el.classList.remove("dragging"); this.pvDrag = null; });
+        });
+        part.querySelectorAll("[data-pv-zone]").forEach(z => {
+            z.addEventListener("dragover", (e) => { e.preventDefault(); z.classList.add("over"); });
+            z.addEventListener("dragleave", () => z.classList.remove("over"));
+            z.addEventListener("drop", (e) => {
+                e.preventDefault();
+                z.classList.remove("over");
+                if (!this.pvDrag) return;
+                const chipEl = e.target.closest("[data-pv-field]");
+                this.pivotMove(this.pvDrag, z.dataset.pvZone, chipEl && chipEl.dataset.pvField !== this.pvDrag ? chipEl.dataset.pvField : null);
+            });
+        });
     },
 
     renderFieldRows() {
@@ -790,6 +1156,8 @@ const TableUpdates = {
             return;
         }
 
+        const axisMode = this.completeFieldsOf(this.fields).length > 0;
+        const isAxis = (f) => !!(f.validation && f.validation.type !== "NONE" && f.validation.showAll);
         rowsEl.innerHTML = this.fields.map((f, idx) => {
             const filterActive = f.filter && f.filter.type !== "NONE";
             const validActive = f.validation && f.validation.type !== "NONE";
@@ -799,8 +1167,8 @@ const TableUpdates = {
             return `
             <div class="actupd-field-row" draggable="true" data-idx="${idx}">
                 <span class="actupd-drag-handle" title="Arrastrar">⠿</span>
-                <span class="actupd-field-key"><input type="checkbox" class="actupd-field-key-cb" data-idx="${idx}" ${f.key ? "checked" : ""} ${f.keyFromParam ? "disabled" : ""} title="${keyTitle}"></span>
-                <span class="actupd-field-name">${UI.escapeHtml(f.name)}</span>
+                <span class="actupd-field-key"><input type="checkbox" class="actupd-field-key-cb" data-idx="${idx}" ${(axisMode ? isAxis(f) : f.key) ? "checked" : ""} ${(f.keyFromParam || axisMode) ? "disabled" : ""} title="${keyTitle}"></span>
+                <span class="actupd-field-name">${UI.escapeHtml(f.name)}${isAxis(f) ? ' <span title="Completa con todos los valores: es parte de la clave" style="color:var(--brand-primary);">∀</span>' : ""}</span>
                 <input type="text" class="actupd-field-desc" data-idx="${idx}" placeholder="Descripción del campo" value="${UI.escapeHtml(f.description || "")}">
                 <button type="button" class="actupd-icon-btn ${filterActive ? "active" : ""}" data-filter-idx="${idx}" title="Filtro">⏷</button>
                 <button type="button" class="actupd-icon-btn ${validActive ? "active" : ""}" data-valid-idx="${idx}" title="Validación">✓</button>
@@ -959,6 +1327,10 @@ const TableUpdates = {
                     <div class="form-group">
                         <label><input type="checkbox" id="actUpdShowText" ${v.showText ? "checked" : ""}> Mostrar texto descriptivo junto al valor</label>
                     </div>
+                    <div class="form-group" id="actUpdShowAllWrap" style="display:${v.type === "NONE" ? "none" : "block"}">
+                        <label><input type="checkbox" id="actUpdShowAll" ${v.showAll ? "checked" : ""} ${(this.options && this.options.pivot) ? "disabled" : ""}> Completar con todos los valores${(this.options && this.options.pivot) ? " (lo controla la tabla multidimensional: Filas y Columnas)" : ""}</label>
+                        <small class="form-hint">La tabla mostrará una fila por cada valor posible de este campo (si hay varios campos marcados, todas las combinaciones), con lo que haya grabado en el resto de campos o vacío si no hay nada. Los campos marcados forman la clave y la tabla pasa a tener filas fijas. Los valores respetan los filtros de las variables.</small>
+                    </div>
                     <div class="form-group">
                         <label>Ayuda de búsqueda</label>
                         <select id="actUpdSearchHelp">
@@ -983,6 +1355,7 @@ const TableUpdates = {
                 overlay.querySelector("#actUpdValidConst").style.display = radio.value === "CONST" && radio.checked ? "block" : "none";
                 overlay.querySelector("#actUpdValidDim").style.display = radio.value === "DIM" && radio.checked ? "block" : "none";
                 overlay.querySelector("#actUpdValidHier").style.display = radio.value === "HIER" && radio.checked ? "block" : "none";
+                if (radio.checked) overlay.querySelector("#actUpdShowAllWrap").style.display = radio.value === "NONE" ? "none" : "block";
             });
         });
 
@@ -1051,10 +1424,11 @@ const TableUpdates = {
                 node: type === "HIER" ? overlay.querySelector("#actUpdHierNode").value.trim() : "",
                 allowEmpty: overlay.querySelector("#actUpdAllowEmpty").checked,
                 showText: overlay.querySelector("#actUpdShowText").checked,
+                showAll: type !== "NONE" && overlay.querySelector("#actUpdShowAll").checked,
                 searchHelp
             };
             close();
-            this.renderFieldRows();
+            this.renderFieldsBlock();      // refresca también el aviso de filas fijas y la clave
         });
     },
 
@@ -1063,26 +1437,37 @@ const TableUpdates = {
         const name = nameEl ? nameEl.textContent.trim() : this.editing[this.NAME_COL];
         if (!name) { UI.toast("El nombre no puede estar vacío.", "error"); return; }
 
+        if (this.options && this.options.pivot) {
+            this.pivotNormalize();
+            const pvErrs = this.pivotErrors(this.fields, this.options.pivot);
+            if (pvErrs.length) { UI.toast("No se puede guardar la tabla multidimensional: " + pvErrs.join(" "), "error"); return; }
+        }
         this.fields.forEach((f, i) => { f.order = i; });
         const varsJsonPlain = JSON.stringify(this.screen);
         const fieldsJsonPlain = JSON.stringify(this.fields);
         const varsJson = varsJsonPlain.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         const fieldsJson = fieldsJsonPlain.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+        const optionsJsonPlain = JSON.stringify(this.options || {});
+        const optionsJson = optionsJsonPlain.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
         const id = this.editing[this.ID_COL];
 
         try {
+            if (!(await this.ensureOptionsColumn())) {
+                UI.toast("No se pudo preparar la columna de opciones de la actualización (OPCIONES_JSON). Revisa los permisos sobre DRACO_CONTROL.", "error");
+                return;
+            }
             if (this.editingIsNew) {
                 await Provider.runQuery(`
                     INSERT INTO ${Provider.qualifyControl(this.TABLE)}
-                    (${this.ID_COL}, PROYECTO_ID, ${this.NAME_COL}, DESCRIPCION, TABLA, VARIABLES_JSON, CAMPOS_JSON, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
+                    (${this.ID_COL}, PROYECTO_ID, ${this.NAME_COL}, DESCRIPCION, TABLA, VARIABLES_JSON, CAMPOS_JSON, OPCIONES_JSON, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
                     VALUES ('${Provider.esc(id)}', '${Provider.esc(this.project.PROYECTO_ID)}', '${Provider.esc(name)}', '${Provider.esc(this.editing.DESCRIPCION || "")}',
-                            '${Provider.esc(this.editing.TABLA)}', '${varsJson}', '${fieldsJson}', ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`);
+                            '${Provider.esc(this.editing.TABLA)}', '${varsJson}', '${fieldsJson}', '${optionsJson}', ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`);
                 this.editingIsNew = false;
                 UI.toast(`Actualización "${name}" creada.`, "success");
             } else {
                 await Provider.runQuery(`
                     UPDATE ${Provider.qualifyControl(this.TABLE)}
-                    SET ${this.NAME_COL} = '${Provider.esc(name)}', VARIABLES_JSON = '${varsJson}', CAMPOS_JSON = '${fieldsJson}', FECHA_MODIFICACION = CURRENT_TIMESTAMP()
+                    SET ${this.NAME_COL} = '${Provider.esc(name)}', VARIABLES_JSON = '${varsJson}', CAMPOS_JSON = '${fieldsJson}', OPCIONES_JSON = '${optionsJson}', FECHA_MODIFICACION = CURRENT_TIMESTAMP()
                     WHERE ${this.ID_COL} = '${Provider.esc(id)}'`);
                 UI.toast(`Actualización "${name}" guardada.`, "success");
             }
@@ -1092,6 +1477,7 @@ const TableUpdates = {
             this.editing[this.NAME_COL] = name;
             this.editing.VARIABLES_JSON = varsJsonPlain;
             this.editing.CAMPOS_JSON = fieldsJsonPlain;
+            this.editing.OPCIONES_JSON = optionsJsonPlain;
             await this.loadList();
             const runBtn = document.getElementById("actUpdEditorRun");
             if (runBtn) runBtn.disabled = false;
@@ -1204,7 +1590,7 @@ const TableUpdates = {
             const where = this.buildWhere(this.runFields, {});
             const table = Provider.qualify(this.project.DATASET, this.runRecord.TABLA);
             const rows = await Provider.runQuery(`SELECT * FROM ${table} ${where}`);
-            await this.buildGridState(this.runRecord, this.runFields, rows, where);
+            await this.buildGridState(this.runRecord, this.runFields, rows, where, {});
             this.renderRunTableView();
         } catch (err) {
             UI.toast("Error al cargar la tabla: " + err.message, "error");
@@ -1564,7 +1950,7 @@ const TableUpdates = {
             const where = this.buildWhere(this.runFields, values);
             const table = Provider.qualify(this.project.DATASET, this.runRecord.TABLA);
             const rows = await Provider.runQuery(`SELECT * FROM ${table} ${where}`);
-            await this.buildGridState(this.runRecord, this.runFields, rows, where);
+            await this.buildGridState(this.runRecord, this.runFields, rows, where, values);
             this.switchRunTab("table");
         } catch (err) {
             UI.toast("Error al cargar la tabla: " + err.message, "error");
@@ -1578,12 +1964,12 @@ const TableUpdates = {
     // Mismo grid tipo "Excel" de siempre (pegar bloques, exportar/importar,
     // filtro por columna, diff altas/mods/bajas al grabar), ahora incrustado
     // en la pestaña "Tabla" en lugar de un monitor de progreso.
-    async buildGridState(record, fields, rows, where) {
+    async buildGridState(record, fields, rows, where, variableValues) {
         const state = {
             record, fields, where,
             columns: fields.map(f => f.name),
             originalRows: rows.map(r => ({ ...r })),
-            currentRows: rows.map(r => ({ ...r, __rowId: Provider.newId(), __isNew: false })),
+            currentRows: [],
             deletedRowIds: [],
             colFilters: {},
             sortCol: null, sortDir: 1,
@@ -1601,6 +1987,14 @@ const TableUpdates = {
                 state.optionsByField[f.name] = await this.resolveValidationOptions(f.validation);
             }
         }
+
+        // Filas fijas / "Completar con todos los valores": las filas salen de los valores posibles.
+        const comp = this.completeRows(fields, state.optionsByField, rows, variableValues || {});
+        state.fixedRows = this.isFixedRows(this.parseOptions(record), fields);
+        state.universeKeys = comp.universeKeys;
+        state.keyCols = this.getKeyColumns(state);
+        state.pivot = this.parsePivot(this.parseOptions(record), fields);      // tabla multidimensional (o null)
+        state.currentRows = comp.rows.map(r => ({ ...r, __rowId: Provider.newId(), __isNew: false }));
     },
 
     renderRunTableView() {
@@ -1616,7 +2010,7 @@ const TableUpdates = {
         const state = this.gridState;
         body.innerHTML = `
             <div class="values-toolbar">
-                <button class="btn btn-secondary btn-sm" id="actUpdGridAddRow">+ Añadir fila</button>
+                <button class="btn btn-secondary btn-sm" id="actUpdGridAddRow" ${state.fixedRows ? 'style="display:none;"' : ""}>+ Añadir fila</button>
                 <button class="btn btn-secondary btn-sm" id="actUpdGridExportCsv">Exportar CSV</button>
                 <button class="btn btn-secondary btn-sm" id="actUpdGridExportXlsx">Exportar Excel</button>
                 <button class="btn btn-secondary btn-sm" id="actUpdGridImport">Importar archivo</button>
@@ -1738,6 +2132,7 @@ const TableUpdates = {
     renderGrid() {
         const state = this.gridState;
         const wrap = document.getElementById("actUpdGridWrap");
+        if (state.pivot) { this.renderPivot(); return; }
 
         // Sin filas no tiene sentido pintar las columnas: se muestra un aviso
         // y el usuario decide si añade una fila manualmente (lo que sí pinta
@@ -1758,7 +2153,7 @@ const TableUpdates = {
         state.selectedRowIds.forEach(id => { if (!currentIds.has(id)) state.selectedRowIds.delete(id); });
 
         const countEl = document.getElementById("actUpdGridCount");
-        if (countEl) countEl.textContent = `${filtered.length} de ${state.currentRows.length} fila(s)`;
+        if (countEl) countEl.textContent = `${filtered.length} de ${state.currentRows.length} fila(s)` + (state.fixedRows ? " · filas fijas" : "");
 
         const delBtn = document.getElementById("actUpdGridDeleteSel");
         if (delBtn) {
@@ -1800,14 +2195,14 @@ const TableUpdates = {
         const rowsHtml = visible.map(row => {
             const cells = state.fields.map(f => this.renderCell(row, f)).join("");
             const checked = state.selectedRowIds.has(row.__rowId);
-            return `<tr data-row="${row.__rowId}" class="${checked ? "actupd-row-selected" : ""}"><td class="values-row-select"><input type="checkbox" class="actupd-row-select" data-row="${row.__rowId}" ${checked ? "checked" : ""}></td>${cells}<td class="values-row-remove"><button type="button" data-remove-row="${row.__rowId}" title="Eliminar fila">✕</button></td></tr>`;
+            return `<tr data-row="${row.__rowId}" class="${checked ? "actupd-row-selected" : ""}"><td class="values-row-select">${state.fixedRows ? "" : `<input type="checkbox" class="actupd-row-select" data-row="${row.__rowId}" ${checked ? "checked" : ""}>`}</td>${cells}<td class="values-row-remove">${state.fixedRows ? "" : `<button type="button" data-remove-row="${row.__rowId}" title="Eliminar fila">✕</button>`}</td></tr>`;
         }).join("");
 
         wrap.innerHTML = `
             <table class="values-grid actupd-values-grid">
                 <colgroup>${colsHtml}</colgroup>
                 <thead>
-                    <tr><th class="values-row-select"><input type="checkbox" id="actUpdSelectAll" ${allFilteredSelected ? "checked" : ""}></th>${headerCells}<th class="values-row-remove"></th></tr>
+                    <tr><th class="values-row-select">${state.fixedRows ? "" : `<input type="checkbox" id="actUpdSelectAll" ${allFilteredSelected ? "checked" : ""}>`}</th>${headerCells}<th class="values-row-remove"></th></tr>
                     <tr><th class="values-row-select"></th>${filterCells}<th class="values-row-remove"></th></tr>
                 </thead>
                 <tbody id="actUpdGridBody">${rowsHtml}</tbody>
@@ -1930,10 +2325,107 @@ const TableUpdates = {
         tbody.addEventListener("paste", (e) => this.handlePaste(e));
     },
 
+    // ---------------- Tabla multidimensional: pintado y edición ----------------
+    /** Etiqueta de un valor de eje: el id y, si el campo muestra texto, su descripción. */
+    pivotLabel(field, id) {
+        if (!(field.validation && field.validation.showText)) return UI.escapeHtml(id);
+        const opt = (this.gridState.optionsByField[field.name] || []).find(o => String(o.id) === String(id));
+        return UI.escapeHtml(id) + (opt && opt.desc ? ` <span class="actupd-pv-desc">· ${UI.escapeHtml(opt.desc)}</span>` : "");
+    },
+
+    /** El editor de una celda de la tabla multidimensional (misma lógica que renderCell, sin columna de texto). */
+    valueInputHtml(row, f, pr, pc) {
+        const val = row[f.name] ?? "";
+        const v = f.validation;
+        const base = `class="actupd-cell-input" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" data-pr="${pr}" data-pc="${pc}"`;
+        if (!v || v.type === "NONE") return `<input type="text" ${base} value="${UI.escapeHtml(val)}">`;
+        const options = this.gridState.optionsByField[f.name] || [];
+        if (v.searchHelp === "CHECKBOX" && options.length === 2) {
+            return `<input type="checkbox" ${base} data-off="${UI.escapeHtml(options[0].id)}" data-on="${UI.escapeHtml(options[1].id)}" ${String(val) === String(options[1].id) ? "checked" : ""}>`;
+        }
+        if (v.searchHelp === "SEARCH") {
+            return `<span class="actupd-search-cell"><input type="text" ${base} value="${UI.escapeHtml(val)}"><button type="button" class="actupd-search-trigger" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" title="Buscar">🔍</button></span>`;
+        }
+        return `<select ${base}><option value="">${v.allowEmpty ? "(vacío)" : "— selecciona —"}</option>${options.map(o => `<option value="${UI.escapeHtml(o.id)}" ${o.desc ? `title="${UI.escapeHtml(o.desc)}"` : ""} ${String(val) === String(o.id) ? "selected" : ""}>${UI.escapeHtml(o.id)}</option>`).join("")}</select>`;
+    },
+
+    renderPivot() {
+        const state = this.gridState, pv = state.pivot;
+        const wrap = document.getElementById("actUpdGridWrap");
+        const L = this.pivotLayout(state.currentRows, pv, state.keyCols || this.getKeyColumns(state));
+        state.pivotMatrix = L.matrix;
+        const countEl = document.getElementById("actUpdGridCount");
+        if (countEl) countEl.textContent = `${L.rowTuples.length} fila(s) × ${L.colTuples.length} columna(s) · filas fijas`;
+        if (!L.rowTuples.length || !L.colTuples.length) {
+            wrap.innerHTML = `<div class="module-empty module-empty--inline">No hay valores que mostrar con estos filtros.</div>`;
+            return;
+        }
+        const nr = pv.rows.length, nc = pv.cols.length;
+        const colGroups = this.pivotColGroups(L.colTuples, nc), rowSpans = this.pivotRowSpans(L.rowTuples, nr);
+        if (!state.pivotOrig) { state.pivotOrig = {}; state.currentRows.forEach(r => { state.pivotOrig[r.__rowId] = r[pv.value.name] ?? ""; }); }
+
+        const head = pv.cols.map((cf, k) => `<tr><th colspan="${nr}" class="actupd-pv-corner">${UI.escapeHtml(cf.description || cf.name)}</th>${colGroups[k].map(g => `<th colspan="${g.span}" class="actupd-pv-colh">${this.pivotLabel(cf, g.id)}</th>`).join("")}</tr>`).join("")
+            + `<tr>${pv.rows.map(rf => `<th class="actupd-pv-rowh">${UI.escapeHtml(rf.description || rf.name)}</th>`).join("")}<th colspan="${L.colTuples.length}" class="actupd-pv-valh">${UI.escapeHtml(pv.value.description || pv.value.name)}</th></tr>`;
+        const body = L.rowTuples.map((rt, r) => {
+            const labels = rt.map((id, k) => rowSpans[r][k] ? `<th rowspan="${rowSpans[r][k]}" class="actupd-pv-rowl">${this.pivotLabel(pv.rows[k], id)}</th>` : "").join("");
+            const cells = L.colTuples.map((ct, c) => {
+                const row = L.matrix[r][c];
+                if (!row) return `<td class="actupd-pv-cell actupd-pv-na"></td>`;
+                const mod = String(state.pivotOrig[row.__rowId] ?? "") !== String(row[pv.value.name] ?? "");
+                return `<td class="actupd-pv-cell ${mod ? "actupd-pv-mod" : ""}" data-cell-row="${row.__rowId}">${this.valueInputHtml(row, pv.value, r, c)}</td>`;
+            }).join("");
+            return `<tr>${labels}${cells}</tr>`;
+        }).join("");
+        wrap.innerHTML = `<table class="values-grid actupd-values-grid actupd-pivot"><thead>${head}</thead><tbody id="actUpdGridBody">${body}</tbody></table>`;
+
+        wrap.querySelectorAll(".actupd-cell-input").forEach(el => {
+            const evt = el.tagName === "SELECT" || el.type === "checkbox" ? "change" : "input";
+            el.addEventListener(evt, (e) => { this.onCellChange(e, el); this.pivotMarkCell(el); });
+        });
+        wrap.querySelectorAll(".actupd-search-trigger").forEach(btn => {
+            btn.addEventListener("click", () => this.openSearchHelp(btn.dataset.row, btn.dataset.field));
+        });
+        document.getElementById("actUpdGridBody").addEventListener("paste", (e) => this.handlePastePivot(e));
+    },
+
+    /** Marca la celda como modificada si su valor ya no es el de la carga. */
+    pivotMarkCell(el) {
+        const state = this.gridState, td = el.closest("td");
+        const row = state.currentRows.find(r => r.__rowId === el.dataset.row);
+        if (!td || !row) return;
+        td.classList.toggle("actupd-pv-mod", String(state.pivotOrig[row.__rowId] ?? "") !== String(row[state.pivot.value.name] ?? ""));
+    },
+
+    /** Pegar un bloque de Excel: rellena celdas hacia abajo y hacia la derecha; lo que sobre se ignora (filas fijas). */
+    handlePastePivot(e) {
+        const t = e.target;
+        if (!t.matches(".actupd-cell-input") || t.tagName !== "INPUT" || t.type === "checkbox") return;
+        const text = (e.clipboardData || window.clipboardData).getData("text");
+        if (!text || (!text.includes("\t") && !text.includes("\n"))) return;
+        e.preventDefault();
+        this.syncGridFromDom();
+        const state = this.gridState, vf = state.pivot.value.name, M = state.pivotMatrix || [];
+        const r0 = parseInt(t.dataset.pr, 10), c0 = parseInt(t.dataset.pc, 10);
+        const lines = text.replace(/\r/g, "").split("\n").filter((l, i, a) => !(i === a.length - 1 && l === ""));
+        lines.forEach((line, i) => line.split("\t").forEach((cell, j) => {
+            const row = M[r0 + i] && M[r0 + i][c0 + j];
+            if (row) row[vf] = cell;
+        }));
+        this.renderGrid();
+    },
+
     renderCell(row, f) {
         const val = row[f.name] ?? "";
         const v = f.validation;
         let inputHtml;
+
+        // Filas fijas: las columnas clave identifican la fila y no se pueden cambiar.
+        if (this.gridState.fixedRows && (this.gridState.keyCols || []).includes(f.name)) {
+            const optsK = this.gridState.optionsByField[f.name] || [];
+            const optK = optsK.find(o => String(o.id) === String(val));
+            return `<td class="actupd-key-ro" style="padding:6px 10px;">${UI.escapeHtml(val)}</td>`
+                + (v && v.showText ? `<td class="actupd-desc-col">${UI.escapeHtml(optK ? optK.desc : "")}</td>` : "");
+        }
 
         if (!v || v.type === "NONE") {
             inputHtml = `<input type="text" class="actupd-cell-input" data-row="${row.__rowId}" data-field="${UI.escapeHtml(f.name)}" data-col-idx="${this.gridState.columns.indexOf(f.name)}" value="${UI.escapeHtml(val)}">`;
@@ -1974,6 +2466,14 @@ const TableUpdates = {
         const state = this.gridState;
         const tbody = document.getElementById("actUpdGridBody");
         if (!tbody) return;
+        if (state.pivot) {          // cada celda lleva su fila: no hay una fila por <tr>
+            tbody.querySelectorAll(".actupd-cell-input").forEach(el => {
+                const row = state.currentRows.find(r => r.__rowId === el.dataset.row);
+                if (!row) return;
+                row[el.dataset.field] = el.type === "checkbox" ? (el.checked ? el.dataset.on : el.dataset.off) : el.value;
+            });
+            return;
+        }
         tbody.querySelectorAll("tr").forEach(tr => {
             const row = state.currentRows.find(r => r.__rowId === tr.dataset.row);
             if (!row) return;
@@ -2029,6 +2529,7 @@ const TableUpdates = {
         pastedRows.forEach((rowText, rOffset) => {
             const cells = rowText.split("\t");
             let rowIdx = startRowIdx + rOffset;
+            if (state.fixedRows && rowIdx >= state.currentRows.length) return;   // filas fijas: pegar no crea filas
             while (rowIdx >= state.currentRows.length) {
                 const blank = {};
                 state.columns.forEach(c => { blank[c] = ""; });
@@ -2037,6 +2538,7 @@ const TableUpdates = {
             cells.forEach((cellText, cOffset) => {
                 const colIdx = startColIdx + cOffset;
                 if (colIdx >= state.columns.length) return;
+                if (state.fixedRows && (state.keyCols || []).includes(state.columns[colIdx])) return;   // la clave no se cambia
                 state.currentRows[rowIdx][state.columns[colIdx]] = cellText;
             });
         });
@@ -2173,6 +2675,27 @@ const TableUpdates = {
             if (!parsed.length) { UI.toast("No se encontraron filas de datos en el archivo.", "error"); return; }
 
             this.syncGridFromDom();
+
+            if (state.fixedRows) {
+                // Filas fijas: el fichero solo actualiza los valores de las filas que YA existen (emparejadas
+                // por la clave); no crea ni elimina filas. Solo se tocan las columnas que vienen en el fichero.
+                const keyColsF = state.keyCols || this.getKeyColumns(state);
+                const byKey = new Map(state.currentRows.map(r => [this.rowKeyValue(r, keyColsF), r]));
+                let updated = 0, ignored = 0;
+                parsed.forEach(pRow => {
+                    const row = byKey.get(this.rowKeyValue(pRow, keyColsF));
+                    if (!row) { ignored++; return; }
+                    state.columns.forEach(c => {
+                        if (keyColsF.includes(c) || headerMap.indexOf(c.toUpperCase()) === -1) return;
+                        row[c] = pRow[c] !== undefined ? pRow[c] : "";
+                    });
+                    updated++;
+                });
+                UI.toast(`Fichero cargado: ${updated} fila(s) actualizada(s)` + (ignored ? `; ${ignored} no existen en la tabla (filas fijas) y se han ignorado` : "") + `. Pulsa "Grabar" para confirmarlo en la base de datos.`, ignored ? "info" : "success");
+                this.renderGrid();
+                return;
+            }
+
             const keyCol = state.columns[0];
             const originalByKey = new Map(state.originalRows.map(r => [String(r[keyCol]), r]));
             const currentByKey = new Map(state.currentRows.map(r => [String(r[keyCol]), r]));
@@ -2209,6 +2732,9 @@ const TableUpdates = {
      * primera columna como antes, por compatibilidad.
      */
     getKeyColumns(state) {
+        // Con "Completar con todos los valores", la clave son los campos marcados (por encima de Parametrización).
+        const axes = this.completeFieldsOf(state.fields);
+        if (axes.length) return axes.map(f => f.name);
         const keys = state.fields.filter(f => f.key).map(f => f.name);
         return keys.length ? keys : [state.columns[0]];
     },
@@ -2293,6 +2819,21 @@ const TableUpdates = {
             return;
         }
 
+        // Filas fijas: no se pueden crear ni eliminar filas. Con "Completar con todos los valores" las
+        // filas nuevas permitidas son las combinaciones de valores; las grabadas que ya no encajan (p. ej.
+        // un valor dado de baja en el maestro) desaparecen al grabar, como el resto del filtro.
+        if (state.fixedRows) {
+            const keyColsF = state.keyCols || this.getKeyColumns(state);
+            const d0 = this.computeDiff();
+            const bad = state.universeKeys
+                ? d0.added.filter(r => !state.universeKeys.has(this.rowKeyValue(r, keyColsF)))
+                : d0.added.concat(d0.deleted);
+            if (bad.length) {
+                UI.toast("No se puede grabar: esta actualización tiene filas fijas y no admite crear ni eliminar filas.", "error");
+                return;
+            }
+        }
+
         const diff = this.computeDiff();
         if (!diff.added.length && !diff.modified.length && !diff.deleted.length) {
             UI.toast("No hay cambios que grabar.", "info");
@@ -2330,6 +2871,7 @@ const TableUpdates = {
             state.originalRows = state.currentRows.map(r => ({ ...r }));
             state.deletedRowIds = [];
             state.currentRows.forEach(r => { r.__isNew = false; });
+            if (state.pivot) { state.pivotOrig = null; this.renderGrid(); }      // las celdas grabadas dejan de verse como modificadas
         } catch (err) {
             UI.toast("Error al grabar: " + err.message, "error");
         } finally {
