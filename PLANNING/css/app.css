@@ -823,3 +823,26 @@ li.hier-preview-node { margin: 2px 0; }
 @media (max-width: 1100px) {
     .hierarchy-editor { grid-template-columns: 1fr; }
 }
+
+
+/* ---- Actualización de tablas: tabla multidimensional (diseñador y ejecución) ---- */
+.actupd-pv { margin: 6px 0 14px; }
+.actupd-pv-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 8px 0; }
+.actupd-pv-zone { border: 1px dashed var(--border-default); border-radius: var(--radius-md, 10px); padding: 8px; background: var(--surface-card); min-height: 78px; }
+.actupd-pv-zone.over { border-color: var(--brand-primary); background: var(--brand-primary-light); }
+.actupd-pv-title { font-size: 12px; font-weight: 700; margin-bottom: 6px; color: var(--text-primary); }
+.actupd-pv-title small { display: block; font-weight: 400; color: var(--text-muted); font-size: 11px; }
+.actupd-pv-body { display: flex; flex-wrap: wrap; gap: 6px; }
+.actupd-pv-chip { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; background: var(--gray-100); border: 1px solid var(--border-default); font-size: 12.5px; cursor: grab; user-select: none; }
+.actupd-pv-chip.dragging { opacity: .45; }
+.actupd-pv-empty { color: var(--text-muted); font-size: 12px; }
+.actupd-pv-errs { margin: 6px 0 0; padding-left: 18px; color: var(--color-danger, #C2362B); font-size: 12.5px; }
+.actupd-pivot th { white-space: nowrap; }
+.actupd-pivot .actupd-pv-corner { text-align: right; font-weight: 600; color: var(--text-muted); background: var(--gray-50); }
+.actupd-pivot .actupd-pv-colh { text-align: center; background: var(--gray-50); border-left: 1px solid var(--border-default); }
+.actupd-pivot .actupd-pv-rowh, .actupd-pivot .actupd-pv-valh { background: var(--gray-50); font-weight: 600; }
+.actupd-pivot .actupd-pv-rowl { background: var(--gray-50); text-align: left; font-weight: 500; vertical-align: top; }
+.actupd-pivot .actupd-pv-desc { color: var(--text-muted); font-weight: 400; }
+.actupd-pivot .actupd-pv-cell { padding: 2px 4px; min-width: 96px; border-left: 1px solid var(--border-default); }
+.actupd-pivot .actupd-pv-mod { background: var(--brand-primary-light); }
+.actupd-pivot .actupd-pv-na { background: var(--gray-100); }
