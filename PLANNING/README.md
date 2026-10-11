@@ -593,6 +593,27 @@ clave duplicada y campos obligatorios, grabar con confirmación y resumen).
   `values`. Tabla, columnas y WHERE se recalculan en Draco desde la definición
   guardada y siempre dentro del proyecto activo; todo valor va por `Provider.esc`
   y las variables se validan antes de consultar.
+- **Filas fijas y «Completar con todos los valores»** (Actualización de tablas, en
+  Planning y dentro de un informe). En el diseñador: la casilla **Filas fijas** de
+  la actualización (no se pueden añadir ni eliminar filas ni cambiar su clave,
+  solo editar valores; se guarda en `ACTUALIZACIONES.OPCIONES_JSON = {fixedRows}`,
+  columna creada por `evolve()` y, para sesiones ya abiertas, por la propia
+  pantalla) y, en la validación de cada campo (constante, dimensión o jerarquía),
+  **Completar con todos los valores** (`validation.showAll`). Con campos marcados,
+  la tabla muestra una fila por cada valor posible de cada campo (todas las
+  combinaciones si hay varios), cruzada con lo grabado (vacío si no hay registro);
+  **la clave pasan a ser los campos marcados** y las filas quedan fijas. Los valores
+  respetan los filtros de las variables (misma semántica que el SQL: único, rango,
+  varios con incluir/excluir, `BT`, `CP`...). Se graba **todo** (también las
+  combinaciones vacías) con la misma estrategia de siempre (borrar el subconjunto
+  filtrado y reinsertarlo). Sin límite de combinaciones, pensado para tablas
+  pequeñas. Una fila ya grabada cuyo valor deja de existir en el maestro o la
+  constante no se muestra y desaparece al grabar (la rejilla lo cuenta como baja
+  en el resumen). El servidor del informe (`informes-datos.js`) hace cumplir las
+  filas fijas aunque la página lo intente. La lógica (`completeRows`,
+  `fieldFilterAllows`, `isFixedRows`...) vive en `table-updates.js` y la reutiliza
+  el informe. En filas fijas, pegar e importar solo actualizan valores de filas
+  existentes.
 - **Velocidad de apertura.** Abrir una tabla tardaba varios segundos por las
   consultas encadenadas (cada una espera a la anterior, ~0,5-1,5 s en BigQuery
   aunque devuelva una fila). Ahora: definición y dimensiones se leen a la vez, y
@@ -618,6 +639,31 @@ clave duplicada y campos obligatorios, grabar con confirmación y resumen).
   una nota; el HTML suelto avisa de que la tabla se edita desde Draco.
 - El estado de la rejilla vive fuera del DOM, así que no se pierde lo editado al
   cambiar de pestaña del informe.
+
+**Tabla multidimensional (Actualización de tablas y bloque del informe).** Con
+*Filas fijas* marcado, el diseñador ofrece **Tabla multidimensional**: debajo de
+los campos aparecen las zonas **Filas**, **Columnas** y **Valor** y los campos se
+arrastran entre ellas (más "Sin colocar"). Reglas: todos los campos tienen que
+estar colocados; en Valor solo hay uno; en Filas y Columnas solo entran campos
+con validación (maestro, jerarquía o constante) y se marcan solos como "Completar
+con todos los valores" (son los ejes y la clave; las zonas mandan sobre esa
+casilla); hace falta al menos un campo en Filas y uno en Columnas; no se guarda
+una configuración incompleta. Se guarda en `OPCIONES_JSON` como
+`{"fixedRows":true,"pivot":{"rows":[...],"cols":[...],"value":"CAMPO"}}`.
+
+Es otra forma de VER y EDITAR las mismas filas: varios campos en Filas dan
+columnas de etiquetas fusionadas y varios en Columnas, cabeceras agrupadas por
+niveles; el orden es el de los valores del maestro o de la constante; cada cruce
+es la celda editable del campo Valor (con su desplegable, buscador o casilla si
+tiene validación). Debajo siguen siendo filas planas: grabar, el resumen de
+altas/modificaciones/bajas, la validación del servidor, exportar e importar (CSV o
+Excel, una fila por combinación) y las reglas de filas fijas no cambian. Pegar un
+bloque de Excel rellena celdas hacia abajo y a la derecha (lo que sobre se
+ignora). No hay filtros ni orden por columna y no hay límite de columnas (se
+asume una tabla acotada). Si la configuración guardada dejara de ser válida (p.
+ej. se borra un campo), se muestra la rejilla normal. Funciona igual en Planning,
+en el generador y en el visor; *Propiedades* del bloque avisa de la configuración.
+Lógica común en `TableUpdates` (`pivotErrors`, `parsePivot`, `pivotLayout`...).
 
 **Actualizar la herramienta.** `informes-herramienta.html` es un único archivo
 autocontenido, que fuera de Draco funciona también por sí solo. Para actualizar

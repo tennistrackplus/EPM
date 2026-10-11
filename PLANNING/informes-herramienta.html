@@ -1113,7 +1113,7 @@ function tuLoad(id,force){
   dcall('tu.load',{ref:b.ref,values:b.values||{},force:!!force}).then(function(res){
     if(TUS[id]!==st) return;
     var cols=res.columns, rows=res.rows.map(function(r){ var o={__id:tuUid(),__new:false,__mod:false}; cols.forEach(function(c,i){ o[c]=(r[i]==null?'':String(r[i])); }); return o; });
-    st.status='ready'; st.meta={name:res.name,table:res.table,columns:cols,keyCols:res.keyCols,fields:res.fields,optionsByField:res.optionsByField||{}};
+    st.status='ready'; st.meta={name:res.name,table:res.table,columns:cols,keyCols:res.keyCols,fields:res.fields,optionsByField:res.optionsByField||{},fixed:!!res.fixedRows,pivot:res.pivot||null};
     st.rows=rows; st.map={}; st.orig={}; rows.forEach(function(r){ st.map[r.__id]=r; st.orig[r.__id]=tuCopy(r,cols); });
     st.nMod=0; st.nNew=0; st.nDel=0; st.dirty=false; st.last=null; st.dup={}; st.msg=null; st.sel={};
     tuRender(id);
@@ -1129,6 +1129,10 @@ function tuFiltered(st){
 function tuOpt(st,f,val){ var o=(st.meta.optionsByField[f]||[]); for(var i=0;i<o.length;i++) if(String(o[i].id)===String(val)) return o[i]; return null; }
 function tuCell(st,row,f){
   var val=row[f.name]==null?'':row[f.name], v=f.validation, h, ci=st.meta.columns.indexOf(f.name);
+  if(st.meta.fixed&&st.meta.keyCols.indexOf(f.name)>-1){   /* filas fijas: la clave identifica la fila y no se cambia */
+    var ok0=tuOpt(st,f.name,val);
+    return '<td class="tu-ro">'+esc(val)+'</td>'+(v&&v.showText?'<td class="tu-desc" data-dr="'+row.__id+'" data-df="'+esc(f.name)+'">'+esc(ok0?ok0.desc:'')+'</td>':'');
+  }
   var at=' class="tu-in" data-r="'+row.__id+'" data-f="'+esc(f.name)+'"';
   if(!v){ h='<input type="text"'+at+' data-ci="'+ci+'" value="'+esc(val)+'">'; }
   else {
@@ -1150,10 +1154,63 @@ function tuGridHtml(st){
   }).join('');
   var filt=M.fields.map(function(f){ return '<th class="tu-fh"><input type="text" class="tu-flt" data-f="'+esc(f.name)+'" placeholder="Filtrar\u2026" value="'+esc(st.filters[f.name]||'')+'"></th>'+(f.validation&&f.validation.showText?'<th class="tu-fh tu-desc"></th>':''); }).join('');
   var body=vis.map(function(r){
-    return '<tr data-r="'+r.__id+'" class="'+tuRowCls(st,r).trim()+'"><td class="tu-c0"><input type="checkbox" class="tu-chk" data-r="'+r.__id+'"'+(st.sel[r.__id]?' checked':'')+' aria-label="Seleccionar fila"></td>'+M.fields.map(function(f){ return tuCell(st,r,f); }).join('')+'<td class="tu-cx"><button type="button" class="tu-x" data-tu-act="rowdel" data-r="'+r.__id+'" title="Eliminar fila" aria-label="Eliminar fila">\u2715</button></td></tr>';
+    return '<tr data-r="'+r.__id+'" class="'+tuRowCls(st,r).trim()+'"><td class="tu-c0">'+(M.fixed?'':'<input type="checkbox" class="tu-chk" data-r="'+r.__id+'"'+(st.sel[r.__id]?' checked':'')+' aria-label="Seleccionar fila">')+'</td>'+M.fields.map(function(f){ return tuCell(st,r,f); }).join('')+'<td class="tu-cx">'+(M.fixed?'':'<button type="button" class="tu-x" data-tu-act="rowdel" data-r="'+r.__id+'" title="Eliminar fila" aria-label="Eliminar fila">\u2715</button>')+'</td></tr>';
   }).join('');
-  return '<table class="tu-grid"><thead><tr><th class="tu-c0"><input type="checkbox" class="tu-all"'+(allSel?' checked':'')+' aria-label="Seleccionar todas"></th>'+head+'<th class="tu-cx"></th></tr><tr class="tu-frow"><th class="tu-c0"></th>'+filt+'<th class="tu-cx"></th></tr></thead><tbody>'+body+'</tbody></table>'
+  return '<table class="tu-grid"><thead><tr><th class="tu-c0">'+(M.fixed?'':'<input type="checkbox" class="tu-all"'+(allSel?' checked':'')+' aria-label="Seleccionar todas">')+'</th>'+head+'<th class="tu-cx"></th></tr><tr class="tu-frow"><th class="tu-c0"></th>'+filt+'<th class="tu-cx"></th></tr></thead><tbody>'+body+'</tbody></table>'
     +(flt.length>vis.length?'<div class="tu-more"><button type="button" class="tu-btn" data-tu-act="more">Mostrar m\u00E1s ('+(flt.length-vis.length)+' restantes)</button></div>':'');
+}
+/* ---- tabla multidimensional: los campos de Filas y Columnas son los ejes; el Valor se edita en cada cruce ---- */
+function tuPvField(st,n){ var f=st.meta.fields; for(var i=0;i<f.length;i++) if(f[i].name===n) return f[i]; return null; }
+function tuPvIds(st,n){ var seen={}, ids=[]; st.rows.forEach(function(r){ var v=String(r[n]==null?'':r[n]); if(v!==''&&!seen[v]){ seen[v]=1; ids.push(v); } }); return ids; }
+function tuPvTuples(st,names){ return names.reduce(function(acc,n){ var ids=tuPvIds(st,n), out=[]; acc.forEach(function(t){ ids.forEach(function(id){ out.push(t.concat([id])); }); }); return out; },[[]]); }
+function tuPvGroups(tuples,levels){
+  var out=[], k, i, j, pre, groups;
+  for(k=0;k<levels;k++){ groups=[]; i=0;
+    while(i<tuples.length){ pre=tuples[i].slice(0,k+1).join('\u0001'); j=i+1; while(j<tuples.length&&tuples[j].slice(0,k+1).join('\u0001')===pre) j++; groups.push({id:tuples[i][k],span:j-i}); i=j; }
+    out.push(groups); }
+  return out;
+}
+function tuPvSpans(tuples,levels){
+  var spans=tuples.map(function(){ var a=[],q; for(q=0;q<levels;q++) a.push(1); return a; }), k, i, j, m, pre;
+  for(k=0;k<levels-1;k++){ i=0;
+    while(i<tuples.length){ pre=tuples[i].slice(0,k+1).join('\u0001'); j=i+1; while(j<tuples.length&&tuples[j].slice(0,k+1).join('\u0001')===pre) j++; spans[i][k]=j-i; for(m=i+1;m<j;m++) spans[m][k]=0; i=j; } }
+  return spans;
+}
+function tuPvLabel(st,n,id){
+  var f=tuPvField(st,n), s=esc(id);
+  if(f&&f.validation&&f.validation.showText){ var o=tuOpt(st,n,id); if(o&&o.desc) s+=' <span class="tu-pv-desc">\u00B7 '+esc(o.desc)+'</span>'; }
+  return s;
+}
+function tuPvCounts(st){ var pv=st.meta.pivot, n=function(names){ return names.reduce(function(a,x){ return a*tuPvIds(st,x).length; },1); }; return {rows:n(pv.rows),cols:n(pv.cols)}; }
+function tuPvInput(st,row,f,pr,pc){
+  var val=row[f.name]==null?'':row[f.name], v=f.validation, at=' class="tu-in" data-r="'+row.__id+'" data-f="'+esc(f.name)+'" data-pr="'+pr+'" data-pc="'+pc+'"';
+  if(!v) return '<input type="text"'+at+' value="'+esc(val)+'">';
+  var opts=st.meta.optionsByField[f.name]||[];
+  if(v.searchHelp==='CHECKBOX'&&opts.length===2) return '<input type="checkbox"'+at+' data-off="'+esc(opts[0].id)+'" data-on="'+esc(opts[1].id)+'"'+(String(val)===String(opts[1].id)?' checked':'')+'>';
+  if(v.searchHelp==='SEARCH') return '<span class="tu-sh"><input type="text"'+at+' value="'+esc(val)+'"><button type="button" class="tu-sbtn" data-tu-act="search" data-r="'+row.__id+'" data-f="'+esc(f.name)+'" title="Buscar un valor">\uD83D\uDD0D</button></span>';
+  return '<select'+at+'><option value="">'+(v.allowEmpty?'(vac\u00EDo)':'\u2014 elige \u2014')+'</option>'+opts.map(function(o){ return '<option value="'+esc(o.id)+'"'+(o.desc?' title="'+esc(o.desc)+'"':'')+(String(val)===String(o.id)?' selected':'')+'>'+esc(o.id)+'</option>'; }).join('')+'</select>';
+}
+function tuPivotHtml(st){
+  var pv=st.meta.pivot, vf=tuPvField(st,pv.value), nr=pv.rows.length, nc=pv.cols.length;
+  var rowT=tuPvTuples(st,pv.rows), colT=tuPvTuples(st,pv.cols);
+  if(!rowT.length||!colT.length) return '<div class="tu-state">No hay valores que mostrar con estos filtros.</div>';
+  var map={}, probe, pmat=[];
+  st.rows.forEach(function(r){ map[tuKey(st,r)]=r; });
+  var groups=tuPvGroups(colT,nc), spans=tuPvSpans(rowT,nr);
+  var head=pv.cols.map(function(n,k){ var f=tuPvField(st,n); return '<tr><th colspan="'+nr+'" class="tu-pv-corner">'+esc(f?f.label:n)+'</th>'+groups[k].map(function(g){ return '<th colspan="'+g.span+'" class="tu-pv-colh">'+tuPvLabel(st,n,g.id)+'</th>'; }).join('')+'</tr>'; }).join('')
+    +'<tr>'+pv.rows.map(function(n){ var f=tuPvField(st,n); return '<th class="tu-pv-rowh">'+esc(f?f.label:n)+'</th>'; }).join('')+'<th colspan="'+colT.length+'" class="tu-pv-valh">'+esc(vf?vf.label:pv.value)+'</th></tr>';
+  var body=rowT.map(function(rt,r){
+    var labels=rt.map(function(id,k){ return spans[r][k]?'<th rowspan="'+spans[r][k]+'" class="tu-pv-rowl">'+tuPvLabel(st,pv.rows[k],id)+'</th>':''; }).join(''), line=[];
+    var cells=colT.map(function(ct,c){
+      probe={}; pv.rows.forEach(function(n,i){ probe[n]=rt[i]; }); pv.cols.forEach(function(n,i){ probe[n]=ct[i]; });
+      var row=map[tuKey(st,probe)]; line.push(row||null);
+      if(!row) return '<td class="tu-pc tu-pv-na"></td>';
+      return '<td class="tu-pc'+(row.__mod?' tu-mod':'')+'" data-r="'+row.__id+'">'+tuPvInput(st,row,vf,r,c)+'</td>';
+    }).join('');
+    pmat.push(line); return '<tr>'+labels+cells+'</tr>';
+  }).join('');
+  st.pmat=pmat;
+  return '<table class="tu-grid tu-pivot"><thead>'+head+'</thead><tbody>'+body+'</tbody></table>';
 }
 function tuRender(id){
   var el=tuEl(id), st=TUS[id], b=TUB[id]; if(!el||!st) return;
@@ -1162,13 +1219,13 @@ function tuRender(id){
   if(st.status==='error'){ el.innerHTML=head+'<div class="tu-state tu-bad">'+esc(tuErrText(st.err))+'<div class="tu-retry"><button type="button" class="tu-btn" data-tu-act="retry">Reintentar</button></div></div>'; return; }
   var oldW=el.querySelector('.tu-wrap'), sT=oldW?oldW.scrollTop:0, sL=oldW?oldW.scrollLeft:0;
   var flt=tuFiltered(st), nsel=Object.keys(st.sel).filter(function(k){ return st.sel[k]; }).length, tools=(b.tools!=='no'), mh=parseInt(b.maxHeight,10);
-  var bar='<div class="tu-bar">'+(tools?'<button type="button" class="tu-btn" data-tu-act="add">+ A\u00F1adir fila</button><button type="button" class="tu-btn" data-tu-act="exp-csv">Exportar CSV</button><button type="button" class="tu-btn" data-tu-act="exp-xlsx">Exportar Excel</button><button type="button" class="tu-btn" data-tu-act="import">Importar archivo</button>':'')
+  var bar='<div class="tu-bar">'+(tools&&!st.meta.fixed?'<button type="button" class="tu-btn" data-tu-act="add">+ A\u00F1adir fila</button>':'')+(tools?'<button type="button" class="tu-btn" data-tu-act="exp-csv">Exportar CSV</button><button type="button" class="tu-btn" data-tu-act="exp-xlsx">Exportar Excel</button><button type="button" class="tu-btn" data-tu-act="import">Importar archivo</button>':'')
     +'<button type="button" class="tu-btn" data-tu-act="reload" title="Volver a leer la tabla">\u21BB Recargar</button>'
-    +'<button type="button" class="tu-btn tu-danger" data-tu-act="delsel"'+(nsel?'':' hidden')+'>\uD83D\uDDD1 Eliminar seleccionadas ('+nsel+')</button>'
-    +'<span class="tu-count">'+flt.length+' de '+st.rows.length+' fila(s)</span><span class="tu-sp"></span><button type="button" class="tu-btn tu-pri" data-tu-act="save"'+(st.busy?' disabled':'')+'>'+(st.busy?'Grabando\u2026':'Grabar')+'</button>'
+    +'<button type="button" class="tu-btn tu-danger" data-tu-act="delsel"'+(nsel&&!st.meta.fixed?'':' hidden')+'>\uD83D\uDDD1 Eliminar seleccionadas ('+nsel+')</button>'
+    +'<span class="tu-count">'+(st.meta.pivot?(function(){ var q=tuPvCounts(st); return q.rows+' fila(s) \u00D7 '+q.cols+' columna(s)'; })():flt.length+' de '+st.rows.length+' fila(s)')+(st.meta.fixed?' \u00B7 filas fijas':'')+'</span><span class="tu-sp"></span><button type="button" class="tu-btn tu-pri" data-tu-act="save"'+(st.busy?' disabled':'')+'>'+(st.busy?'Grabando\u2026':'Grabar')+'</button>'
     +'<input type="file" class="tu-file" accept=".csv,.xlsx,.xls" hidden></div>';
   var msg=st.msg?'<div class="tu-msg tu-'+st.msg.kind+'" role="status">'+esc(st.msg.text)+'</div>':'';
-  var body=st.rows.length?tuGridHtml(st):'<div class="tu-state">No hay datos en esta tabla'+(tools?'. Usa \u00AB+ A\u00F1adir fila\u00BB para empezar a cargar registros':'')+'.</div>';
+  var body=st.rows.length?(st.meta.pivot?tuPivotHtml(st):tuGridHtml(st)):'<div class="tu-state">No hay datos en esta tabla'+(tools&&!st.meta.fixed?'. Usa \u00AB+ A\u00F1adir fila\u00BB para empezar a cargar registros':'')+'.</div>';
   el.innerHTML=head+bar+msg+'<div class="tu-wrap"'+(mh>0?' style="max-height:'+mh+'px"':'')+'>'+body+'</div>';
   var nw=el.querySelector('.tu-wrap'); if(nw){ nw.scrollTop=sT; nw.scrollLeft=sL; }
 }
@@ -1184,6 +1241,7 @@ function tuSyncChrome(id){
   var el=tuEl(id), st=TUS[id]; if(!el||!st) return;
   var d=el.querySelector('.tu-dirty'); if(d) d.hidden=!st.dirty;
   [].forEach.call(el.querySelectorAll('tbody tr[data-r]'),function(tr){ var r=st.map[tr.getAttribute('data-r')]; if(r) tr.className=tuRowCls(st,r).trim(); });
+  [].forEach.call(el.querySelectorAll('td.tu-pc[data-r]'),function(td){ var r=st.map[td.getAttribute('data-r')]; if(r) td.classList.toggle('tu-mod',!!r.__mod); });
 }
 function tuIdOf(el){ var tr=el.closest('tr'); return tr?tr.getAttribute('data-r'):null; }
 function tuHostOf(el){ var h=el.closest('.tu[data-tu]'); return h?h.getAttribute('data-tu'):null; }
@@ -1230,7 +1288,8 @@ function tuSearch(id,rid,field){
   paint(''); d.querySelector('.tu-sq').addEventListener('input',function(e){ paint(e.target.value); });
 }
 function tuAddRow(id){
-  var st=TUS[id], r={__id:tuUid(),__new:true,__mod:false}; st.meta.columns.forEach(function(c){ r[c]=''; });
+  var st=TUS[id]; if(st.meta.fixed) return;
+  var r={__id:tuUid(),__new:true,__mod:false}; st.meta.columns.forEach(function(c){ r[c]=''; });
   st.rows.push(r); st.map[r.__id]=r; st.nNew++; tuDirtyUpdate(st); st.msg=null;
   var fk=Object.keys(st.filters).filter(function(k){ return st.filters[k]; }); if(fk.length) st.filters={};
   st.visible=Math.max(st.visible,st.rows.length); tuRender(id);
@@ -1238,7 +1297,7 @@ function tuAddRow(id){
   var inp=el&&el.querySelector('tr[data-r="'+r.__id+'"] .tu-in'); if(inp) try{ inp.focus(); }catch(e){}
 }
 function tuDelRows(id,ids){
-  var st=TUS[id], set={}; ids.forEach(function(i){ set[i]=1; });
+  var st=TUS[id], set={}; if(st.meta.fixed) return; ids.forEach(function(i){ set[i]=1; });
   st.rows=st.rows.filter(function(r){ if(!set[r.__id]) return true; if(r.__new) st.nNew--; else { st.nDel++; if(r.__mod) st.nMod--; } delete st.map[r.__id]; delete st.sel[r.__id]; return false; });
   tuDirtyUpdate(st); st.msg=null; st.dup={}; tuRender(id);
 }
@@ -1255,6 +1314,13 @@ function tuImportFile(id,file){
       var hm=aoa[0].map(function(h){ return String(h).trim().toUpperCase(); }), cols=st.meta.columns;
       var parsed=aoa.slice(1).filter(function(r){ return r.some(function(c){ return String(c==null?'':c).trim()!==''; }); }).map(function(r){ var o={}; cols.forEach(function(c){ var i=hm.indexOf(c.toUpperCase()); o[c]=i!==-1?String(r[i]==null?'':r[i]):''; }); return o; });
       if(!parsed.length){ st.msg={kind:'bad',text:'No se encontraron filas de datos en el archivo.'}; tuRender(id); return; }
+      if(st.meta.fixed){   /* filas fijas: el fichero solo actualiza los valores de las filas que ya existen */
+        var kc=st.meta.keyCols, byK={}, upd=0, ign=0;
+        st.rows.forEach(function(r){ byK[tuKey(st,r)]=r; });
+        parsed.forEach(function(p){ var r=byK[tuKey(st,p)]; if(!r){ ign++; return; } cols.forEach(function(c){ if(kc.indexOf(c)>-1||hm.indexOf(c.toUpperCase())===-1) return; r[c]=p[c]; }); tuMark(st,r.__id); upd++; });
+        st.imported=true; tuDirtyUpdate(st);
+        st.msg={kind:'ok',text:'Fichero cargado: '+upd+' fila(s) actualizada(s)'+(ign?'; '+ign+' no existen en la tabla (filas fijas) y se han ignorado':'')+'. Pulsa \u00ABGrabar\u00BB para confirmarlo en la base de datos.'}; tuRender(id); return;
+      }
       var origByKey={}, origId={}, curByKey={};
       Object.keys(st.orig).forEach(function(i){ var k=tuKey(st,st.orig[i]); origByKey[k]=st.orig[i]; origId[k]=i; });
       st.rows.forEach(function(r){ curByKey[tuKey(st,r)]=r; });
@@ -1318,11 +1384,16 @@ function tuBind(){
     var t=e.target; if(!t.closest||!t.classList||!t.classList.contains('tu-in')||t.tagName!=='INPUT') return; var id=tuHostOf(t); if(!id||!TUS[id]) return;
     var text=(e.clipboardData||window.clipboardData).getData('text'); if(!text||(text.indexOf('\t')<0&&text.indexOf('\n')<0)) return;
     e.preventDefault(); var st=TUS[id], flt=tuFiltered(st).slice(), lines=text.replace(/\r/g,'').split('\n').filter(function(r,i,a){ return !(i===a.length-1&&r===''); });
+    if(st.meta.pivot){      // en la tabla multidimensional el bloque rellena celdas hacia abajo y a la derecha; lo que sobre se ignora (filas fijas)
+      var pr0=parseInt(t.getAttribute('data-pr'),10), pc0=parseInt(t.getAttribute('data-pc'),10), pvn=st.meta.pivot.value, M=st.pmat||[];
+      lines.forEach(function(line,i){ line.split('\t').forEach(function(cell,j){ var prow=M[pr0+i]&&M[pr0+i][pc0+j]; if(prow){ prow[pvn]=cell; tuMark(st,prow.__id); } }); });
+      tuDirtyUpdate(st); tuRender(id); return;
+    }
     var start=flt.findIndex(function(r){ return r.__id===tuIdOf(t); }), c0=parseInt(t.getAttribute('data-ci'),10);
     lines.forEach(function(line,ro){
       var idx=start+ro, row=flt[idx];
-      if(!row){ row={__id:tuUid(),__new:true,__mod:false}; st.meta.columns.forEach(function(c){ row[c]=''; }); st.rows.push(row); st.map[row.__id]=row; st.nNew++; flt.push(row); }
-      line.split('\t').forEach(function(cell,co){ var ci=c0+co; if(ci>=st.meta.columns.length) return; row[st.meta.columns[ci]]=cell; });
+      if(!row){ if(st.meta.fixed) return; row={__id:tuUid(),__new:true,__mod:false}; st.meta.columns.forEach(function(c){ row[c]=''; }); st.rows.push(row); st.map[row.__id]=row; st.nNew++; flt.push(row); }
+      line.split('\t').forEach(function(cell,co){ var ci=c0+co; if(ci>=st.meta.columns.length) return; if(st.meta.fixed&&st.meta.keyCols.indexOf(st.meta.columns[ci])>-1) return; row[st.meta.columns[ci]]=cell; });
       tuMark(st,row.__id);
     });
     st.visible=Math.max(st.visible,st.rows.length); tuDirtyUpdate(st); tuRender(id);
@@ -2366,8 +2437,17 @@ input.tu-in[type=checkbox]{width:auto;min-width:0}
 .tu-sh{display:flex;align-items:center;gap:2px}.tu-sbtn{border:none;background:none;cursor:pointer;font-size:14px;padding:4px;border-radius:6px}.tu-sbtn:hover{background:color-mix(in srgb,var(--brand) 10%,transparent)}
 .tu-x{border:none;background:none;color:var(--muted);cursor:pointer;font-size:13px;padding:5px 7px;border-radius:6px}.tu-x:hover{color:var(--bad);background:color-mix(in srgb,var(--bad) 10%,transparent)}
 .tu-desc{color:var(--muted);font-size:13px}
+.tu-ro{padding:6px 10px !important;color:var(--ink);white-space:nowrap}
 .tu-new td{background:color-mix(in srgb,var(--good) 9%,transparent)}.tu-mod td{background:color-mix(in srgb,var(--brand) 8%,transparent)}.tu-dup td{background:color-mix(in srgb,var(--bad) 15%,transparent)}
 .tu-sel td{box-shadow:inset 0 0 0 999px color-mix(in srgb,var(--brand) 7%,transparent)}
+.tu-pivot{min-width:0}.tu-pivot th{position:static;text-align:left}
+.tu-pivot .tu-pv-corner{text-align:right;color:var(--muted);font-weight:700;background:var(--bg)}
+.tu-pivot .tu-pv-colh{text-align:center;border-left:1px solid var(--line);color:var(--ink);background:var(--bg)}
+.tu-pivot .tu-pv-rowh,.tu-pivot .tu-pv-valh{background:var(--bg);color:var(--muted)}
+.tu-pivot .tu-pv-rowl{background:var(--bg);color:var(--ink);font-weight:600;font-size:14px;vertical-align:top;border-bottom:1px solid var(--line)}
+.tu-pivot .tu-pv-desc{color:var(--muted);font-weight:400}
+.tu-pivot td.tu-pc{padding:2px 4px;min-width:104px;border-left:1px solid var(--line)}.tu-pivot td.tu-pc.tu-mod{background:color-mix(in srgb,var(--brand) 12%,transparent)}
+.tu-pivot td.tu-pv-na{background:color-mix(in srgb,var(--muted) 10%,transparent)}
 .tu-more{padding:12px;text-align:center}
 .tu-modal{position:fixed;inset:0;z-index:400;background:rgba(10,15,30,.5);display:flex;align-items:center;justify-content:center;padding:20px}
 .tu-mbox{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:14px;padding:22px;max-width:520px;width:100%;max-height:80vh;overflow:auto;font-family:var(--font);box-shadow:0 30px 70px -30px rgba(0,0,0,.55)}
@@ -4682,13 +4762,15 @@ function tuMissing(b,d){
 function tuPaintVars(bid){
   var b=tuBlock(bid), d=b&&TUV.desc[b.ref], el=$('tuVarsBox'); if(!b||!d||!el) return;
   var vars=d.vars.filter(function(v){ return v.type!=='FILE'; }), h='<div class="insp-sec">Variables de la vista</div>';
+  if(d.pivot) h+=edNote('Esta vista se mostrará como tabla multidimensional: filas = '+d.pivot.rows.join(' › ')+' · columnas = '+d.pivot.cols.join(' › ')+' · valor = '+d.pivot.value+'.');
+  if(d.fixedRows) h+=edNote('Esta vista tiene filas fijas: en el informe no se podrán añadir ni eliminar filas ni cambiar su clave, solo editar valores.');
   h+=vars.length?edNote('Valores con los que se cargará la tabla. Filtran sus campos igual que en Actualización de tablas. Los marcados con * son obligatorios.')
                 :edNote('Esta vista no tiene variables: se mostrará la tabla completa.');
   vars.forEach(function(v){ h+=tuVarHtml(v,(b.values||{})[v.name]); });
   h+='<div id="tuVarWarn"></div>';
   if(d.fields.length) h+='<details class="tu-fields"><summary>Columnas de la tabla ('+d.fields.length+')</summary>'+d.fields.map(function(f){
       return '<div class="tu-f"><b>'+esc(f.label)+'</b>'+(f.key?' <span class="tag">clave</span>':'')
-        +'<small>'+esc(f.name)+(f.filter.type==='VAR'?' · filtrada por «'+esc(f.filter.variable)+'»':(f.filter.type==='CONST'?' · filtrada = '+esc(f.filter.value):''))+(f.validation?' · validada ('+esc(f.validation.type)+')':'')+'</small></div>'; }).join('')+'</details>';
+        +'<small>'+esc(f.name)+(f.filter.type==='VAR'?' · filtrada por «'+esc(f.filter.variable)+'»':(f.filter.type==='CONST'?' · filtrada = '+esc(f.filter.value):''))+(f.validation?' · validada ('+esc(f.validation.type)+')':'')+(f.validation&&f.validation.showAll?' · completa con todos los valores':'')+'</small></div>'; }).join('')+'</details>';
   el.innerHTML=h; tuWarn(b,d);
 }
 function tuWarn(b,d){
