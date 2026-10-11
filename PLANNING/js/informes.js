@@ -50,11 +50,11 @@ const Informes = {
         if (!Provider.isConnected()) {
             throw this.fail("NO_AUTH", `Tu sesión de ${Provider.label()} ha caducado.`);
         }
-        await this.ensureTables();
+        this.ensureTables().catch(() => {});   // sin esperar: ver ensureTables() y q()
     },
 
     /**
-     * Garantiza que existen INFORMES e INFORMES_FAVORITOS. Normalmente ya las
+     * Garantiza que existen INFORMES e INFORMES_FAVORITOS (sin bloquear: ver guard() y q()). Normalmente ya las
      * ha creado el bootstrap al iniciar sesión (index.html -> DracoSchema.bootstrap),
      * pero quien tenga una sesión viva cuando se despliega esta versión puede
      * abrir generador.html/visor.html sin pasar por el login. CREATE TABLE IF
@@ -62,14 +62,37 @@ const Informes = {
      * motor. Si el usuario no tiene permiso para crear tablas, se ignora y las
      * consultas fallarán con el mensaje real del motor.
      */
-    async ensureTables() {
-        if (typeof DracoSchema === "undefined") return;
+    ensureP: null,
+    ensureTables(force) {
+        if (typeof DracoSchema === "undefined") return Promise.resolve();
         const key = `draco_informes_tablas_${Provider.key()}_${Provider.databaseLabel()}`;
-        try { if (sessionStorage.getItem(key)) return; } catch (e) { /* sin sessionStorage: se comprueba cada vez */ }
-        try {
-            await Promise.all([this.TABLE, this.FAV_TABLE].map(t => Provider.runQuery(DracoSchema.ddl(t))));
-            try { sessionStorage.setItem(key, "1"); } catch (e) { /* nada */ }
-        } catch (e) { /* ver nota arriba */ }
+        if (!force) {
+            try { if (sessionStorage.getItem(key)) return Promise.resolve(); } catch (e) { /* sin sessionStorage: se comprueba cada vez */ }
+            if (this.ensureP) return this.ensureP;
+        }
+        this.ensureP = (async () => {
+            try {
+                await Promise.all([this.TABLE, this.FAV_TABLE].map(t => Provider.runQuery(DracoSchema.ddl(t))));
+                try { sessionStorage.setItem(key, "1"); } catch (e) { /* nada */ }
+            } catch (e) { /* ver nota arriba */ }
+        })();
+        return this.ensureP;
+    },
+
+    isMissingTable(err) { return /not found|does not exist|no existe|doesn't exist/i.test((err && err.message) || ""); },
+
+    /**
+     * Ejecuta una consulta de este módulo. La comprobación de tablas (ensureTables) ya
+     * no frena cada apertura: si la consulta falla porque la tabla no existe, se
+     * crean las tablas y se repite UNA vez.
+     */
+    async q(sql) {
+        try { return await Provider.runQuery(sql); }
+        catch (err) {
+            if (!this.isMissingTable(err)) throw err;
+            await this.ensureTables(true);
+            return Provider.runQuery(sql);
+        }
     },
 
     /** Convierte el error NO_AUTH de BigQuery (BQ.request) en el mismo código que usa guard(). */
@@ -120,7 +143,7 @@ const Informes = {
                          FROM ${Provider.qualifyControl(this.TABLE)}
                          WHERE PROYECTO_ID = '${Provider.esc(projectId)}'
                          ORDER BY FECHA_MODIFICACION DESC`;
-            const rows = await Provider.runQuery(sql);
+            const rows = await this.q(sql);
             return rows.map(r => this.rowToMeta(r));
         } catch (err) { throw this.asError(err); }
     },
@@ -134,7 +157,7 @@ const Informes = {
                                 ${this.tsExpr("FECHA_MODIFICACION")} AS MODIFICADO
                          FROM ${Provider.qualifyControl(this.TABLE)}
                          WHERE INFORME_ID = '${Provider.esc(id)}'`;
-            const rows = await Provider.runQuery(sql);
+            const rows = await this.q(sql);
             if (!rows.length) throw this.fail("NOT_FOUND", "El informe no existe.");
             return { ...this.rowToMeta(rows[0]), proyectoId: rows[0].PROYECTO_ID };
         } catch (err) { throw this.asError(err); }
@@ -150,7 +173,7 @@ const Informes = {
                          FROM ${Provider.qualifyControl(this.TABLE)}
                          WHERE INFORME_ID = '${Provider.esc(id)}'
                            ${projectId ? `AND PROYECTO_ID = '${Provider.esc(projectId)}'` : ""}`;
-            const rows = await Provider.runQuery(sql);
+            const rows = await this.q(sql);
             if (!rows.length) throw this.fail("NOT_FOUND", "El informe no existe en este proyecto.");
             let spec;
             try { spec = JSON.parse(rows[0].SPEC_JSON); }
@@ -189,7 +212,7 @@ const Informes = {
             const t = Provider.qualifyControl(this.TABLE);
 
             // Nombre único dentro del proyecto (sin distinguir mayúsculas)
-            const dup = await Provider.runQuery(`SELECT INFORME_ID FROM ${t}
+            const dup = await this.q(`SELECT INFORME_ID FROM ${t}
                 WHERE PROYECTO_ID = '${Provider.esc(projectId)}' AND UPPER(NOMBRE) = UPPER('${Provider.esc(nombre)}')`);
             if (dup.some(r => r.INFORME_ID !== id)) {
                 throw this.fail("NAME_EXISTS", "Ya existe un informe con ese nombre en este proyecto.");
@@ -197,13 +220,13 @@ const Informes = {
 
             let exists = false;
             if (id) {
-                const cur = await Provider.runQuery(`SELECT INFORME_ID FROM ${t}
+                const cur = await this.q(`SELECT INFORME_ID FROM ${t}
                     WHERE INFORME_ID = '${Provider.esc(id)}' AND PROYECTO_ID = '${Provider.esc(projectId)}'`);
                 exists = cur.length > 0;
             }
 
             if (exists) {
-                await Provider.runQuery(`UPDATE ${t}
+                await this.q(`UPDATE ${t}
                     SET NOMBRE = '${Provider.esc(nombre)}',
                         DESCRIPCION = '${Provider.esc(descripcion)}',
                         SPEC_JSON = '${Provider.esc(json)}',
@@ -213,7 +236,7 @@ const Informes = {
             }
 
             const newId = id || Provider.newId();
-            await Provider.runQuery(`INSERT INTO ${t}
+            await this.q(`INSERT INTO ${t}
                 (INFORME_ID, PROYECTO_ID, NOMBRE, DESCRIPCION, SPEC_JSON, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
                 VALUES ('${Provider.esc(newId)}', '${Provider.esc(projectId)}', '${Provider.esc(nombre)}', '${Provider.esc(descripcion)}',
                         '${Provider.esc(json)}', ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`);
@@ -226,9 +249,9 @@ const Informes = {
         if (!id || !projectId) throw this.fail("BAD_INPUT", "Faltan datos para eliminar el informe.");
         await this.guard();
         try {
-            await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl(this.FAV_TABLE)}
+            await this.q(`DELETE FROM ${Provider.qualifyControl(this.FAV_TABLE)}
                 WHERE INFORME_ID = '${Provider.esc(id)}' AND PROYECTO_ID = '${Provider.esc(projectId)}'`);
-            await Provider.runQuery(`DELETE FROM ${Provider.qualifyControl(this.TABLE)}
+            await this.q(`DELETE FROM ${Provider.qualifyControl(this.TABLE)}
                 WHERE INFORME_ID = '${Provider.esc(id)}' AND PROYECTO_ID = '${Provider.esc(projectId)}'`);
         } catch (err) { throw this.asError(err); }
     },
@@ -240,7 +263,7 @@ const Informes = {
     async favoriteIds(projectId) {
         await this.guard();
         try {
-            const rows = await Provider.runQuery(`SELECT INFORME_ID FROM ${Provider.qualifyControl(this.FAV_TABLE)}
+            const rows = await this.q(`SELECT INFORME_ID FROM ${Provider.qualifyControl(this.FAV_TABLE)}
                 WHERE PROYECTO_ID = '${Provider.esc(projectId)}' AND USUARIO = ${Provider.currentUserExpr()}`);
             return new Set(rows.map(r => r.INFORME_ID));
         } catch (err) { throw this.asError(err); }
@@ -253,12 +276,12 @@ const Informes = {
             const t = Provider.qualifyControl(this.FAV_TABLE);
             const where = `PROYECTO_ID = '${Provider.esc(projectId)}' AND INFORME_ID = '${Provider.esc(id)}' AND USUARIO = ${Provider.currentUserExpr()}`;
             if (!on) {
-                await Provider.runQuery(`DELETE FROM ${t} WHERE ${where}`);
+                await this.q(`DELETE FROM ${t} WHERE ${where}`);
                 return false;
             }
-            const cur = await Provider.runQuery(`SELECT INFORME_ID FROM ${t} WHERE ${where}`);
+            const cur = await this.q(`SELECT INFORME_ID FROM ${t} WHERE ${where}`);
             if (!cur.length) {
-                await Provider.runQuery(`INSERT INTO ${t} (PROYECTO_ID, INFORME_ID, USUARIO, FECHA_ALTA)
+                await this.q(`INSERT INTO ${t} (PROYECTO_ID, INFORME_ID, USUARIO, FECHA_ALTA)
                     SELECT '${Provider.esc(projectId)}', '${Provider.esc(id)}', ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP()`);
             }
             return true;

@@ -46,7 +46,10 @@ const InformesDatos = {
     MAX_ROWS: 50000,
     MAX_OPTIONS: 3000,
     CHUNK: 500,
+    META_TTL: 300000,        // la definición, dimensiones, claves y listas de valores se reutilizan 5 min (Recargar las renueva)
     sessions: {},
+    opening: {},
+    pending: {},             // tablas precargadas mientras se dibuja el informe (un solo uso, 60 s)
 
     fail(code, message, details) {
         const err = new Error(message);
@@ -68,25 +71,57 @@ const InformesDatos = {
         return rows[0];
     },
 
-    /** Crea (o reutiliza) la sesión de una vista. fresh=true relee la definición y las opciones. */
-    async open(project, ref, fresh) {
+    /**
+     * Sesión de una vista. mode: "fresh" la rehace; "ttl" reutiliza la existente si tiene menos
+     * de META_TTL; "any" reutiliza la existente sea cual sea su edad (grabar/exportar, para usar la
+     * misma definición con la que se cargó).
+     * Se hace en el menor número de viajes posible: definición y dimensiones a la vez; y después,
+     * claves, listas de valores de las variables y de los campos, también a la vez. T.metaP agrupa
+     * lo que no bloquea el arranque (claves y listas de los campos): quien lo necesite lo espera.
+     */
+    async open(project, ref, mode) {
         await Informes.guard();
         const key = project.PROYECTO_ID + ":" + ref;
-        if (!fresh && this.sessions[key]) return this.sessions[key];
+        const hit = this.sessions[key];
+        if (hit && (mode === "any" || (mode === "ttl" && Date.now() - hit.openedAt < this.META_TTL))) {
+            await hit.metaP;
+            return hit;
+        }
+        if (mode !== "fresh" && this.opening[key]) return this.opening[key];
+        const p = this.build(project, ref, key).finally(() => { if (this.opening[key] === p) delete this.opening[key]; });
+        this.opening[key] = p;
+        return p;
+    },
 
-        const record = await this.record(project, ref);
+    async build(project, ref, key) {
         const T = Object.create(TableUpdates);
         T.project = project;
+        T.openedAt = Date.now();
+        const dimsP = T.loadDimensions();             // no depende de la vista: arranca ya
+        dimsP.catch(() => {});
+        const record = await this.record(project, ref);
         T.runRecord = record;
         T.runScreen = T.parseScreen(record.VARIABLES_JSON);
         T.runFields = T.safeParse(record.CAMPOS_JSON, []).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-        // La clave se recalcula en vivo desde Parametrización, igual que en startRun().
-        T.applyParamKeys(T.runFields, await T.getParamKeyColumns(record.TABLA));
-        await T.loadDimensions();
-        await T.resolveRunVarOptions();
         T.vars = T.flatVars(T.runScreen);
+        // La clave se recalcula en vivo desde Parametrización, igual que en startRun().
+        const keysP = T.getParamKeyColumns(record.TABLA).then(k => T.applyParamKeys(T.runFields, k));
+        await dimsP;
+        const optsP = this.loadFieldOptions(T);
+        T.metaP = Promise.all([keysP, optsP]).then(() => T);
+        T.metaP.catch(() => {});
+        await T.resolveRunVarOptions();
         this.sessions[key] = T;
         return T;
+    },
+
+    /** Listas de valores de todos los campos validados, a la vez (antes, una detrás de otra). */
+    async loadFieldOptions(T) {
+        T.fieldOptions = {};
+        await Promise.all(T.runFields.filter(f => f.validation && f.validation.type !== "NONE").map(async f => {
+            const opts = await T.resolveValidationOptions(f.validation);
+            T.fieldOptions[f.name] = opts.slice(0, this.MAX_OPTIONS).map(o => ({ id: String(o.id), desc: o.desc || "" }));
+        }));
     },
 
     // ---------------------------------------------------------
@@ -115,7 +150,8 @@ const InformesDatos = {
     },
 
     async describe(project, ref) {
-        const T = await this.open(project, ref, true);
+        const T = await this.open(project, ref, "fresh");
+        await T.metaP;
         const vars = T.vars.map(v => {
             const val = v.validation || {};
             const opts = (T.runVarOptions[v.id] || []);
@@ -198,27 +234,19 @@ const InformesDatos = {
         return { table, rows };
     },
 
-    async load(project, ref, values) {
-        const T = await this.open(project, ref, true);
+    async load(project, ref, values, force) {
+        const T = await this.open(project, ref, force ? "fresh" : "ttl");
         const vals = this.cleanValues(T, values);
-        this.checkVars(T, vals);
+        this.checkVars(T, vals);                                   // se valida ANTES de consultar la tabla
         const where = T.buildWhere(T.runFields, vals);
-        const { table, rows } = await this.readRows(T, where);
+        const [{ rows }] = await Promise.all([this.readRows(T, where), T.metaP]);   // datos y metadatos a la vez
         const columns = T.runFields.map(f => f.name);
         const objs = this.toObjects(columns, rows);
-
-        const optionsByField = {};
-        for (const f of T.runFields) {
-            if (f.validation && f.validation.type !== "NONE") {
-                const opts = await T.resolveValidationOptions(f.validation);
-                optionsByField[f.name] = opts.slice(0, this.MAX_OPTIONS).map(o => ({ id: String(o.id), desc: o.desc || "" }));
-            }
-        }
         const keyCols = T.getKeyColumns({ fields: T.runFields, columns });
         return {
             name: T.runRecord.NOMBRE, table: T.runRecord.TABLA, columns, keyCols,
             fields: T.runFields.map(f => ({ name: f.name, label: f.description || f.name, key: !!f.key, validation: this.validationSummary(f.validation) })),
-            optionsByField,
+            optionsByField: T.fieldOptions,
             rows: objs.map(o => columns.map(c => o[c]))
         };
     },
@@ -271,7 +299,7 @@ const InformesDatos = {
     },
 
     async save(project, ref, values, rows, doCommit) {
-        const T = await this.open(project, ref, false);
+        const T = await this.open(project, ref, "any");
         const vals = this.cleanValues(T, values);
         this.checkVars(T, vals);
         const columns = T.runFields.map(f => f.name);
@@ -316,7 +344,7 @@ const InformesDatos = {
     // Exportar e importar ficheros
     // ---------------------------------------------------------
     async exportRows(project, ref, p) {
-        const T = await this.open(project, ref, false);
+        const T = await this.open(project, ref, "any");
         const columns = T.runFields.map(f => f.name);
         const aoa = [columns, ...this.cleanRows(columns, p.rows).map(r => columns.map(c => r[c]))];
         const base = T.runRecord.TABLA;
@@ -351,6 +379,38 @@ const InformesDatos = {
     },
 
     // ---------------------------------------------------------
+    // Precarga: el visor la lanza en cuanto tiene la definición del informe, mientras
+    // se prepara y dibuja la página, para que la tabla esté lista (o casi) al aparecer.
+    // ---------------------------------------------------------
+    pkey(project, ref, values) { return project.PROYECTO_ID + "|" + ref + "|" + JSON.stringify(values || {}); },
+
+    prefetch(project, spec) {
+        const now = Date.now();
+        Object.keys(this.pending).forEach(k => { if (now - this.pending[k].at > 60000) delete this.pending[k]; });
+        let n = 0;
+        const walk = (blocks) => (blocks || []).forEach(b => {
+            if (!b || n >= 6) return;
+            if (b.type === "tableUpdate" && b.ref) {
+                const key = this.pkey(project, b.ref, b.values);
+                if (!this.pending[key]) {
+                    const pr = this.load(project, b.ref, b.values, false);
+                    pr.catch(() => {});
+                    this.pending[key] = { pr, at: now };
+                    n++;
+                }
+            } else if (b.type === "tabs") (b.tabs || []).forEach(t => walk(t.blocks));
+        });
+        ((spec && spec.sections) || []).forEach(s => walk(s.blocks));
+    },
+
+    takePending(project, ref, values) {
+        const key = this.pkey(project, ref, values), x = this.pending[key];
+        if (!x) return null;
+        delete this.pending[key];
+        return (Date.now() - x.at < 60000) ? x.pr : null;
+    },
+
+    // ---------------------------------------------------------
     // Despacho
     // ---------------------------------------------------------
     async handle(project, op, p) {
@@ -360,7 +420,10 @@ const InformesDatos = {
             switch (op) {
                 case "tu.list": return await this.list(project);
                 case "tu.describe": return await this.describe(project, p.ref);
-                case "tu.load": return await this.load(project, p.ref, p.values);
+                case "tu.load": {
+                    const pre = p.force ? null : this.takePending(project, p.ref, p.values);
+                    return pre ? await pre : await this.load(project, p.ref, p.values, !!p.force);
+                }
                 case "tu.preview": return await this.save(project, p.ref, p.values, p.rows, false);
                 case "tu.commit": return await this.save(project, p.ref, p.values, p.rows, true);
                 case "tu.export": return await this.exportRows(project, p.ref, p);

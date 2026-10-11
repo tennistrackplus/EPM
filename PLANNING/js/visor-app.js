@@ -35,6 +35,8 @@ const VisorApp = {
     sideHidden: false,
     fullMode: false,        // true = solo el informe (enlace directo limpio)
     notFound: false,        // el informe pedido en el enlace no existe
+    listLoaded: false,      // la lista de informes ya se ha leído (en modo "solo el informe" se omite hasta que se pide)
+    preloaded: null,        // informe ya leído en paralelo con la lista de proyectos
 
     async init() {
         if (Provider.key() === "snowflake") {
@@ -54,6 +56,7 @@ const VisorApp = {
         this.bindProjectBar();
         this.bindViewerBar();
         window.addEventListener("message", (e) => this.onMessage(e));
+        if (this.pendingInformeId) this.ensureViewer();     // la herramienta empieza a cargar ya, mientras se consulta la base de datos
 
         await this.loadProjects();
     },
@@ -95,7 +98,10 @@ const VisorApp = {
             const sql = `SELECT PROYECTO_ID, PROYECTO, DESCRIPCION, DATASET
                          FROM ${Provider.qualifyControl("PROYECTOS")}
                          ORDER BY FECHA_CREACION DESC`;
-            this.projects = await Provider.runQuery(sql);
+            // Con enlace directo, el informe se lee a la vez que la lista de proyectos (antes, una consulta detrás de otra)
+            const projP = Provider.runQuery(sql);
+            const repP = this.pendingInformeId ? Informes.get(this.pendingInformeId).then(r => ({ r }), e => ({ e })) : null;
+            this.projects = await projP;
 
             if (!this.projects.length) {
                 select.innerHTML = `<option value="">No hay proyectos todavía</option>`;
@@ -111,10 +117,10 @@ const VisorApp = {
             // Enlace directo: arranca en el proyecto del informe pedido
             let wantedId = localStorage.getItem("draco_current_project");
             if (this.pendingInformeId) {
-                try {
-                    const meta = await Informes.getMeta(this.pendingInformeId);
-                    if (this.projects.some(p => p.PROYECTO_ID === meta.proyectoId)) wantedId = meta.proyectoId;
-                } catch (e) { this.notFound = true; this.pendingInformeId = null; }
+                const res = await repP;
+                if (res.r && this.projects.some(p => p.PROYECTO_ID === res.r.proyectoId)) { wantedId = res.r.proyectoId; this.preloaded = res.r; }
+                else if (res.r || (res.e && res.e.code === "NOT_FOUND")) { this.notFound = true; this.pendingInformeId = null; }
+                /* NO_AUTH u otro error: se deja pendingInformeId y openInforme lo gestiona con su "Reintentar" */
             }
             const toSelect = this.projects.find(p => p.PROYECTO_ID === wantedId) || this.projects[0];
             select.value = toSelect.PROYECTO_ID;
@@ -131,6 +137,14 @@ const VisorApp = {
         if (this.currentProject) localStorage.setItem("draco_current_project", this.currentProject.PROYECTO_ID);
         this.currentId = null;
         this.clearViewer();
+        if (this.pendingInformeId && this.fullMode) {
+            // Modo "solo el informe": no hace falta la lista ni los favoritos (se cargan si se pasa al visor normal)
+            const id = this.pendingInformeId;
+            this.pendingInformeId = null;
+            this.listLoaded = false;
+            this.openInforme(id);
+            return;
+        }
         await this.loadList();
         if (this.pendingInformeId) {
             const id = this.pendingInformeId;
@@ -149,7 +163,9 @@ const VisorApp = {
             const pid = this.currentProject.PROYECTO_ID;
             const [rows, favs] = await Promise.all([Informes.list(pid), Informes.favoriteIds(pid)]);
             this.list = rows.map(r => ({ ...r, fav: favs.has(r.id) }));
+            this.listLoaded = true;
             this.renderList();
+            this.updateToolbar();
         } catch (err) {
             this.renderListError(err, () => this.loadList());
         }
@@ -236,6 +252,7 @@ const VisorApp = {
         if (!on && !this.currentId) { window.location.href = "visor.html"; return; }
         this.fullMode = !!on;
         document.documentElement.classList.toggle("vw-full", this.fullMode);
+        if (!on && !this.listLoaded) this.loadList();
         if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
         this.syncUrl();
     },
@@ -296,7 +313,7 @@ const VisorApp = {
         const frame = document.getElementById("viewerFrame");
         if (this.viewerReady) return this.viewerReady;
         this.viewerReady = new Promise((resolve) => { this._resolveReady = resolve; });
-        frame.src = "informes-herramienta.html?mode=viewer&v=20261010b";   // la versión evita una herramienta antigua en caché
+        frame.src = "informes-herramienta.html?mode=viewer&v=20261010d";   // la versión evita una herramienta antigua en caché
         return this.viewerReady;
     },
 
@@ -309,7 +326,11 @@ const VisorApp = {
         this.updateToolbar();
         this.showViewerMessage("Abriendo informe…");
         try {
-            const r = await Informes.get(id, this.currentProject.PROYECTO_ID);
+            let r = (this.preloaded && this.preloaded.id === id) ? this.preloaded : null;
+            this.preloaded = null;
+            if (!r) r = await Informes.get(id, this.currentProject.PROYECTO_ID);
+            // Mientras se prepara la herramienta y se dibuja la página, ya se leen sus tablas de actualización
+            try { InformesDatos.prefetch(this.currentProject, r.spec); } catch (e) { /* sin precarga */ }
             await this.ensureViewer();
             const frame = document.getElementById("viewerFrame");
             frame.hidden = false;
