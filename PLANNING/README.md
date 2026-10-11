@@ -593,6 +593,18 @@ clave duplicada y campos obligatorios, grabar con confirmación y resumen).
   `values`. Tabla, columnas y WHERE se recalculan en Draco desde la definición
   guardada y siempre dentro del proyecto activo; todo valor va por `Provider.esc`
   y las variables se validan antes de consultar.
+- **Velocidad de apertura.** Abrir una tabla tardaba varios segundos por las
+  consultas encadenadas (cada una espera a la anterior, ~0,5-1,5 s en BigQuery
+  aunque devuelva una fila). Ahora: definición y dimensiones se leen a la vez, y
+  después claves, listas de valores y datos también a la vez; lo que no cambia
+  (definición, dimensiones, claves, listas) se reutiliza 5 min y *Recargar* lo
+  renueva; el visor precarga las tablas mientras dibuja el informe; en modo "solo el
+  informe" no lee la lista ni los favoritos; y la comprobación de las tablas de
+  informes ya no frena la apertura (si faltan, se crean y se repite la consulta).
+  Con 300 ms por consulta simulados: 3,8 s -> 1,2 s (vista sencilla) y 5,7 s -> 2,1 s
+  (vista con 6 campos y 2 variables con dimensión). Al ir en paralelo, una apertura
+  puede lanzar a la vez varias consultas pequeñas (en Snowflake pueden hacer cola
+  según la concurrencia del almacén).
 - **Grabar** usa la misma estrategia que la pantalla original (borrar el
   subconjunto filtrado y reinsertarlo; sin transacción) y, si el INSERT falla,
   intenta restaurar las filas anteriores. Un grabado solo toca lo que selecciona

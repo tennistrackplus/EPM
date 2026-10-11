@@ -1108,9 +1108,9 @@ function tuMount(el){
   if(!st||st.sig!==sig){ st=TUS[id]={sig:sig,status:'loading',filters:{},sel:{},visible:300,msg:null,sort:null}; tuLoad(id); }
   tuRender(id);
 }
-function tuLoad(id){
+function tuLoad(id,force){
   var b=TUB[id], st=TUS[id]; st.status='loading'; st.err=null;
-  dcall('tu.load',{ref:b.ref,values:b.values||{}}).then(function(res){
+  dcall('tu.load',{ref:b.ref,values:b.values||{},force:!!force}).then(function(res){
     if(TUS[id]!==st) return;
     var cols=res.columns, rows=res.rows.map(function(r){ var o={__id:tuUid(),__new:false,__mod:false}; cols.forEach(function(c,i){ o[c]=(r[i]==null?'':String(r[i])); }); return o; });
     st.status='ready'; st.meta={name:res.name,table:res.table,columns:cols,keyCols:res.keyCols,fields:res.fields,optionsByField:res.optionsByField||{}};
@@ -1281,8 +1281,8 @@ function tuBind(){
     if(act==='dlg-commit'){ tuCommit(id); return; }
     if(act==='dlg-detail'){ var dt=modal.querySelector('.tu-detail'); dt.hidden=!dt.hidden; a.textContent=dt.hidden?'Ver detalle':'Ocultar detalle'; return; }
     if(act==='pick'){ var r=st.map[modal.getAttribute('data-r')], f=modal.getAttribute('data-f'); if(r){ r[f]=a.getAttribute('data-v'); tuMark(st,r.__id); } tuDialogClose(); tuRender(id); return; }
-    if(act==='retry'){ tuLoad(id); tuRender(id); return; }
-    if(act==='reload'){ if(st.dirty&&!window.confirm('Hay cambios sin grabar. \u00BFSeguro que quieres descartarlos y volver a leer la tabla?')) return; TUS[id]={sig:st.sig,status:'loading',filters:{},sel:{},visible:300,msg:null,sort:null}; tuLoad(id); tuRender(id); return; }
+    if(act==='retry'){ tuLoad(id,true); tuRender(id); return; }
+    if(act==='reload'){ if(st.dirty&&!window.confirm('Hay cambios sin grabar. \u00BFSeguro que quieres descartarlos y volver a leer la tabla?')) return; TUS[id]={sig:st.sig,status:'loading',filters:{},sel:{},visible:300,msg:null,sort:null}; tuLoad(id,true); tuRender(id); return; }
     if(act==='add'){ tuAddRow(id); return; }
     if(act==='exp-csv'){ tuExport(id,'csv'); return; }
     if(act==='exp-xlsx'){ tuExport(id,'xlsx'); return; }
