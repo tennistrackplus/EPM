@@ -1,0 +1,528 @@
+/* ==========================================================================
+ * ExcelService — traducción de las macros de lectura/escritura del
+ * diseñador de informes (frmReportDesigner2 + módulo de filtros).
+ * ========================================================================== */
+
+const SVC_CRLF = "\r\n";
+
+/* ---------------------------------------------------------------------
+ * Utilidades de rango ("grids"), igual que en commands.js: se carga el
+ * used range de una hoja una sola vez y se accede por coordenada absoluta
+ * (fila,columna) como hacía ws.Cells(R,C) en VBA.
+ * ------------------------------------------------------------------- */
+
+async function getValuesGrid(context, sheetName) {
+    const sheet = context.workbook.worksheets.getItem(sheetName);
+    const used = sheet.getUsedRangeOrNullObject();
+    used.load(["values", "rowIndex", "columnIndex", "isNullObject"]);
+    await context.sync();
+
+    if (used.isNullObject) {
+        return { values: [], startRow: 0, startCol: 0 };
+    }
+
+    return { values: used.values, startRow: used.rowIndex, startCol: used.columnIndex };
+}
+
+function cellValue(grid, row1, col1) {
+    const r = row1 - 1 - grid.startRow;
+    const c = col1 - 1 - grid.startCol;
+    if (r < 0 || c < 0 || r >= grid.values.length) return "";
+    const rowArr = grid.values[r];
+    if (!rowArr || c >= rowArr.length) return "";
+    const v = rowArr[c];
+    return v === null || v === undefined ? "" : v;
+}
+
+function lastRowInColumnValues(grid, col1) {
+    const c = col1 - 1 - grid.startCol;
+    for (let r = grid.values.length - 1; r >= 0; r--) {
+        const rowArr = grid.values[r];
+        const v = rowArr && c >= 0 && c < rowArr.length ? rowArr[c] : "";
+        if (v !== null && v !== undefined && String(v) !== "") {
+            return r + 1 + grid.startRow;
+        }
+    }
+    return grid.startRow;
+}
+
+// Convierte {row,col} (base 1) en dirección tipo "B16"
+function numToColLetters(n) {
+    let s = "";
+    while (n > 0) {
+        const rem = (n - 1) % 26;
+        s = String.fromCharCode(65 + rem) + s;
+        n = Math.floor((n - 1) / 26);
+    }
+    return s;
+}
+
+function addressFromRC(row, col) {
+    return numToColLetters(col) + row;
+}
+
+// Convierte "B16" (o "$B$16") en {row, col} (base 1)
+function parseAddress(addr) {
+    addr = String(addr).trim();
+    if (addr.indexOf("!") !== -1) addr = addr.split("!").pop();
+    if (addr.indexOf(":") !== -1) addr = addr.split(":")[0];
+    addr = addr.replace(/\$/g, "");
+    const m = addr.match(/^([A-Za-z]+)(\d+)$/);
+    if (!m) return null;
+    const colLetters = m[1].toUpperCase();
+    const row = parseInt(m[2], 10);
+    let col = 0;
+    for (let i = 0; i < colLetters.length; i++) {
+        col = col * 26 + (colLetters.charCodeAt(i) - 64);
+    }
+    return { row, col };
+}
+
+/* ---------------------------------------------------------------------
+ * BuildFilterValuesSQL / ExistsAttribute / BuildAttributeSQL /
+ * ExistsHierarchy / BuildHierarchySQL
+ * ------------------------------------------------------------------- */
+
+function existsAttribute(atribGrid, dimension, attributeName) {
+    const lastRow = lastRowInColumnValues(atribGrid, 1);
+    for (let R = 2; R <= lastRow; R++) {
+        if (String(cellValue(atribGrid, R, 2)).toUpperCase() === String(dimension).toUpperCase()
+            && String(cellValue(atribGrid, R, 3)).toUpperCase() === String(attributeName).toUpperCase()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function buildAttributeSQL(atribGrid, dimension, attributeName) {
+    const lastRow = lastRowInColumnValues(atribGrid, 1);
+    let project = "", dataset = "", table = "", field = "";
+
+    for (let R = 2; R <= lastRow; R++) {
+        if (String(cellValue(atribGrid, R, 2)).toUpperCase() === String(dimension).toUpperCase()
+            && String(cellValue(atribGrid, R, 3)).toUpperCase() === String(attributeName).toUpperCase()) {
+            project = cellValue(atribGrid, R, 4);
+            dataset = cellValue(atribGrid, R, 5);
+            table = cellValue(atribGrid, R, 6);
+            field = cellValue(atribGrid, R, 7);
+            break;
+        }
+    }
+
+    return "SELECT DISTINCT" + SVC_CRLF
+        + "    " + field + SVC_CRLF
+        + "FROM " + Provider.qualify(project, dataset, table) + SVC_CRLF
+        + "ORDER BY " + field;
+}
+
+function existsHierarchy(hierGrid, dimension, hierarchy) {
+    const lastRow = lastRowInColumnValues(hierGrid, 1);
+    for (let R = 2; R <= lastRow; R++) {
+        if (String(cellValue(hierGrid, R, 4)).toUpperCase() === String(dimension).toUpperCase()
+            && String(cellValue(hierGrid, R, 2)).toUpperCase() === String(hierarchy).toUpperCase()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function buildHierarchySQL(hierGrid, dimension, hierarchy) {
+    const lastRow = lastRowInColumnValues(hierGrid, 1);
+    const fields = [];
+    let project = "", dataset = "", table = "";
+
+    for (let R = 2; R <= lastRow; R++) {
+        if (String(cellValue(hierGrid, R, 4)).toUpperCase() === String(dimension).toUpperCase()
+            && String(cellValue(hierGrid, R, 2)).toUpperCase() === String(hierarchy).toUpperCase()) {
+            fields.push(cellValue(hierGrid, R, 9));  // I: DIM_FIELD
+            project = cellValue(hierGrid, R, 6);      // F: DIM_PROJECT
+            dataset = cellValue(hierGrid, R, 7);      // G: DIM_DATASET
+            table = cellValue(hierGrid, R, 8);        // H: DIM_TABLE
+        }
+    }
+
+    let sql = "SELECT DISTINCT" + SVC_CRLF;
+    sql += fields.map(f => "    " + f).join("," + SVC_CRLF);
+    sql += SVC_CRLF + "FROM " + Provider.qualify(project, dataset, table) + SVC_CRLF;
+    sql += "ORDER BY" + SVC_CRLF;
+    sql += fields.map(f => "    " + f).join("," + SVC_CRLF);
+
+    return sql;
+}
+
+/* ---------------------------------------------------------------------
+ * ExecuteSQL (idéntico al usado en commands.js)
+ * ------------------------------------------------------------------- */
+
+/**
+ * Convierte filas normalizadas (array de objetos { COLUMNA: valor }) al
+ * mismo formato de texto que devuelve BigQuery y que sabe leer
+ * parseMemberJsonTree()/filterModal.js: buscan el literal `"v":` una vez
+ * por celda, en el mismo orden columna a columna del SELECT. Copia local
+ * (misma lógica que en commands.js) para no depender del orden de carga
+ * entre los dos ficheros.
+ */
+function svcRowsToPseudoBqJson(rows) {
+    let out = '{"rows":[';
+    rows.forEach((row, i) => {
+        if (i > 0) out += ",";
+        out += '{"f":[';
+        const values = Object.values(row);
+        values.forEach((val, j) => {
+            if (j > 0) out += ",";
+            if (val === null || val === undefined) {
+                out += '{"v": null}';
+            } else {
+                const text = String(val).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+                out += '{"v": "' + text + '"}';
+            }
+        });
+        out += "]}";
+    });
+    out += "]}";
+    return out;
+}
+
+// Límite duro en el cliente: si la conexión a BigQuery se queda colgada
+// (proxy/VPN/inspección TLS de la red corporativa, o un simple corte de
+// red — NO la ejecución de la consulta en sí, que para las tablas que
+// consulta el picker/filtro es cuestión de milisegundos), se aborta el
+// fetch cuanto antes. Esto importa más de lo que parece: el navegador
+// limita a un puñado de conexiones simultáneas por dominio, así que un
+// fetch colgado sin abortar nunca ocupa uno de esos huecos para
+// SIEMPRE — y cualquier otra consulta a bigquery.googleapis.com (el
+// siguiente picker, el siguiente filtro, el propio informe) se queda
+// esperando turno detrás de ella, no porque BigQuery esté lento sino
+// porque no hay conexión libre. De ahí el síntoma de "se pilla y encima
+// deja sin funcionar las consultas siguientes durante un buen rato":
+// antes no había NINGÚN timeout aquí, así que ese hueco no se liberaba
+// jamás por sí solo. Por eso el margen es corto (bastante por encima del
+// propio timeoutMs que se le pide a BigQuery), no largo: esperar más no
+// arregla una conexión que nunca iba a responder.
+const SVC_CLIENT_TIMEOUT_MS = 12000;
+// Límite total (incluyendo el sondeo de getQueryResults más abajo) para
+// el caso, distinto, de una consulta legítimamente pesada en otra tabla
+// grande que BigQuery sigue ejecutando de verdad (jobComplete:false).
+const SVC_MAX_TOTAL_WAIT_MS = 40000;
+
+async function svcFetchWithTimeout(url, options) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), SVC_CLIENT_TIMEOUT_MS);
+    try {
+        return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+    } catch (err) {
+        if (err && err.name === "AbortError") {
+            throw new Error(
+                "La conexión con BigQuery no respondió en " + (SVC_CLIENT_TIMEOUT_MS / 1000) +
+                "s (probable corte de red o proxy). Prueba de nuevo."
+            );
+        }
+        throw err;
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function executeSQLBigQuery(sql) {
+    if (Provider.key() === "snowflake") {
+        const rows = await SF.runQuery(sql);
+        return svcRowsToPseudoBqJson(rows);
+    }
+
+    if (Provider.key() === "fabric") {
+        return await FB.runQueryPseudoBqJson(sql);
+    }
+
+    // BigQuery
+    const token = localStorage.getItem("bigquery_access_token");
+    const expires = localStorage.getItem("bigquery_token_expires");
+
+    if (!token || !expires || Date.now() >= parseInt(expires)) {
+        throw new Error("No hay una sesión activa de BigQuery. Inicia sesión en el panel primero.");
+    }
+
+    const projectId = "bigqueryexcelconnector";
+    const baseUrl = "https://bigquery.googleapis.com/bigquery/v2/projects/" + projectId;
+    const headers = {
+        "Authorization": "Bearer " + token,
+        "Content-Type": "application/json"
+    };
+
+    const startedAt = Date.now();
+
+    let response = await svcFetchWithTimeout(baseUrl + "/queries", {
+        method: "POST",
+        headers,
+        // timeoutMs explícito, por debajo de SVC_CLIENT_TIMEOUT_MS (si le
+        // pidiéramos a BigQuery más margen del que el propio cliente está
+        // dispuesto a esperar, el fetch se abortaría antes de que BigQuery
+        // llegase a devolver su "todavía en curso").
+        body: JSON.stringify({ query: sql, useLegacySql: false, timeoutMs: SVC_CLIENT_TIMEOUT_MS - 2000 })
+    });
+    let text = await response.text();
+
+    if (!response.ok) {
+        throw new Error("Error de BigQuery (" + response.status + "): " + text);
+    }
+
+    // Si la tabla es grande (SELECT DISTINCT + ORDER BY sin LIMIT, como
+    // generan buildAttributeSQL/buildHierarchySQL), BigQuery puede devolver
+    // el job todavía en curso (jobComplete:false) en vez de esperar más. El
+    // parser del picker/filtro (loadJsonTree/parseMemberJsonTree) busca el
+    // literal "v": directamente sobre el texto, así que un job incompleto
+    // se leía silenciosamente como "sin resultados" — aquí se sondea
+    // jobs.getQueryResults hasta que el job termine de verdad, o se avisa
+    // con un error claro si se pasa de SVC_MAX_TOTAL_WAIT_MS.
+    let parsed;
+    try { parsed = JSON.parse(text); } catch (e) { parsed = null; }
+
+    while (parsed && parsed.jobComplete === false && parsed.jobReference && parsed.jobReference.jobId) {
+        if (Date.now() - startedAt > SVC_MAX_TOTAL_WAIT_MS) {
+            throw new Error(
+                "La consulta está tardando demasiado en BigQuery (más de " +
+                (SVC_MAX_TOTAL_WAIT_MS / 1000) + "s). Prueba a acotar el campo o vuelve a intentarlo."
+            );
+        }
+
+        const jobId = encodeURIComponent(parsed.jobReference.jobId);
+        const loc = parsed.jobReference.location
+            ? "&location=" + encodeURIComponent(parsed.jobReference.location)
+            : "";
+
+        response = await svcFetchWithTimeout(
+            baseUrl + "/queries/" + jobId + "?timeoutMs=" + (SVC_CLIENT_TIMEOUT_MS - 2000) + loc,
+            { method: "GET", headers }
+        );
+        text = await response.text();
+
+        if (!response.ok) {
+            throw new Error("Error de BigQuery (" + response.status + "): " + text);
+        }
+
+        try { parsed = JSON.parse(text); } catch (e) { break; }
+    }
+
+    return text;
+}
+
+/* ---------------------------------------------------------------------
+ * ExcelService
+ * ------------------------------------------------------------------- */
+
+const ExcelService = {
+
+    /**
+     * LoadDimensions + LoadAttributes: dimensiones (antes MODEL_ATRIBUTES),
+     * atributos + nombres de jerarquía (antes MODEL_HIER, solo NIVEL=1),
+     * y la pseudo-dimensión "MEASURE" con las medidas (antes MODEL_MEASURES).
+     * Los datos ya no viven en hojas: se generan al vuelo desde el modelo
+     * semántico activo guardado por SemanticModelStore (por ahora, el
+     * primero que exista; ver SemanticModelStore.getActiveModelName).
+     */
+    // modelNameOverride: nombre del modelo semántico a leer directamente,
+    // en vez de depender del "modelo activo" global (SemanticModelStore.
+    // getActiveModelName/setActiveModelName) — ese estado compartido
+    // necesita un paso intermedio (populateModelSelectorMain, en
+    // taskpane.js) que lo sincronice con el modelo del informe actual, y
+    // si ese paso no llega a completarse a tiempo, aquí no se sabe qué
+    // modelo leer y las dimensiones salen vacías (con Shared Runtime, al
+    // no depender ya de si el panel llegó a "abrirse" o no, conviene no
+    // fiarse de ese intermediario para esta lectura). Si no se pasa,
+    // se mantiene el comportamiento de siempre (cae al modelo activo).
+    async readDim2Data(modelNameOverride) {
+        try {
+            {
+                const atribGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES", modelNameOverride);
+                const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER", modelNameOverride);
+                const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES", modelNameOverride);
+
+                const order = [];
+                const dimensionsMap = {};
+
+                const lastAttrRow = lastRowInColumnValues(atribGrid, 2);
+                for (let R = 2; R <= lastAttrRow; R++) {
+                    const dimName = String(cellValue(atribGrid, R, 2)).trim();
+                    const attrName = String(cellValue(atribGrid, R, 3)).trim();
+                    if (!dimName || !attrName) continue;
+
+                    if (!dimensionsMap[dimName]) {
+                        dimensionsMap[dimName] = { dimension: dimName, hierarchies: [], attributes: [] };
+                        order.push(dimName);
+                    }
+                    if (!dimensionsMap[dimName].attributes.includes(attrName)) {
+                        dimensionsMap[dimName].attributes.push(attrName);
+                    }
+                }
+
+                // Nombres de jerarquía (MODEL_HIER, columna B), solo el nivel 1 marca el nombre único
+                const lastHierRow = lastRowInColumnValues(hierGrid, 4);
+                for (let R = 2; R <= lastHierRow; R++) {
+                    const dimName = String(cellValue(hierGrid, R, 4)).trim(); // D: DIMENSION
+                    const hierName = String(cellValue(hierGrid, R, 2)).trim(); // B: HIERARCHY
+                    const nivel = Number(cellValue(hierGrid, R, 3));           // C: NIVEL
+                    if (!dimName || !hierName || nivel !== 1) continue;
+
+                    if (!dimensionsMap[dimName]) {
+                        dimensionsMap[dimName] = { dimension: dimName, hierarchies: [], attributes: [] };
+                        order.push(dimName);
+                    }
+                    if (!dimensionsMap[dimName].hierarchies.includes(hierName)) {
+                        dimensionsMap[dimName].hierarchies.push(hierName);
+                    }
+                }
+
+                // Pseudo-dimensión MEASURE (MODEL_MEASURES, columna B)
+                const measureNames = [];
+                const lastMeasRow = lastRowInColumnValues(measuresGrid, 2);
+                for (let R = 2; R <= lastMeasRow; R++) {
+                    const name = String(cellValue(measuresGrid, R, 2)).trim();
+                    if (name) measureNames.push(name);
+                }
+
+                const dimensionsList = order.map(d => dimensionsMap[d]);
+                dimensionsList.push({ dimension: "MEASURE", hierarchies: [], attributes: measureNames });
+
+                return { data: dimensionsList };
+            }
+        } catch (error) {
+            console.error("Error leyendo el modelo semántico (atributos/jerarquías/medidas):", error);
+            return { error: "Error al leer los datos del modelo." };
+        }
+    },
+
+    /**
+     * BuildFilterValuesSQL: decide si "name" es un atributo suelto o una
+     * jerarquía y genera el SQL correspondiente. Devuelve "" si no existe.
+     */
+    async buildFilterValuesSQL(dimension, name) {
+        const atribGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+        const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
+
+        // Modelo de Power BI/Fabric: consulta DAX (objeto) en vez de SQL
+        if (window.PowerBIQuery && window.PowerBIQuery.isActiveModel()) {
+            return window.PowerBIQuery.buildMembersQuery(dimension, name, atribGrid, hierGrid);
+        }
+
+        if (existsAttribute(atribGrid, dimension, name)) {
+            return buildAttributeSQL(atribGrid, dimension, name);
+        }
+        if (existsHierarchy(hierGrid, dimension, name)) {
+            return buildHierarchySQL(hierGrid, dimension, name);
+        }
+        return "";
+    },
+
+    /**
+     * Devuelve los niveles (nivel + nombre de atributo) de una jerarquía
+     * concreta, leídos de MODEL_HIER, para poder listarlos en el panel
+     * "Opciones de campo" (expandir hasta nivel / mostrar niveles).
+     */
+    async getHierarchyLevels(dimension, hierarchy) {
+        const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
+        const lastRow = lastRowInColumnValues(hierGrid, 4);
+        const levels = [];
+
+        for (let R = 2; R <= lastRow; R++) {
+            if (String(cellValue(hierGrid, R, 4)).toUpperCase() === String(dimension).toUpperCase()
+                && String(cellValue(hierGrid, R, 2)).toUpperCase() === String(hierarchy).toUpperCase()) {
+                levels.push({
+                    nivel: Number(cellValue(hierGrid, R, 3)),
+                    attribute: String(cellValue(hierGrid, R, 5)).trim()
+                });
+            }
+        }
+
+        levels.sort((a, b) => a.nivel - b.nivel);
+        return levels;
+    },
+
+    async executeSQL(sql) {
+        // Modelo de Power BI/Fabric: la consulta es un objeto DAX (ver js/powerBiQuery.js)
+        if (sql && typeof sql === "object" && sql.kind === "powerbi-dax") {
+            return await window.PowerBIQuery.execute(sql);
+        }
+        return await executeSQLBigQuery(sql);
+    },
+
+    /**
+     * LoadFilters + LoadRows + LoadCols + LoadFixed + LoadRanges:
+     * lee el estado actual del diseño del informe indicado (o el activo si
+     * no se pasa reportId) desde ReportStore (JSON). El único dato que
+     * sigue viniendo de la hoja física es el ancla E1 (celda seleccionada
+     * al pulsar "Editar informe" la primera vez).
+     */
+    async loadEditReportDesign(reportId) {
+        const id = reportId || (window.ReportStore ? window.ReportStore.getActiveReportId() : null);
+        const report = id && window.ReportStore ? window.ReportStore.getReport(id) : null;
+        const design = report ? (report.design || {}) : {};
+
+        // ---- Celda de anclaje para la PRIMERA vez que se monta el informe
+        // (EDIT_REPORT!E1, sigue siendo física: la escribe captureActiveEditContext
+        // en taskpane.js). Si está vacía o no es una dirección válida, se usa
+        // A1. Solo se aplica cuando todavía no hay rrAddress/rcAddress
+        // guardados (ver RangeAxis.loadFromAddresses en taskpane.js).
+        let anchorAddress = "";
+        try {
+            anchorAddress = await Excel.run(async (context) => {
+                const cell = context.workbook.worksheets.getItem("EDIT_REPORT").getRange("E1");
+                cell.load("values");
+                await context.sync();
+                return String((cell.values && cell.values[0] && cell.values[0][0]) || "").trim();
+            });
+        } catch (e) {
+            // La hoja EDIT_REPORT todavía no existe: sin ancla, se usará A1.
+        }
+
+        return {
+            filters: design.filters || [],
+            rows: design.rows || [],
+            columns: design.columns || [],
+            rowsStatic: !!design.rowsStatic,
+            colsStatic: !!design.colsStatic,
+            rrAddress: design.rrAddress || "",
+            rcAddress: design.rcAddress || "",
+            anchorAddress,
+            fieldOptions: design.fieldOptions || {}
+        };
+    },
+
+    /**
+     * SaveFilters + SaveRows + SaveCols + SaveFixed + SaveRanges:
+     * guarda el diseño del informe indicado (o el activo) en ReportStore
+     * (JSON), expandiendo jerarquías a través de MODEL_HIER igual que hacía
+     * antes frmReportDesigner2/esta misma función al escribir en la hoja.
+     * YA NO escribe nada en EDIT_REPORT: esa hoja se reserva para el
+     * último SQL/JSON (X1/Y1), la hoja/celda activas (D1/E1) y el picker
+     * de doble clic del XLAM.
+     */
+    async saveEditReportDesign(reportId, state) {
+        const id = reportId || (window.ReportStore ? window.ReportStore.getActiveReportId() : null);
+        if (!id || !window.ReportStore) return;
+        await window.ReportStore.saveDesign(id, state);
+    },
+
+    /**
+     * Guarda las "Propiedades del informe" (modal del taskpane) en
+     * ReportStore, para el informe indicado (o el activo). Sustituye a la
+     * antigua escritura en EDIT_REPORT!D2:D6 + clave global
+     * "draco_reportProperties": ahora cada informe tiene las suyas.
+     */
+    async saveReportPropertiesToSheetCells(props, reportId) {
+        const id = reportId || (window.ReportStore ? window.ReportStore.getActiveReportId() : null);
+        if (!id || !window.ReportStore) return;
+        await window.ReportStore.saveReportProperties(id, props);
+    },
+
+    /**
+     * Lista de modelos semánticos disponibles (nombres únicos, ordenados).
+     * Usado para rellenar el listbox "Modelo semántico" de Propiedades del
+     * informe y, en el futuro, para el selector de modelo semántico del
+     * editor de informes.
+     */
+    async getSemanticModels() {
+        return window.SemanticModelStore.listModelNames();
+    }
+};
+
+window.ExcelService = ExcelService;
+window.ReportDesignerUtils = { addressFromRC, parseAddress, numToColLetters };
