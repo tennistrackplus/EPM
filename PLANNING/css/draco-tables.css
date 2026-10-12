@@ -1,0 +1,28 @@
+/* ---- Tablas Draco: diseñador (modal con rejilla de solo lectura + taskpane del addin) ---- */
+.dtd-overlay { z-index: 1200; padding: 0; align-items: stretch; justify-content: stretch; }
+.dtd-modal { display: flex; flex-direction: column; width: 100%; height: 100%; background: var(--surface-card, #fff); }
+.dtd-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border-default, #e2e8f0); flex-shrink: 0; flex-wrap: wrap; }
+.dtd-title { font-size: 15px; white-space: nowrap; }
+.dtd-name, .dtd-desc { height: 32px; border: 1px solid var(--border-default, #e2e8f0); border-radius: var(--radius-sm, 6px); padding: 0 10px; background: var(--surface-sunken, #f8fafc); color: var(--text-primary, #0f172a); font: inherit; }
+.dtd-name { width: 240px; font-weight: 600; }
+.dtd-desc { width: 280px; }
+.dtd-spacer { flex: 1; }
+.dtd-status { font-size: 12.5px; color: var(--text-muted, #64748b); max-width: 360px; }
+.dtd-status.bad { color: var(--color-danger, #c2362b); }
+.dtd-ribbon { display: flex; align-items: center; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--border-subtle, #eef2f7); background: var(--surface-sunken, #f8fafc); flex-shrink: 0; flex-wrap: wrap; }
+.dtd-hint { margin-left: 8px; font-size: 12px; color: var(--text-muted, #64748b); }
+.dtd-body { display: flex; flex: 1; min-height: 0; }
+.dtd-grid-wrap { flex: 1; min-width: 0; overflow: auto; background: #fff; position: relative; }
+.dtd-loading { padding: 40px; text-align: center; color: var(--text-muted, #64748b); }
+.dtd-resizer { width: 6px; cursor: col-resize; background: var(--border-subtle, #eef2f7); flex-shrink: 0; }
+.dtd-resizer:hover, .dtd-resizer.dragging { background: var(--brand-primary, #2f6df6); }
+.dtd-panel { width: 440px; min-width: 300px; flex-shrink: 0; display: flex; background: var(--surface-card, #fff); }
+.dtd-taskpane { flex: 1; width: 100%; border: 0; background: #fff; }
+/* Rejilla de solo lectura (aspecto de hoja de cálculo) */
+.dtd-grid { border-collapse: collapse; font-family: "Segoe UI", system-ui, sans-serif; font-size: 12px; table-layout: auto; }
+.dtd-grid th { background: #f1f5f9; color: #64748b; font-weight: 500; border: 1px solid #e2e8f0; padding: 2px 8px; position: sticky; z-index: 2; }
+.dtd-grid thead th { top: 0; text-align: center; min-width: 74px; }
+.dtd-grid .dtd-corner { left: 0; z-index: 3; min-width: 38px; }
+.dtd-grid .dtd-rowh { left: 0; text-align: center; min-width: 38px; }
+.dtd-grid td { border: 1px solid #eef2f7; padding: 2px 8px; height: 22px; white-space: nowrap; color: #0f172a; cursor: default; }
+.dtd-grid td.dtd-sel { outline: 2px solid var(--brand-primary, #2f6df6); outline-offset: -2px; }
