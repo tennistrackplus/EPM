@@ -39,6 +39,15 @@ const DracoTables = {
     // ---------------------------------------------------------------------
     t() { return Provider.qualifyControl(this.TABLE); },
 
+    /**
+     * Literal de texto seguro para BigQuery y Snowflake. Provider.esc() solo protege comillas y barras: BigQuery NO admite
+     * saltos de línea reales dentro de '...' ("Unclosed string literal"), y el SQL generado por el addin los lleva (CRLF).
+     * Se escriben como \n \r \t (escapes que entienden los dos motores) y vuelven a ser saltos al leerlos.
+     */
+    lit(v) {
+        return "'" + Provider.esc(v == null ? "" : v).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t") + "'";
+    },
+
     /** Lista sin la definición ni el SQL (pesan). `desfasado`: el cubo cambió después de generar el SQL. */
     async list(projectId) {
         await Informes.guard();
@@ -100,9 +109,9 @@ const DracoTables = {
         const motor = Provider.key();
         const mf = modeloFecha === undefined || modeloFecha === null || modeloFecha === "" ? "NULL" : `'${Provider.esc(modeloFecha)}'`;
         if (exists) {
-            await Informes.q(`UPDATE ${t} SET NOMBRE = '${Provider.esc(nombre)}', DESCRIPCION = '${Provider.esc(descripcion)}',
-                    CUBO = '${Provider.esc(cubo || "")}', MOTOR = '${Provider.esc(motor)}',
-                    DEFINICION_JSON = '${Provider.esc(json)}', SQL_TEXT = '${Provider.esc(sql)}',
+            await Informes.q(`UPDATE ${t} SET NOMBRE = ${this.lit(nombre)}, DESCRIPCION = ${this.lit(descripcion)},
+                    CUBO = ${this.lit(cubo || "")}, MOTOR = ${this.lit(motor)},
+                    DEFINICION_JSON = ${this.lit(json)}, SQL_TEXT = ${this.lit(sql)},
                     SQL_GENERADO = CURRENT_TIMESTAMP(), MODELO_FECHA = ${mf}, FECHA_MODIFICACION = CURRENT_TIMESTAMP()
                 WHERE TABLA_DRACO_ID = '${Provider.esc(id)}' AND PROYECTO_ID = '${pid}'`);
             this.dispose(projectId, id);
@@ -111,8 +120,8 @@ const DracoTables = {
         const newId = id || Provider.newId();
         await Informes.q(`INSERT INTO ${t}
             (TABLA_DRACO_ID, PROYECTO_ID, NOMBRE, DESCRIPCION, CUBO, MOTOR, DEFINICION_JSON, SQL_TEXT, SQL_GENERADO, MODELO_FECHA, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
-            VALUES ('${Provider.esc(newId)}', '${pid}', '${Provider.esc(nombre)}', '${Provider.esc(descripcion)}', '${Provider.esc(cubo || "")}',
-                    '${Provider.esc(motor)}', '${Provider.esc(json)}', '${Provider.esc(sql)}', CURRENT_TIMESTAMP(), ${mf},
+            VALUES ('${Provider.esc(newId)}', '${pid}', ${this.lit(nombre)}, ${this.lit(descripcion)}, ${this.lit(cubo || "")},
+                    ${this.lit(motor)}, ${this.lit(json)}, ${this.lit(sql)}, CURRENT_TIMESTAMP(), ${mf},
                     ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`);
         return { id: newId, nombre };
     },

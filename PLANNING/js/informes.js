@@ -79,6 +79,15 @@ const Informes = {
         return this.ensureP;
     },
 
+    /**
+     * Literal de texto seguro para BigQuery y Snowflake. Provider.esc() solo protege comillas y barras: BigQuery NO admite
+     * saltos de línea reales dentro de '...' ("Unclosed string literal"), p. ej. en una descripción de varias líneas.
+     * Se escriben como \n \r \t (escapes que entienden los dos motores) y vuelven a ser saltos al leerlos.
+     */
+    lit(v) {
+        return "'" + Provider.esc(v == null ? "" : v).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t") + "'";
+    },
+
     isMissingTable(err) { return /not found|does not exist|no existe|doesn't exist/i.test((err && err.message) || ""); },
 
     /**
@@ -213,7 +222,7 @@ const Informes = {
 
             // Nombre único dentro del proyecto (sin distinguir mayúsculas)
             const dup = await this.q(`SELECT INFORME_ID FROM ${t}
-                WHERE PROYECTO_ID = '${Provider.esc(projectId)}' AND UPPER(NOMBRE) = UPPER('${Provider.esc(nombre)}')`);
+                WHERE PROYECTO_ID = '${Provider.esc(projectId)}' AND UPPER(NOMBRE) = UPPER(${this.lit(nombre)})`);
             if (dup.some(r => r.INFORME_ID !== id)) {
                 throw this.fail("NAME_EXISTS", "Ya existe un informe con ese nombre en este proyecto.");
             }
@@ -227,9 +236,9 @@ const Informes = {
 
             if (exists) {
                 await this.q(`UPDATE ${t}
-                    SET NOMBRE = '${Provider.esc(nombre)}',
-                        DESCRIPCION = '${Provider.esc(descripcion)}',
-                        SPEC_JSON = '${Provider.esc(json)}',
+                    SET NOMBRE = ${this.lit(nombre)},
+                        DESCRIPCION = ${this.lit(descripcion)},
+                        SPEC_JSON = ${this.lit(json)},
                         FECHA_MODIFICACION = CURRENT_TIMESTAMP()
                     WHERE INFORME_ID = '${Provider.esc(id)}' AND PROYECTO_ID = '${Provider.esc(projectId)}'`);
                 return { id, nombre, descripcion };
@@ -238,8 +247,8 @@ const Informes = {
             const newId = id || Provider.newId();
             await this.q(`INSERT INTO ${t}
                 (INFORME_ID, PROYECTO_ID, NOMBRE, DESCRIPCION, SPEC_JSON, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
-                VALUES ('${Provider.esc(newId)}', '${Provider.esc(projectId)}', '${Provider.esc(nombre)}', '${Provider.esc(descripcion)}',
-                        '${Provider.esc(json)}', ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`);
+                VALUES ('${Provider.esc(newId)}', '${Provider.esc(projectId)}', ${this.lit(nombre)}, ${this.lit(descripcion)},
+                        ${this.lit(json)}, ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`);
             return { id: newId, nombre, descripcion };
         } catch (err) { throw this.asError(err); }
     },
