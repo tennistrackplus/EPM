@@ -24,7 +24,7 @@ const DracoTables = {
     MAX_NAME: 120,
     MAX_DESC: 500,
     MAX_ENGINES: 6,
-    ENGINE_URL: "tablas-draco/engine.html?v=20261011a",
+    ENGINE_URL: "tablas-draco/engine.html?v=20261012b",
 
     engines: new Map(),      // "proyecto:id" -> { frame, host, stamp, chain, lastUse }
     pending: {},             // precarga: "proyecto:id" -> { pr, at }
@@ -151,25 +151,93 @@ const DracoTables = {
         return { fact, fields };
     },
 
-    /** Modelo semántico de un cubo: descarga su .lkml de GitHub y lo convierte. Cacheado por cubo y fecha. */
+    /**
+     * Modelo del cubo en el formato de SemanticModelStore (el que lee el addin), sea cual sea el proveedor:
+     *   1) BigQuery: el .lkml que Planning sube a GitHub al guardar el cubo (rápido, sin tocar tablas).
+     *   2) Si no hay .lkml (cubo sin generar, GitHub/secreto inaccesible...) o el proveedor es Snowflake (que
+     *      solo guarda un YAML en un stage y no genera .lkml): se RECONSTRUYE desde el propio cubo, con lo mismo que
+     *      Planning usa para generar ese modelo (CUBOS.CAMPOS_JSON + DIMENSIONES + JERARQUIAS).
+     * Cacheado por cubo y fecha del modelo. Si ninguna vía funciona, el error cuenta el motivo de cada una.
+     */
     _modelCache: {},
+    engine() { return Provider.key(); },
     async resolveModel(project, cube) {
         if (this.modelLoader) return this.modelLoader(project, cube);
         const key = `${project.PROYECTO_ID}:${cube.id}:${cube.fecha}`;
         if (this._modelCache[key]) return this._modelCache[key];
+        const reasons = [];
+        let model = null;
+        if (this.engine() !== "snowflake") {      // solo BigQuery genera .lkml
+            try { model = await this.modelFromLkml(project, cube); }
+            catch (err) { reasons.push("GitHub: " + err.message); }
+        }
+        if (!model) {
+            try { model = await this.modelFromCube(project, cube); }
+            catch (err) { reasons.push("cubo: " + err.message); }
+        }
+        if (!model || !model.fields || !model.fields.length) {
+            console.error(`DracoTables: no se pudo obtener el modelo del cubo «${cube.name}»:`, reasons);
+            throw this.fail("NO_MODEL", `No se pudo obtener el modelo del cubo «${cube.name}». ${reasons.join(" · ") || "El cubo no tiene dimensiones ni medidas."}`);
+        }
+        this._modelCache[key] = model;
+        return model;
+    },
+
+    /** Vía 1: el .lkml de GitHub. Devuelve null si no existe. */
+    async modelFromLkml(project, cube) {
         let path = cube.path ? cube.path.replace(/\.yaml$/i, ".lkml") : null;
         if (!path && typeof SemanticModel !== "undefined") {
             const ident = Provider.toIdentifier(cube.name) || cube.id;
             path = SemanticModel.buildPath(project, ident).replace(/\.yaml$/i, ".lkml");
         }
-        if (!path) throw this.fail("NO_MODEL", `El cubo «${cube.name}» no tiene modelo semántico (.lkml). Genéralo desde Cubos.`);
+        if (!path) throw new Error("el cubo no tiene ruta de modelo (.lkml)");
         const cfg = (typeof DracoConfig !== "undefined" && DracoConfig.semanticModelGithub) || {};
         const token = await BQ.getGithubPatFromSecretManager();
         const text = await GithubRepo.getFile(path, { url: cfg.url, branch: cfg.branch, token });
-        if (text === null) throw this.fail("NO_MODEL", `No existe el modelo ${path} del cubo «${cube.name}».`);
-        const model = this.lkmlToSemanticModel(LkmlParse.parse(text));
-        this._modelCache[key] = model;
-        return model;
+        if (text === null) throw new Error(`no existe ${path}`);
+        return this.lkmlToSemanticModel(LkmlParse.parse(text));
+    },
+
+    /** Vía 2: reconstruir el modelo desde el cubo (lo mismo que Planning usa para generar su YAML/.lkml). */
+    async modelFromCube(project, cube) {
+        if (typeof SemanticModel === "undefined") throw new Error("SemanticModel no está cargado");
+        const pid = Provider.esc(project.PROYECTO_ID);
+        const rows = await Provider.runQuery(`SELECT CUBO_ID, CUBOS, DESCRIPCION, TABLA, CAMPOS_JSON FROM ${Provider.qualifyControl("CUBOS")}
+            WHERE CUBO_ID = '${Provider.esc(cube.id)}' AND PROYECTO_ID = '${pid}'`);
+        if (!rows.length) throw new Error("el cubo ya no existe");
+        let spec;
+        try { spec = JSON.parse(rows[0].CAMPOS_JSON || "{}"); } catch (e) { throw new Error("la definición del cubo no es válida"); }
+        spec.dimensions = spec.dimensions || []; spec.measures = spec.measures || [];
+        if (!spec.dimensions.length && !spec.measures.length) throw new Error("el cubo no tiene dimensiones ni medidas");
+        const ids = spec.dimensions.map(d => d.id).filter(Boolean);
+        let dimRows = [], hierRows = [];
+        if (ids.length) {
+            const inList = ids.map(id => `'${Provider.esc(id)}'`).join(", ");
+            [dimRows, hierRows] = await Promise.all([
+                Provider.runQuery(`SELECT DIMENSION_ID, DIMENSION, DESCRIPCION, TABLA, CAMPOS_JSON FROM ${Provider.qualifyControl("DIMENSIONES")} WHERE DIMENSION_ID IN (${inList})`),
+                Provider.runQuery(`SELECT DIMENSION_ID, JERARQUIA, NIVELES_JSON FROM ${Provider.qualifyControl("JERARQUIAS")} WHERE DIMENSION_ID IN (${inList})`)
+            ]);
+        }
+        const built = SemanticModel.build(project, { id: rows[0].CUBO_ID, name: rows[0].CUBOS, description: rows[0].DESCRIPCION, table: rows[0].TABLA }, spec, dimRows, hierRows);
+        return this.planningModelToSemanticModel(built);
+    },
+
+    /** Objeto de SemanticModel.build() -> formato de SemanticModelStore. La dimensión se llama como su columna en la tabla de hechos. */
+    planningModelToSemanticModel(m) {
+        const project = (m.model && m.model.database) || "", dataset = (m.model && m.model.schema) || "";
+        const fks = (m.fact && m.fact.foreign_keys) || [];
+        const fields = [];
+        (m.dimensions || []).forEach((d, i) => {
+            const fk = fks.find(f => f.dimension === d.name) || fks[i];
+            fields.push({
+                enabled: true, type: "DIMENSION", name: (fk && fk.column) || d.key_column,
+                relProject: project, relDataset: dataset, relTable: d.table,
+                attributes: (d.attributes || []).map(a => ({ name: a.column, alias: a.column, dataType: a.type || "STRING", isKey: !!a.is_key, enabled: true })),
+                hierarchies: (d.hierarchies || []).map(h => ({ name: h.name, levels: (h.levels || []).map(l => ({ attribute: l.column })) }))
+            });
+        });
+        ((m.fact && m.fact.measures) || []).forEach(x => fields.push({ enabled: true, type: "MEASURE", name: x.column, aggregation: "SUM", format: "#,##0.00" }));
+        return { fact: { project, dataset, table: m.fact && m.fact.table }, fields };
     },
 
     // ---------------------------------------------------------------------

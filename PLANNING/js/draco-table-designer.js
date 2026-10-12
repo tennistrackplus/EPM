@@ -11,7 +11,7 @@
  * Al guardar se genera el SQL del informe y se guarda junto a su definición en TABLAS_DRACO (ver draco-tables.js).
  */
 const DracoTableDesigner = {
-    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261011a",
+    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261012b",
     MAX_ROWS: 600,
     MAX_COLS: 80,
     ctx: null,
@@ -30,6 +30,7 @@ const DracoTableDesigner = {
         return new Promise((resolve) => {
             this.ctx = { project, ref, row, cubes, resolve, saved: null, initialSig: null, ready: false, raf: 0, sel: { r: 0, c: 0 } };
             this.buildModal();
+            if (!cubes.length) this.banner("Este proyecto no tiene cubos, y el informe se diseña sobre uno. Crea un cubo en «Cubos» y vuelve a abrir el diseñador.", "warn");
             this.startTaskpane(def);
         });
     },
@@ -59,6 +60,7 @@ const DracoTableDesigner = {
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdRecog" title="Reconocimiento de miembros">🔎 Reconocimiento</button>
                     <span class="dtd-hint">Diseña el informe en el panel de la derecha. Al guardar se genera su SQL y se guarda con la definición.</span>
                 </div>
+                <div class="dtd-banner" id="dtdBanner" role="alert" hidden></div>
                 <div class="dtd-body">
                     <div class="dtd-grid-wrap" id="dtdGridWrap"><div class="dtd-loading"><span class="spinner"></span> Preparando el diseñador…</div></div>
                     <div class="dtd-resizer" id="dtdResizer" title="Arrastra para cambiar el ancho del panel"></div>
@@ -83,6 +85,15 @@ const DracoTableDesigner = {
         if (!el) return;
         el.textContent = text || "";
         el.className = "dtd-status" + (kind ? " " + kind : "");
+    },
+
+    /** Aviso persistente (no desaparece solo como un toast): el motivo por el que algo no funciona. */
+    banner(text, kind) {
+        const el = this.ctx && this.ctx.overlay.querySelector("#dtdBanner");
+        if (!el) return;
+        el.hidden = !text;
+        el.textContent = text || "";
+        el.className = "dtd-banner" + (kind ? " " + kind : "");
     },
 
     wireResizer() {
@@ -110,8 +121,8 @@ const DracoTableDesigner = {
                 const cube = c.cubes.find(x => x.name === name);
                 if (!cube) return null;
                 this.status("Cargando el modelo «" + name + "»…");
-                try { return await DracoTables.resolveModel(c.project, cube); }
-                catch (err) { UI.toast(err.message, "error"); return null; }
+                try { const m = await DracoTables.resolveModel(c.project, cube); this.banner(""); return m; }
+                catch (err) { this.banner(err.message, "bad"); UI.toast("No se pudo cargar el modelo del cubo «" + name + "».", "error"); return null; }
                 finally { this.status(""); }
             },
             markDirty() {},
