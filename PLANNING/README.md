@@ -691,7 +691,12 @@ botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un infor
   addin y aplica 3 parches (conexión de Planning; SQL guardado en informes dinámicos y en estáticos). Si el addin
   cambia y un parche deja de encajar, el script FALLA diciendo cuál; `python3 tools/sync-addin.py --check` solo lo
   comprueba. Plantillas propias en `tools/templates/` (host-bridge, provider-bridge, model-bootstrap, engine-api).
-- **Modelos.** Los cubos del proyecto (`CUBOS`); el modelo se lee de su `.lkml` en GitHub al elegirlo.
+- **Modelos.** Los cubos del proyecto (`CUBOS`) son los «modelos semánticos» del selector. Al elegir uno se carga su
+  modelo: con **BigQuery**, de su `.lkml` en GitHub; si no existe o falla (cubo sin generar, secreto o GitHub
+  inaccesibles) y siempre con **Snowflake** (que solo guarda un YAML en un stage y no genera `.lkml`), se
+  **reconstruye desde el propio cubo** con lo mismo que Planning usa para generarlo (`CUBOS.CAMPOS_JSON` +
+  `DIMENSIONES` + `JERARQUIAS`). Si ninguna vía funciona, el diseñador muestra un aviso persistente con el motivo de
+  cada una, y al volver a elegir el cubo se reintenta. Un proyecto sin cubos también lo avisa.
 - **Alcance de esta versión.** Solo lectura en el informe (sin escritura de planificación ni reparto de valores:
   esos botones están ocultos); filtros del informe fijos al diseñar; sin modelos de Power BI/Fabric (DAX). Los
   informes **estáticos/asimétricos** (los que leen de la hoja los miembros tecleados, con fórmulas `=EPM_VALUE`)

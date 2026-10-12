@@ -3,6 +3,9 @@
 Descomprime este zip **encima de la raíz del repositorio** (las rutas ya empiezan por `PLANNING/`).
 No hay que tocar `config.js` ni instalar nada: es JavaScript puro como el resto.
 
+## Corrección: Tablas Draco no dejaba elegir modelo semántico
+El modelo de un cubo solo se leía del `.lkml` de GitHub. Ahora, si no existe o falla (y siempre con Snowflake, que no genera `.lkml`), se reconstruye desde el propio cubo en la base de datos. El diseñador muestra un aviso persistente con el motivo cuando un modelo no carga (y reintenta al volver a elegirlo) y avisa si el proyecto no tiene cubos. Además, las páginas de `tablas-draco/` llevan ahora número de versión en sus scripts (caché). Cambia `js/draco-tables.js`, `js/draco-table-designer.js`, `css/draco-tables.css`, `generador.html`, `visor.html` y `tablas-draco/` (regenerado con `python3 tools/sync-addin.py`).
+
 ## Ajuste: tabla multidimensional
 Sin cabeceras de nombre de campo (esquina, fila de campos de Filas y título del Valor): solo los valores de Filas y Columnas; el nombre del campo queda como tooltip. Las celdas siguen el tipo de la columna del bloque **Valor** (si su ayuda de búsqueda es Checkbox, todas son checkbox; las cabeceras nunca llevan campos de entrada). En la validación de un campo ya no se muestra el texto de ayuda de «Completar con todos los valores». Cambia `js/table-updates.js`, `css/app.css` e `informes-herramienta.html` (más los números de versión de los html y de `generador-app.js` / `visor-app.js`).
 
