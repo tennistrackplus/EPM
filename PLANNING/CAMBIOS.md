@@ -3,6 +3,15 @@
 Descomprime este zip **encima de la raíz del repositorio** (las rutas ya empiezan por `PLANNING/`).
 No hay que tocar `config.js` ni instalar nada: es JavaScript puro como el resto.
 
+## Ajuste: tabla multidimensional
+Sin cabeceras de nombre de campo (esquina, fila de campos de Filas y título del Valor): solo los valores de Filas y Columnas; el nombre del campo queda como tooltip. Las celdas siguen el tipo de la columna del bloque **Valor** (si su ayuda de búsqueda es Checkbox, todas son checkbox; las cabeceras nunca llevan campos de entrada). En la validación de un campo ya no se muestra el texto de ayuda de «Completar con todos los valores». Cambia `js/table-updates.js`, `css/app.css` e `informes-herramienta.html` (más los números de versión de los html y de `generador-app.js` / `visor-app.js`).
+
+## Novedad: Tablas Draco (informes tipo tabla dinámica del addin)
+Nuevo componente **Tabla Draco** en el generador de informes. En *Propiedades*, el botón **Diseñador del informe** abre un pseudo-Excel solo para diseñar (rejilla de solo lectura + el taskpane del addin con todas sus opciones). Se guarda la definición y el **SQL ya generado** en la tabla nueva `TABLAS_DRACO`; el visor ejecuta ese SQL sin regenerarlo y dibuja el resultado con los estilos del libro (con +/- de jerarquías). Si el cubo cambia después, avisa de «SQL desfasado».
+- **Archivos nuevos:** `PLANNING/js/draco-tables.js`, `PLANNING/js/draco-table-designer.js`, `PLANNING/css/draco-tables.css`, `PLANNING/tablas-draco/` (GENERADO: motor y diseñador del addin; no editar), `tools/sync-addin.py` y `tools/templates/` (generan la carpeta anterior desde `ADDIN/src`: `python3 tools/sync-addin.py`).
+- **Archivos tuyos modificados:** `js/schema.js` (tabla `TABLAS_DRACO`), `js/informes.js` (la crea con las demás), `generador.html`, `visor.html`, `js/generador-app.js`, `js/visor-app.js`, `informes-herramienta.html`, `README.md`.
+- **Pendiente / no probado:** BigQuery y Snowflake reales (solo mi simulador); escritura de planificación (oculta); los informes **estáticos/asimétricos NO están soportados** (el diseñador oculta su interruptor); modelos de Power BI.
+
 ## Novedad de esta versión: editor con barras laterales
 `PLANNING/informes-herramienta.html` incluye ahora una barra izquierda (**Componentes** en iconos + **Estructura** en árbol con filas y columnas) y la barra derecha de **Propiedades**; las dos se contraen y expanden. Se arrastra y suelta en el árbol (reordenar, mover bloques entre secciones, soltar componentes de la paleta). Dentro de Draco se abre directamente en modo diseño. Ver README §7quater.
 

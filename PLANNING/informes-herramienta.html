@@ -1268,15 +1268,18 @@ function tuPivotHtml(st){
   var map={}, probe, pmat=[];
   st.rows.forEach(function(r){ map[tuKey(st,r)]=r; });
   var groups=tuPvGroups(colT,nc), spans=tuPvSpans(rowT,nr);
-  var head=pv.cols.map(function(n,k){ var f=tuPvField(st,n); return '<tr><th colspan="'+nr+'" class="tu-pv-corner">'+esc(f?f.label:n)+'</th>'+groups[k].map(function(g){ return '<th colspan="'+g.span+'" class="tu-pv-colh">'+tuPvLabel(st,n,g.id)+'</th>'; }).join('')+'</tr>'; }).join('')
-    +'<tr>'+pv.rows.map(function(n){ var f=tuPvField(st,n); return '<th class="tu-pv-rowh">'+esc(f?f.label:n)+'</th>'; }).join('')+'<th colspan="'+colT.length+'" class="tu-pv-valh">'+esc(vf?vf.label:pv.value)+'</th></tr>';
+  /* Sin cabeceras de nombre de campo (esquina, fila de campos de Filas, t\u00EDtulo del Valor): solo los valores de Filas y Columnas.
+     El nombre del campo queda como tooltip. Las celdas siguen el tipo de la columna del bloque Valor (si es Checkbox, todas lo son). */
+  var fl=function(n){ var f=tuPvField(st,n); return esc(f?f.label:n); };
+  var vopts=st.meta.optionsByField[pv.value]||[], isChk=!!(vf&&vf.validation&&vf.validation.searchHelp==='CHECKBOX'&&vopts.length===2);
+  var head=pv.cols.map(function(n,k){ return '<tr><th colspan="'+nr+'" class="tu-pv-corner"></th>'+groups[k].map(function(g){ return '<th colspan="'+g.span+'" class="tu-pv-colh" title="'+fl(n)+'">'+tuPvLabel(st,n,g.id)+'</th>'; }).join('')+'</tr>'; }).join('');
   var body=rowT.map(function(rt,r){
-    var labels=rt.map(function(id,k){ return spans[r][k]?'<th rowspan="'+spans[r][k]+'" class="tu-pv-rowl">'+tuPvLabel(st,pv.rows[k],id)+'</th>':''; }).join(''), line=[];
+    var labels=rt.map(function(id,k){ return spans[r][k]?'<th rowspan="'+spans[r][k]+'" class="tu-pv-rowl" title="'+fl(pv.rows[k])+'">'+tuPvLabel(st,pv.rows[k],id)+'</th>':''; }).join(''), line=[];
     var cells=colT.map(function(ct,c){
       probe={}; pv.rows.forEach(function(n,i){ probe[n]=rt[i]; }); pv.cols.forEach(function(n,i){ probe[n]=ct[i]; });
       var row=map[tuKey(st,probe)]; line.push(row||null);
       if(!row) return '<td class="tu-pc tu-pv-na"></td>';
-      return '<td class="tu-pc'+(row.__mod?' tu-mod':'')+'" data-r="'+row.__id+'">'+tuPvInput(st,row,vf,r,c)+'</td>';
+      return '<td class="tu-pc'+(row.__mod?' tu-mod':'')+(isChk?' tu-chk':'')+'" data-r="'+row.__id+'">'+tuPvInput(st,row,vf,r,c)+'</td>';
     }).join('');
     pmat.push(line); return '<tr>'+labels+cells+'</tr>';
   }).join('');
@@ -2528,7 +2531,7 @@ input.tu-in[type=checkbox]{width:auto;min-width:0}
 .tu-pivot .tu-pv-rowh,.tu-pivot .tu-pv-valh{background:var(--bg);color:var(--muted)}
 .tu-pivot .tu-pv-rowl{background:var(--bg);color:var(--ink);font-weight:600;font-size:14px;vertical-align:top;border-bottom:1px solid var(--line)}
 .tu-pivot .tu-pv-desc{color:var(--muted);font-weight:400}
-.tu-pivot td.tu-pc{padding:2px 4px;min-width:104px;border-left:1px solid var(--line)}.tu-pivot td.tu-pc.tu-mod{background:color-mix(in srgb,var(--brand) 12%,transparent)}
+.tu-pivot td.tu-pc{padding:2px 4px;min-width:104px;border-left:1px solid var(--line)}.tu-pivot td.tu-pc.tu-chk{text-align:center}.tu-pivot td.tu-pc.tu-mod{background:color-mix(in srgb,var(--brand) 12%,transparent)}
 .tu-pivot td.tu-pv-na{background:color-mix(in srgb,var(--muted) 10%,transparent)}
 .tu-more{padding:12px;text-align:center}
 .tu-modal{position:fixed;inset:0;z-index:400;background:rgba(10,15,30,.5);display:flex;align-items:center;justify-content:center;padding:20px}
