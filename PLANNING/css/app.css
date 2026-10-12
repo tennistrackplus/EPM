@@ -841,9 +841,10 @@ li.hier-preview-node { margin: 2px 0; }
 .actupd-pivot .actupd-pv-corner { text-align: right; font-weight: 600; color: var(--text-muted); background: var(--gray-50); }
 .actupd-pivot .actupd-pv-colh { text-align: center; background: var(--gray-50); border-left: 1px solid var(--border-default); }
 .actupd-pivot .actupd-pv-rowh, .actupd-pivot .actupd-pv-valh { background: var(--gray-50); font-weight: 600; }
-.actupd-pivot .actupd-pv-rowl { background: var(--gray-50); text-align: left; font-weight: 500; vertical-align: top; }
+.actupd-pivot .actupd-pv-rowl { background: var(--gray-50); text-align: left; font-weight: 500; font-size: 11.5px; padding: 4px 8px; vertical-align: middle; }
 .actupd-pivot .actupd-pv-desc { color: var(--text-muted); font-weight: 400; }
-.actupd-pivot .actupd-pv-cell { padding: 2px 4px; min-width: 96px; border-left: 1px solid var(--border-default); }
+/* Mismo espaciado y texto que la rejilla normal: la celda sin relleno (lo pone el propio campo, 6px 8px) y 11.5px */
+.actupd-pivot .actupd-pv-cell { padding: 0; min-width: 96px; border-left: 1px solid var(--border-default); }
 .actupd-pivot .actupd-pv-mod { background: var(--brand-primary-light); }
 .actupd-pivot .actupd-pv-na { background: var(--gray-100); }
 .actupd-pivot .actupd-pv-chk { text-align: center; }
