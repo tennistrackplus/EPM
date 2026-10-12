@@ -846,3 +846,4 @@ li.hier-preview-node { margin: 2px 0; }
 .actupd-pivot .actupd-pv-cell { padding: 2px 4px; min-width: 96px; border-left: 1px solid var(--border-default); }
 .actupd-pivot .actupd-pv-mod { background: var(--brand-primary-light); }
 .actupd-pivot .actupd-pv-na { background: var(--gray-100); }
+.actupd-pivot .actupd-pv-chk { text-align: center; }
