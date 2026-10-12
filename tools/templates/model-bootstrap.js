@@ -27,7 +27,7 @@
         try {
             const model = await host().resolveModel(name);
             if (model && model.fields && model.fields.length) await window.SemanticModelStore.saveModel(name, model);
-            else console.warn(`model-bootstrap: el cubo "${name}" no tiene modelo semántico.`);
+            else { entry.resolved = false; console.warn(`model-bootstrap: el cubo "${name}" no tiene modelo semántico.`); }   // se reintenta al volver a elegirlo
         } catch (err) {
             entry.resolved = false;
             console.error(`model-bootstrap: error al leer el modelo de "${name}":`, err);
