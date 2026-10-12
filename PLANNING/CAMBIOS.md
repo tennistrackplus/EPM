@@ -3,6 +3,9 @@
 Descomprime este zip **encima de la raíz del repositorio** (las rutas ya empiezan por `PLANNING/`).
 No hay que tocar `config.js` ni instalar nada: es JavaScript puro como el resto.
 
+## Ajuste: espaciado de la tabla multidimensional
+Ahora tiene el mismo espaciado que la tabla normal, en Planning y en el informe: misma altura de fila (25 px en Planning, 45,4 px en el informe), mismo relleno de celda y mismo tamaño de texto; las etiquetas de fila van centradas y con el tamaño del texto normal (antes 30 px / 43,4 px y etiquetas de 14 px). Cambia `css/app.css` e `informes-herramienta.html` (más los números de versión de los html y de `generador-app.js` / `visor-app.js`).
+
 ## Corrección: Tablas Draco no dejaba elegir modelo semántico
 El modelo de un cubo solo se leía del `.lkml` de GitHub. Ahora, si no existe o falla (y siempre con Snowflake, que no genera `.lkml`), se reconstruye desde el propio cubo en la base de datos. El diseñador muestra un aviso persistente con el motivo cuando un modelo no carga (y reintenta al volver a elegirlo) y avisa si el proyecto no tiene cubos. Además, las páginas de `tablas-draco/` llevan ahora número de versión en sus scripts (caché). Cambia `js/draco-tables.js`, `js/draco-table-designer.js`, `css/draco-tables.css`, `generador.html`, `visor.html` y `tablas-draco/` (regenerado con `python3 tools/sync-addin.py`).
 
