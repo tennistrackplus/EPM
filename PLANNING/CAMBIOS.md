@@ -3,6 +3,9 @@
 Descomprime este zip **encima de la raíz del repositorio** (las rutas ya empiezan por `PLANNING/`).
 No hay que tocar `config.js` ni instalar nada: es JavaScript puro como el resto.
 
+## Corrección: al guardar una tabla Draco daba «Unclosed string literal»
+El SQL generado por el addin lleva saltos de línea y BigQuery no admite saltos de línea reales dentro de un texto entre comillas simples. Ahora los textos del `INSERT`/`UPDATE` de `TABLAS_DRACO` se escriben con los saltos escapados (`\n`), que entienden BigQuery y Snowflake, y vuelven a ser saltos al leerlos. El mismo fallo afectaba al guardado de **informes** cuando su descripción tenía varias líneas: también corregido en `js/informes.js`. Cambia `js/draco-tables.js`, `js/informes.js` (y la versión en `generador.html` / `visor.html`).
+
 ## Ajuste: espaciado de la tabla multidimensional
 Ahora tiene el mismo espaciado que la tabla normal, en Planning y en el informe: misma altura de fila (25 px en Planning, 45,4 px en el informe), mismo relleno de celda y mismo tamaño de texto; las etiquetas de fila van centradas y con el tamaño del texto normal (antes 30 px / 43,4 px y etiquetas de 14 px). Cambia `css/app.css` e `informes-herramienta.html` (más los números de versión de los html y de `generador-app.js` / `visor-app.js`).
 
