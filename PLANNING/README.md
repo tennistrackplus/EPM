@@ -665,6 +665,40 @@ ej. se borra un campo), se muestra la rejilla normal. Funciona igual en Planning
 en el generador y en el visor; *Propiedades* del bloque avisa de la configuración.
 Lógica común en `TableUpdates` (`pivotErrors`, `parsePivot`, `pivotLayout`...).
 
+**Tablas Draco (informes tipo tabla dinámica del addin, dentro de un informe).** Nuevo componente
+*Tabla Draco* (grupo Datos, solo dentro de Draco). En *Propiedades* eliges una de las tablas del proyecto o
+pulsas **Diseñador del informe**, que abre un pseudo-Excel **solo para diseñar** (rejilla de solo lectura, sin
+fuentes, colores, bordes, combinar ni insertar filas) con, a la derecha, el taskpane del addin con todas sus
+opciones (modelo, campos en Filas/Columnas/Filtros, medidas, jerarquías, opciones de campo, propiedades) y los
+botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un informe del addin.
+
+- **Base de datos.** `DRACO_CONTROL.TABLAS_DRACO`: `DEFINICION_JSON` (el diseño tal como lo guarda el addin: informe,
+  filtros y el modelo activo con sus campos; sin el último SQL/JSON ni el resultado), **`SQL_TEXT`** (el SQL ya
+  generado al guardar), `SQL_GENERADO`, `CUBO`, `MOTOR` y `MODELO_FECHA` (= `CUBOS.MODELO_YAML_FECHA` al generarlo).
+  El informe solo guarda la referencia (`{type:"dracoTable", ref, refName}`).
+- **El SQL no se regenera al refrescar.** Al guardar en el diseñador se genera y se guarda; el visor y la vista
+  previa ejecutan ese SQL tal cual. Si el cubo se regenera después (`MODELO_YAML_FECHA` distinto), la tabla
+  muestra «SQL desfasado» pero sigue funcionando; para regenerarlo, abrir el diseñador y guardar. Si el SQL es de
+  otro motor (BigQuery/Snowflake) que la conexión actual, lo dice y pide regenerarlo.
+- **Cómo se ejecuta.** `js/draco-tables.js` arranca el MISMO código del addin en un iframe sin interfaz
+  (`tablas-draco/engine.html`) con un «Excel falso» (`tablas-draco/js/host-bridge.js`); el motor ejecuta el SQL
+  guardado con la conexión de Planning y pinta en su hoja en memoria; de ahí se saca una foto (celdas con formato,
+  números ya formateados a la española) que la página dibuja como HTML con los estilos del libro. El iframe se
+  conserva por tabla: los +/- de las jerarquías se expanden y contraen sin volver a consultar. El visor precarga
+  las tablas mientras dibuja la página.
+- **`tablas-draco/` está GENERADO** desde `ADDIN/src` por `python3 tools/sync-addin.py` (no editar a mano). Extrae solo
+  la vista de diseño del taskpane (las vistas de conexión y de modelo las sustituye Planning), copia los módulos del
+  addin y aplica 3 parches (conexión de Planning; SQL guardado en informes dinámicos y en estáticos). Si el addin
+  cambia y un parche deja de encajar, el script FALLA diciendo cuál; `python3 tools/sync-addin.py --check` solo lo
+  comprueba. Plantillas propias en `tools/templates/` (host-bridge, provider-bridge, model-bootstrap, engine-api).
+- **Modelos.** Los cubos del proyecto (`CUBOS`); el modelo se lee de su `.lkml` en GitHub al elegirlo.
+- **Alcance de esta versión.** Solo lectura en el informe (sin escritura de planificación ni reparto de valores:
+  esos botones están ocultos); filtros del informe fijos al diseñar; sin modelos de Power BI/Fabric (DAX). Los
+  informes **estáticos/asimétricos** (los que leen de la hoja los miembros tecleados, con fórmulas `=EPM_VALUE`)
+  **no están soportados**: necesitan teclear en una hoja de Excel y un motor de fórmulas, y la rejilla es de solo
+  lectura. El diseñador oculta su interruptor y rechaza guardar uno. Un informe con solo una medida en Columnas (sin
+  dimensión) genera `OVER (ORDER BY )` vacío: es un comportamiento del propio addin.
+
 **Actualizar la herramienta.** `informes-herramienta.html` es un único archivo
 autocontenido, que fuera de Draco funciona también por sí solo. Para actualizar
 la herramienta basta con sustituir ese archivo por la nueva versión; el

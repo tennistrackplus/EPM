@@ -1086,6 +1086,77 @@ function dreply(d){
   if(d.ok) p.res(d.data);
   else { var e=new Error((d.error&&d.error.message)||'Error desconocido'); e.code=d.error&&d.error.code; e.details=d.error&&d.error.details; p.rej(e); }
 }
+/* ---------- Tablas Draco (bloque "dracoTable") ----------
+   Informe tipo tabla din\u00E1mica del addin de Excel, dise\u00F1ado en el dise\u00F1ador de Draco. La p\u00E1gina NO consulta nada:
+   pide a Draco (dcall "dt.run") que ejecute el SQL YA GENERADO de esa tabla y le devuelva lo pintado (celdas con su
+   formato); aqu\u00ED se dibuja como HTML con los estilos del libro. Los +/- de las jerarqu\u00EDas se expanden y contraen
+   con "dt.toggle" (Draco repinta desde su cach\u00E9, sin volver a consultar). */
+var DTS={}, DTB={};
+function dtEl(id){ return document.querySelector('.dt[data-dt="'+id+'"]'); }
+function dtTitle(b,res){ return b.title||(res&&res.nombre)||b.refName||'Tabla Draco'; }
+function dtMsg(b,text){ return '<div class="tu-head"><h3>'+esc(tok(dtTitle(b)))+'</h3></div><p class="tu-sub">'+esc(text)+'</p>'; }
+function dtNote(b){ return '<div class="card" data-block="dracoTable">'+(b.title?'<h3 style="margin-bottom:10px">'+esc(tok(b.title))+'</h3>':'')+'<p class="tu-sub">'+esc('Tabla Draco'+(b.refName?' \u00AB'+b.refName+'\u00BB':'')+'. Se consulta desde Draco Planning.')+'</p></div>'; }
+function dtShell(b,id){ DTB[id]=b; return '<div class="card tu dt" data-dt="'+id+'" data-block="dracoTable"></div>'; }
+function dtMountAll(force){ [].forEach.call(document.querySelectorAll('.dt[data-dt]'),function(el){ if(force||!el.getAttribute('data-mounted')) dtMount(el); }); }
+function dtMount(el){
+  var id=el.getAttribute('data-dt'), b=DTB[id]; if(!b) return; el.setAttribute('data-mounted','1');
+  if(EDIT){ el.innerHTML=dtMsg(b,'Tabla Draco'+(b.refName?' \u00AB'+b.refName+'\u00BB':'')+'. Pulsa \u00ABVista previa\u00BB para ver los datos.'); return; }
+  if(!b.ref){ el.innerHTML=dtMsg(b,'Elige o crea la tabla en las propiedades de este bloque (bot\u00F3n \u00ABDise\u00F1ador del informe\u00BB).'); return; }
+  if(!HOSTON){ el.innerHTML=dtMsg(b,'Esta tabla se consulta desde Draco Planning.'); return; }
+  var sig=JSON.stringify([b.ref]), st=DTS[id];
+  if(!st||st.sig!==sig){ st=DTS[id]={sig:sig,status:'loading'}; dtLoad(id); }
+  dtRender(id);
+}
+function dtLoad(id,force){
+  var b=DTB[id], st=DTS[id]; if(!b||!st) return; st.status='loading'; st.err=null;
+  dcall('dt.run',{ref:b.ref,force:!!force}).then(function(res){ if(DTS[id]!==st) return; st.status='ready'; st.res=res; dtRender(id); },function(e){ if(DTS[id]!==st) return; st.status='error'; st.err=e; dtRender(id); });
+}
+function dtLum(hex){ var m=/^#?([0-9a-f]{6})$/i.exec(hex||''); if(!m) return 1; var n=parseInt(m[1],16); return (0.2126*((n>>16)&255)+0.7152*((n>>8)&255)+0.0722*(n&255))/255; }
+function dtGridHtml(g){
+  if(!g||!g.rows||!g.cols) return '<div class="tu-state">El informe no ha devuelto datos.</div>';
+  var cov={}, anc={}, i, j, k, h='<table class="dt-grid"><tbody>';
+  (g.merges||[]).forEach(function(m){ anc[m.r+'_'+m.c]=m; for(var r=m.r;r<m.r+(m.rowSpan||1);r++) for(var c=m.c;c<m.c+(m.colSpan||1);c++) if(r!==m.r||c!==m.c) cov[r+'_'+c]=1; });
+  for(i=0;i<g.rows;i++){
+    h+='<tr>';
+    for(j=0;j<g.cols;j++){
+      k=i+'_'+j; if(cov[k]) continue;
+      var o=g.cells[k]||{}, m=anc[k], txt=(o.t!=null)?o.t:(o.v==null?'':String(o.v)), cls=[], st=[];
+      if(o.bg) cls.push(dtLum(o.bg)<0.935?'dt-h1':'dt-h2');
+      if(o.b) cls.push('dt-b'); if(o.i) cls.push('dt-i'); if(o.u) cls.push('dt-u');
+      var num=(o.t!=null)||/^-?\d+(\.\d+)?$/.test(txt), al=o.al||((num&&!o.bg)?'right':'left');
+      st.push('text-align:'+(al==='center'?'center':(al==='right'?'right':'left')));
+      if(o.ind) st.push('padding-left:'+(10+o.ind*16)+'px');
+      if(o.bd){ if(o.bd.t) st.push('border-top:1px solid var(--line)'); if(o.bd.r) st.push('border-right:1px solid var(--line)'); if(o.bd.b) st.push('border-bottom:1px solid var(--line)'); if(o.bd.l) st.push('border-left:1px solid var(--line)'); }
+      var tg=/^[\u25B8\u25BE] /.test(txt); if(tg) cls.push('dt-tg');
+      h+='<td'+(cls.length?' class="'+cls.join(' ')+'"':'')+(m?' rowspan="'+(m.rowSpan||1)+'" colspan="'+(m.colSpan||1)+'"':'')+(tg?' data-dt-r="'+i+'" data-dt-c="'+j+'" title="Expandir o contraer"':'')+' style="'+st.join(';')+'">'+esc(txt)+'</td>';
+    }
+    h+='</tr>';
+  }
+  return h+'</tbody></table>';
+}
+function dtRender(id){
+  var el=dtEl(id), st=DTS[id], b=DTB[id]; if(!el||!st) return;
+  var res=st.res, head='<div class="tu-head"><h3>'+esc(tok(dtTitle(b,res)))+'</h3>'+(res&&res.desfasado?'<span class="dt-warn" title="El cubo cambi\u00F3 despu\u00E9s de generar el SQL de esta tabla">SQL desfasado</span>':'')+'</div>';
+  if(st.status==='loading'){ el.innerHTML=head+'<div class="tu-state"><span class="tu-spin"></span> Cargando datos\u2026</div>'; return; }
+  if(st.status==='error'){ el.innerHTML=head+'<div class="tu-state tu-bad">'+esc(tuErrText(st.err))+'<div class="tu-retry"><button type="button" class="tu-btn" data-dt-act="retry">Reintentar</button></div></div>'; return; }
+  var g=res.grid, mh=parseInt(b.maxHeight,10);
+  var bar='<div class="tu-bar"><button type="button" class="tu-btn" data-dt-act="reload" title="Volver a ejecutar la consulta">\u21BB Recargar</button><span class="tu-count">'+g.rows+' fila(s) \u00D7 '+g.cols+' columna(s)</span></div>';
+  var warn=res.desfasado?'<div class="tu-msg tu-info" role="status">El modelo del cubo ha cambiado desde que se gener\u00F3 el SQL de esta tabla. \u00C1brela en el dise\u00F1ador y gu\u00E1rdala para regenerarlo.</div>':'';
+  var oldW=el.querySelector('.tu-wrap'), sT=oldW?oldW.scrollTop:0, sL=oldW?oldW.scrollLeft:0;
+  el.innerHTML=head+bar+warn+'<div class="tu-wrap dt-wrap"'+(mh>0?' style="max-height:'+mh+'px"':'')+'>'+dtGridHtml(g)+'</div>';
+  var nw=el.querySelector('.tu-wrap'); if(nw){ nw.scrollTop=sT; nw.scrollLeft=sL; }
+}
+document.addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.closest) return;
+  var host=t.closest('.dt[data-dt]'); if(!host) return;
+  var id=host.getAttribute('data-dt'), st=DTS[id], b=DTB[id]; if(!st||!b) return;
+  var a=t.closest('[data-dt-act]');
+  if(a){ var act=a.getAttribute('data-dt-act'); if(act==='retry'||act==='reload'){ dtLoad(id,true); dtRender(id); } return; }
+  var td=t.closest('td[data-dt-r]'); if(!td||st.busy||st.status!=='ready') return;
+  st.busy=true; td.style.opacity='.55';
+  dcall('dt.toggle',{ref:b.ref,r:+td.getAttribute('data-dt-r'),c:+td.getAttribute('data-dt-c')}).then(function(res){ st.busy=false; if(DTS[id]!==st) return; st.res.grid=res.grid; dtRender(id); },function(err){ st.busy=false; if(DTS[id]!==st) return; st.status='error'; st.err=err; dtRender(id); });
+});
+
 function tuUid(){ return 'r'+Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-3); }
 function tuEl(id){ return document.querySelector('.tu[data-tu="'+id+'"]'); }
 function tuErrText(e){ if(e&&e.code==='NO_AUTH') return 'Tu sesi\u00F3n de Draco ha caducado. Inicia sesi\u00F3n en Draco en otra pesta\u00F1a y pulsa Reintentar.'; return (e&&e.message)||'No se pudo completar la operaci\u00F3n.'; }
@@ -1098,7 +1169,7 @@ function tuVarCount(b){
   return n;
 }
 function tuMsgCard(b,text){ return '<div class="tu-head"><h3>'+esc(tok(tuTitle(b)))+'</h3></div><p class="tu-sub">'+esc(text)+'</p>'; }
-function tuMountAll(force){ [].forEach.call(document.querySelectorAll('.tu[data-tu]'),function(el){ if(force||!el.getAttribute('data-mounted')) tuMount(el); }); }
+function tuMountAll(force){ [].forEach.call(document.querySelectorAll('.tu[data-tu]'),function(el){ if(force||!el.getAttribute('data-mounted')) tuMount(el); }); if(typeof dtMountAll==='function') dtMountAll(force); }
 function tuMount(el){
   var id=el.getAttribute('data-tu'), b=TUB[id]; if(!b) return; el.setAttribute('data-mounted','1');
   if(EDIT){ var n=tuVarCount(b); el.innerHTML=tuMsgCard(b,'Actualizaci\u00F3n de tablas'+(b.refName?' \u00AB'+b.refName+'\u00BB':'')+(n?' \u00B7 '+n+' variable(s) con valor':'')+'. Pulsa \u00ABVista previa\u00BB para ver y probar la tabla con datos reales.'); return; }
@@ -1422,6 +1493,7 @@ function blockInner(b,id){
       case 'cards': return '<div class="cards" data-block="cards">'+b.items.map(function(it){ return '<div class="card">'+(it.tag?'<span class="tag">'+esc(it.tag)+'</span>':'')+'<h3>'+esc(tok(it.title))+'</h3><p>'+inl(it.body)+'</p></div>'; }).join('')+'</div>';
       case 'tabs': return tabsHtml(b,id);
       case 'tableUpdate': return tuNote(b);
+      case 'dracoTable': return dtNote(b);
     }
   }catch(e){ REPORT.errors.push(id+': '+e.message); return '<div class="card"><p>No se pudo dibujar este bloque.</p></div>'; }
   return '';
@@ -1431,6 +1503,7 @@ function blockWrap(b,id){
   var cls='blk'+((b.span==='full'||b.type==='kpis')?' full':(typeof b.span==='number'&&b.span>1?' sp'+b.span:''));
   var sh=b.showIf?' data-showif="'+esc(b.showIf)+'"':'';
   if(b.type==='tableUpdate'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="tableUpdate"'+dAttr(b.density)+sh+'>'+tuShell(b,id)+'</div>';
+  if(b.type==='dracoTable'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoTable"'+dAttr(b.density)+sh+'>'+dtShell(b,id)+'</div>';
   return '<div class="'+cls+'" data-bid="'+id+'" data-btype="'+esc(b.type)+'"'+dAttr(b.density)+sh+' '+pAttr(function(){ return blockInner(b,id); })+'></div>';
 }
 function gridHtml(blocks,layout,cols,pre,flat){
@@ -2408,6 +2481,15 @@ tr:last-child td{border-bottom:none}tr.tot td{font-weight:800;color:var(--ink);b
 tr[data-act="cross"]{cursor:pointer}tr[data-act="cross"]:hover td{background:color-mix(in srgb,var(--brand) 6%,transparent)}tr.sel td{background:color-mix(in srgb,var(--brand) 12%,transparent)}tr.dim td{opacity:.45}
 .tsearch{width:100%;max-width:280px;margin:0 0 14px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;font-size:14px}.tsearch:focus{outline:2px solid color-mix(in srgb,var(--brand) 50%,transparent);border-color:var(--brand)}
 
+/* ---- Tablas Draco (bloque dracoTable) ---- */
+.dt-wrap{overflow:auto}.dt-grid{border-collapse:collapse;font-size:14px;width:max-content;min-width:100%}
+.dt-grid td{padding:6px 12px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--ink);font-variant-numeric:tabular-nums}
+.dt-grid td.dt-h1{background:color-mix(in srgb,var(--brand) 9%,var(--bg));font-weight:700}
+.dt-grid td.dt-h2{background:var(--bg);font-weight:600;color:var(--muted)}
+.dt-grid td.dt-b{font-weight:700}.dt-grid td.dt-i{font-style:italic}.dt-grid td.dt-u{text-decoration:underline}
+.dt-grid td.dt-tg{cursor:pointer;user-select:none}.dt-grid td.dt-tg:hover{background:color-mix(in srgb,var(--brand) 14%,var(--bg))}
+.dt-warn{margin-left:auto;font-size:12px;font-weight:700;color:#8a5a00;background:#fff3cd;border:1px solid #f0d58a;padding:2px 10px;border-radius:999px}
+.tu-msg.tu-info{border-color:#f0d58a;background:#fff8e1;color:#6b4a00}
 /* ---- Actualizaci\u00F3n de tablas (bloque tableUpdate) ---- */
 .tu{padding:clamp(16px,2vw,24px)}
 .tu-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:14px}.tu-head h3{margin:0}
@@ -2905,6 +2987,10 @@ function validate(spec){
     var big=function(str,max,label){ if(typeof str==='string'&&str.length>max) w.push(p+': '+label+' de '+str.length+' caracteres (m\u00E1x. recomendado '+max+' para que quepa en una diapositiva).'); };
     big(b.title,70,'t\u00EDtulo'); big(b.insight,180,'insight'); big(b.subtitle,90,'subt\u00EDtulo');
     if(b.type==='text') big(b.body,600,'texto'); if(b.type==='callout') big(b.body,420,'aviso');
+    if(b.type==='dracoTable'){
+      if(b.ref!==undefined&&typeof b.ref!=='string') e.push(p+': "ref" debe ser texto.');
+      if(!b.ref) w.push(p+': elige o dise\u00F1a la tabla Draco en las propiedades del bloque.');
+    }
     if(b.type==='tableUpdate'){
       if(b.ref!==undefined&&typeof b.ref!=='string') e.push(p+': "ref" debe ser texto.');
       if(b.values!==undefined&&(typeof b.values!=='object'||b.values===null||Array.isArray(b.values))) e.push(p+': "values" debe ser un objeto.');
@@ -3477,6 +3563,7 @@ function edBlock(r){
   else if(b.type==='cards') h=listBlock('Tarjetas','items',b.items,function(it,i){ return gText('Etiqueta peque\u00F1a','items.'+i+'.tag',it.tag)+gText('T\u00EDtulo','items.'+i+'.title',it.title)+gArea('Texto','items.'+i+'.body',it.body,4); },{tag:'Etiqueta',title:'Nueva tarjeta',body:'Descripci\u00F3n.'},1);
   else if(b.type==='kpis') h=edNote('Haz clic en una cifra de la p\u00E1gina para editarla. Aqu\u00ED puedes a\u00F1adir cifras.')+listBlock('Cifras','items',b.items,function(it,i){ return '<b>'+esc(it.label||'')+'</b>'; },edKpiTpl(),1);
   else if(b.type==='tableUpdate') h=edTU(b);
+  else if(b.type==='dracoTable') h=edDT(b);
   else if(b.type==='tabs') h=edNote('Cada pesta\u00F1a tiene su propia distribuci\u00F3n. El contenido se edita haciendo clic en sus gr\u00E1ficos o tablas.')+gText('T\u00EDtulo','title',b.title)+(b.tabs||[]).map(function(t,i){
     var g=isGrid(t);
     return '<div class="col-row">'+gText('Pesta\u00F1a '+(i+1),'tabs.'+i+'.label',t.label)+gSel('Distribuci\u00F3n','tabs.'+i+'.layout',g?'grid':'single',[['single','Una columna'],['grid','En columnas']])+(g?gSel('Reparto de columnas','tabs.'+i+'.cols',(t.cols&&t.cols.length?t.cols:[1,1]).join(','),colOpts(t.cols)):'')+'</div>';
@@ -3537,6 +3624,7 @@ function edTemplate(type){
   var cat=di&&di.dims.filter(function(d){ return d.id!==di.month; })[0];
   switch(type){
     case 'tableUpdate': return {type:'tableUpdate',title:'',ref:'',refName:'',values:{}};
+    case 'dracoTable': return {type:'dracoTable',title:'',ref:'',refName:''};
     case 'text': return {type:'text',title:'Nuevo texto',body:'Escribe aqu\u00ED tu texto. Puedes usar **negrita**'+(m0?' y cifras vivas como {'+m0+'}':'')+'.'};
     case 'callout': return {type:'callout',title:'Aviso',body:'Texto destacado.'};
     case 'cards': return {type:'cards',items:[{tag:'Etiqueta',title:'Primera tarjeta',body:'Descripci\u00F3n.'},{tag:'Etiqueta',title:'Segunda tarjeta',body:'Descripci\u00F3n.'},{tag:'Etiqueta',title:'Tercera tarjeta',body:'Descripci\u00F3n.'}]};
@@ -4260,7 +4348,7 @@ function palTemplate(id){
     case 'footer': return {id:'',type:'footer',text:'Mi organización',links:[]};
     case 'section': case 'faq': case 'cta': return edTemplate(id);
     case 'tabs': return {type:'tabs',title:'Pestañas',tabs:[{label:'Pestaña 1',blocks:[edTemplate('text')]},{label:'Pestaña 2',blocks:[edTemplate('text')]}]};
-    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': return edTemplate(id);
+    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': case 'dracoTable': return edTemplate(id);
     default: { var c=edTemplate('chart'), k=id.split(':')[1]; if(c){ if(isLitChart(c)) edConvertLit(c,k); else edConvert(c,k); } return c; }
   }
 }
@@ -4270,8 +4358,8 @@ function palRender(){
     var closed=!!sbState.groups[g.g];
     h+='<div class="pal-g"><button class="pal-gh" data-pg="'+esc(g.g)+'" aria-expanded="'+(!closed)+'"><span class="chev">'+(closed?'▸':'▾')+'</span>'+esc(g.g)+'</button>';
     if(!closed) h+='<div class="pal-grid">'+g.items.map(function(it){
-      var off=(it.id==='hero'&&has('hero'))||(it.id==='footer'&&has('footer'))||(it.id==='tableUpdate'&&!HOSTED);
-      return '<button class="pal-it" data-pal="'+esc(it.id)+'" draggable="'+(off?'false':'true')+'"'+(off?' disabled':'')+' title="'+esc(it.t+(off?(it.id==='tableUpdate'?' (solo disponible dentro de Draco Planning)':' (ya existe en la página)'):''))+'">'+ico(it.i,22)+'<span>'+esc(it.l)+'</span></button>';
+      var off=(it.id==='hero'&&has('hero'))||(it.id==='footer'&&has('footer'))||(it.id==='tableUpdate'&&!HOSTED)||(it.id==='dracoTable'&&!HOSTED);
+      return '<button class="pal-it" data-pal="'+esc(it.id)+'" draggable="'+(off?'false':'true')+'"'+(off?' disabled':'')+' title="'+esc(it.t+(off?((it.id==='tableUpdate'||it.id==='dracoTable')?' (solo disponible dentro de Draco Planning)':' (ya existe en la página)'):''))+'">'+ico(it.i,22)+'<span>'+esc(it.l)+'</span></button>';
     }).join('')+'</div>';
     h+='</div>';
   });
@@ -4284,7 +4372,7 @@ var BLn={kpis:'Cifras',chart:'Gráfico',table:'Tabla',text:'Texto',callout:'Avis
 var BIc={kpis:'kpis',table:'table',text:'text',callout:'callout',cards:'cards',tabs:'tabs'};
 function snip(t,n){ t=String(t==null?'':t).replace(/\s+/g,' ').trim(); return t.length>n?t.slice(0,n-1)+'…':t; }
 function chartIc(b){ return {line:'chart-line',bar:'chart-bar',hbar:'chart-hbar',donut:'chart-donut',funnel:'chart-funnel'}[b.kind]||'chart-line'; }
-function blockSub(b){ if(b.type==='tableUpdate') return b.refName||b.title||''; return b.title||b.body||(b.items&&b.items[0]&&(b.items[0].title||b.items[0].label))||''; }
+function blockSub(b){ if(b.type==='tableUpdate'||b.type==='dracoTable') return b.refName||b.title||''; return b.title||b.body||(b.items&&b.items[0]&&(b.items[0].title||b.items[0].label))||''; }
 function rowsOf(blocks,n){
   var rows=[], cur=[], used=0;
   blocks.forEach(function(b,i){
@@ -4439,7 +4527,7 @@ function crumbText(){
 function edAfterSync(){ var c=$('inspCrumb'); if(c) c.textContent=crumbText(); treeRender(); }
 function edAfterRender(){
   var c=$('inspCrumb'); if(c) c.textContent=crumbText();
-  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender();
+  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender(); if(typeof dtAfterRender==='function') dtAfterRender();
 }
 
 /* ---------- acciones sobre nodos ---------- */
@@ -4804,13 +4892,101 @@ function tuVarRows(name,add,i){
   if(add) rows.push({sign:'I',option:'EQ',low:'',high:''}); else rows.splice(+i,1);
   edSync(true); tuPaintVars(edSel.bid);
 }
+/* =====================================================================
+   Bloque "dracoTable": una Tabla Draco (informe tipo tabla din\u00E1mica del addin de Excel). En Propiedades se elige una
+   de las del proyecto o se abre el DISE\u00D1ADOR (pseudo-Excel con el taskpane del addin) para crearla o editarla. Al
+   guardar en el dise\u00F1ador se genera su SQL y se guarda con la definici\u00F3n; el informe solo lleva la referencia.
+   Solo se puede configurar dentro de Draco (necesita el dise\u00F1ador y las tablas del proyecto).
+   ===================================================================== */
+BLOCK_TYPES.push('dracoTable'); BLOCK_LABEL.dracoTable='Tabla Draco';
+BLn.dracoTable='Tabla Draco'; BIc.dracoTable='draco-table';
+IC['draco-table']='<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 4v16M9 14h12"/><path d="M5.5 6.5h1.5M5.5 12h1.5M5.5 16h1.5"/>';
+(function(){
+  var g=PAL.filter(function(x){ return x.g==='Datos'; })[0], i=g.items.map(function(x){ return x.id; }).indexOf('tableUpdate');
+  g.items.splice(i+1,0,{id:'dracoTable',l:'Tabla Draco',i:'draco-table',t:'Informe tipo tabla din\u00E1mica (el de la extensi\u00F3n de Excel) dise\u00F1ado con su propio dise\u00F1ador y consultado con su SQL ya generado. Solo disponible dentro de Draco Planning.'});
+})();
+var DTV={list:null,listP:null};
+function dtCall(op,payload){
+  if(!HOSTED) return Promise.reject(hostErr('NO_HOST','Esta opci\u00F3n solo funciona dentro de Draco Planning.'));
+  return hostCall(op,payload);
+}
+/* El dise\u00F1ador es una ventana que puede estar abierta mucho rato: hostCall corta a los 90 s, esta llamada no. */
+function dtCallLong(op,payload){
+  if(!HOSTED) return Promise.reject(hostErr('NO_HOST','Esta opci\u00F3n solo funciona dentro de Draco Planning.'));
+  return new Promise(function(res,rej){ var id='h'+(++hostSeq); hostPending[id]={res:res,rej:rej,t:null}; hostPost({dpTool:1,id:id,op:op,payload:payload||{}}); });
+}
+function dtEnsureList(force){
+  if(DTV.list&&!force) return Promise.resolve(DTV.list);
+  if(DTV.listP) return DTV.listP;
+  DTV.listP=dtCall('dt.list').then(function(l){ DTV.list=l; DTV.listP=null; return l; },function(e){ DTV.listP=null; throw e; });
+  return DTV.listP;
+}
+function dtBlock(bid){ var r=edResolve({bid:bid}); return (r&&r.kind==='block'&&r.obj&&r.obj.type==='dracoTable')?r.obj:null; }
+function dtSelBlock(){ var r=edResolve(edSel); return (r&&r.kind==='block'&&r.obj&&r.obj.type==='dracoTable')?r.obj:null; }
+function edDT(b){
+  var h=gText('T\u00EDtulo','title',b.title,'Por ejemplo: Ventas por producto');
+  if(!HOSTED){
+    return h+'<div class="insp-sec">Tabla Draco</div>'
+      +edNote('Elegir o dise\u00F1ar la tabla solo se puede hacer dentro de Draco Planning (generador de informes). Aqu\u00ED se conserva lo ya elegido.')
+      +(b.ref?'<p class="insp-hint"><b>'+esc(b.refName||b.ref)+'</b></p>':'');
+  }
+  return h+'<div class="insp-sec">Tabla Draco</div><div id="dtViewBox"><p class="insp-hint">Cargando las tablas del proyecto\u2026</p></div>'
+    +'<div class="insp-sec">Opciones de la tabla</div>'
+    +gSel('Alto m\u00E1ximo de la tabla','maxHeight',b.maxHeight||'',[['','Seg\u00FAn el contenido'],['320','320 px'],['480','480 px'],['640','640 px'],['800','800 px']]);
+}
+function dtAfterRender(){
+  if(!HOSTED) return;
+  var b=dtSelBlock(); if(!b||!$('dtViewBox')) return;
+  var bid=edSel.bid, still=function(){ return edSel&&edSel.bid===bid; };
+  dtEnsureList().then(function(){ if(still()) dtPaintView(bid); },function(e){ if(still()) tuPaintErr('dtViewBox',e,function(){ DTV.list=null; edRender(); }); });
+}
+function dtPaintView(bid){
+  var b=dtBlock(bid), el=$('dtViewBox'); if(!b||!el) return;
+  var L=DTV.list||[], cur=L.filter(function(x){ return x.id===b.ref; })[0];
+  var opts='<option value="">\u2014 elige una tabla \u2014</option>'+L.map(function(x){ return '<option value="'+esc(x.id)+'"'+(x.id===b.ref?' selected':'')+'>'+esc(x.nombre)+'</option>'; }).join('');
+  if(b.ref&&!cur) opts+='<option value="'+esc(b.ref)+'" selected>'+esc((b.refName||b.ref)+' (ya no existe)')+'</option>';
+  var info='';
+  if(cur){
+    info='<p class="insp-hint">Cubo <b>'+esc(cur.cubo||'\u2014')+'</b>'+(cur.motor?' \u00B7 SQL de '+esc(cur.motor):'')+(cur.sqlGenerado?' \u00B7 generado '+esc(String(cur.sqlGenerado).slice(0,16)):'')+(cur.descripcion?'<br>'+esc(cur.descripcion):'')+'</p>'
+      +(cur.desfasado?'<p class="insp-hint" style="color:#8a5a00">\u26A0 El cubo cambi\u00F3 despu\u00E9s de generar el SQL. Abre el dise\u00F1ador y guarda para regenerarlo.</p>':'')
+      +(!cur.tieneSql?'<p class="insp-hint" style="color:#C2362B">Esta tabla no tiene SQL generado: abre el dise\u00F1ador y guarda.</p>':'');
+  }
+  el.innerHTML='<label class="ef"><span>Tabla</span><select data-dtview>'+opts+'</select></label>'+info
+    +'<button class="btn small" data-dtdesign type="button" style="margin-top:8px">\uD83E\uDDE9 Dise\u00F1ador del informe</button>'
+    +'<p class="insp-hint">'+(b.ref?'Abre el dise\u00F1ador para cambiar el informe (campos, filtros, medidas\u2026).':'Crea una tabla nueva en el dise\u00F1ador. Al guardarla se enlaza con este bloque.')+'</p>'
+    +(L.length?'':'<p class="insp-hint">Este proyecto todav\u00EDa no tiene tablas Draco.</p>');
+}
+function dtPickView(ref){
+  var b=dtSelBlock(); if(!b) return; edPrevSel=edSel;
+  var cur=(DTV.list||[]).filter(function(x){ return x.id===ref; })[0];
+  b.ref=ref||''; b.refName=cur?cur.nombre:'';
+  edSync(true); edRender();
+}
+function dtDesign(){
+  var b=dtSelBlock(); if(!b||!edSel) return; var bid=edSel.bid, btn=document.querySelector('[data-dtdesign]');
+  if(btn){ btn.disabled=true; btn.textContent='Dise\u00F1ador abierto\u2026'; }
+  dtCallLong('dt.design',{ref:b.ref||null}).then(function(res){
+    DTV.list=null;
+    if(res&&res.id){
+      var bb=dtBlock(bid);
+      if(bb){ edPrevSel=edSel; bb.ref=res.id; bb.refName=res.nombre; edSync(true); }
+    }
+    edRender();
+  },function(e){
+    DTV.list=null; edRender();
+    var box=$('dtViewBox'); if(box) box.insertAdjacentHTML('beforeend','<p class="insp-hint" style="color:#C2362B">'+esc((e&&e.message)||'No se pudo abrir el dise\u00F1ador.')+'</p>');
+  });
+}
+
 $('inspBody').addEventListener('change',function(e){
   var t=e.target;
+  if(t.hasAttribute('data-dtview')) return dtPickView(t.value);
   if(t.hasAttribute('data-tuview')) return tuPickView(t.value);
   if(t.hasAttribute('data-tuv')&&(t.tagName==='SELECT'||t.type==='checkbox'||t.type==='date')) tuVarEdit(t);
 });
 $('inspBody').addEventListener('input',function(e){ var t=e.target; if(t.hasAttribute('data-tuv')&&(t.type==='text'||t.type==='number')) tuVarEdit(t); });
 $('inspBody').addEventListener('click',function(e){
+  if(e.target.closest('[data-dtdesign]')) return dtDesign();
   var a=e.target.closest('[data-tuadd]'); if(a) return tuVarRows(a.getAttribute('data-tuadd'),true);
   var d=e.target.closest('[data-tudel]'); if(d) return tuVarRows(d.getAttribute('data-tudel'),false,d.getAttribute('data-i'));
 });
