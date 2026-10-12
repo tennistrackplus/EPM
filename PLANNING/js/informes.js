@@ -72,7 +72,7 @@ const Informes = {
         }
         this.ensureP = (async () => {
             try {
-                await Promise.all([this.TABLE, this.FAV_TABLE].map(t => Provider.runQuery(DracoSchema.ddl(t))));
+                await Promise.all([this.TABLE, this.FAV_TABLE, "TABLAS_DRACO"].map(t => Provider.runQuery(DracoSchema.ddl(t))));
                 try { sessionStorage.setItem(key, "1"); } catch (e) { /* nada */ }
             } catch (e) { /* ver nota arriba */ }
         })();

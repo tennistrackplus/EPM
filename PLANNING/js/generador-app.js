@@ -139,7 +139,7 @@ const GeneradorApp = {
         if (this.pendingInformeId) { qs.set("informe_id", this.pendingInformeId); this.pendingInformeId = null; }
         document.getElementById("toolEmpty").hidden = true;
         frame.hidden = false;
-        qs.set("v", "20261011a");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
+        qs.set("v", "20261011b");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
         frame.src = "informes-herramienta.html?" + qs.toString();
     },
 
@@ -178,7 +178,10 @@ const GeneradorApp = {
         const reply = (ok, data, error) => frame.contentWindow.postMessage(
             { dpHost: 1, op: "page-reply", id: rid, ok, data, error }, window.location.origin);
         try {
-            reply(true, await InformesDatos.handle(this.currentProject, pl && pl.op, pl && pl.payload));
+            const op = pl && pl.op;
+            reply(true, (typeof op === "string" && op.indexOf("dt.") === 0)
+                ? await DracoTables.handle(this.currentProject, op, pl.payload)               // Tablas Draco (vista previa)
+                : await InformesDatos.handle(this.currentProject, op, pl && pl.payload));
         } catch (err) {
             reply(false, null, { code: err.code || "ERR", message: err.message || "Error desconocido", details: err.details });
         }
@@ -203,6 +206,10 @@ const GeneradorApp = {
             case "tu.list":
             case "tu.describe":
                 return InformesDatos.handle(this.currentProject, op, p);      // el editor elige la vista de una actualización de tablas
+            case "dt.list":
+            case "dt.design":
+                // el editor elige una Tabla Draco o abre su diseñador (pseudo-Excel con el taskpane del addin)
+                return DracoTables.handle(this.currentProject, op, p, { openDesigner: (project, ref) => DracoTableDesigner.open(project, ref) });
             default:
                 throw Object.assign(new Error("Operación desconocida: " + op), { code: "BAD_INPUT" });
         }

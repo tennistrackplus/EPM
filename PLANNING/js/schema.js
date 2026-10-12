@@ -7,7 +7,7 @@
  *   - DRACO_CONTROL.PROYECTOS
  *   - DRACO_CONTROL.DIMENSIONES
  *   - DRACO_CONTROL.CUBOS
- *   - ... (ver TABLES) incluidas INFORMES e INFORMES_FAVORITOS (generador/visor de informes)
+ *   - ... (ver TABLES) incluidas INFORMES e INFORMES_FAVORITOS (generador/visor de informes) y TABLAS_DRACO
  */
 const DracoSchema = {
 
@@ -395,6 +395,23 @@ const DracoSchema = {
                     INFORME_ID STRING NOT NULL,
                     USUARIO STRING NOT NULL,
                     FECHA_ALTA TIMESTAMP
+                )`,
+            // Tablas Draco (informes tipo tabla dinámica del addin, dentro de un informe): ver js/draco-tables.js.
+            TABLAS_DRACO: `
+                CREATE TABLE IF NOT EXISTS ${t} (
+                    TABLA_DRACO_ID STRING NOT NULL,
+                    PROYECTO_ID STRING NOT NULL,
+                    NOMBRE STRING NOT NULL,
+                    DESCRIPCION STRING,
+                    CUBO STRING,                 -- nombre del cubo (modelo semántico) sobre el que está diseñada
+                    MOTOR STRING,                -- 'bigquery' | 'snowflake': el SQL guardado es de ese motor
+                    DEFINICION_JSON STRING,      -- definición del informe (ajustes del addin: informe, filtros, modelo...)
+                    SQL_TEXT STRING,             -- SQL ya generado al guardar: al refrescar NO se vuelve a generar
+                    SQL_GENERADO TIMESTAMP,      -- cuándo se generó ese SQL
+                    MODELO_FECHA STRING,         -- CUBOS.MODELO_YAML_FECHA del cubo al generar el SQL (si cambia, el SQL está desfasado)
+                    USUARIO STRING,
+                    FECHA_CREACION TIMESTAMP,
+                    FECHA_MODIFICACION TIMESTAMP
                 )`
         };
         return ddl[table];
@@ -408,7 +425,7 @@ const DracoSchema = {
              "WORKFLOWS_PASOS_BLOQUES", "WORKFLOWS_PASOS_TAREAS", "WORKFLOWS_PASOS_TAREAS_VALORES",
              "WORKFLOWS_RUNS", "WORKFLOWS_RUNS_INSTANCIAS", "WORKFLOWS_RUNS_VARIABLES",
              "ACTUALIZACIONES", "FUNCIONES", "FUNCIONES_RUNS", "WIDGETS",
-             "INFORMES", "INFORMES_FAVORITOS"],
+             "INFORMES", "INFORMES_FAVORITOS", "TABLAS_DRACO"],
 
     /**
      * Comprobación ligera para la puerta de instalación (usada hoy solo

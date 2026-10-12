@@ -313,7 +313,7 @@ const VisorApp = {
         const frame = document.getElementById("viewerFrame");
         if (this.viewerReady) return this.viewerReady;
         this.viewerReady = new Promise((resolve) => { this._resolveReady = resolve; });
-        frame.src = "informes-herramienta.html?mode=viewer&v=20261011a";   // la versión evita una herramienta antigua en caché
+        frame.src = "informes-herramienta.html?mode=viewer&v=20261011b";   // la versión evita una herramienta antigua en caché
         return this.viewerReady;
     },
 
@@ -331,6 +331,7 @@ const VisorApp = {
             if (!r) r = await Informes.get(id, this.currentProject.PROYECTO_ID);
             // Mientras se prepara la herramienta y se dibuja la página, ya se leen sus tablas de actualización
             try { InformesDatos.prefetch(this.currentProject, r.spec); } catch (e) { /* sin precarga */ }
+            try { DracoTables.prefetch(this.currentProject, r.spec); } catch (e) { /* sin precarga */ }
             await this.ensureViewer();
             const frame = document.getElementById("viewerFrame");
             frame.hidden = false;
@@ -371,7 +372,10 @@ const VisorApp = {
         const reply = (ok, data, error) => frame.contentWindow.postMessage(
             { dpHost: 1, op: "page-reply", id: rid, ok, data, error }, window.location.origin);
         try {
-            reply(true, await InformesDatos.handle(this.currentProject, pl && pl.op, pl && pl.payload));
+            const op = pl && pl.op;
+            reply(true, (typeof op === "string" && op.indexOf("dt.") === 0)
+                ? await DracoTables.handle(this.currentProject, op, pl.payload)               // Tablas Draco
+                : await InformesDatos.handle(this.currentProject, op, pl && pl.payload));
         } catch (err) {
             reply(false, null, { code: err.code || "ERR", message: err.message || "Error desconocido", details: err.details });
         }
