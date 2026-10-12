@@ -313,7 +313,7 @@ const VisorApp = {
         const frame = document.getElementById("viewerFrame");
         if (this.viewerReady) return this.viewerReady;
         this.viewerReady = new Promise((resolve) => { this._resolveReady = resolve; });
-        frame.src = "informes-herramienta.html?mode=viewer&v=20261011b";   // la versión evita una herramienta antigua en caché
+        frame.src = "informes-herramienta.html?mode=viewer&v=20261012a";   // la versión evita una herramienta antigua en caché
         return this.viewerReady;
     },
 

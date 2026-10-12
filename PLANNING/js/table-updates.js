@@ -1329,7 +1329,6 @@ const TableUpdates = {
                     </div>
                     <div class="form-group" id="actUpdShowAllWrap" style="display:${v.type === "NONE" ? "none" : "block"}">
                         <label><input type="checkbox" id="actUpdShowAll" ${v.showAll ? "checked" : ""} ${(this.options && this.options.pivot) ? "disabled" : ""}> Completar con todos los valores${(this.options && this.options.pivot) ? " (lo controla la tabla multidimensional: Filas y Columnas)" : ""}</label>
-                        <small class="form-hint">La tabla mostrará una fila por cada valor posible de este campo (si hay varios campos marcados, todas las combinaciones), con lo que haya grabado en el resto de campos o vacío si no hay nada. Los campos marcados forman la clave y la tabla pasa a tener filas fijas. Los valores respetan los filtros de las variables.</small>
                     </div>
                     <div class="form-group">
                         <label>Ayuda de búsqueda</label>
@@ -2364,15 +2363,20 @@ const TableUpdates = {
         const colGroups = this.pivotColGroups(L.colTuples, nc), rowSpans = this.pivotRowSpans(L.rowTuples, nr);
         if (!state.pivotOrig) { state.pivotOrig = {}; state.currentRows.forEach(r => { state.pivotOrig[r.__rowId] = r[pv.value.name] ?? ""; }); }
 
-        const head = pv.cols.map((cf, k) => `<tr><th colspan="${nr}" class="actupd-pv-corner">${UI.escapeHtml(cf.description || cf.name)}</th>${colGroups[k].map(g => `<th colspan="${g.span}" class="actupd-pv-colh">${this.pivotLabel(cf, g.id)}</th>`).join("")}</tr>`).join("")
-            + `<tr>${pv.rows.map(rf => `<th class="actupd-pv-rowh">${UI.escapeHtml(rf.description || rf.name)}</th>`).join("")}<th colspan="${L.colTuples.length}" class="actupd-pv-valh">${UI.escapeHtml(pv.value.description || pv.value.name)}</th></tr>`;
+        // Sin cabeceras de nombre de campo (esquina, fila con los campos de Filas, título del Valor): solo los valores de Filas y
+        // Columnas, que son lo que identifica cada fila y cada columna. El nombre del campo queda como tooltip.
+        const fname = (f) => UI.escapeHtml(f.description || f.name);
+        const head = pv.cols.map((cf, k) => `<tr><th colspan="${nr}" class="actupd-pv-corner"></th>${colGroups[k].map(g => `<th colspan="${g.span}" class="actupd-pv-colh" title="${fname(cf)}">${this.pivotLabel(cf, g.id)}</th>`).join("")}</tr>`).join("");
+        // Las celdas siguen el tipo de la columna del bloque Valor: si su ayuda de búsqueda es Checkbox, todas son checkbox.
+        const vOpts = state.optionsByField[pv.value.name] || [];
+        const isChk = !!(pv.value.validation && pv.value.validation.searchHelp === "CHECKBOX" && vOpts.length === 2);
         const body = L.rowTuples.map((rt, r) => {
-            const labels = rt.map((id, k) => rowSpans[r][k] ? `<th rowspan="${rowSpans[r][k]}" class="actupd-pv-rowl">${this.pivotLabel(pv.rows[k], id)}</th>` : "").join("");
+            const labels = rt.map((id, k) => rowSpans[r][k] ? `<th rowspan="${rowSpans[r][k]}" class="actupd-pv-rowl" title="${fname(pv.rows[k])}">${this.pivotLabel(pv.rows[k], id)}</th>` : "").join("");
             const cells = L.colTuples.map((ct, c) => {
                 const row = L.matrix[r][c];
                 if (!row) return `<td class="actupd-pv-cell actupd-pv-na"></td>`;
                 const mod = String(state.pivotOrig[row.__rowId] ?? "") !== String(row[pv.value.name] ?? "");
-                return `<td class="actupd-pv-cell ${mod ? "actupd-pv-mod" : ""}" data-cell-row="${row.__rowId}">${this.valueInputHtml(row, pv.value, r, c)}</td>`;
+                return `<td class="actupd-pv-cell ${mod ? "actupd-pv-mod" : ""}${isChk ? " actupd-pv-chk" : ""}" data-cell-row="${row.__rowId}">${this.valueInputHtml(row, pv.value, r, c)}</td>`;
             }).join("");
             return `<tr>${labels}${cells}</tr>`;
         }).join("");
