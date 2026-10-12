@@ -23,6 +23,9 @@ SRC = os.path.join(ROOT, "ADDIN", "src")
 OUT = os.path.join(ROOT, "PLANNING", "tablas-draco")
 TPL = os.path.join(ROOT, "tools", "templates")
 CHECK = "--check" in sys.argv
+# Se añade a todos los <script src> y <link href> de las páginas generadas: sin ello el navegador puede seguir usando
+# una copia antigua (p. ej. de model-bootstrap.js) tras actualizar. Súbelo cuando cambies tablas-draco/.
+BUNDLE_VERSION = "20261012b"
 
 # JS del addin que se copian tal cual (más los parches de abajo)
 JS_COPY = ["semanticModelStore.js", "reportStore.js", "filterRangeStore.js", "excelService.js",
@@ -181,6 +184,11 @@ def main():
 </body>
 </html>
 '''
+    # ---- versión en las referencias locales de las páginas (caché)
+    def versioned(h):
+        h = re.sub(r'(<script src="js/[A-Za-z0-9_.-]+\.js)(")', r'\1?v=%s\2' % BUNDLE_VERSION, h)
+        return re.sub(r'(<link rel="stylesheet" href="css/[A-Za-z0-9_.-]+\.css)(")', r'\1?v=%s\2' % BUNDLE_VERSION, h)
+    # (los diálogos y engine.html se versionan más abajo, cuando ya están construidos)
     # ---- diálogos: solo cambia office.js por el puente
     for name in DIALOGS:
         d = norm(read(os.path.join(SRC, name)))
@@ -208,6 +216,9 @@ def main():
 <script src="js/excelService.js"></script><script src="js/commands.js"></script><script src="js/engine-api.js"></script>
 </body></html>
 '''
+    for rel in list(files):
+        if rel.endswith(".html"):
+            files[rel] = versioned(files[rel])
     if problems:
         print("\n".join("✗ " + p for p in problems))
         sys.exit(1)
