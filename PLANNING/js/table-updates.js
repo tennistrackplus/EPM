@@ -2848,6 +2848,34 @@ const TableUpdates = {
             `Se van a grabar ${diff.added.length} alta(s), ${diff.modified.length} modificación(es) y ${diff.deleted.length} baja(s) en ${state.record.TABLA}. ¿Continuar?`);
         if (!ok) return;
 
+        // Tipos físicos de las columnas: los campos numéricos no pueden ir como
+        // texto ('123') en el INSERT (BigQuery no convierte STRING a INT64/NUMERIC).
+        // Se validan ANTES del DELETE para no dejar la tabla a medias.
+        let colTypes = {};
+        try {
+            const cols = await Provider.listColumns(this.project.DATASET, state.record.TABLA);
+            cols.forEach(c => { colTypes[String(c.name).toUpperCase()] = String(c.type || "").toUpperCase(); });
+        } catch (err) {
+            UI.toast("No se pudieron leer los tipos de columna: " + err.message, "error");
+            return;
+        }
+        const badNums = [];
+        state.currentRows.forEach(r => state.columns.forEach(c => {
+            if (!this.isNumericType(colTypes[String(c).toUpperCase()])) return;
+            const v = r[c];
+            if (v === "" || v === null || v === undefined) return;
+            if (this.normalizeNumber(v) === null) badNums.push(`${c}: "${v}"`);
+        }));
+        if (badNums.length) {
+            UI.toast(`No se puede grabar: hay ${badNums.length} valor(es) no numérico(s) en campos numéricos (${[...new Set(badNums)].slice(0, 5).join(", ")}${badNums.length > 5 ? "…" : ""}).`, "error");
+            return;
+        }
+        const sqlLiteral = (c, v) => {
+            if (v === "" || v === null || v === undefined) return "NULL";
+            if (this.isNumericType(colTypes[String(c).toUpperCase()])) return this.normalizeNumber(v);
+            return `'${Provider.esc(v)}'`;
+        };
+
         const btn = document.getElementById("actUpdGridSave");
         if (btn) { btn.disabled = true; btn.textContent = "Guardando..."; }
         try {
@@ -2863,7 +2891,7 @@ const TableUpdates = {
             for (let i = 0; i < state.currentRows.length; i += CHUNK) {
                 const chunk = state.currentRows.slice(i, i + CHUNK);
                 const values = chunk.map(r =>
-                    `(${state.columns.map(c => r[c] === "" || r[c] === null || r[c] === undefined ? "NULL" : `'${Provider.esc(r[c])}'`).join(", ")})`
+                    `(${state.columns.map(c => sqlLiteral(c, r[c])).join(", ")})`
                 ).join(", ");
                 if (chunk.length) {
                     await Provider.runQuery(`INSERT INTO ${table} (${state.columns.join(", ")}) VALUES ${values}`);
@@ -2883,14 +2911,36 @@ const TableUpdates = {
         }
     },
 
+    /** true si el tipo físico (BigQuery o Snowflake) es numérico. */
+    isNumericType(type) {
+        return /^(INT|INTEGER|INT64|SMALLINT|BIGINT|TINYINT|BYTEINT|NUMERIC|BIGNUMERIC|DECIMAL|BIGDECIMAL|NUMBER|FLOAT|FLOAT64|DOUBLE|REAL)\b/i.test(String(type || "").trim());
+    },
+
+    /**
+     * Convierte el valor de la celda a literal numérico SQL, o null si no es
+     * un número. Acepta coma decimal y separador de miles ("1.234,56" o
+     * "1,234.56" -> 1234.56; "12,5" -> 12.5).
+     */
+    normalizeNumber(v) {
+        if (typeof v === "number") return isFinite(v) ? String(v) : null;
+        let s = String(v).trim().replace(/\s/g, "");
+        const lastDot = s.lastIndexOf("."), lastComma = s.lastIndexOf(",");
+        if (lastDot >= 0 && lastComma >= 0) {
+            s = lastComma > lastDot ? s.replace(/\./g, "").replace(",", ".") : s.replace(/,/g, "");
+        } else if (lastComma >= 0) {
+            s = s.replace(",", ".");
+        }
+        return /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(s) ? s : null;
+    },
+
     showChangeSummary(diff) {
         let overlay = document.getElementById("actUpdSummaryModal");
         if (!overlay) {
             overlay = document.createElement("div");
             overlay.className = "modal-overlay";
             overlay.id = "actUpdSummaryModal";
-            document.body.appendChild(overlay);
         }
+        document.body.appendChild(overlay);   // siempre al frente del modal de ejecución
         const state = this.gridState;
         overlay.innerHTML = `
             <div class="modal-box">
