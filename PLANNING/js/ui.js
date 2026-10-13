@@ -51,6 +51,11 @@ const UI = {
                 document.body.appendChild(overlay);
             }
 
+            // Se vuelve a colocar al final del <body> en cada uso: el modal se crea una
+            // sola vez y, si después se abre otro modal (p. ej. la ejecución de una
+            // actualización de tablas), éste queda detrás al tener el mismo z-index.
+            document.body.appendChild(overlay);
+
             document.getElementById("confirmModalTitle").textContent = title;
             document.getElementById("confirmModalMessage").innerHTML = message;
             overlay.classList.add("visible");
@@ -484,7 +489,8 @@ const UI = {
             nameInput.value = name;
             nameInput.disabled = !nameEditable;
             overlay.querySelector("#cuboFormDesc").value = description;
-            overlay.querySelector("#cuboFormAddField").onclick = () => addRow();
+            // Las medidas nuevas se crean como NUMERIC por defecto (en lugar de STRING)
+            overlay.querySelector("#cuboFormAddField").onclick = () => addRow({ name: "", type: "NUMERIC", key: false, isDescription: false });
 
             overlay.classList.add("visible");
             setTimeout(() => nameInput.focus(), 50);
