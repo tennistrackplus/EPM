@@ -3,6 +3,15 @@
 Descomprime este zip **encima de la raíz del repositorio** (las rutas ya empiezan por `PLANNING/`).
 No hay que tocar `config.js` ni instalar nada: es JavaScript puro como el resto.
 
+## Rediseño del editor: estructura y propiedades (solo estético)
+- **Estructura (paleta):** Menú, Sección, Fila, Pestañas y Pie. Cabecera, Preguntas y Llamada a la acción pasan a ser **tipos de sección**; Menú sale desactivado (ya existe) y Fila no hace nada por ahora.
+- **Página:** título, tipografía y «aprovechar la pantalla»; sin botón del menú, exportación ni «añadir sección».
+- **Menú:** marca, icono (sin efecto), opciones de menú (añadir, quitar, nombre; no enlazadas a las secciones) y botones (acción + Exportar).
+- **Sección:** selector de tipo (Cabecera, Contenido, Canvas —sin efecto—, Preguntas frecuentes, Llamada a la acción), Fondo, Distribución, Reparto, Espaciado y Notas del orador. Al cambiar de tipo se conservan etiqueta, título y subtítulo, se pide confirmación si dejan de verse elementos y se guardan en `_prev` (no viaja en el HTML exportado) para poder volver.
+- **Etiqueta, Título, Subtítulo y Botón:** cada uno con su panel. Un clic en el título, la etiqueta o el subtítulo dentro de la página abre su panel; en la barra superior, el del Menú.
+- **Pestañas:** título y lista de pestañas (añadir, quitar, nombre); cada pestaña con Nombre, Distribución, Reparto, Espaciado (se aplica en la página) y Notas del orador (se usan en las diapositivas de esa pestaña).
+- Cambia solo `informes-herramienta.html` (más versiones en `generador.html`, `visor.html`, `generador-app.js`, `visor-app.js`).
+
 ## Corrección: al guardar una tabla Draco daba «Unclosed string literal»
 El SQL generado por el addin lleva saltos de línea y BigQuery no admite saltos de línea reales dentro de un texto entre comillas simples. Ahora los textos del `INSERT`/`UPDATE` de `TABLAS_DRACO` se escriben con los saltos escapados (`\n`), que entienden BigQuery y Snowflake, y vuelven a ser saltos al leerlos. El mismo fallo afectaba al guardado de **informes** cuando su descripción tenía varias líneas: también corregido en `js/informes.js`. Cambia `js/draco-tables.js`, `js/informes.js` (y la versión en `generador.html` / `visor.html`).
 
