@@ -3,6 +3,9 @@
 Descomprime este zip **encima de la raíz del repositorio** (las rutas ya empiezan por `PLANNING/`).
 No hay que tocar `config.js` ni instalar nada: es JavaScript puro como el resto.
 
+## Marca Orange
+Nuevo perfil de marca **Orange** (corporativo.orange.es): menú negro con enlaces blancos en negrita, naranja #FF7900 como único color de marca, fondo blanco, textos en negro, Helvetica y esquinas rectas. Para el menú negro se añade la opción de estilo `nav:"black"`. Cambia solo `informes-herramienta.html`.
+
 ## Rediseño del editor: estructura y propiedades (solo estético)
 - **Estructura (paleta):** Menú, Sección, Fila, Pestañas y Pie. Cabecera, Preguntas y Llamada a la acción pasan a ser **tipos de sección**; Menú sale desactivado (ya existe) y Fila no hace nada por ahora.
 - **Página:** título, tipografía y «aprovechar la pantalla»; sin botón del menú, exportación ni «añadir sección».

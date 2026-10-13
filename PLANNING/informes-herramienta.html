@@ -409,7 +409,7 @@ var THEME_DOC = [
 '  "colors": { "bg","surface","ink","text","muted","line","tint","good","bad","warn","brandOnDark","accent","nav" },',
 '  "palette": [ {"light":"#hex legible sobre fondo claro","dark":"#hex legible sobre navy"} ... hasta 5 ],   // series 2 a 6 de los gráficos',
 '  "font": { "family":"Nombre", "fallback":"Inter", "google":false, "headingWeight":300-800, "bodyWeight":300-500 },',
-'  "style": { "hero":"navy|brand|light", "nav":"dark|light", "shape":"soft|sharp|corner", "tabs":"pill|underline",',
+'  "style": { "hero":"navy|brand|light", "nav":"dark|light|black", "shape":"soft|sharp|corner", "tabs":"pill|underline",',
 '             "callout":"bar|tint", "scheme":"auto|light", "kpi":"card|stat", "upper":true|false, "dots":true|false, "navBold":true|false },',
 '  "guidance": "reglas de redacción y de uso del color (máx. 1200 caracteres)" }'
 ].join('\n');
@@ -2618,7 +2618,7 @@ function resolveTheme(raw){
     font: { family:fam(f.family,'Inter'), fallback:fam(f.fallback,'Inter'), google:f.google===true,
             hw:(Number.isInteger(f.headingWeight)&&f.headingWeight>=100&&f.headingWeight<=900)?f.headingWeight:800,
             bw:(Number.isInteger(f.bodyWeight)&&f.bodyWeight>=100&&f.bodyWeight<=900)?f.bodyWeight:400 },
-    s: { hero:pick(s.hero,['navy','brand','light'],'navy'), nav:pick(s.nav,['dark','light'],'dark'), shape:pick(s.shape,['soft','sharp','corner'],'soft'),
+    s: { hero:pick(s.hero,['navy','brand','light'],'navy'), nav:pick(s.nav,['dark','light','black'],'dark'), shape:pick(s.shape,['soft','sharp','corner'],'soft'),
          tabs:pick(s.tabs,['pill','underline'],'pill'), callout:pick(s.callout,['bar','tint'],'bar'), scheme:pick(s.scheme,['auto','light'],'auto'),
          kpi:pick(s.kpi,['card','stat'],'card'), upper:s.upper===true, dots:s.dots===true, navBold:s.navBold===true },
     guidance: (typeof raw.guidance==='string') ? raw.guidance.trim().slice(0,1200) : ''
@@ -2720,6 +2720,16 @@ var STRATESYS_RAW = {
   guidance:'Estilo Stratesys 2026 seg\u00FAn su Brandbook. Base en negro (#1B1B20) y blanco; el azul Stratesys (#007AFF) solo como acento y diferenciador (etiquetas, botones, una barra o filo), nunca como fondo grande. Grises de apoyo #686868 y #F0F0F2. Tipograf\u00EDa DM Sans: t\u00EDtulos en bold, subt\u00EDtulos en medium, cuerpo regular (Aptos en soportes internos de Microsoft).\nTono claro y sobrio, centrado en las personas. Mucho aire, tarjetas redondeadas, iconos lineales de trazo fino. T\u00EDtulos cortos (m\u00E1ximo 60 caracteres).\nDatos: m\u00E1ximo 3 series por gr\u00E1fico; la primera en azul y las dem\u00E1s en negro y grises. Solo si una serie representa una soluci\u00F3n propia usa su color: Lyra #E20091, Pyxis #009DE1, Orion #EB6A15, Hydra #E2191A, Norma #39B6B8, Sagitta #832DA6, Aquarius #91CF50. Como mucho una secci\u00F3n oscura.'
 };
 
+var ORANGE_RAW = {
+  name:'Orange',
+  brand:'#ff7900', navy:'#000000',
+  colors:{ bg:'#ffffff', surface:'#ffffff', ink:'#000000', text:'#000000', muted:'#666666', line:'#d6d6d6', tint:'#f4f4f4', good:'#1e7a1e', bad:'#cd3c14', warn:'#a65500', brandOnDark:'#ff7900', accent:'#ff7900', nav:'#000000' },
+  palette:[ {light:'#000000',dark:'#ffffff'}, {light:'#666666',dark:'#b8b8b8'}, {light:'#0f7bb0',dark:'#4bb4e6'}, {light:'#2f8f5f',dark:'#50be87'}, {light:'#7a4fb5',dark:'#a885d8'} ],
+  font:{ family:'Helvetica', fallback:'Arial', google:false, headingWeight:700, bodyWeight:400 },
+  style:{ hero:'light', nav:'black', shape:'sharp', tabs:'underline', callout:'bar', scheme:'light', kpi:'card', upper:false, dots:false, navBold:true },
+  guidance:'Estilo Orange (corporativo.orange.es). Men\u00FA negro con enlaces en blanco y negrita; el naranja Orange (#FF7900) como \u00FAnico color de marca: etiquetas sobre el t\u00EDtulo, subrayado de la opci\u00F3n activa, botones y cifras clave. Fondo blanco, textos y t\u00EDtulos en negro (Helvetica, t\u00EDtulos en negrita), esquinas rectas y mucho aire. Etiqueta en naranja sobre un t\u00EDtulo grande en negro.\nDatos: la primera serie en naranja y el resto en negro y grises; solo para distinguir categor\u00EDas usa los secundarios de Orange: azul #4BB4E6, verde #50BE87, morado #A885D8. T\u00EDtulos cortos y directos. Como mucho una secci\u00F3n oscura.'
+};
+
 /* =====================================================================
    4c. CSS DE LA PÁGINA GENERADA: base + variables del perfil + variantes de estilo
    ===================================================================== */
@@ -2743,6 +2753,8 @@ function variantCss(T){
     if(s.shape==='sharp') o+='.btn-primary{box-shadow:none}\n';
     o+='.logo i,.hero .eyebrow,.tag,.xtag,.lg,.fc select,.tsearch,.seg,.seg button,.pills,.chipsb,.pill,.chipb,.tabbar,.tab,.hb-t,.hb-f,.hb-r,.fn-t,.fn-f,.donut li{border-radius:0}\n';
   }
+  /* men\u00FA negro: el color oscuro del perfil, sin transparencia (Orange) */
+  if(s.nav==='black') o+='.nav{background:'+T.navy+';backdrop-filter:none;-webkit-backdrop-filter:none;border-bottom:none}.nav-links a{color:#fff;font-weight:700;opacity:1}\n';
   /* menú claro */
   if(s.nav==='light'){
     o+='.nav{background:var(--surface);backdrop-filter:none;-webkit-backdrop-filter:none;border-bottom:1px solid var(--line)}.logo{color:var(--ink)}.xbtn{color:var(--ink);border-color:var(--line)}.xbtn:hover{color:var(--brand);border-color:var(--brand)}\n';
@@ -3268,7 +3280,8 @@ var BUILTIN = [
   {id:'telefonica', name:TELEFONICA_RAW.name, builtin:true, raw:TELEFONICA_RAW},
   {id:'metro', name:METRO_RAW.name, builtin:true, raw:METRO_RAW},
   {id:'vivo', name:VIVO_RAW.name, builtin:true, raw:VIVO_RAW},
-  {id:'stratesys', name:STRATESYS_RAW.name, builtin:true, raw:STRATESYS_RAW}
+  {id:'stratesys', name:STRATESYS_RAW.name, builtin:true, raw:STRATESYS_RAW},
+  {id:'orange', name:ORANGE_RAW.name, builtin:true, raw:ORANGE_RAW}
 ];
 var customProfiles = [], activeId = 'page', brandTimer = null;
 try{
