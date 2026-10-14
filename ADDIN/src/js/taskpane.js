@@ -2201,7 +2201,8 @@ const TaskPaneApp = {
         const key = this.fieldOptionsKey(zoneId, entry);
         const isMeasure = String(entry.dimension).toUpperCase() === "MEASURE";
         const defaults = isMeasure
-            ? { numberFormat: "#,##0.00", decimalSeparator: ",", thousandsSeparator: ".", factor: 1, decimals: 2, aggregation: "SUM" }
+            // aggregation "" = la del modelo semántico (no se sobrescribe).
+            ? { numberFormat: "number", decimals: 2, aggregation: "" }
             : { showTotals: false, sortOrder: "none", expandToLevel: null, visibleLevels: null };
         return Object.assign({}, defaults, this.state.fieldOptions[key] || {});
     },
@@ -2378,42 +2379,50 @@ const TaskPaneApp = {
         const wrap = document.createElement("div");
         wrap.className = "field-options-group";
 
+        // Formato: solo Número (con separador de miles) o Porcentaje, con
+        // el nº de decimales de abajo (ver dracoNumberFormatFromOptions en
+        // commands.js). El separador decimal lo pone Excel según el idioma
+        // del usuario, y el factor de escala ya no existe. Los informes
+        // antiguos traen numberFormat "#,##0.00"/"0.00%"/...: lo que lleva
+        // "%" se muestra como Porcentaje y el resto como Número.
+        const formatKind = (String(options.numberFormat || "").indexOf("%") !== -1 || options.numberFormat === "percent") ? "percent" : "number";
+        // Agregaciones soportadas tal cual por el SQL dinámico (GROUPING
+        // SETS) y por DAX. "" = la definida en el modelo semántico.
+        const AGGREGATIONS = [
+            ["", "Según el modelo"],
+            ["SUM", "Suma (SUM)"],
+            ["AVG", "Media (AVG)"],
+            ["COUNT", "Recuento (COUNT)"],
+            ["COUNT_DISTINCT", "Recuento distinto (COUNT DISTINCT)"],
+            ["MIN", "Mínimo (MIN)"],
+            ["MAX", "Máximo (MAX)"]
+        ];
+        const currentAgg = String(options.aggregation || "").toUpperCase();
+        const decimalsValue = Number.isFinite(Number(options.decimals)) ? Number(options.decimals) : 2;
+
         wrap.innerHTML = `
             <div class="field-options-section-title">Formato de número</div>
             <label>
                 Formato
                 <select id="optNumberFormat">
-                    <option value="#,##0" ${options.numberFormat === "#,##0" ? "selected" : ""}>1.234 (sin decimales)</option>
-                    <option value="#,##0.00" ${options.numberFormat === "#,##0.00" ? "selected" : ""}>1.234,00</option>
-                    <option value="0.00%" ${options.numberFormat === "0.00%" ? "selected" : ""}>Porcentaje</option>
-                    <option value="#,##0.00 €" ${options.numberFormat === "#,##0.00 €" ? "selected" : ""}>Moneda (€)</option>
-                </select>
-            </label>
-            <label>
-                Separador decimal
-                <select id="optDecimalSeparator">
-                    <option value="," ${options.decimalSeparator === "," ? "selected" : ""}>Coma (,)</option>
-                    <option value="." ${options.decimalSeparator === "." ? "selected" : ""}>Punto (.)</option>
+                    <option value="number" ${formatKind === "number" ? "selected" : ""}>Número (1.234)</option>
+                    <option value="percent" ${formatKind === "percent" ? "selected" : ""}>Porcentaje (12%)</option>
                 </select>
             </label>
             <label>
                 Nº de decimales
-                <input type="number" id="optDecimals" min="0" max="10" value="${options.decimals}">
+                <input type="number" id="optDecimals" min="0" max="10" value="${decimalsValue}">
             </label>
-            <label>
-                Factor de escala
-                <select id="optFactor">
-                    <option value="1" ${Number(options.factor) === 1 ? "selected" : ""}>Unidades</option>
-                    <option value="1000" ${Number(options.factor) === 1000 ? "selected" : ""}>Miles</option>
-                    <option value="1000000" ${Number(options.factor) === 1000000 ? "selected" : ""}>Millones</option>
-                </select>
-            </label>
+            <div style="font-size:10px; color:#605e5c; margin:2px 0 6px;">
+                Se aplica al actualizar si "Sobrescribir formatos" está activado
+                en las propiedades del informe.
+            </div>
             <div class="field-options-section-title">Agregación</div>
             <label>
                 Función
                 <select id="optAggregation">
-                    ${["SUM", "AVG", "COUNT", "COUNT_DISTINCT", "MIN", "MAX"].map(a =>
-                        `<option value="${a}" ${options.aggregation === a ? "selected" : ""}>${a}</option>`).join("")}
+                    ${AGGREGATIONS.map(([value, label]) =>
+                        `<option value="${value}" ${currentAgg === value ? "selected" : ""}>${label}</option>`).join("")}
                 </select>
             </label>
             <div class="field-options-section-title">Planificación</div>
@@ -2437,10 +2446,13 @@ const TaskPaneApp = {
         const persist = () => {
             const current = this.getFieldOptions(zoneId, entry);
             current.numberFormat = wrap.querySelector("#optNumberFormat").value;
-            current.decimalSeparator = wrap.querySelector("#optDecimalSeparator").value;
-            current.decimals = Number(wrap.querySelector("#optDecimals").value) || 0;
-            current.factor = Number(wrap.querySelector("#optFactor").value) || 1;
+            const dec = Math.floor(Number(wrap.querySelector("#optDecimals").value));
+            current.decimals = Number.isFinite(dec) ? Math.min(10, Math.max(0, dec)) : 0;
             current.aggregation = wrap.querySelector("#optAggregation").value;
+            // Opciones retiradas del panel (ya no se usan en ningún sitio).
+            delete current.decimalSeparator;
+            delete current.thousandsSeparator;
+            delete current.factor;
             current.planificable = wrap.querySelector("#optPlanificable").checked;
             current.dimensionsBehaviorCustom = wrap.querySelector("#optDimensionsBehaviorCustom").checked;
 
