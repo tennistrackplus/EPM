@@ -110,10 +110,15 @@
         return daxString(s);
     }
 
-    function measureExpression(measuresGrid, measureName) {
+    // aggregationOverride (opcional): agregación elegida en "Opciones de
+    // campo" de la medida (ReportState.Measures[k].Aggregation). No aplica
+    // a medidas DAX del propio modelo (se usan tal cual).
+    function measureExpression(measuresGrid, measureName, aggregationOverride) {
         const m = findMeasure(measuresGrid, measureName);
         const col = () => daxColumn(m.table, m.field);
-        switch (m.aggregation) {
+        const override = up(aggregationOverride);
+        const aggregation = (override && m.aggregation !== "DAX") ? override : m.aggregation;
+        switch (aggregation) {
             case "DAX": return daxMeasureRef(m.field || measureName);
             case "SUM": return `SUM(${col()})`;
             case "AVG":
@@ -125,7 +130,7 @@
             case "COUNTDISTINCT":
             case "DISTINCTCOUNT": return `DISTINCTCOUNT(${col()})`;
             default:
-                throw new Error(`Agregación "${m.aggregation}" no soportada en la medida "${measureName}".`);
+                throw new Error(`Agregación "${aggregation}" no soportada en la medida "${measureName}".`);
         }
     }
 
@@ -354,8 +359,12 @@
         if (!model || !model.source || model.source.type !== "fabric-semantic-model") {
             throw new Error("El modelo semántico activo no es un modelo de Power BI.");
         }
-        if (!state.Measures || state.Measures.length === 0) {
-            throw new Error("Añade al menos una medida al informe.");
+        // Sin medidas se puede consultar igual (solo miembros de Filas/
+        // Columnas: SUMMARIZECOLUMNS sin expresiones); lo que no tiene
+        // sentido es un informe completamente vacío.
+        const noMeasures = !state.Measures || state.Measures.length === 0;
+        if (noMeasures && state.Columns.length === 0 && state.Rows.length === 0) {
+            throw new Error("Añade al menos un campo a Filas o Columnas.");
         }
 
         const withSubtotals = state.Columns.some(c => c.Subtotal) || state.Rows.some(r => r.Subtotal);
@@ -373,10 +382,10 @@
         });
         const byKey = new Map(fields.map(f => [f.key, f]));
 
-        const measures = state.Measures.map((m, idx) => ({
+        const measures = (state.Measures || []).map((m, idx) => ({
             name: m.Name,
             alias: "m" + idx,
-            expr: measureExpression(measuresGrid, m.Name)
+            expr: measureExpression(measuresGrid, m.Name, m.Aggregation)
         }));
 
         // Filtros del informe (zona Filtros + filtros "bloqueados")
