@@ -647,3 +647,108 @@ body {
     accent-color: var(--brand-primary);
     cursor: pointer;
 }
+
+/* ==========================================================
+   CÁLCULOS ENTRE MIEMBROS — botón ƒx del árbol de campos
+   (único cambio visual del árbol; ver js/calcEditor.js)
+   ========================================================== */
+.field-fx-btn {
+    margin-left: auto;
+    flex-shrink: 0;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-muted);
+    font-family: Georgia, 'Times New Roman', serif;
+    font-style: italic;
+    font-weight: 700;
+    font-size: 11.5px;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--transition-fast), background-color var(--transition-fast), color var(--transition-fast);
+}
+.field-item:hover .field-fx-btn,
+.dimension-header:hover .field-fx-btn,
+.field-fx-btn:focus-visible {
+    opacity: 1;
+}
+.field-fx-btn:hover {
+    background-color: var(--surface-card);
+    border-color: var(--border-default);
+    color: var(--brand-primary);
+}
+/* Atributo/dimensión con cálculos: el ƒx se ve siempre, en azul */
+.field-fx-btn.has-calcs {
+    opacity: 1;
+    color: var(--brand-primary);
+}
+.dimension-header .field-fx-btn {
+    font-size: 10.5px;
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+/* ---------- Editor de cálculos (modal) ---------- */
+.calc-dialog { width: 520px; }
+.calc-fx {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-style: italic;
+    font-weight: 700;
+    color: var(--brand-primary);
+}
+.calc-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.calc-list-item {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 10px; border-radius: var(--radius-pill);
+    border: 1px solid var(--border-default); background: var(--surface-card);
+    font-size: var(--fs-sm); color: var(--text-primary); cursor: pointer;
+}
+.calc-list-item.active { border-color: var(--brand-primary); background: var(--brand-primary-light); }
+.calc-list-mode { font-size: var(--fs-xs); color: var(--text-muted); }
+.calc-list-bad {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--color-danger); color: var(--text-inverse); font-size: 10px; font-weight: 700;
+}
+.calc-add-btn {
+    padding: 5px 10px; border-radius: var(--radius-pill);
+    border: 1px dashed var(--brand-primary); background: transparent;
+    color: var(--brand-primary); font-size: var(--fs-sm); font-weight: 600; cursor: pointer;
+}
+.calc-editor { gap: 8px; }
+.calc-hint { font-size: var(--fs-xs); color: var(--text-muted); font-weight: 400; line-height: 1.4; }
+.calc-formula {
+    width: 100%; box-sizing: border-box; resize: vertical;
+    font-family: Consolas, 'Courier New', monospace; font-size: var(--fs-base);
+    padding: 6px 8px; border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+}
+.calc-formula:focus { outline: none; border-color: var(--brand-primary); box-shadow: 0 0 0 3px var(--brand-primary-light); }
+.calc-ops, .calc-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.calc-op {
+    min-width: 26px; height: 24px; padding: 0 6px;
+    border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+    background: var(--surface-card); color: var(--text-primary); font-size: var(--fs-base); cursor: pointer;
+}
+.calc-op:hover, .calc-chip:hover { border-color: var(--brand-primary); color: var(--brand-primary); }
+.calc-chips-title { font-size: var(--fs-xs); color: var(--text-secondary); font-weight: 600; }
+.calc-chips { max-height: 96px; overflow-y: auto; }
+.calc-chip {
+    padding: 2px 8px; border-radius: var(--radius-sm);
+    border: 1px solid #D7E3FC; background: var(--brand-primary-light);
+    color: var(--brand-primary-hover); font-size: var(--fs-sm); font-weight: 600; cursor: pointer;
+}
+.calc-chip.hidden-member { background: var(--surface-sunken); border-color: var(--border-default); color: var(--text-secondary); }
+.calc-chip-note { font-weight: 400; color: var(--text-muted); }
+.calc-status { font-size: var(--fs-xs); font-weight: 600; }
+.calc-status.ok { color: var(--color-success); }
+.calc-status.bad { color: var(--color-danger); }
+.calc-grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.calc-bar-options { display: flex; flex-direction: column; gap: 8px; }
+.calc-bar-options input[type="color"] { width: 100%; height: 26px; padding: 1px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); }
+.calc-delete-btn {
+    align-self: flex-start; border: none; background: none; padding: 0;
+    color: var(--color-danger); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; text-decoration: underline;
+}
+.calc-footer-msg { margin-right: auto; font-size: var(--fs-sm); color: var(--color-danger); }
