@@ -1070,6 +1070,7 @@ const TaskPaneApp = {
             this.state.rowsStatic = design.rowsStatic;
             this.state.colsStatic = design.colsStatic;
             this.state.fieldOptions = design.fieldOptions || {};
+            this.refreshCalcBadges();
 
             RangeAxis.loadFromAddresses(design.rrAddress, design.rcAddress, design.anchorAddress);
 
@@ -1258,6 +1259,7 @@ const TaskPaneApp = {
             this.state.rowsStatic = false;
             this.state.colsStatic = false;
             this.state.fieldOptions = {};
+            this.refreshCalcBadges();
             this.reportProperties = Object.assign({}, this.reportProperties, {
                 reportName: report.name,
                 suppressZeroRows: false,
@@ -1331,6 +1333,11 @@ const TaskPaneApp = {
                 nameSpan.textContent = dim.dimension.toLowerCase();
                 header.appendChild(caretSpan);
                 header.appendChild(nameSpan);
+                // ƒx: cálculos entre miembros de los atributos de esta
+                // dimensión (abre el editor con el primero seleccionado).
+                if (dim.attributes && dim.attributes.length) {
+                    header.appendChild(this.createCalcButton(dim.dimension, null, dim.attributes));
+                }
                 // Contraer/expandir la dimensión oculta sus atributos (y
                 // jerarquías) para dejar el árbol de campos más compacto,
                 // igual que las listas de campos de una tabla dinámica.
@@ -1345,18 +1352,66 @@ const TaskPaneApp = {
                 });
 
                 dim.attributes.forEach(att => {
-                    group.appendChild(this.createFieldElement(dim.dimension, att, false));
+                    group.appendChild(this.createFieldElement(dim.dimension, att, false, dim.attributes));
                 });
 
                 container.appendChild(group);
             });
+            this.refreshCalcBadges();
         } catch (err) {
             console.error("Error al cargar dimensiones:", err);
             container.innerHTML = `<div style='color: #a80000; padding: 4px;'>❌ Error: ${err.message || err}</div>`;
         }
     },
 
-    createFieldElement(dim, name, isHierarchy) {
+    /**
+     * Botón ƒx (a la derecha del campo / de la dimensión) que abre el
+     * editor de cálculos entre miembros (js/calcEditor.js). Solo en
+     * atributos: las jerarquías no admiten cálculos.
+     */
+    createCalcButton(dim, attribute, attributes) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "field-fx-btn";
+        btn.textContent = "ƒx";
+        btn.title = attribute ? `Cálculos de ${attribute.toLowerCase()}` : `Cálculos de ${String(dim).toLowerCase()}`;
+        btn.setAttribute("aria-label", btn.title);
+        btn.dataset.dim = String(dim).toUpperCase();
+        if (attribute) btn.dataset.attr = String(attribute).toUpperCase();
+        btn.draggable = false;
+        btn.addEventListener("mousedown", (e) => e.stopPropagation());
+        btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (!window.DracoCalcEditor) return;
+            let initial = attribute;
+            if (!initial) {
+                // Desde la dimensión: el primer atributo que ya tenga cálculos, si no el primero.
+                initial = (attributes || []).find(a =>
+                    window.DracoCalc.getCalcs(this.state.fieldOptions, dim, a).length > 0) || (attributes || [])[0];
+            }
+            window.DracoCalcEditor.open(this, dim, initial, attributes);
+        });
+        return btn;
+    },
+
+    // Marca (ƒx en color) los atributos y dimensiones que tienen cálculos en el informe actual.
+    refreshCalcBadges() {
+        if (!window.DracoCalc) return;
+        const fo = this.state.fieldOptions || {};
+        const withCalcs = new Set(Object.keys(fo)
+            .filter(k => window.DracoCalc.isCalcKey(k) && Array.isArray(fo[k]) && fo[k].length)
+            .map(k => k.split("|").slice(1).join("|")));
+        const dimsWithCalcs = new Set(Array.from(withCalcs).map(k => k.split("|")[0]));
+        document.querySelectorAll(".field-fx-btn").forEach(b => {
+            const has = b.dataset.attr
+                ? withCalcs.has(b.dataset.dim + "|" + b.dataset.attr)
+                : dimsWithCalcs.has(b.dataset.dim);
+            b.classList.toggle("has-calcs", has);
+        });
+    },
+
+    createFieldElement(dim, name, isHierarchy, dimAttributes) {
         const div = document.createElement("div");
         div.className = "field-item";
         div.draggable = true;
@@ -1374,6 +1429,7 @@ const TaskPaneApp = {
         labelSpan.textContent = name.toLowerCase();
         div.appendChild(iconSpan);
         div.appendChild(labelSpan);
+        if (!isHierarchy) div.appendChild(this.createCalcButton(dim, name, dimAttributes || [name]));
 
         const fieldData = { dim, name, isHierarchy };
 

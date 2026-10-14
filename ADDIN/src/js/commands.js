@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-02-picker-v4";
+const DRACO_BUILD = "2026-10-14-calcs-v1";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -1145,6 +1145,208 @@ function loadReportDefinition(editReportGrid, reportId) {
     loadRows(editReportGrid);
     loadColumns(editReportGrid);
     attachDracoMeasureOptions();
+    attachDracoCalcs();
+}
+
+/* ---------------------------------------------------------------------
+ * CÁLCULOS ENTRE MIEMBROS (ver js/calcFormula.js)
+ *
+ * ReportState.Calcs: un elemento por atributo de Filas/Columnas que
+ * tenga cálculos definidos en el informe:
+ *   { dim, attr, axis: "Columns"|"Rows", idx, calcs: [calc + {ast, refs}] }
+ * (axis "Columns" = columnas H.. de EDIT_REPORT = zona Filas del
+ * taskpane, que se pinta en filas físicas; "Rows" = zona Columnas).
+ * Solo se usan en el flujo Dinámico.
+ * ------------------------------------------------------------------- */
+function attachDracoCalcs() {
+    ReportState.Calcs = [];
+    ReportState.CalcOrder = {};
+    if (!window.DracoCalc) return;
+
+    let fieldOptions = {};
+    try {
+        const report = (window.ReportStore && ReportState.ReportId !== null && ReportState.ReportId !== undefined)
+            ? window.ReportStore.getReport(ReportState.ReportId) : null;
+        fieldOptions = (report && report.design && report.design.fieldOptions) || {};
+    } catch (e) { fieldOptions = {}; }
+
+    const seen = new Set();
+    const collect = (fields, axis) => {
+        fields.forEach((fld, idx) => {
+            const k = String(fld.AttributeName).toUpperCase();
+            if (seen.has(k)) return; // mismo atributo dos veces: solo el primero
+            const calcs = window.DracoCalc.getCalcs(fieldOptions, fld.Dimension, fld.AttributeName)
+                .map(c => {
+                    const a = window.DracoCalc.analyze(c.expr, c.mode);
+                    return a.ok ? Object.assign({}, c, { ast: a.ast, refs: a.refs }) : null;
+                })
+                .filter(Boolean);
+            if (calcs.length === 0) return;
+            seen.add(k);
+            ReportState.Calcs.push({ dim: fld.Dimension, attr: fld.AttributeName, axis, idx, calcs });
+        });
+    };
+    collect(ReportState.Columns, "Columns");
+    collect(ReportState.Rows, "Rows");
+}
+
+// Literal de texto SQL según motor (BigQuery escapa con \, el resto
+// duplicando la comilla).
+function dracoSqlString(v) {
+    const t = String(v);
+    if (Provider.key && Provider.key() === "bigquery") {
+        return "'" + t.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
+    }
+    return "'" + t.replace(/'/g, "''") + "'";
+}
+
+// Parte del ORDER BY de ROW_ID/COLUMN_ID: un atributo con cálculos se
+// ordena primero por su orden de cálculo (reales = 0, cálculos al final
+// o al principio) y después por su valor ORIGINAL (no por el texto, que
+// para atributos numéricos ordenaría "10" antes que "2").
+function dracoCalcOrderPart(part) {
+    const o = ReportState.CalcOrder && ReportState.CalcOrder[part];
+    return o || part;
+}
+
+/**
+ * CTEs de los cálculos, encadenadas detrás de REPORT_DATA. Devuelve
+ * { sql: ",\nDRC_...", last: "nombre de la última CTE" } o null.
+ *
+ * Por cada atributo con cálculos (paso i):
+ *   - DRC_HID_i (solo si hay cálculos por miembro): la misma consulta que
+ *     REPORT_DATA pero quitando los filtros de la dimensión del atributo
+ *     y quedándose solo con los miembros referenciados. Así un cálculo
+ *     fijo funciona aunque esos miembros no estén en el filtro.
+ *   - DRC_SRC_i: REPORT_DATA (o el paso anterior) marcado 'P' + DRC_HID_i
+ *     marcado 'H'.
+ *   - DRC_STEP_i: las filas del paso anterior (el atributo pasa a texto) +
+ *     una fila por cálculo y combinación del resto de campos, con:
+ *       · por miembro: SUM(CASE WHEN atributo = 'X' ...) operados según
+ *         la fórmula (miembro visible si está; si no, el leído aparte).
+ *       · por posición: NULL (el valor lo pone la fórmula de Excel).
+ *     DRC_S_i guarda el valor original (orden) y DRC_O_i la posición del
+ *     cálculo (0 = miembro real).
+ */
+function buildDracoCalcCtes(relGrid, measuresGrid, atributesGrid, withSubtotals) {
+    const specs = ReportState.Calcs || [];
+    if (specs.length === 0) return null;
+
+    const STR = Provider.stringType();
+    const dimCols = [...ReportState.Columns.map(c => c.AttributeName), ...ReportState.Rows.map(r => r.AttributeName)];
+    const flagCols = withSubtotals
+        ? [...ReportState.Columns.map(c => subtotalFlagName(c.AttributeName)), ...ReportState.Rows.map(r => subtotalFlagName(r.AttributeName))]
+        : [];
+    const measureCols = ReportState.Measures.map(m => m.Name);
+    const extras = [];           // [{attr, s, o}] de pasos anteriores
+    const castedAttrs = new Set(); // atributos ya convertidos a texto
+    let prev = "REPORT_DATA";
+    let sql = "";
+
+    specs.forEach((spec, n) => {
+        const i = n + 1;
+        const A = spec.attr;
+        const flagA = withSubtotals ? subtotalFlagName(A) : null;
+        const S = "DRC_S" + i, O = "DRC_O" + i;
+        const curCols = [...dimCols, ...flagCols, ...extras.flatMap(e => [e.s, e.o]), ...measureCols];
+
+        const memberRefs = [];
+        spec.calcs.filter(c => c.mode === "member").forEach(c => c.refs.forEach(r => {
+            if (memberRefs.indexOf(String(r)) === -1) memberRefs.push(String(r));
+        }));
+        const hasH = memberRefs.length > 0;
+        let src = prev;
+
+        if (hasH) {
+            // --- DRC_HID_i: consulta auxiliar con los miembros referenciados
+            const savedFilters = ReportState.Filters;
+            let conds;
+            try {
+                ReportState.Filters = (savedFilters || []).filter(f =>
+                    String(f.Dimension).toUpperCase() !== String(spec.dim).toUpperCase());
+                conds = buildFilterConditions(atributesGrid, relGrid);
+            } finally {
+                ReportState.Filters = savedFilters;
+            }
+            const tipo = getAttributeType(atributesGrid, spec.dim, A);
+            const lits = memberRefs.map(r => UNQUOTED_TYPES.includes(tipo) && !isNaN(Number(r)) ? String(Number(r)) : dracoSqlString(r));
+            conds.push(getTableAlias(relGrid, spec.dim) + "." + A + " IN (" + lits.join(", ") + ")");
+
+            sql += "," + CRLF + "DRC_HID_" + i + " AS (" + CRLF
+                + (withSubtotals ? buildSelectWithSubtotals(measuresGrid, relGrid) : buildSelect(measuresGrid, relGrid)) + CRLF
+                + buildFrom(measuresGrid, null, relGrid) + CRLF
+                + buildJoins(relGrid) + CRLF
+                + "WHERE" + CRLF + conds.join(CRLF + "AND ") + CRLF
+                + (withSubtotals ? buildConfigSetsWithSubtotals(relGrid) : buildConfigSets(relGrid)) + CRLF
+                + ")";
+
+            // --- DRC_SRC_i
+            const fromPrev = curCols.map(c => "p." + c + " AS " + c).join(", ");
+            const fromHid = curCols.map(c => {
+                const e = extras.find(x => x.s === c || x.o === c);
+                if (e) return (c === e.s ? "h." + e.attr : "0") + " AS " + c;
+                if (castedAttrs.has(c)) return "CAST(h." + c + " AS " + STR + ") AS " + c;
+                return "h." + c + " AS " + c;
+            }).join(", ");
+            sql += "," + CRLF + "DRC_SRC_" + i + " AS (" + CRLF
+                + "    SELECT 'P' AS DRC_SRC, " + fromPrev + " FROM " + prev + " p" + CRLF
+                + "    UNION ALL" + CRLF
+                + "    SELECT 'H' AS DRC_SRC, " + fromHid + " FROM DRC_HID_" + i + " h" + CRLF
+                + ")";
+            src = "DRC_SRC_" + i;
+        }
+
+        // --- DRC_STEP_i
+        const realBranch = "    SELECT "
+            + curCols.map(c => (c === A ? "CAST(p." + A + " AS " + STR + ")" : "p." + c) + " AS " + c).join(", ")
+            + ", p." + A + " AS " + S + ", 0 AS " + O + CRLF
+            + "    FROM " + prev + " p";
+
+        const groupCols = curCols.filter(c => c !== A && c !== flagA && measureCols.indexOf(c) === -1);
+        const memberCond = (r) => "CAST(s." + A + " AS " + STR + ") = " + dracoSqlString(r);
+
+        const calcBranches = spec.calcs.map((calc, ci) => {
+            const ord = calc.position === "start" ? (-1000 + ci) : (1 + ci);
+            const isMember = calc.mode === "member";
+            const cols = curCols.map(c => {
+                if (c === A) return dracoSqlString(calc.name) + " AS " + c;
+                if (c === flagA) return "0 AS " + c;
+                if (measureCols.indexOf(c) !== -1) {
+                    if (!isMember) return "NULL AS " + c;
+                    const expr = window.DracoCalc.toSql(calc.ast, (r) => {
+                        const vis = "SUM(CASE WHEN " + (hasH ? "s.DRC_SRC = 'P' AND " : "") + memberCond(r) + " THEN s." + c + " END)";
+                        if (!hasH) return "COALESCE(" + vis + ", 0)";
+                        const hid = "SUM(CASE WHEN s.DRC_SRC = 'H' AND " + memberCond(r) + " THEN s." + c + " END)";
+                        return "COALESCE(" + vis + ", " + hid + ", 0)";
+                    });
+                    return expr + " AS " + c;
+                }
+                return "s." + c + " AS " + c;
+            });
+            const where = ["s." + A + " IS NOT NULL"];
+            if (!isMember && hasH) where.push("s.DRC_SRC = 'P'");
+            const having = (isMember && calc.refs.length)
+                ? "HAVING COUNT(CASE WHEN CAST(s." + A + " AS " + STR + ") IN (" + calc.refs.map(r => dracoSqlString(r)).join(", ") + ") THEN 1 END) > 0"
+                : "";
+            return "    SELECT " + cols.join(", ") + ", NULL AS " + S + ", " + ord + " AS " + O + CRLF
+                + "    FROM " + src + " s" + CRLF
+                + "    WHERE " + where.join(" AND ") + CRLF
+                + (groupCols.length ? "    GROUP BY " + groupCols.map(c => "s." + c).join(", ") + CRLF : "")
+                + (having ? "    " + having + CRLF : "");
+        });
+
+        sql += "," + CRLF + "DRC_STEP_" + i + " AS (" + CRLF
+            + realBranch + CRLF
+            + calcBranches.map(b => "    UNION ALL" + CRLF + b).join("")
+            + ")";
+
+        extras.push({ attr: A, s: S, o: O });
+        castedAttrs.add(A);
+        ReportState.CalcOrder[A] = O + ", " + S + ", " + A;
+        prev = "DRC_STEP_" + i;
+    });
+
+    return { sql, last: prev };
 }
 
 /* ---------------------------------------------------------------------
@@ -2866,6 +3068,7 @@ function buildConfigSetsWithSubtotals(relGrid) {
 // constante 1: todo el resultado cae en una única fila/columna lógica
 // (DENSE_RANK sin ORDER BY no es válido en Snowflake).
 function buildDenseRankExpression(orderParts, alias) {
+    if (orderParts) orderParts = orderParts.map(dracoCalcOrderPart);
     if (!orderParts || orderParts.length === 0) {
         return "    1 AS " + alias;
     }
@@ -3074,8 +3277,16 @@ function buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop) {
     sql += buildJoins(relGrid) + CRLF + CRLF;
     sql += buildWhere(atributesGrid, relGrid) + CRLF + CRLF;
     sql += (withSubtotals ? buildConfigSetsWithSubtotals(relGrid) : buildConfigSets(relGrid)) + CRLF + CRLF;
-    sql += ")" + CRLF + CRLF;
-    sql += (withSubtotals ? buildFinalSelectWithSubtotals(atributesGrid, !!subtotalsOnTop) : buildFinalSelect()) + CRLF + CRLF;
+    sql += ")";
+    // Cálculos entre miembros (si el informe tiene): CTEs encadenadas y el
+    // SELECT final lee de la última en vez de REPORT_DATA.
+    ReportState.CalcOrder = {};
+    const calcCtes = buildDracoCalcCtes(relGrid, measuresGrid, atributesGrid, withSubtotals);
+    if (calcCtes) sql += calcCtes.sql;
+    sql += CRLF + CRLF;
+    let finalSelect = withSubtotals ? buildFinalSelectWithSubtotals(atributesGrid, !!subtotalsOnTop) : buildFinalSelect();
+    if (calcCtes) finalSelect = finalSelect.replace(/FROM REPORT_DATA$/, "FROM " + calcCtes.last);
+    sql += finalSelect + CRLF + CRLF;
     sql += (withSubtotals ? buildFinalWhereWithSubtotals() : buildFinalWhere()) + CRLF + CRLF;
     sql += "ORDER BY" + CRLF + "    ROW_ID," + CRLF + "    COLUMN_ID";
 
@@ -5086,9 +5297,11 @@ async function handleDracoPlanningValueChanged(eventArgs) {
                 return checker ? checker(h.r, h.c) : false;
             });
             hits.length = 0;
-            hits.push(...hitsFiltrados);
+            // Las celdas de cálculos entre miembros (Variación...) no son
+            // datos de la base: nunca se planifican ni se escriben.
+            hits.push(...hitsFiltrados.filter(h => !isDracoCalcCell(h.reportId, h.r, h.c)));
             if (hits.length === 0) {
-                await writeDracoPlanningDebug(`${sheet.name}!${addr}: ${hitsAntesDeMedida} celda(s) en zona de planificación, pero ninguna con medida marcada "Planificable" en MODEL_MEASURES.`);
+                await writeDracoPlanningDebug(`${sheet.name}!${addr}: ${hitsAntesDeMedida} celda(s) en zona de planificación, pero ninguna con medida marcada "Planificable" en MODEL_MEASURES (o son celdas de cálculo).`);
                 return;
             }
 
@@ -6420,11 +6633,18 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     if (realMeasureCount > 0 && (reportProps.suppressZeroRows || reportProps.suppressZeroCols)) {
         const rowsWithValue = new Set();
         const colsWithValue = new Set();
+        // Cálculos por posición: llegan del SQL sin valor (la fórmula de
+        // Excel se escribe al pintar), así que no deben suprimirse por
+        // "cero/vacío".
+        const positionCalcChecks = (ReportState.Calcs || []).map(spec => ({
+            fi: 2 + (spec.axis === "Columns" ? spec.idx : ReportState.ColumnCount + spec.idx),
+            names: new Set(spec.calcs.filter(c => c.mode === "position").map(c => String(c.name).trim()))
+        })).filter(x => x.names.size > 0);
         for (let i = 0; i < filas; i++) {
             const f = fact[i];
             // Con varias medidas se suprime la fila/columna solo si TODAS
             // sus medidas son cero/vacío (antes solo miraba la última).
-            let anyNonZero = false;
+            let anyNonZero = positionCalcChecks.some(x => x.names.has(String(f[x.fi]).trim()));
             for (let mIdx = 0; mIdx < measureCount; mIdx++) {
                 const n = Number(f[measureFieldBase + mIdx]);
                 if (!isNaN(n) && n !== 0) { anyNonZero = true; break; }
@@ -6530,7 +6750,13 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // cada una con su propio sync.
     const clearMode = reportProps.overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents;
     for (const it of prevNamedItems) {
-        if (!it.isNullObject) it.getRange().clear(clearMode);
+        if (!it.isNullObject) {
+            const prevRange = it.getRange();
+            prevRange.clear(clearMode);
+            // Barras de datos de los cálculos (formato condicional): se
+            // quitan siempre que se sobrescriben formatos.
+            if (reportProps.overwriteFormats) prevRange.conditionalFormats.clearAll();
+        }
     }
 
     // Limpiar cualquier resto de la ejecución anterior que hubiera quedado
@@ -6567,6 +6793,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
      *    remapean a la numeración compactada 1..N.
      * ----------------------------------------------------------- */
     const factCells = new Map(); // "row_col" -> {row, col, value}
+    const calcEntries = (ReportState.Calcs && ReportState.Calcs.length) ? [] : null;
     for (let i = 0; i < filas; i++) {
         const f = fact[i];
         const newRowId = rowsFilter.idMap.get(Number(f[0]));
@@ -6594,9 +6821,23 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
             const value = coerceCellLiteral(f[measureFieldBase + mIdx]);
             factCells.set(row + "_" + col, { row, col, value, mIdx });
             if (factBaseline) factBaseline.set(row + "_" + col, value);
+            if (calcEntries) calcEntries.push({ row, col, mIdx, f });
         }
     }
+
+    // Cálculos entre miembros: fórmulas de Excel (por posición), celdas
+    // excluidas de la planificación y líneas para formato/barras.
+    const calcPaint = calcEntries
+        ? resolveDracoCalcCells(calcEntries, factCells, factBaseline, ReportState.ColumnCount)
+        : null;
+    DracoCalcCellsByReport.set(dracoStateKey(reportId), calcPaint ? calcPaint.cellSet : new Set());
+
     await writeCellBlock(context, sheet, factCells, true);
+    if (calcPaint) {
+        for (const fm of calcPaint.formulas) {
+            sheet.getRangeByIndexes(fm.row - 1, fm.col - 1, 1, 1).formulas = [[fm.formula]];
+        }
+    }
     tPerf = draco_perfMark(reportId, `Escribir FACT (${factCells.size} celdas, en cola)`, tPerf);
 
     if (isPlanningReport_) {
@@ -6851,6 +7092,15 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
             console.warn("[Draco] No se pudo aplicar el formato de número de las medidas:", e);
         }
     }
+    if (reportProps.overwriteFormats && calcPaint && calcPaint.lines.size > 0) {
+        try {
+            applyDracoCalcFormats(sheet, calcPaint);
+            draco_suspendScreenUpdating(context);
+            await context.sync();
+        } catch (e) {
+            console.warn("[Draco] No se pudo aplicar el formato de los cálculos:", e);
+        }
+    }
     tPerf = draco_perfMark(reportId, "Formato de número por medida", tPerf);
 
     // 6) Registrar (una sola vez por hoja) los listeners de clic/edición:
@@ -7061,6 +7311,155 @@ async function clearDracoNamedRanges(context, reportId, overwriteFormats) {
     if (anyToClear) {
         draco_suspendScreenUpdating(context);
         await context.sync();
+    }
+}
+
+// reportId -> Set("fila_col", 1-based) de celdas de cálculos del último pintado
+const DracoCalcCellsByReport = new Map();
+
+function isDracoCalcCell(reportId, r0, c0) {
+    const set = DracoCalcCellsByReport.get(dracoStateKey(reportId));
+    return !!(set && set.has((r0 + 1) + "_" + (c0 + 1)));
+}
+
+function dracoColumnLetter(col) { // 1-based
+    let s = "";
+    while (col > 0) {
+        const m = (col - 1) % 26;
+        s = String.fromCharCode(65 + m) + s;
+        col = Math.floor((col - 1) / 26);
+    }
+    return s;
+}
+
+/**
+ * Recorre las celdas de valores pintadas y, para cada atributo con
+ * cálculos:
+ *   - agrupa las celdas por "todo lo demás igual" (resto de campos +
+ *     medida), separando miembros reales de cálculos;
+ *   - en los cálculos por POSICIÓN, escribe la fórmula de Excel que
+ *     apunta a las celdas del 1º, 2º... miembro real visible de ese mismo
+ *     grupo (en el orden en que se ven);
+ *   - quita las celdas de cálculo de la línea base de planificación.
+ * Devuelve { formulas, cellSet, lines: Map(calcId -> {calc, onRows, cells}) }.
+ */
+function resolveDracoCalcCells(entries, factCells, factBaseline, columnCount) {
+    const formulas = [];
+    const cellSet = new Set();
+    const lines = new Map();
+
+    for (const spec of ReportState.Calcs) {
+        const onRows = spec.axis === "Columns";            // H.. -> filas físicas
+        const fi = 2 + (onRows ? spec.idx : columnCount + spec.idx);
+        const byName = new Map(spec.calcs.map(c => [String(c.name).trim(), c]));
+        const groups = new Map(); // clave -> { reals: [], calcs: [] }
+
+        for (const e of entries) {
+            const member = String(e.f[fi] === undefined ? "" : e.f[fi]).trim();
+            const keyParts = [];
+            for (let k = 2; k < 2 + ReportState.ColumnCount + ReportState.RowCount; k++) {
+                if (k !== fi) keyParts.push(String(e.f[k]).trim());
+            }
+            keyParts.push("m" + e.mIdx);
+            const key = keyParts.join("\u0001");
+            if (!groups.has(key)) groups.set(key, { reals: [], calcs: [] });
+            const calc = byName.get(member);
+            if (calc) groups.get(key).calcs.push({ e, calc });
+            else if (member !== "" && member.toLowerCase().indexOf("null") !== 0) groups.get(key).reals.push(e);
+        }
+
+        for (const g of groups.values()) {
+            g.reals.sort((a, b) => onRows ? (a.row - b.row) : (a.col - b.col));
+            for (const { e, calc } of g.calcs) {
+                const id = e.row + "_" + e.col;
+                cellSet.add(id);
+                if (factBaseline) factBaseline.delete(id);
+                if (!lines.has(calc.id)) lines.set(calc.id, { calc, onRows, cells: [] });
+                lines.get(calc.id).cells.push({ row: e.row, col: e.col });
+
+                if (calc.mode === "position") {
+                    const formula = window.DracoCalc.toExcel(calc.ast, (pos) => {
+                        const target = g.reals[pos - 1];
+                        return target ? dracoColumnLetter(target.col) + target.row : null;
+                    });
+                    const cell = factCells.get(id);
+                    if (cell) cell.value = "";
+                    if (formula) formulas.push({ row: e.row, col: e.col, formula });
+                }
+            }
+        }
+    }
+    return { formulas, cellSet, lines };
+}
+
+/**
+ * Formato de los cálculos: número/porcentaje con sus decimales y, si se
+ * pide, barras de datos (rojo/verde con eje, como en "Variation Detail").
+ * La escala de las barras es común a TODAS las celdas del cálculo y deja
+ * a cada lado el % de ancho indicado para el número.
+ */
+function applyDracoCalcFormats(sheet, calcPaint) {
+    for (const { calc, onRows, cells } of calcPaint.lines.values()) {
+        // Celdas del cálculo agrupadas en líneas contiguas (una fila física
+        // si el atributo está en Filas, una columna si está en Columnas).
+        const byLine = new Map();
+        for (const c of cells) {
+            const k = onRows ? c.row : c.col;
+            if (!byLine.has(k)) byLine.set(k, []);
+            byLine.get(k).push(onRows ? c.col : c.row);
+        }
+        const ranges = [];
+        for (const [k, list] of byLine) {
+            list.sort((a, b) => a - b);
+            let start = list[0], prev = list[0];
+            const flush = (a, b) => ranges.push(onRows
+                ? { r: k, c: a, h: 1, w: b - a + 1 }
+                : { r: a, c: k, h: b - a + 1, w: 1 });
+            for (let i = 1; i < list.length; i++) {
+                if (list[i] !== prev + 1) { flush(start, prev); start = list[i]; }
+                prev = list[i];
+            }
+            flush(start, prev);
+        }
+
+        const fmt = window.DracoCalc.numberFormat(calc);
+        for (const rg of ranges) {
+            sheet.getRangeByIndexes(rg.r - 1, rg.c - 1, rg.h, rg.w).numberFormat = [[fmt]];
+        }
+
+        if (calc.display !== "bar" && calc.display !== "barOnly") continue;
+
+        const addr = (rg) => "$" + dracoColumnLetter(rg.c) + "$" + rg.r + ":$" + dracoColumnLetter(rg.c + rg.w - 1) + "$" + (rg.r + rg.h - 1);
+        const list = ranges.slice(0, 200).map(addr).join(",");
+        const barOnly = calc.display === "barOnly";
+        const L = barOnly ? 0.04 : Math.max(0, Math.min(0.9, Number(calc.labelLeft) / 100 || 0));
+        const R = barOnly ? 0.04 : Math.max(0, Math.min(0.9, Number(calc.labelRight) / 100 || 0));
+        const mn = "MIN(0,MIN(" + list + "))";
+        const mx = "MAX(0,MAX(" + list + "))";
+        const span = "MAX(0.000001," + mx + "-" + mn + ")";
+        const ln = "IF(" + mn + "<0," + L + ",0)";
+        const lp = "IF(" + mx + ">0," + R + ",0)";
+        const bar = "MAX(0.05,1-" + ln + "-" + lp + ")";
+        const lo = "=" + mn + "-" + span + "*" + ln + "/" + bar;
+        const hi = "=" + mx + "+" + span + "*" + lp + "/" + bar;
+        const neg = calc.invertColors ? calc.colorPos : calc.colorNeg;
+        const pos = calc.invertColors ? calc.colorNeg : calc.colorPos;
+
+        for (const rg of ranges) {
+            const cf = sheet.getRangeByIndexes(rg.r - 1, rg.c - 1, rg.h, rg.w)
+                .conditionalFormats.add(Excel.ConditionalFormatType.dataBar);
+            const db = cf.dataBar;
+            db.showDataBarOnly = barOnly;
+            db.barDirection = Excel.ConditionalDataBarDirection.leftToRight;
+            db.axisFormat = Excel.ConditionalDataBarAxisFormat.automatic;
+            db.axisColor = "#000000";
+            db.positiveFormat.fillColor = pos || "#70D06A";
+            db.positiveFormat.gradientFill = false;
+            db.negativeFormat.matchPositiveFillColor = false;
+            db.negativeFormat.fillColor = neg || "#F0436A";
+            db.lowerBoundRule = { type: Excel.ConditionalFormatRuleType.formula, formula: lo };
+            db.upperBoundRule = { type: Excel.ConditionalFormatRuleType.formula, formula: hi };
+        }
     }
 }
 
