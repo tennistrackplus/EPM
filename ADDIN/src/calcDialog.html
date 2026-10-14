@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>Cálculos</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/modal.css">
+    <style>
+        /* Misma estructura que filterDialog.html: ventana propia, sin
+           backdrop; se reutilizan los controles de theme.css/modal.css
+           (btn-primary/secondary, segmented-control, modal-toolbar,
+           modal-items-list, link-btn). */
+        html, body {
+            margin: 0; padding: 0; height: 100%;
+            font-family: var(--font-family, 'Segoe UI', Arial, sans-serif);
+            background: var(--surface-card, #fff);
+            color: var(--text-primary, #1A2233);
+            display: flex; flex-direction: column;
+            font-size: var(--fs-base, 12.5px);
+        }
+        .dialog-header {
+            padding: 14px 18px; border-bottom: 1px solid var(--border-subtle);
+            background: var(--surface-sunken);
+            display: flex; justify-content: space-between; align-items: center; gap: 10px;
+            flex-shrink: 0;
+        }
+        .dialog-header h1 { font-size: var(--fs-lg, 15px); margin: 0; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+        .dialog-back-btn {
+            border: none; background: none; cursor: pointer; padding: 4px 6px;
+            border-radius: var(--radius-sm); color: var(--text-secondary); font-size: 16px; line-height: 1;
+        }
+        .dialog-back-btn:hover { background: var(--gray-100); color: var(--text-primary); }
+        .dialog-close-btn {
+            background: none; border: none; font-size: 20px; line-height: 1;
+            color: var(--text-muted); cursor: pointer;
+            width: 28px; height: 28px; border-radius: var(--radius-sm);
+            display: flex; align-items: center; justify-content: center; padding: 0;
+        }
+        .dialog-close-btn:hover { background: var(--gray-100); color: var(--text-primary); }
+        .fx {
+            font-family: Georgia, 'Times New Roman', serif; font-style: italic; font-weight: 700;
+            color: var(--brand-primary);
+        }
+        .dialog-body { flex: 1; display: flex; overflow: hidden; }
+        .dialog-main {
+            flex: 1 1 60%; padding: 14px 16px; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 10px;
+        }
+        .dialog-main.with-side { border-right: 1px solid var(--border-subtle); }
+        .dialog-side {
+            flex: 1 1 40%; padding: 14px 16px; overflow: hidden;
+            display: flex; flex-direction: column; gap: 8px; background: var(--surface-sunken);
+        }
+        .dialog-footer {
+            padding: 12px 18px; border-top: 1px solid var(--border-subtle);
+            background: var(--surface-sunken);
+            display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-shrink: 0;
+        }
+        .footer-msg { margin-right: auto; font-size: var(--fs-sm); color: var(--color-danger); }
+        .section-title {
+            font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase;
+            letter-spacing: 0.04em; color: var(--text-muted); margin: 6px 0 0;
+        }
+        .hint { font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.4; }
+        .loading, .empty { padding: 14px; color: var(--text-muted); font-size: var(--fs-sm); }
+
+        /* ---- Listado de cálculos ---- */
+        .list-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        .calc-table { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+        .calc-table-head, .calc-row {
+            display: grid; grid-template-columns: minmax(110px, 1.2fr) 92px minmax(120px, 2fr) 120px;
+            align-items: center; gap: 8px; padding: 7px 10px;
+        }
+        .calc-table.with-attr .calc-table-head, .calc-table.with-attr .calc-row {
+            grid-template-columns: minmax(90px, 1fr) minmax(100px, 1.2fr) 92px minmax(110px, 2fr) 120px;
+        }
+        .calc-table-head {
+            background: var(--surface-sunken); border-bottom: 1px solid var(--border-subtle);
+            font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted);
+        }
+        .calc-row { border-bottom: 1px solid var(--border-subtle); cursor: default; }
+        .calc-row:last-child { border-bottom: none; }
+        .calc-row:hover { background: var(--brand-primary-light); }
+        .calc-name { font-weight: 600; display: flex; align-items: center; gap: 6px; min-width: 0; }
+        .calc-name span:last-child, .calc-formula-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .calc-formula-text { font-family: Consolas, 'Courier New', monospace; font-size: var(--fs-sm); color: var(--text-secondary); }
+        .calc-type { font-size: var(--fs-xs); color: var(--text-secondary); }
+        .calc-actions { display: flex; justify-content: flex-end; gap: 10px; }
+        .link-btn.danger { color: var(--color-danger); }
+        .bad-badge {
+            display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+            width: 14px; height: 14px; border-radius: 50%;
+            background: var(--color-danger); color: var(--text-inverse); font-size: 10px; font-weight: 700;
+        }
+
+        /* ---- Editor ---- */
+        .form-row { display: flex; flex-direction: column; gap: 4px; }
+        .form-row > label, .form-label { font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary); }
+        .form-row input[type="text"], .form-row input[type="number"], .form-row select {
+            padding: 6px 8px; font-size: var(--fs-sm); font-family: inherit; color: var(--text-primary);
+            border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: var(--surface-card);
+        }
+        .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .formula-box {
+            width: 100%; box-sizing: border-box; resize: vertical; min-height: 58px;
+            font-family: Consolas, 'Courier New', monospace; font-size: var(--fs-base);
+            padding: 7px 9px; border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+        }
+        .formula-box:focus { outline: none; border-color: var(--brand-primary); box-shadow: 0 0 0 3px var(--brand-primary-light); }
+        .ops { display: flex; flex-wrap: wrap; gap: 4px; }
+        .op {
+            min-width: 28px; height: 26px; padding: 0 8px; cursor: pointer;
+            border: 1px solid var(--border-default); border-radius: var(--radius-sm);
+            background: var(--surface-card); color: var(--text-primary); font-size: var(--fs-base);
+        }
+        .op:hover { border-color: var(--brand-primary); color: var(--brand-primary); }
+        .status { font-size: var(--fs-xs); font-weight: 600; }
+        .status.ok { color: var(--color-success); }
+        .status.bad { color: var(--color-danger); }
+        .type-switch { width: 100%; }
+        .type-switch .segmented-option { flex: 1; }
+        .color-input { width: 100%; height: 28px; padding: 1px; border: 1px solid var(--border-default); border-radius: var(--radius-sm); }
+        .check-row { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); }
+
+        /* ---- Selector lateral (como el picker) ---- */
+        .picker-list { flex: 1; min-height: 0; overflow-y: auto; max-height: none; }
+        .picker-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; cursor: pointer; }
+        .picker-row .tag { font-size: var(--fs-xs); color: var(--text-muted); white-space: nowrap; }
+        .picker-row .code { font-family: Consolas, 'Courier New', monospace; font-size: var(--fs-xs); color: var(--text-muted); }
+    </style>
+</head>
+<body>
+    <div class="dialog-header">
+        <h1 id="dialogTitle"><span class="fx">ƒx</span><span>Cálculos</span></h1>
+        <button id="btnCloseDialog" class="dialog-close-btn" title="Cerrar" aria-label="Cerrar">&times;</button>
+    </div>
+    <div class="dialog-body" id="dialogBody">
+        <div class="dialog-main"><div class="loading">Esperando datos…</div></div>
+    </div>
+    <div class="dialog-footer" id="dialogFooter"></div>
+    <script src="js/calcFormula.js?v=2"></script>
+    <script src="js/calcDialog.js?v=1"></script>
+</body>
+</html>
