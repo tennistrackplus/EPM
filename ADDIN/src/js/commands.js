@@ -1063,8 +1063,12 @@ function loadRows(editReportGrid) {
 
         if (dim.toUpperCase() === "MEASURE") {
             ReportState.MeasureCount++;
+            // Columnas N/O/P de EDIT_REPORT = zona "columns" del taskpane
+            // (ver ReportStore.getReportGrid: expandedCols -> N..S). La zona
+            // hace falta para la clave de fieldOptions (formato/agregación).
             ReportState.Measures.push({
-                Name: String(cellValue(editReportGrid, R, 15)).trim()
+                Name: String(cellValue(editReportGrid, R, 15)).trim(),
+                Zone: "columns"
             });
         } else {
             ReportState.RowCount++;
@@ -1103,8 +1107,11 @@ function loadColumns(editReportGrid) {
 
         if (dim.toUpperCase() === "MEASURE") {
             ReportState.MeasureCount++;
+            // Columnas H/I/J de EDIT_REPORT = zona "rows" del taskpane (ver
+            // ReportStore.getReportGrid: expandedRows -> H..M).
             ReportState.Measures.push({
-                Name: String(cellValue(editReportGrid, R, 9)).trim()
+                Name: String(cellValue(editReportGrid, R, 9)).trim(),
+                Zone: "rows"
             });
         } else {
             if (Number(cellValue(editReportGrid, R, 10)) === 1) {
@@ -1131,10 +1138,92 @@ function loadColumns(editReportGrid) {
 }
 
 function loadReportDefinition(editReportGrid, reportId) {
+    const effectiveReportId = reportId !== undefined ? reportId : activeReportIdOrNull();
+    ReportState.ReportId = effectiveReportId;
     loadFilters(editReportGrid);
-    appendLockedFilterRangesToState(reportId !== undefined ? reportId : activeReportIdOrNull());
+    appendLockedFilterRangesToState(effectiveReportId);
     loadRows(editReportGrid);
     loadColumns(editReportGrid);
+    attachDracoMeasureOptions();
+}
+
+/* ---------------------------------------------------------------------
+ * Opciones de campo de las MEDIDAS (panel "Opciones de campo" del
+ * taskpane, ver buildMeasureOptionsForm en taskpane.js): formato de
+ * número (Número / Porcentaje + nº de decimales) y agregación. Viven por
+ * informe en report.design.fieldOptions con clave "zona|MEASURE|nombre".
+ * Se cuelgan de cada ReportState.Measures[k] como .Aggregation (para el
+ * SQL/DAX) y .NumberFormat (para el pintado), así buildSQL/
+ * jsonTo3Matrices no necesitan saber de qué informe se trata.
+ * ------------------------------------------------------------------- */
+
+// Agregaciones que ofrece el desplegable. Todas funcionan tal cual en el
+// flujo Dinámico: GROUPING SETS calcula cada nivel (detalle, subtotales y
+// nodos de jerarquía) directamente sobre las filas de la tabla de hechos,
+// nunca agregando agregados, así que AVG / COUNT DISTINCT dan el valor
+// correcto también en los subtotales.
+const DRACO_SQL_AGGREGATIONS = {
+    SUM: field => "SUM(" + field + ")",
+    AVG: field => "AVG(" + field + ")",
+    COUNT: field => "COUNT(" + field + ")",
+    COUNT_DISTINCT: field => "COUNT(DISTINCT " + field + ")",
+    MIN: field => "MIN(" + field + ")",
+    MAX: field => "MAX(" + field + ")"
+};
+
+function normalizeDracoAggregation(value) {
+    const v = String(value || "").trim().toUpperCase().replace(/\s+/g, "_");
+    if (v === "AVERAGE") return "AVG";
+    if (v === "COUNTDISTINCT" || v === "DISTINCTCOUNT") return "COUNT_DISTINCT";
+    return DRACO_SQL_AGGREGATIONS[v] ? v : "";
+}
+
+function dracoMeasureFieldOptions(reportId, zone, measureName) {
+    try {
+        const report = (window.ReportStore && reportId !== null && reportId !== undefined)
+            ? window.ReportStore.getReport(reportId) : null;
+        const all = (report && report.design && report.design.fieldOptions) || {};
+        return all[`${zone}|MEASURE|${measureName}`] || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Formato de Excel para una medida a partir de sus opciones:
+ *   - "Número":     #,##0  /  #,##0.00 ...  (separador de miles)
+ *   - "Porcentaje": 0%     /  0.00% ...
+ * con tantos decimales como diga "Nº de decimales". numberFormat (no
+ * numberFormatLocal) usa siempre la sintaxis inglesa ("," miles, "."
+ * decimales) y Excel muestra los separadores del idioma del usuario, por
+ * eso ya no hace falta elegir separador decimal. Devuelve null si la
+ * medida no tiene opciones guardadas (se deja el formato general).
+ *
+ * Compatibilidad: informes guardados con la versión anterior del panel
+ * tienen numberFormat "#,##0", "#,##0.00", "0.00%" o "#,##0.00 €": todo lo
+ * que lleva "%" se trata como porcentaje y el resto como número.
+ */
+function dracoNumberFormatFromOptions(opts) {
+    if (!opts) return null;
+    const kindRaw = String(opts.numberFormat || "number");
+    const kind = (kindRaw === "percent" || kindRaw.indexOf("%") !== -1) ? "percent" : "number";
+    let decimals = Number(opts.decimals);
+    if (!isFinite(decimals) || decimals < 0) decimals = kind === "percent" ? 0 : 2;
+    decimals = Math.min(10, Math.floor(decimals));
+    const dec = decimals > 0 ? "." + "0".repeat(decimals) : "";
+    return kind === "percent" ? "0" + dec + "%" : "#,##0" + dec;
+}
+
+function decorateDracoMeasure(m) {
+    if (!m) return;
+    if (!m.Zone) m.Zone = "filters";
+    const opts = dracoMeasureFieldOptions(ReportState.ReportId, m.Zone, m.Name);
+    m.Aggregation = opts ? normalizeDracoAggregation(opts.aggregation) : "";
+    m.NumberFormat = dracoNumberFormatFromOptions(opts);
+}
+
+function attachDracoMeasureOptions() {
+    (ReportState.Measures || []).forEach(decorateDracoMeasure);
 }
 
 /**
@@ -1155,7 +1244,9 @@ function applyFilterMeasuresToDynamicReport() {
     (ReportState.FilterMeasureNames || []).forEach(name => {
         if (!name) return;
         ReportState.MeasureCount = (ReportState.MeasureCount || 0) + 1;
-        ReportState.Measures.push({ Name: name });
+        const m = { Name: name, Zone: "filters" };
+        decorateDracoMeasure(m);
+        ReportState.Measures.push(m);
     });
 }
 
@@ -1447,8 +1538,33 @@ function buildSelectBase(relGrid, rowsDefs, colDefs, measureField) {
 // celda MEASURE realmente pintada, no necesariamente la primera del
 // diseño en EDIT_REPORT. Si no se pasa, se mantiene el comportamiento de
 // siempre (usado tal cual por el modo Dinámico).
-function buildFrom(measuresGrid, measureNameOverride) {
-    const measureName = measureNameOverride || ReportState.Measures[0].Name;
+function buildFrom(measuresGrid, measureNameOverride, relGrid) {
+    const firstMeasure = ReportState.Measures && ReportState.Measures[0];
+    const measureName = measureNameOverride || (firstMeasure && firstMeasure.Name);
+
+    // Informe SIN medidas (solo dimensiones en Filas y/o Columnas): no hay
+    // medida de la que sacar la tabla de hechos, así que se usa la de la
+    // relación (MODEL_RELATIONSHIP: FACT_PROJECT/DATASET/TABLE) de la
+    // primera dimensión usada — la misma tabla "f" contra la que
+    // buildJoins hace los JOIN, así que se listan los miembros que tienen
+    // datos, igual que cuando hay medida.
+    if (!measureName && relGrid) {
+        const lastRow = lastRowInColumnValues(relGrid, 1);
+        for (let R = 2; R <= lastRow; R++) {
+            if (dimensionIsUsed(cellValue(relGrid, R, 2))) {
+                return "FROM " + Provider.qualify(
+                    cellValue(relGrid, R, 3),
+                    cellValue(relGrid, R, 4),
+                    cellValue(relGrid, R, 5)
+                ) + " f";
+            }
+        }
+        throw new Error("No se encuentra la tabla de hechos de las dimensiones del informe (MODEL_RELATIONSHIP).");
+    }
+    if (!measureName) {
+        throw new Error("El informe no tiene ninguna medida ni dimensión que consultar.");
+    }
+
     const R = buscarMedida(measuresGrid, measureName);
 
     return "FROM " +
@@ -1922,7 +2038,23 @@ function parseJsonValueTriples(json) {
 }
 
 // Igual que asignar Texto a FormulaR1C1 en VBA: si es numérico, Excel lo interpreta como número
+//
+// NULL -> celda en blanco: BigQuery devuelve los NULL sin comillas
+// ({"v": null}, con el JSON "bonito" -> el texto extraído empieza por
+// "null" seguido de espacios/saltos de línea) y Snowflake/Fabric/Power BI
+// generan ese mismo literal en su pseudo JSON. Antes se pintaba tal cual
+// ("null" en la celda). Las cabeceras de Filas/Columnas ya descartaban esos
+// valores antes de llegar aquí (indexOf("null") === 0), así que esto solo
+// cambia el pintado de VALORES (medidas), que es lo que se buscaba.
+function isDracoNullLiteral(text) {
+    if (text === null || text === undefined) return true;
+    const t = String(text).trim().toLowerCase();
+    return t === "null" || t === "undefined";
+}
+
 function coerceCellLiteral(text) {
+    if (isDracoNullLiteral(text)) return "";
+    text = String(text);
     if (text.trim() !== "" && !isNaN(text)) {
         return Number(text);
     }
@@ -2198,11 +2330,23 @@ async function actualizarInformeFixed(event) {
  * GetMeasureSQL — ver nota de la cabecera de esta sección sobre la
  * implementación asumida.
  */
-function getMeasureSQL(measuresGrid, measureName) {
+// aggregationOverride (opcional): la agregación elegida en "Opciones de
+// campo" de la medida (SUM/AVG/COUNT/COUNT_DISTINCT/MIN/MAX). Vacía =
+// la del modelo semántico (MODEL_MEASURES!G), como hasta ahora.
+function getMeasureSQL(measuresGrid, measureName, aggregationOverride) {
     const R = buscarMedida(measuresGrid, measureName);
     if (R === 0) return "";
     const aggregation = String(cellValue(measuresGrid, R, 7)).trim(); // G: AGGREGATION
     const field = String(cellValue(measuresGrid, R, 6)).trim();       // F: FACT_FIELD
+    // Override de Opciones de campo, si no la del modelo. Si la del modelo
+    // es una de las conocidas se pasa por el mismo mapeo (así
+    // COUNT_DISTINCT, que el editor del modelo permite elegir, genera
+    // COUNT(DISTINCT ...) en vez de un "COUNT_DISTINCT(...)" inválido);
+    // cualquier otra se deja tal cual, como siempre.
+    const effective = normalizeDracoAggregation(aggregationOverride) || normalizeDracoAggregation(aggregation);
+    if (effective) {
+        return DRACO_SQL_AGGREGATIONS[effective]("f." + field) + " AS " + measureName;
+    }
     return aggregation + "(f." + field + ") AS " + measureName;
 }
 
@@ -2227,7 +2371,7 @@ function buildSelect(measuresGrid, relGrid) {
 
     for (const m of ReportState.Measures) {
         if (!first) sql += "," + CRLF;
-        sql += "    " + getMeasureSQL(measuresGrid, m.Name);
+        sql += "    " + getMeasureSQL(measuresGrid, m.Name, m.Aggregation);
         first = false;
     }
 
@@ -2618,6 +2762,9 @@ function computeGroupingSetDimensionsAndHierarchies(relGrid) {
 }
 
 function buildConfigSets(relGrid) {
+    // Sin campos en Filas ni Columnas (solo medidas): total general, sin
+    // GROUP BY (un "GROUPING SETS ( () )" no lo admiten todos los motores).
+    if (ReportState.Rows.length === 0 && ReportState.Columns.length === 0) return "";
     const { dimensions, hierarchiesAcum, combinations } = computeGroupingSetDimensionsAndHierarchies(relGrid);
 
     const tuples = combinations.map(item => groupingSetTupleToColumnList(item, dimensions, hierarchiesAcum));
@@ -2714,43 +2861,34 @@ function buildConfigSetsWithSubtotals(relGrid) {
  * Columnas y COLUMN_ID a partir del eje Filas) — se deja igual, según lo
  * acordado.
  */
+// "DENSE_RANK() OVER (ORDER BY ...) AS <alias>" a partir de las partes
+// del ORDER BY; si el eje está vacío (no hay ningún campo en él), una
+// constante 1: todo el resultado cae en una única fila/columna lógica
+// (DENSE_RANK sin ORDER BY no es válido en Snowflake).
+function buildDenseRankExpression(orderParts, alias) {
+    if (!orderParts || orderParts.length === 0) {
+        return "    1 AS " + alias;
+    }
+    return "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY" + CRLF
+        + orderParts.map(p => "            " + p).join("," + CRLF) + CRLF
+        + "    ) AS " + alias;
+}
+
 function buildFinalSelect() {
     let sql = "SELECT" + CRLF + CRLF;
 
-    sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
-    let first = true;
-    for (const c of ReportState.Columns) {
-        if (c.Hierarchy > 0) {
-            sql += first ? (CRLF + "            " + c.AttributeName) : ("," + CRLF + "            " + c.AttributeName);
-            first = false;
-        }
-    }
-    sql += CRLF + "    ) AS ROW_ID," + CRLF + CRLF;
+    sql += buildDenseRankExpression(ReportState.Columns.filter(c => c.Hierarchy > 0).map(c => c.AttributeName), "ROW_ID") + "," + CRLF + CRLF;
+    sql += buildDenseRankExpression(ReportState.Rows.filter(r => r.Hierarchy > 0).map(r => r.AttributeName), "COLUMN_ID");
 
-    sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
-    first = true;
-    for (const r of ReportState.Rows) {
-        if (r.Hierarchy > 0) {
-            sql += first ? (CRLF + "            " + r.AttributeName) : ("," + CRLF + "            " + r.AttributeName);
-            first = false;
-        }
-    }
-    sql += CRLF + "    ) AS COLUMN_ID," + CRLF + CRLF;
-
-    first = true;
-    for (const c of ReportState.Columns) {
-        sql += first ? ("    " + c.AttributeName) : ("," + CRLF + "    " + c.AttributeName);
-        first = false;
-    }
-    for (const r of ReportState.Rows) {
-        sql += "," + CRLF + "    " + r.AttributeName;
-    }
-
-    // Una columna por medida (antes: "IMPORTE" fijo, lo que descartaba
-    // cualquier medida adicional aunque ya viniera calculada en REPORT_DATA).
-    for (const m of ReportState.Measures) {
-        sql += "," + CRLF + "    " + m.Name;
-    }
+    // Campos de Columnas, de Filas y una columna por medida (antes:
+    // "IMPORTE" fijo). Con lista común para que un eje vacío o un informe
+    // sin medidas no deje comas sueltas.
+    const items = [
+        ...ReportState.Columns.map(c => c.AttributeName),
+        ...ReportState.Rows.map(r => r.AttributeName),
+        ...ReportState.Measures.map(m => m.Name)
+    ];
+    if (items.length > 0) sql += "," + CRLF + CRLF + items.map(it => "    " + it).join("," + CRLF);
     sql += CRLF + CRLF + "FROM REPORT_DATA";
 
     return sql;
@@ -2761,59 +2899,36 @@ function buildFinalSelect() {
  * correspondan al grouping-set de totales de esa jerarquía (IS NULL).
  */
 function buildFinalWhere() {
-    let sql = "";
-    let currentDim = "";
-    let first = true;
+    return buildFinalWhereFromAxes([ReportState.Columns, ReportState.Rows]);
+}
 
-    // ---- COLUMNAS ----
-    for (const c of ReportState.Columns) {
-        if (c.Hierarchy > 0) {
-            if (currentDim !== c.Dimension.toUpperCase()) {
-                if (currentDim !== "") {
-                    sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
-                } else {
-                    sql += "WHERE NOT (" + CRLF;
-                }
-                currentDim = c.Dimension.toUpperCase();
-                first = true;
+/**
+ * Para cada eje recibido, agrupa sus campos (Hierarchy > 0) en tramos
+ * consecutivos de la misma dimensión y genera "NOT ( a IS NULL AND b IS
+ * NULL ... )" por tramo, todo unido con AND. Mismo resultado que el bucle
+ * original de buildFinalWhere cuando los dos ejes tienen campos, pero sin
+ * dejar paréntesis/AND sueltos si alguno (o los dos) está vacío.
+ */
+function buildFinalWhereFromAxes(axes) {
+    const groups = [];
+    for (const fields of axes) {
+        let currentDim = "";
+        let current = null;
+        for (const f of fields) {
+            if (!(f.Hierarchy > 0)) continue;
+            const dim = String(f.Dimension).toUpperCase();
+            if (!current || dim !== currentDim) {
+                current = [];
+                groups.push(current);
+                currentDim = dim;
             }
-
-            sql += first
-                ? ("    " + c.AttributeName + " IS NULL")
-                : (CRLF + "    AND " + c.AttributeName + " IS NULL");
-            first = false;
+            current.push(f.AttributeName + " IS NULL");
         }
     }
-
-    sql += CRLF + ")";
-
-    // ---- FILAS ----
-    currentDim = "";
-
-    for (const r of ReportState.Rows) {
-        if (r.Hierarchy > 0) {
-            if (currentDim !== r.Dimension.toUpperCase()) {
-                if (currentDim !== "") {
-                    sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
-                } else {
-                    sql += CRLF + CRLF + "AND NOT (" + CRLF;
-                }
-                currentDim = r.Dimension.toUpperCase();
-                first = true;
-            }
-
-            sql += first
-                ? ("    " + r.AttributeName + " IS NULL")
-                : (CRLF + "    AND " + r.AttributeName + " IS NULL");
-            first = false;
-        }
-    }
-
-    if (currentDim !== "") {
-        sql += CRLF + ")";
-    }
-
-    return sql;
+    if (groups.length === 0) return "";
+    return groups
+        .map((g, idx) => (idx === 0 ? "WHERE NOT (" : "AND NOT (") + CRLF + "    " + g.join(CRLF + "    AND ") + CRLF + ")")
+        .join(CRLF + CRLF);
 }
 
 /* =======================================================================
@@ -2911,32 +3026,15 @@ function buildAxisOrderByWithSubtotals(fields, subtotalsOnTop) {
 function buildFinalSelectWithSubtotals(atributesGrid, subtotalsOnTop) {
     let sql = "SELECT" + CRLF + CRLF;
 
-    const rowOrderParts = buildAxisOrderByWithSubtotals(ReportState.Columns, subtotalsOnTop);
-    sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
-    rowOrderParts.forEach((part, idx) => {
-        sql += idx === 0 ? (CRLF + "            " + part) : ("," + CRLF + "            " + part);
-    });
-    sql += CRLF + "    ) AS ROW_ID," + CRLF + CRLF;
+    sql += buildDenseRankExpression(buildAxisOrderByWithSubtotals(ReportState.Columns, subtotalsOnTop), "ROW_ID") + "," + CRLF + CRLF;
+    sql += buildDenseRankExpression(buildAxisOrderByWithSubtotals(ReportState.Rows, subtotalsOnTop), "COLUMN_ID");
 
-    const colOrderParts = buildAxisOrderByWithSubtotals(ReportState.Rows, subtotalsOnTop);
-    sql += "    DENSE_RANK() OVER (" + CRLF + "        ORDER BY";
-    colOrderParts.forEach((part, idx) => {
-        sql += idx === 0 ? (CRLF + "            " + part) : ("," + CRLF + "            " + part);
-    });
-    sql += CRLF + "    ) AS COLUMN_ID," + CRLF + CRLF;
-
-    let first = true;
-    for (const c of ReportState.Columns) {
-        sql += first ? ("    " + fieldFinalExpressionWithSubtotal(atributesGrid, c)) : ("," + CRLF + "    " + fieldFinalExpressionWithSubtotal(atributesGrid, c));
-        first = false;
-    }
-    for (const r of ReportState.Rows) {
-        sql += "," + CRLF + "    " + fieldFinalExpressionWithSubtotal(atributesGrid, r);
-    }
-
-    for (const m of ReportState.Measures) {
-        sql += "," + CRLF + "    " + m.Name;
-    }
+    const items = [
+        ...ReportState.Columns.map(c => fieldFinalExpressionWithSubtotal(atributesGrid, c)),
+        ...ReportState.Rows.map(r => fieldFinalExpressionWithSubtotal(atributesGrid, r)),
+        ...ReportState.Measures.map(m => m.Name)
+    ];
+    if (items.length > 0) sql += "," + CRLF + CRLF + items.map(it => "    " + it).join("," + CRLF);
     sql += CRLF + CRLF + "FROM REPORT_DATA";
 
     return sql;
@@ -2949,60 +3047,12 @@ function buildFinalSelectWithSubtotals(atributesGrid, subtotalsOnTop) {
  * tiene marcas) conserva el filtrado de siempre, sin ningun cambio.
  */
 function buildFinalWhereWithSubtotals() {
-    let sql = "";
-    let currentDim = "";
-    let first = true;
-
     const colsHaveSubtotal = ReportState.Columns.some(c => c.Subtotal);
     const rowsHaveSubtotal = ReportState.Rows.some(r => r.Subtotal);
-
-    if (!colsHaveSubtotal) {
-        for (const c of ReportState.Columns) {
-            if (c.Hierarchy > 0) {
-                if (currentDim !== c.Dimension.toUpperCase()) {
-                    if (currentDim !== "") {
-                        sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
-                    } else {
-                        sql += "WHERE NOT (" + CRLF;
-                    }
-                    currentDim = c.Dimension.toUpperCase();
-                    first = true;
-                }
-
-                sql += first
-                    ? ("    " + c.AttributeName + " IS NULL")
-                    : (CRLF + "    AND " + c.AttributeName + " IS NULL");
-                first = false;
-            }
-        }
-        if (currentDim !== "") sql += CRLF + ")";
-    }
-
-    currentDim = "";
-
-    if (!rowsHaveSubtotal) {
-        for (const r of ReportState.Rows) {
-            if (r.Hierarchy > 0) {
-                if (currentDim !== r.Dimension.toUpperCase()) {
-                    if (currentDim !== "") {
-                        sql += CRLF + CRLF + ")" + CRLF + CRLF + "AND NOT (" + CRLF;
-                    } else {
-                        sql += (sql.trim() !== "" ? (CRLF + CRLF + "AND NOT (" + CRLF) : ("WHERE NOT (" + CRLF));
-                    }
-                    currentDim = r.Dimension.toUpperCase();
-                    first = true;
-                }
-
-                sql += first
-                    ? ("    " + r.AttributeName + " IS NULL")
-                    : (CRLF + "    AND " + r.AttributeName + " IS NULL");
-                first = false;
-            }
-        }
-        if (currentDim !== "") sql += CRLF + ")";
-    }
-
-    return sql;
+    return buildFinalWhereFromAxes([
+        colsHaveSubtotal ? [] : ReportState.Columns,
+        rowsHaveSubtotal ? [] : ReportState.Rows
+    ]);
 }
 
 /**
@@ -3012,12 +3062,15 @@ function buildFinalWhereWithSubtotals() {
  * Si hay al menos uno, usa las variantes "WithSubtotals" de arriba.
  */
 function buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop) {
+    if (ReportState.Rows.length === 0 && ReportState.Columns.length === 0 && ReportState.Measures.length === 0) {
+        throw new Error("Añade al menos un campo a Filas o Columnas.");
+    }
     let sql = "";
     const withSubtotals = hasAnySubtotalMarked();
 
     sql += "WITH REPORT_DATA AS (" + CRLF + CRLF;
     sql += (withSubtotals ? buildSelectWithSubtotals(measuresGrid, relGrid) : buildSelect(measuresGrid, relGrid)) + CRLF + CRLF;
-    sql += buildFrom(measuresGrid) + CRLF + CRLF;
+    sql += buildFrom(measuresGrid, null, relGrid) + CRLF + CRLF;
     sql += buildJoins(relGrid) + CRLF + CRLF;
     sql += buildWhere(atributesGrid, relGrid) + CRLF + CRLF;
     sql += (withSubtotals ? buildConfigSetsWithSubtotals(relGrid) : buildConfigSets(relGrid)) + CRLF + CRLF;
@@ -6141,6 +6194,17 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const isPlanningReport_ = !!(report_ && report_.reportProperties && report_.reportProperties.planningReport);
     const factBaseline = isPlanningReport_ ? new Map() : null;
 
+    // Definición del informe que se va a pintar (ReportState): se recarga
+    // aquí para que corresponda SIEMPRE a reportId. Antes se pintaba con
+    // lo que hubiera dejado en ReportState el último loadReportDefinition,
+    // que en "Actualizar todos" (todas las consultas se preparan primero y
+    // se pintan después) o en un +/- de un informe que no es el último
+    // diseñado era el de OTRO informe. Además aporta las opciones de campo
+    // de cada medida (formato), que el pintado necesita.
+    const editReportGrid = await getEditReportGrid(context, reportId);
+    loadReportDefinition(editReportGrid, reportId);
+    applyFilterMeasuresToDynamicReport();
+
     const totalCampos = 2 + ReportState.RowCount + ReportState.ColumnCount + ReportState.MeasureCount;
 
     // ---- Extraer todos los "v" ----
@@ -6206,15 +6270,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     }
 
     // ---- PINTAR ----
-    const editReportGrid = await getEditReportGrid(context, reportId);
-
-    const RRows = parseAddress(cellValue(editReportGrid, 10, 8));  // EDIT_REPORT!H10
-    const RCols = parseAddress(cellValue(editReportGrid, 10, 14)); // EDIT_REPORT!N10
-
-    const rowsOffRow = RRows.row - 1;
-    const rowsOffCol = RRows.col - 1;
-    const colsOffRow = RCols.row - 1;
-    const colsOffCol = RCols.col - 1;
+    // (editReportGrid ya se ha leído al principio de la función)
 
     const totalDimFilas = ReportState.ColumnCount;
     const totalDimCols = ReportState.RowCount;
@@ -6243,6 +6299,39 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
 
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
+
+    // Ancla de cada eje (EDIT_REPORT!H10 = Filas, N10 = Columnas). El
+    // taskpane (RangeAxis.addressOf) deja la dirección VACÍA cuando el eje
+    // no tiene ningún campo (alto/ancho 0) y antes eso hacía fallar
+    // parseAddress -> no se pintaba nada hasta tener campos en los DOS
+    // ejes. Ahora, si falta una, se deduce de la otra con la misma regla
+    // de RangeAxis (Columnas empieza justo a la derecha de las cabeceras de
+    // Filas; Filas empieza justo debajo de las cabeceras de Columnas), y
+    // si faltan las dos (solo medidas en Filtros), se usa la celda ancla
+    // del informe (EDIT_REPORT!E1) o A1.
+    const tryParseAddress = (raw) => {
+        const t = String(raw === null || raw === undefined ? "" : raw).trim();
+        if (t === "") return null;
+        try { return parseAddress(t); } catch (e) { return null; }
+    };
+    let RRows = tryParseAddress(cellValue(editReportGrid, 10, 8));  // EDIT_REPORT!H10
+    let RCols = tryParseAddress(cellValue(editReportGrid, 10, 14)); // EDIT_REPORT!N10
+    if (!RRows && !RCols) {
+        const anchor = tryParseAddress(cellValue(editReportGrid, 1, 5)) || { row: 1, col: 1 }; // EDIT_REPORT!E1
+        RRows = { row: anchor.row, col: anchor.col };
+        RCols = { row: anchor.row, col: anchor.col };
+    } else if (!RCols) {
+        RCols = { row: RRows.row - planColumnas.totalIaux, col: RRows.col + planFilas.totalIaux };
+    } else if (!RRows) {
+        RRows = { row: RCols.row + planColumnas.totalIaux, col: RCols.col - planFilas.totalIaux };
+    }
+    RRows.row = Math.max(1, RRows.row); RRows.col = Math.max(1, RRows.col);
+    RCols.row = Math.max(1, RCols.row); RCols.col = Math.max(1, RCols.col);
+
+    const rowsOffRow = RRows.row - 1;
+    const rowsOffCol = RRows.col - 1;
+    const colsOffRow = RCols.row - 1;
+    const colsOffCol = RCols.col - 1;
 
     // ---- Medidas arrastradas a la zona "Filtros" (ver loadFilters/
     // appendLockedFilterRangesToState + applyFilterMeasuresToDynamicReport,
@@ -6293,7 +6382,11 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // measureCount veces más ancho/alto (una fila/columna física física
     // por medida), en vez de una sola celda con el valor de la última
     // medida (como pasaba antes de este cambio).
-    const measureCount = Math.max(1, ReportState.Measures.length);
+    // realMeasureCount = 0 -> informe solo con dimensiones: se pintan las
+    // cabeceras de Filas/Columnas y ningún valor. measureCount se mantiene
+    // en >= 1 porque solo se usa para "explotar" el eje que lleva medidas.
+    const realMeasureCount = ReportState.Measures.length;
+    const measureCount = Math.max(1, realMeasureCount);
     const measuresOnRowsAxis = planFilas.measureLevels.length > 0;      // eje "Filas" físico (H/I/J)
     const measuresOnColsAxis = planColumnas.measureLevels.length > 0;   // eje "Columnas" físico (N/O/P)
     // Índice (0-based) del primer campo de medida dentro de cada fila del
@@ -6324,7 +6417,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // "Suprimir ceros en filas/columnas" (propiedades del informe): se quita
     // del diccionario, ANTES de compactar, cualquier ROW_ID/COLUMN_ID cuyo
     // valor sea siempre cero (o vacío) en todo el FACT.
-    if (reportProps.suppressZeroRows || reportProps.suppressZeroCols) {
+    if (realMeasureCount > 0 && (reportProps.suppressZeroRows || reportProps.suppressZeroCols)) {
         const rowsWithValue = new Set();
         const colsWithValue = new Set();
         for (let i = 0; i < filas; i++) {
@@ -6492,13 +6585,14 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         // quedaría con la tabla completamente en blanco (sin ningún dato
         // que mostrar), que no es lo que se pedía — "no pinte esa
         // fila/columna" se refiere a la etiqueta de cabecera, no al dato.
-        for (let mIdx = 0; mIdx < measureCount; mIdx++) {
+        for (let mIdx = 0; mIdx < realMeasureCount; mIdx++) {
             const physRow = explodeForMeasures(newRowId, measuresOnRowsAxis, mIdx);
             const physCol = explodeForMeasures(newColId, measuresOnColsAxis, mIdx);
             const row = physRow + rowsOffRow;
             const col = physCol + colsOffCol;
-            const value = coerceCellLiteral(String(f[measureFieldBase + mIdx]));
-            factCells.set(row + "_" + col, { row, col, value });
+            // NULL (o sin valor) -> celda en blanco, ver coerceCellLiteral.
+            const value = coerceCellLiteral(f[measureFieldBase + mIdx]);
+            factCells.set(row + "_" + col, { row, col, value, mIdx });
             if (factBaseline) factBaseline.set(row + "_" + col, value);
         }
     }
@@ -6733,9 +6827,31 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         totalDimFilas: paintedFilasCols,
         totalDimCols: paintedColsRows,
         maxRowId: physicalMaxRowId, maxColId: physicalMaxColId,
-        applyVisualFormat: reportProps.overwriteFormats
+        applyVisualFormat: reportProps.overwriteFormats,
+        hasValues: realMeasureCount > 0
     }, reportId, prevNamedItems);
     tPerf = draco_perfMark(reportId, "Rangos con nombre + formato general (fuente/número/bordes)", tPerf);
+
+    // Formato de número POR MEDIDA (Opciones de campo: Número/Porcentaje +
+    // nº de decimales), solo con "Sobrescribir formatos" activado — igual
+    // que el resto del formato. Va después de applyDracoNamedRanges, que
+    // deja el formato general por defecto (#,##0.00) en todo el bloque.
+    if (reportProps.overwriteFormats && namedRanges.valuesRange && realMeasureCount > 0) {
+        try {
+            const applied = applyDracoMeasureNumberFormats(namedRanges.valuesRange, {
+                rows: physicalMaxRowId, cols: physicalMaxColId,
+                measureCount: realMeasureCount,
+                measuresOnRowsAxis, measuresOnColsAxis
+            });
+            if (applied) {
+                draco_suspendScreenUpdating(context);
+                await context.sync();
+            }
+        } catch (e) {
+            console.warn("[Draco] No se pudo aplicar el formato de número de las medidas:", e);
+        }
+    }
+    tPerf = draco_perfMark(reportId, "Formato de número por medida", tPerf);
 
     // 6) Registrar (una sola vez por hoja) los listeners de clic/edición:
     //    resuelven los indicadores +/- pintados arriba y el "Reconocimiento
@@ -6751,11 +6867,11 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // applyDracoNamedRanges (rowsRange/colsRange): antes se volvían a
     // buscar por nombre con su propio load+sync, un viaje de red entero
     // solo para recuperar algo que ya teníamos en memoria.
-    if (reportProps.autoFitColumns && namedRanges.rowsRange && namedRanges.colsRange) {
+    if (reportProps.autoFitColumns && (namedRanges.rowsRange || namedRanges.colsRange)) {
         if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ajustando columnas"));
         try {
-            namedRanges.rowsRange.format.autofitColumns();
-            namedRanges.colsRange.format.autofitColumns();
+            if (namedRanges.rowsRange) namedRanges.rowsRange.format.autofitColumns();
+            if (namedRanges.colsRange) namedRanges.colsRange.format.autofitColumns();
 
             draco_suspendScreenUpdating(context);
             await context.sync();
@@ -6949,6 +7065,65 @@ async function clearDracoNamedRanges(context, reportId, overwriteFormats) {
 }
 
 /**
+ * Aplica el formato de número de cada medida (ReportState.Measures[k].
+ * NumberFormat, ver dracoNumberFormatFromOptions) sobre el bloque de
+ * valores ya definido. Las medidas están todas en un mismo eje y
+ * "explotadas" (measureCount filas/columnas físicas consecutivas por
+ * cada ID lógico, ver explodeForMeasures en jsonTo3MatricesCore), así que
+ * la medida de una celda es (fila % measureCount) si van en Filas o
+ * (columna % measureCount) si van en Columnas. Deja las operaciones en
+ * cola (sin sync); devuelve true si ha encolado alguna.
+ */
+function applyDracoMeasureNumberFormats(valuesRange, layout) {
+    const DEFAULT_FMT = "#,##0.00";
+    const { rows, cols, measureCount, measuresOnRowsAxis, measuresOnColsAxis } = layout;
+    if (!valuesRange || rows <= 0 || cols <= 0 || measureCount <= 0) return false;
+
+    const fmts = [];
+    for (let k = 0; k < measureCount; k++) {
+        const m = ReportState.Measures[k];
+        fmts.push((m && m.NumberFormat) || DEFAULT_FMT);
+    }
+    // Nada que cambiar respecto al formato por defecto ya aplicado.
+    if (fmts.every(f => f === DEFAULT_FMT)) return false;
+
+    // Todas iguales (o una sola medida): una única asignación.
+    if (fmts.every(f => f === fmts[0]) || (!measuresOnRowsAxis && !measuresOnColsAxis)) {
+        valuesRange.numberFormat = [[fmts[0]]];
+        return true;
+    }
+
+    const fmtFor = (r, c) => fmts[measuresOnRowsAxis ? (r % measureCount) : (c % measureCount)];
+
+    // Bloques razonables: matriz completa en una sola operación.
+    if (rows * cols <= 200000) {
+        const matrix = [];
+        for (let r = 0; r < rows; r++) {
+            const line = new Array(cols);
+            for (let c = 0; c < cols; c++) line[c] = fmtFor(r, c);
+            matrix.push(line);
+        }
+        valuesRange.numberFormat = matrix;
+        return true;
+    }
+
+    // Bloques enormes: fila a fila (medidas en Filas) o columna a columna
+    // (medidas en Columnas), solo las que no usan el formato por defecto.
+    if (measuresOnRowsAxis) {
+        for (let r = 0; r < rows; r++) {
+            const f = fmts[r % measureCount];
+            if (f !== DEFAULT_FMT) valuesRange.getRow(r).numberFormat = [[f]];
+        }
+    } else {
+        for (let c = 0; c < cols; c++) {
+            const f = fmts[c % measureCount];
+            if (f !== DEFAULT_FMT) valuesRange.getColumn(c).numberFormat = [[f]];
+        }
+    }
+    return true;
+}
+
+/**
  * Crea/actualiza los 3 rangos con nombre a partir de la última tabla
  * pintada, y aplica: fuente Segoe UI 9 en los tres, número 2 decimales +
  * separador de miles + centrado en Draco_001_Values, y un borde fino
@@ -6971,23 +7146,37 @@ async function clearDracoNamedRanges(context, reportId, overwriteFormats) {
 async function applyDracoNamedRanges(context, sheet, dims, reportId, existingItems) {
     const { RRows, RCols, totalDimFilas, totalDimCols, maxRowId, maxColId, applyVisualFormat } = dims;
     const doFormat = applyVisualFormat !== false; // por defecto, sí formatear (comportamiento previo)
+    const hasValues = dims.hasValues !== false;   // false = informe sin medidas (solo cabeceras)
     let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
 
-    if (maxRowId <= 0 || maxColId <= 0 || totalDimFilas <= 0 || totalDimCols <= 0) {
-        // No hay datos suficientes para definir una tabla: no se crean rangos.
-        return { rowsRange: null, colsRange: null, valuesRange: null };
-    }
-
-    const rowsRange = sheet.getRangeByIndexes(RRows.row - 1, RRows.col - 1, maxRowId, totalDimFilas);
-    const colsRange = sheet.getRangeByIndexes(RCols.row - 1, RCols.col - 1, totalDimCols, maxColId);
-    const valuesRange = sheet.getRangeByIndexes(RRows.row - 1, RCols.col - 1, maxRowId, maxColId);
+    // Cada rango se crea solo si tiene tamaño: un informe con campos solo
+    // en Filas (o solo en Columnas), o sin medidas, tiene alguno de los 3
+    // vacíos. Antes, si faltaba cualquiera, no se creaba NINGUNO — y sin
+    // rangos con nombre el siguiente refresco no sabía qué borrar.
+    const rowsRange = (maxRowId > 0 && totalDimFilas > 0)
+        ? sheet.getRangeByIndexes(RRows.row - 1, RRows.col - 1, maxRowId, totalDimFilas) : null;
+    const colsRange = (maxColId > 0 && totalDimCols > 0)
+        ? sheet.getRangeByIndexes(RCols.row - 1, RCols.col - 1, totalDimCols, maxColId) : null;
+    const valuesRange = (hasValues && maxRowId > 0 && maxColId > 0)
+        ? sheet.getRangeByIndexes(RRows.row - 1, RCols.col - 1, maxRowId, maxColId) : null;
 
     const rn = dracoRangeNames(reportId);
     const defs = [
         { name: rn.rows, range: rowsRange },
         { name: rn.cols, range: colsRange },
         { name: rn.values, range: valuesRange }
-    ];
+    ].filter(d => d.range);
+
+    if (defs.length === 0) {
+        // Nada pintado: se borran los nombres antiguos (si los había) para
+        // que no apunten a una tabla que ya no existe.
+        if (existingItems && existingItems.some(it => !it.isNullObject)) {
+            existingItems.forEach(it => { if (!it.isNullObject) it.delete(); });
+            await context.sync();
+        }
+        return { rowsRange: null, colsRange: null, valuesRange: null };
+    }
+    const presentRanges = defs.map(d => d.range);
 
     // "Sobrescribir formatos" (propiedades del informe) desactivado: se
     // conservan el color/fuente/bordes que el usuario haya tocado a mano,
@@ -6995,14 +7184,19 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId, existingIte
     // tamaño actual de la tabla.
     if (doFormat) {
         // ---- Fuente Segoe UI 9 en los tres rangos ----
-        for (const r of [rowsRange, colsRange, valuesRange]) {
+        for (const r of presentRanges) {
             r.format.font.name = DRACO_FONT_NAME;
             r.format.font.size = DRACO_FONT_SIZE;
         }
 
         // ---- Valores: 2 decimales + separador de miles, centrado ----
-        valuesRange.numberFormat = [["#,##0.00"]];
-        valuesRange.format.horizontalAlignment = Excel.HorizontalAlignment.center;
+        // (formato por defecto; las medidas con formato propio en
+        // "Opciones de campo" lo sustituyen después, ver
+        // applyDracoMeasureNumberFormats)
+        if (valuesRange) {
+            valuesRange.numberFormat = [["#,##0.00"]];
+            valuesRange.format.horizontalAlignment = Excel.HorizontalAlignment.center;
+        }
 
         // ---- Bordes: primero se elimina cualquier borde existente del rango
         //      (externo + interior, restos de refrescos anteriores con otra
@@ -7027,7 +7221,7 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId, existingIte
         ];
 
         // 1a: quitar bordes (+ fuente/número, que no necesitan sync propio).
-        for (const r of [rowsRange, colsRange, valuesRange]) {
+        for (const r of presentRanges) {
             for (const edge of ALL_BORDER_EDGES) {
                 r.format.borders.getItem(edge).style = Excel.BorderLineStyle.none;
             }
@@ -7044,7 +7238,7 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId, existingIte
         tPerf = draco_perfMark(reportId, "  [diag] Borrar nombres antiguos", tPerf);
 
         // 2a: pintar el borde exterior fino, color RGB(13,23,42).
-        for (const r of [rowsRange, colsRange, valuesRange]) {
+        for (const r of presentRanges) {
             for (const edge of OUTER_BORDER_EDGES) {
                 const border = r.format.borders.getItem(edge);
                 border.style = Excel.BorderLineStyle.continuous;
