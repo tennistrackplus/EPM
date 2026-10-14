@@ -1384,13 +1384,9 @@ const TaskPaneApp = {
             e.stopPropagation();
             e.preventDefault();
             if (!window.DracoCalcEditor) return;
-            let initial = attribute;
-            if (!initial) {
-                // Desde la dimensión: el primer atributo que ya tenga cálculos, si no el primero.
-                initial = (attributes || []).find(a =>
-                    window.DracoCalc.getCalcs(this.state.fieldOptions, dim, a).length > 0) || (attributes || [])[0];
-            }
-            window.DracoCalcEditor.open(this, dim, initial, attributes);
+            // Desde un atributo: ventana de cálculos de ese atributo.
+            // Desde la dimensión: listado de los cálculos de todos sus atributos.
+            window.DracoCalcEditor.open(this, dim, attribute || null, attributes);
         });
         return btn;
     },
@@ -1429,7 +1425,7 @@ const TaskPaneApp = {
         labelSpan.textContent = name.toLowerCase();
         div.appendChild(iconSpan);
         div.appendChild(labelSpan);
-        if (!isHierarchy) div.appendChild(this.createCalcButton(dim, name, dimAttributes || [name]));
+        if (!isHierarchy) div.appendChild(this.createCalcButton(dim, name, [name]));
 
         const fieldData = { dim, name, isHierarchy };
 

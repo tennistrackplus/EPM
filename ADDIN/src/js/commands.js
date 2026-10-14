@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-14-calcs-v1";
+const DRACO_BUILD = "2026-10-14-calcs-v2";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -1306,7 +1306,7 @@ function buildDracoCalcCtes(relGrid, measuresGrid, atributesGrid, withSubtotals)
         const memberCond = (r) => "CAST(s." + A + " AS " + STR + ") = " + dracoSqlString(r);
 
         const calcBranches = spec.calcs.map((calc, ci) => {
-            const ord = calc.position === "start" ? (-1000 + ci) : (1 + ci);
+            const ord = 1 + ci; // los cálculos van siempre detrás de los miembros
             const isMember = calc.mode === "member";
             const cols = curCols.map(c => {
                 if (c === A) return dracoSqlString(calc.name) + " AS " + c;
