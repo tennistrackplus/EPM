@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-15-epm-formula-v1";
+const DRACO_BUILD = "2026-10-16-hibrido-autofit";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -3099,12 +3099,11 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
         await formatDracoStaticAxis(context, sheet, editReportGrid, plan.staticIsRows ? "rows" : "cols", staticLines);
     }
 
-    if (props.autoFitColumns && nTuples > 0) {
-        const rg = plan.dynamicIsColumns
-            ? sheet.getRangeByIndexes(anchor.row - 1, anchor.col - 1, Math.max(1, headerDepth), nTuples)
-            : sheet.getRangeByIndexes(anchor.row - 1, anchor.col - 1, nTuples, Math.max(1, headerDepth));
-        rg.format.autofitColumns();
-    }
+    // El autoajuste de columnas NO se hace aquí: durante el refresco el
+    // cálculo está en manual y las fórmulas EPM_VALUE de la cabecera aún no
+    // muestran su texto, así que Excel ajustaría a celdas "vacías" (columna
+    // enana). Se hace al final, con el cálculo ya restaurado (ver
+    // autofitDracoHybrid en actualizarInformeHybridCore).
     await context.sync();
     draco_perfMark(reportId, `Híbrido: pintado (${nTuples} miembros dinámicos, ${cells.length} valores)`, tPerf);
 }
@@ -3457,10 +3456,34 @@ async function actualizarInformeHybridCore(reportIdOverride) {
     } finally {
         await endSuppressPlanningPaint();
         await draco_endManualCalculation();
+        // Con el cálculo ya restaurado, las cabeceras EPM_VALUE muestran su
+        // texto: ahora sí se puede autoajustar.
+        try { await autofitDracoHybrid(reportId, built && built.plan); } catch (e) { console.warn("[Draco] Autoajuste híbrido:", e); }
         if (window.BusyIndicator) await window.BusyIndicator.hide();
         draco_perfMark(reportId, "══ TOTAL refresco híbrido ══", tRefreshStart);
         await endDracoPerfLog();
     }
+}
+
+/**
+ * Autoajusta las columnas de lo pintado por el híbrido (cabecera del eje
+ * dinámico y, si las Filas son dinámicas, también su bloque de valores),
+ * DESPUÉS de recalcular, para que las fórmulas EPM_VALUE ya muestren su
+ * texto y no se queden las columnas estrechas.
+ */
+async function autofitDracoHybrid(reportId, plan) {
+    if (!plan || !dracoReportPropsFor(reportId).autoFitColumns) return;
+    await Excel.run(async (context) => {
+        try { context.workbook.application.calculate(Excel.CalculationType.recalculate); } catch (e) { /* host sin calculate */ }
+        await context.sync();
+        const rn = dracoRangeNames(reportId);
+        const items = [plan.dynamicIsColumns ? rn.cols : rn.rows, rn.values]
+            .map(n => context.workbook.names.getItemOrNullObject(n));
+        items.forEach(it => it.load("name"));
+        await context.sync();
+        items.forEach(it => { if (!it.isNullObject) it.getRange().format.autofitColumns(); });
+        await context.sync();
+    });
 }
 
 /* ==========================================================================
