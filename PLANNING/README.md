@@ -706,7 +706,22 @@ botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un infor
   guardan con la definición (`DEFINICION_JSON.cells`). El "Excel falso" (`host-bridge`) guarda la fórmula de cada
   celda, calcula las fórmulas normales (`+ - * / ^`, referencias y rangos, `SUM/SUMA`, `MIN`, `MAX`, `ABS`,
   `AVERAGE/PROMEDIO`, `ROUND/REDONDEAR`, `IF/SI`, `IFERROR/SI.ERROR`), convierte A1 ↔ R1C1 y calcula las barras de
-  datos, que el visor dibuja con CSS.
+  datos, que el visor dibuja con CSS. El doble clic y «Miembro» proponen el campo según la fila/columna (posición
+  en el eje del diseño o, si no, las celdas EPM_VALUE vecinas). «Refrescar» relee el diseño y el eje Estático y
+  muestra los errores en el aviso. «Filtro» no pregunta el informe (una tabla = un informe).
+- **Variables.** «Variables» abre `variablesDialog.html` (diálogo del addin, comando `abrirVariables`): nombre, campo
+  y valor elegido de la lista de valores. En el selector de miembros, pestaña «Variables»:
+  `=EPM_VALUE("DIM","ATTR","$NOMBRE$","$NOMBRE$")`, que se muestra con el valor de la variable. El SQL se genera con
+  el marcador `$NOMBRE$` y `executeSQL` lo sustituye al ejecutar (`ADDIN/src/js/variablesStore.js`), así que el SQL
+  guardado vale para cualquier valor. Preparado para cambiarlas en tiempo de ejecución: `dt.variables` (lista) y
+  `dt.run` con `{ variables: { NOMBRE: valor } }` (DracoTables.run(..., { variables })).
+- **Bloque «Selector de variable» (`dracoVar`).** Desplegable del generador que da valor a una variable de las Tablas
+  Draco del informe. Propiedades: cubo, campo (dimensión · atributo) y variable vinculada, elegida entre las de ese
+  campo que usan las Tablas Draco de ESE informe (`dt.varsFor`, según su SQL guardado). Se guardan también las tablas
+  que la usan (`refs`) y su valor guardado (`defaultValue`, valor inicial). En el visor/vista previa muestra los valores
+  del campo (`dt.members`: `SELECT DISTINCT` sobre la tabla de la dimensión, máx. 5.000, caché 10 min) y, al
+  cambiarlo, vuelve a ejecutar solo esas tablas con el nuevo valor (`dt.run` con `variables`), sin regenerar SQL.
+  Varios selectores de la misma variable van sincronizados. Solo disponible dentro de Draco Planning.
 
 **Actualizar la herramienta.** `informes-herramienta.html` es un único archivo
 autocontenido, que fuera de Draco funciona también por sí solo. Para actualizar
