@@ -1126,6 +1126,7 @@ function dtGridHtml(g){
       var num=(o.t!=null)||/^-?\d+(\.\d+)?$/.test(txt), al=o.al||((num&&!o.bg)?'right':'left');
       st.push('text-align:'+(al==='center'?'center':(al==='right'?'right':'left')));
       if(o.ind) st.push('padding-left:'+(10+o.ind*16)+'px');
+      if(o.bar){ st.push(o.bar); if(o.only) st.push('color:transparent'); }
       if(o.bd){ if(o.bd.t) st.push('border-top:1px solid var(--line)'); if(o.bd.r) st.push('border-right:1px solid var(--line)'); if(o.bd.b) st.push('border-bottom:1px solid var(--line)'); if(o.bd.l) st.push('border-left:1px solid var(--line)'); }
       var tg=/^[\u25B8\u25BE] /.test(txt); if(tg) cls.push('dt-tg');
       h+='<td'+(cls.length?' class="'+cls.join(' ')+'"':'')+(m?' rowspan="'+(m.rowSpan||1)+'" colspan="'+(m.colSpan||1)+'"':'')+(tg?' data-dt-r="'+i+'" data-dt-c="'+j+'" title="Expandir o contraer"':'')+' style="'+st.join(';')+'">'+esc(txt)+'</td>';

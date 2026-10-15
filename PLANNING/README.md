@@ -688,7 +688,7 @@ botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un infor
   las tablas mientras dibuja la página.
 - **`tablas-draco/` está GENERADO** desde `ADDIN/src` por `python3 tools/sync-addin.py` (no editar a mano). Extrae solo
   la vista de diseño del taskpane (las vistas de conexión y de modelo las sustituye Planning), copia los módulos del
-  addin y aplica 3 parches (conexión de Planning; SQL guardado en informes dinámicos y en estáticos). Si el addin
+  addin y aplica 4 parches (conexión de Planning; SQL guardado en informes dinámicos, estáticos e híbridos). Si el addin
   cambia y un parche deja de encajar, el script FALLA diciendo cuál; `python3 tools/sync-addin.py --check` solo lo
   comprueba. Plantillas propias en `tools/templates/` (host-bridge, provider-bridge, model-bootstrap, engine-api).
 - **Modelos.** Los cubos del proyecto (`CUBOS`) son los «modelos semánticos» del selector. Al elegir uno se carga su
@@ -698,11 +698,15 @@ botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un infor
   `DIMENSIONES` + `JERARQUIAS`). Si ninguna vía funciona, el diseñador muestra un aviso persistente con el motivo de
   cada una, y al volver a elegir el cubo se reintenta. Un proyecto sin cubos también lo avisa.
 - **Alcance de esta versión.** Solo lectura en el informe (sin escritura de planificación ni reparto de valores:
-  esos botones están ocultos); filtros del informe fijos al diseñar; sin modelos de Power BI/Fabric (DAX). Los
-  informes **estáticos/asimétricos** (los que leen de la hoja los miembros tecleados, con fórmulas `=EPM_VALUE`)
-  **no están soportados**: necesitan teclear en una hoja de Excel y un motor de fórmulas, y la rejilla es de solo
-  lectura. El diseñador oculta su interruptor y rechaza guardar uno. Un informe con solo una medida en Columnas (sin
-  dimensión) genera `OVER (ORDER BY )` vacío: es un comportamiento del propio addin.
+  esos botones están ocultos); filtros del informe fijos al diseñar; sin modelos de Power BI/Fabric (DAX).
+- **Informes Estáticos e Híbridos (un eje Estático y otro Dinámico).** Las líneas del eje Estático se editan en la
+  rejilla del diseñador: seleccionar (clic, arrastrar, Mayús+clic) y **Supr**; **«Miembro»** o **doble clic**
+  (`=EPM_VALUE`, con buscador y varios miembros a la vez hacia abajo o a la derecha); **«Fórmula»** (`=EPM_FORMULA`:
+  texto, expresión compuesta haciendo clic en celdas y con `+ − × ÷ ( )`, formato y barras de datos). Esas celdas se
+  guardan con la definición (`DEFINICION_JSON.cells`). El "Excel falso" (`host-bridge`) guarda la fórmula de cada
+  celda, calcula las fórmulas normales (`+ - * / ^`, referencias y rangos, `SUM/SUMA`, `MIN`, `MAX`, `ABS`,
+  `AVERAGE/PROMEDIO`, `ROUND/REDONDEAR`, `IF/SI`, `IFERROR/SI.ERROR`), convierte A1 ↔ R1C1 y calcula las barras de
+  datos, que el visor dibuja con CSS.
 
 **Actualizar la herramienta.** `informes-herramienta.html` es un único archivo
 autocontenido, que fuera de Draco funciona también por sí solo. Para actualizar
