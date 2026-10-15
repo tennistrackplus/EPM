@@ -11,7 +11,7 @@
  * Al guardar se genera el SQL del informe y se guarda junto a su definición en TABLAS_DRACO (ver draco-tables.js).
  */
 const DracoTableDesigner = {
-    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261016a",
+    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261016b",
     MAX_ROWS: 600,
     MAX_COLS: 80,
     ctx: null,
@@ -55,14 +55,15 @@ const DracoTableDesigner = {
                     <button type="button" class="btn btn-primary" id="dtdSave" disabled>Guardar</button>
                 </div>
                 <div class="dtd-ribbon">
-                    <button type="button" class="btn btn-secondary btn-sm" id="dtdRefresh" title="Actualizar el informe (genera el SQL y lo ejecuta)">⟳ Actualizar</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="dtdRefresh" title="Refrescar el informe: vuelve a leer el diseño y las líneas del eje Estático, genera el SQL y lo ejecuta">⟳ Refrescar</button>
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdFilter" title="Añadir un filtro al informe">▽ Filtro</button>
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdRecog" title="Reconocimiento de miembros">🔎 Reconocimiento</button>
                     <span class="dtd-sep" aria-hidden="true"></span>
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdMember" title="Poner miembros (EPM_VALUE) en la celda seleccionada. También con doble clic.">＋ Miembro</button>
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdFormula" title="Línea calculada (EPM_FORMULA) en la celda seleccionada"><i class="dtd-fx">ƒx</i> Fórmula</button>
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdClear" title="Borrar el contenido de las celdas seleccionadas (Supr)">✕ Borrar</button>
-                    <span class="dtd-hint">Ejes Estáticos: selecciona celdas y usa «Miembro», «Fórmula» o Supr; después «Actualizar».</span>
+                    <button type="button" class="btn btn-secondary btn-sm" id="dtdVars" title="Variables: un nombre asociado a un valor de un campo, para usar en las líneas del eje Estático ($NOMBRE$)"><i class="dtd-fx">𝑥</i> Variables</button>
+                    <span class="dtd-hint">Ejes Estáticos: selecciona celdas y usa «Miembro», «Fórmula» o Supr; después «Refrescar».</span>
                 </div>
                 <div class="dtd-fbar">
                     <span class="dtd-fbar-addr" id="dtdAddr">A1</span>
@@ -80,7 +81,8 @@ const DracoTableDesigner = {
         c.overlay = overlay;
         overlay.querySelector("#dtdClose").addEventListener("click", () => this.requestClose());
         overlay.querySelector("#dtdSave").addEventListener("click", () => this.save());
-        overlay.querySelector("#dtdRefresh").addEventListener("click", () => this.callCommand("actualizar"));
+        overlay.querySelector("#dtdRefresh").addEventListener("click", () => this.refreshReport());
+        overlay.querySelector("#dtdVars").addEventListener("click", () => this.callCommand("abrirVariables"));
         overlay.querySelector("#dtdFilter").addEventListener("click", () => this.callCommand("abrirAnadirFiltro"));
         overlay.querySelector("#dtdRecog").addEventListener("click", () => this.callCommand("toggleMemberRecognition"));
         overlay.querySelector("#dtdMember").addEventListener("click", () => { const s = this.selTopLeft(); this.openMemberDialog(s.r, s.c); });
@@ -184,6 +186,32 @@ const DracoTableDesigner = {
         const s = (this.ctx && this.ctx.host && this.ctx.host.state.taskpaneSettings) || {};
         const st = (this.ctx && this.ctx.host) ? JSON.stringify(DracoTables.staticCells(this.ctx.host)) : "";
         return String(s.epm_reports || "") + "|" + String(s.epm_activeSemanticModel || "") + "|" + st;
+    },
+
+    /**
+     * Refresca el informe por la misma vía que al abrir el diseñador (DracoEngineApi.refresh): relee el diseño y
+     * las líneas del eje Estático (miembros, fórmulas, variables), genera el SQL y lo ejecuta. A diferencia del
+     * comando "actualizar" del addin (que escribe los errores en una hoja que aquí no se ve), los errores se
+     * muestran en el aviso del diseñador.
+     */
+    async refreshReport() {
+        const c = this.ctx, w = this.win();
+        if (!c || !c.ready || !w || !w.DracoEngineApi) { UI.toast("El diseñador todavía se está cargando.", "info"); return; }
+        const btn = c.overlay.querySelector("#dtdRefresh");
+        btn.disabled = true;
+        this.status("Refrescando…");
+        try {
+            await w.DracoEngineApi.refresh(undefined, null);
+            this.banner("");
+            this.status("");
+        } catch (err) {
+            console.error("DracoTableDesigner: refresco", err);
+            this.banner("No se pudo refrescar: " + (err.message || err), "bad");
+            this.status("");
+        } finally {
+            btn.disabled = false;
+            this.scheduleRender();
+        }
     },
 
     /** Llama a una función de comando del addin (commands.js) con el "event" con .completed() que espera. */
@@ -455,6 +483,52 @@ const DracoTableDesigner = {
         return Array.from(new Set(w.loadJsonTree(json).map(i => String(i.value)))).slice(0, 5000);
     },
 
+    /**
+     * Campo (dimensión/atributo) de una celda del eje Estático, para abrir el selector ya en él:
+     *   1) por su posición en el eje según el diseño (EDIT_REPORT: ancla H10/N10 y campos de Filas/Columnas);
+     *      en una jerarquía, el nivel de las celdas vecinas de la misma columna/fila (si no, el primero);
+     *   2) si no cae en ningún eje, por la celda EPM_VALUE más cercana de su columna (o de su fila).
+     * Devuelve { dim, attr } (dim "MEASURE" para medidas) o null.
+     */
+    async inferField(r, cc) {
+        const c = this.ctx, w = this.win(), cells = c.host.state.cells || {};
+        const FX = w.__dracoFormulaEngine;
+        const epmArgs = (o) => (o && typeof o.f === "string" && /EPM_VALUE\s*\(/i.test(o.f) && FX) ? FX.splitArgs(o.f).map(FX.unq) : null;
+        let info = null;
+        try {
+            info = await w.Excel.run(async (ctx) => {
+                const g = await w.getEditReportGrid(ctx);
+                const pa = (x) => { const t = String(x || "").trim(); if (!t) return null; try { return w.parseAddress(t); } catch (e) { return null; } };
+                return { rr: pa(w.cellValue(g, 10, 8)), rc: pa(w.cellValue(g, 10, 14)), rows: w.readDracoAxisFields(g, false), cols: w.readDracoAxisFields(g, true) };
+            });
+        } catch (e) { info = null; }
+        const nearest = (dr, dc) => {
+            for (let k = 1; k <= 300; k++) for (const sgn of [-1, 1]) {
+                const a = epmArgs(cells[(r + sgn * k * dr) + "_" + (cc + sgn * k * dc)]);
+                if (a) return a;
+            }
+            return null;
+        };
+        let field = null, axis = null;
+        if (info && info.rr && info.rows.length && r >= info.rr.row - 1 && cc >= info.rr.col - 1 && cc < info.rr.col - 1 + info.rows.length) {
+            axis = "rows"; field = info.rows[cc - (info.rr.col - 1)];
+        } else if (info && info.rc && info.cols.length && cc >= info.rc.col - 1 && r >= info.rc.row - 1 && r < info.rc.row - 1 + info.cols.length) {
+            axis = "cols"; field = info.cols[r - (info.rc.row - 1)];
+        }
+        const near = axis === "cols" ? nearest(0, 1) : axis === "rows" ? nearest(1, 0) : (nearest(1, 0) || nearest(0, 1));
+        if (field) {
+            if (field.type === "measure") return { dim: "MEASURE", attr: "" };
+            if (field.type === "attr") return { dim: field.dim, attr: field.attr };
+            if (field.type === "hier") {
+                const lv = near && String(near[0]).toUpperCase() === field.dim.toUpperCase()
+                    ? field.levels.find(l => l.attr.toUpperCase() === String(near[1]).toUpperCase()) : null;
+                return { dim: field.dim, attr: (lv || field.levels[0]).attr };
+            }
+        }
+        if (near) return String(near[0]).toUpperCase() === "MEASURE" ? { dim: "MEASURE", attr: "" } : { dim: near[0], attr: near[1] };
+        return null;
+    },
+
     async openMemberDialog(r, cc) {
         const c = this.ctx;
         if (!c || !c.ready) return;
@@ -464,6 +538,9 @@ const DracoTableDesigner = {
         const w = this.win();
         let curArgs = null;
         if (typeof cur.f === "string" && /EPM_VALUE\s*\(/i.test(cur.f) && w.__dracoFormulaEngine) curArgs = w.__dracoFormulaEngine.splitArgs(cur.f).map(w.__dracoFormulaEngine.unq);
+        // Sin miembro en la celda: el campo se deduce de su fila/columna
+        const guess = curArgs ? { dim: curArgs[0], attr: curArgs[1] } : await this.inferField(r, cc);
+        const curVar = curArgs && w.DracoVariables ? w.DracoVariables.tokenName(curArgs[2]) : null;
 
         const back = document.createElement("div");
         back.className = "dtd-dlg-back";
@@ -472,8 +549,13 @@ const DracoTableDesigner = {
                 <div class="dtd-dlg-head"><strong>Miembro en ${E(this.addr(r, cc))}</strong><button type="button" class="dtd-x" aria-label="Cerrar">×</button></div>
                 <div class="dtd-dlg-body">
                     <label class="dtd-lbl">Campo<select id="dtdMField"><option value="">Cargando…</option></select></label>
+                    <div class="dtd-tabs" role="tablist">
+                        <button type="button" class="dtd-tab active" role="tab" data-tab="values" aria-selected="true">Valores</button>
+                        <button type="button" class="dtd-tab" role="tab" data-tab="vars" aria-selected="false">Variables <span id="dtdMVarCount" class="dtd-badge">0</span></button>
+                    </div>
                     <input id="dtdMSearch" class="dtd-in" type="text" placeholder="Buscar miembro…" autocomplete="off">
                     <div id="dtdMList" class="dtd-mlist"><div class="dtd-empty">Elige un campo.</div></div>
+                    <div id="dtdMVars" class="dtd-mlist" hidden></div>
                     <div class="dtd-mfoot">
                         <span id="dtdMCount" class="dtd-muted">0 seleccionados</span>
                         <span class="dtd-spacer"></span>
@@ -482,7 +564,7 @@ const DracoTableDesigner = {
                     </div>
                 </div>
                 <div class="dtd-dlg-foot">
-                    <span class="dtd-muted">Varios miembros: uno por celda, desde ${E(this.addr(r, cc))}.</span>
+                    <span class="dtd-muted" id="dtdMFootHint">Varios miembros: uno por celda, desde ${E(this.addr(r, cc))}.</span>
                     <span class="dtd-spacer"></span>
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdMCancel">Cancelar</button>
                     <button type="button" class="btn btn-primary btn-sm" id="dtdMOk" disabled>Insertar</button>
@@ -495,9 +577,34 @@ const DracoTableDesigner = {
         $("#dtdMCancel").addEventListener("click", close);
         back.addEventListener("mousedown", (e) => { if (e.target === back) close(); });
 
-        let fields = [], members = [], chosen = new Set();
-        const sel = $("#dtdMField"), list = $("#dtdMList"), search = $("#dtdMSearch");
-        const refreshCount = () => { $("#dtdMCount").textContent = chosen.size + (chosen.size === 1 ? " seleccionado" : " seleccionados"); $("#dtdMOk").disabled = chosen.size === 0; };
+        let fields = [], members = [], chosen = new Set(), tab = "values", chosenVar = curVar || null;
+        const sel = $("#dtdMField"), list = $("#dtdMList"), search = $("#dtdMSearch"), varsBox = $("#dtdMVars");
+        const varsOf = () => { const f = fields[+sel.value]; return (f && f.dim !== "MEASURE" && w.DracoVariables) ? w.DracoVariables.forField(f.dim, f.attr) : []; };
+        const fillVars = () => {
+            const vs = varsOf();
+            $("#dtdMVarCount").textContent = String(vs.length);
+            varsBox.innerHTML = vs.length
+                ? vs.map(v => `<label class="dtd-mrow"><input type="radio" name="dtdMVar" value="${E(v.name)}"${chosenVar === v.name ? " checked" : ""}><span class="dtd-mono">$${E(v.name)}$</span><span class="dtd-muted">= ${E(v.display || v.value)}</span></label>`).join("")
+                : `<div class="dtd-empty">${fields[+sel.value] && fields[+sel.value].dim === "MEASURE" ? "Las medidas no usan variables." : "No hay variables de este campo. Créalas con «Variables» en la cinta."}</div>`;
+        };
+        const setTab = (t) => {
+            tab = t;
+            back.querySelectorAll(".dtd-tab").forEach(b => { const on = b.dataset.tab === t; b.classList.toggle("active", on); b.setAttribute("aria-selected", on ? "true" : "false"); });
+            list.hidden = search.hidden = t !== "values";
+            varsBox.hidden = t !== "vars";
+            $(".dtd-mfoot").hidden = t !== "values";
+            $("#dtdMFootHint").textContent = t === "vars"
+                ? "La celda usará el valor de la variable; si cambia, cambia el informe."
+                : "Varios miembros: uno por celda, desde " + this.addr(r, cc) + ".";
+            refreshCount();
+        };
+        back.querySelectorAll(".dtd-tab").forEach(b => b.addEventListener("click", () => setTab(b.dataset.tab)));
+        varsBox.addEventListener("change", (e) => { if (e.target.name === "dtdMVar") { chosenVar = e.target.value; refreshCount(); } });
+        varsBox.addEventListener("dblclick", (e) => { const row = e.target.closest(".dtd-mrow"); if (!row) return; chosenVar = row.querySelector("input").value; refreshCount(); $("#dtdMOk").click(); });
+        const refreshCount = () => {
+            $("#dtdMCount").textContent = chosen.size + (chosen.size === 1 ? " seleccionado" : " seleccionados");
+            $("#dtdMOk").disabled = tab === "vars" ? !chosenVar : chosen.size === 0;
+        };
         const fill = () => {
             const q = search.value.trim().toLowerCase();
             const items = members.filter(m => !q || m.toLowerCase().indexOf(q) !== -1).slice(0, 1500);
@@ -511,11 +618,12 @@ const DracoTableDesigner = {
         const load = async () => {
             const f = fields[+sel.value];
             members = []; chosen = new Set(); refreshCount();
+            fillVars();
             if (!f) { list.innerHTML = `<div class="dtd-empty">Elige un campo.</div>`; return; }
             list.innerHTML = `<div class="dtd-empty"><span class="spinner"></span> Cargando miembros…</div>`;
             try { members = await this.loadMembers(f); }
             catch (err) { list.innerHTML = `<div class="dtd-empty bad">${E(err.message || String(err))}</div>`; return; }
-            if (curArgs && f.dim.toUpperCase() === String(curArgs[0]).toUpperCase()) {
+            if (curArgs && !curVar && f.dim.toUpperCase() === String(curArgs[0]).toUpperCase()) {
                 const v = f.dim === "MEASURE" ? curArgs[1] : curArgs[2];
                 if (members.indexOf(v) !== -1) chosen.add(v);
                 refreshCount();
@@ -525,6 +633,13 @@ const DracoTableDesigner = {
         sel.addEventListener("change", load);
         $("#dtdMOk").addEventListener("click", async () => {
             const f = fields[+sel.value];
+            if (f && tab === "vars") {
+                if (!chosenVar) return;
+                const token = "$" + chosenVar + "$";
+                close();
+                await this.excelWrite(sh => { sh.getRangeByIndexes(r, cc, 1, 1).formulas = [[w.buildEpmValueFormula(f.dim, f.attr, token, token)]]; });
+                return;
+            }
             if (!f || !chosen.size) return;
             const ordered = members.filter(m => chosen.has(m));
             const down = back.querySelector('input[name="dtdMDir"]:checked').value === "down";
@@ -541,10 +656,11 @@ const DracoTableDesigner = {
         try {
             fields = await this.modelFields();
             sel.innerHTML = `<option value="">— Elige un campo —</option>` + fields.map((f, i) => `<option value="${i}">${E(f.label)}</option>`).join("");
-            if (curArgs) {
-                const i = fields.findIndex(f => f.dim.toUpperCase() === String(curArgs[0]).toUpperCase() && (f.dim === "MEASURE" || f.attr.toUpperCase() === String(curArgs[1]).toUpperCase()));
+            if (guess) {
+                const i = fields.findIndex(f => f.dim.toUpperCase() === String(guess.dim).toUpperCase() && (f.dim === "MEASURE" || f.attr.toUpperCase() === String(guess.attr).toUpperCase()));
                 if (i >= 0) { sel.value = String(i); await load(); }
             }
+            if (curVar) setTab("vars");
             (sel.value ? search : sel).focus();
         } catch (err) {
             sel.innerHTML = `<option value="">No se pudo leer el modelo</option>`;

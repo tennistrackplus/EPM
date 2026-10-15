@@ -24,7 +24,7 @@ const DracoTables = {
     MAX_NAME: 120,
     MAX_DESC: 500,
     MAX_ENGINES: 6,
-    ENGINE_URL: "tablas-draco/engine.html?v=20261016a",
+    ENGINE_URL: "tablas-draco/engine.html?v=20261016b",
 
     engines: new Map(),      // "proyecto:id" -> { frame, host, stamp, chain, lastUse }
     pending: {},             // precarga: "proyecto:id" -> { pr, at }
@@ -415,8 +415,92 @@ const DracoTables = {
         return { r0: r1, c0: c1, rows: r2 - r1 + 1, cols: c2 - c1 + 1, cells: out, merges };
     },
 
-    /** Ejecuta una tabla guardada con SU SQL (sin regenerarlo) y devuelve la foto de lo pintado. */
-    async run(project, id, force) {
+    /**
+     * Variables de una tabla guardada (las del diseñador, ver ADDIN/src/js/variablesStore.js):
+     * [{ name, dim, attr, value, display }]. Para el futuro selector de variables del generador/visor.
+     */
+    async variables(project, id) {
+        const row = await this.get(project.PROYECTO_ID, id);
+        const def = JSON.parse(row.DEFINICION_JSON || "{}");
+        let vars = {};
+        try { vars = JSON.parse(((def.settings || {}).epm_variables) || "{}"); } catch (e) { vars = {}; }
+        return Object.keys(vars).sort().map(name => Object.assign({ name }, vars[name]));
+    },
+
+    // ---------------------------------------------------------------------
+    // Selector de variable (bloque "dracoVar" del generador)
+    // ---------------------------------------------------------------------
+    _membersCache: {},
+
+    async cubeByName(project, name) {
+        const cube = (await this.cubes(project.PROYECTO_ID)).find(c => c.name === name);
+        if (!cube) throw this.fail("NO_CUBE", `El cubo «${name}» ya no existe en este proyecto.`);
+        return cube;
+    },
+
+    /** Campos (dimensión · atributo) de un cubo, con los nombres que usan las Tablas Draco (y sus variables). */
+    async fields(project, cubeName) {
+        const model = await this.resolveModel(project, await this.cubeByName(project, cubeName));
+        const out = [];
+        (model.fields || []).filter(f => f.type === "DIMENSION" && f.enabled !== false).forEach(f => {
+            (f.attributes || []).filter(a => a.enabled !== false).forEach(a => out.push({
+                dim: f.name, attr: a.name, label: String(f.name).toLowerCase() + " · " + String(a.alias || a.name).toLowerCase()
+            }));
+        });
+        return out.sort((a, b) => a.label.localeCompare(b.label));
+    },
+
+    /** Valores distintos de un atributo (lista del desplegable). Caché de 10 minutos por cubo/campo. */
+    async members(project, cubeName, dim, attr) {
+        const k = [project.PROYECTO_ID, cubeName, dim, attr].join("|").toUpperCase();
+        const hit = this._membersCache[k];
+        if (hit && Date.now() - hit.at < 600000) return hit.list;
+        const model = await this.resolveModel(project, await this.cubeByName(project, cubeName));
+        const f = (model.fields || []).find(x => x.type === "DIMENSION" && String(x.name).toUpperCase() === String(dim).toUpperCase());
+        if (!f) throw this.fail("NO_FIELD", `La dimensión «${dim}» no está en el cubo «${cubeName}».`);
+        const a = (f.attributes || []).find(x => String(x.name).toUpperCase() === String(attr).toUpperCase());
+        if (!a) throw this.fail("NO_FIELD", `El atributo «${attr}» no está en la dimensión «${dim}».`);
+        const sf = Provider.key() === "snowflake";
+        const db = f.relProject || (sf ? SF.getDatabase() : BQ.getGcpProject());
+        const table = sf ? `${db}.${f.relDataset}.${f.relTable}` : `\`${db}.${f.relDataset}.${f.relTable}\``;
+        const col = /^[A-Za-z_][A-Za-z0-9_]*$/.test(a.name) ? a.name : null;
+        if (!col) throw this.fail("BAD_INPUT", "Nombre de atributo no válido.");
+        const rows = await Provider.runQuery(`SELECT DISTINCT ${col} AS V FROM ${table} WHERE ${col} IS NOT NULL ORDER BY 1 LIMIT 5000`);
+        const list = rows.map(r => String(r.V ?? r.v ?? Object.values(r)[0]));
+        this._membersCache[k] = { at: Date.now(), list };
+        return list;
+    },
+
+    /**
+     * Variables que usan las tablas indicadas (las de un informe), agrupadas por nombre:
+     * [{ name, dim, attr, value, display, tablas: [nombre], refs: [id] }]. Una tabla que ya no exista se ignora.
+     */
+    async varsFor(project, refs) {
+        const by = {};
+        for (const ref of Array.from(new Set(refs || [])).filter(Boolean)) {
+            let row;
+            try { row = await this.get(project.PROYECTO_ID, ref); } catch (e) { continue; }
+            let vars = {};
+            try { vars = JSON.parse(((JSON.parse(row.DEFINICION_JSON || "{}").settings || {}).epm_variables) || "{}"); } catch (e) { vars = {}; }
+            // solo las que la tabla USA de verdad (su SQL lleva el marcador)
+            const used = new Set(String(row.SQL_TEXT || "").match(/\$[A-Za-z][A-Za-z0-9_]*\$/g) || []);
+            Object.keys(vars).forEach(name => {
+                if (used.size && !used.has("$" + name + "$")) return;
+                const v = vars[name];
+                const g = by[name] || (by[name] = { name, dim: v.dim, attr: v.attr, value: v.value, display: v.display || v.value, tablas: [], refs: [] });
+                g.tablas.push(row.NOMBRE); g.refs.push(ref);
+            });
+        }
+        return Object.values(by).sort((a, b) => a.name.localeCompare(b.name));
+    },
+
+    /**
+     * Ejecuta una tabla guardada con SU SQL (sin regenerarlo) y devuelve la foto de lo pintado.
+     * opts.variables = { NOMBRE: valor | { value, display } } cambia el valor de las variables SOLO en esta
+     * ejecución (el SQL guardado lleva los marcadores $NOMBRE$ y se sustituyen al ejecutar).
+     */
+    async run(project, id, force, opts) {
+        const runVars = (opts && opts.variables) || {};
         const k = this.key(project.PROYECTO_ID, id);
         const row = await this.get(project.PROYECTO_ID, id);
         const item = this.toItem(row);
@@ -439,8 +523,10 @@ const DracoTables = {
             await eng.ready;
             const win = eng.frame.contentWindow;
             await win.Office.onReady();
+            if (win.DracoVariables) win.DracoVariables.setOverrides(runVars);
             await win.DracoEngineApi.refresh(def.reportId, row.SQL_TEXT);
-            return { id, nombre: row.NOMBRE, motor: row.MOTOR || "", sqlGenerado: row.SQL_GENERADO || null, desfasado: item.desfasado, grid: this.snapshot(eng.host) };
+            const variables = win.DracoVariables ? win.DracoVariables.list() : [];
+            return { id, nombre: row.NOMBRE, motor: row.MOTOR || "", sqlGenerado: row.SQL_GENERADO || null, desfasado: item.desfasado, variables, grid: this.snapshot(eng.host) };
         });
         eng.chain = result.catch(() => {});
         return result;
@@ -492,9 +578,16 @@ const DracoTables = {
             switch (op) {
                 case "dt.list": return await this.list(project.PROYECTO_ID);
                 case "dt.run": {
-                    const pre = p.force ? null : this.takePending(project, p.ref);
-                    return pre ? await pre : await this.run(project, p.ref, p.force ? "fresh" : undefined);
+                    // p.variables (opcional): valores de variables para ESTA ejecución (futuro selector del generador)
+                    const hasVars = p.variables && Object.keys(p.variables).length;
+                    const pre = (p.force || hasVars) ? null : this.takePending(project, p.ref);
+                    return pre ? await pre : await this.run(project, p.ref, p.force ? "fresh" : undefined, { variables: p.variables || {} });
                 }
+                case "dt.variables": return await this.variables(project, p.ref);
+                case "dt.cubes": return (await this.cubes(project.PROYECTO_ID)).map(c => ({ name: c.name }));
+                case "dt.fields": return await this.fields(project, p.cube);
+                case "dt.members": return await this.members(project, p.cube, p.dim, p.attr);
+                case "dt.varsFor": return await this.varsFor(project, p.refs || []);
                 case "dt.toggle": return await this.toggle(project, p.ref, p.r, p.c);
                 case "dt.design":
                     if (!ui || typeof ui.openDesigner !== "function") throw this.fail("NOT_AVAILABLE", "El diseñador solo está disponible en el generador de informes.");

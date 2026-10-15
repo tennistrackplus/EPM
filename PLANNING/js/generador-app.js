@@ -139,7 +139,7 @@ const GeneradorApp = {
         if (this.pendingInformeId) { qs.set("informe_id", this.pendingInformeId); this.pendingInformeId = null; }
         document.getElementById("toolEmpty").hidden = true;
         frame.hidden = false;
-        qs.set("v", "20261013a");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
+        qs.set("v", "20261016c");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
         frame.src = "informes-herramienta.html?" + qs.toString();
     },
 
@@ -206,6 +206,10 @@ const GeneradorApp = {
             case "tu.list":
             case "tu.describe":
                 return InformesDatos.handle(this.currentProject, op, p);      // el editor elige la vista de una actualización de tablas
+            case "dt.cubes":
+            case "dt.fields":
+            case "dt.varsFor":
+                return DracoTables.handle(this.currentProject, op, p);      // el editor configura un «Selector de variable»
             case "dt.list":
             case "dt.design":
                 // el editor elige una Tabla Draco o abre su diseñador (pseudo-Excel con el taskpane del addin)
