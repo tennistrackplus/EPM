@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-15-hibrido-v2";
+const DRACO_BUILD = "2026-10-15-epm-formula-v1";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -1627,7 +1627,9 @@ async function readRowDefinitions(context, editReportGrid, csvGrid) {
     for (let R = RRows.row; R <= lastRow; R++) {
         for (let Col = RRows.col; Col <= lastCol; Col++) {
 
-            if (cellHasFormula(csvGrid, R, Col)) {
+            // Solo las EPM_VALUE son condiciones de la línea; una EPM_FORMULA
+            // (línea calculada) u otra fórmula del usuario no entra en el SQL.
+            if (cellHasFormula(csvGrid, R, Col) && /EPM_VALUE\s*\(/i.test(String(cellFormula(csvGrid, R, Col)))) {
 
                 let F = String(cellFormula(csvGrid, R, Col));
 
@@ -1668,7 +1670,9 @@ async function readColumnDefinitions(context, editReportGrid, csvGrid) {
     for (let Col = RCols.col; Col <= lastCol; Col++) {
         for (let R = RCols.row; R <= lastRow; R++) {
 
-            if (cellHasFormula(csvGrid, R, Col)) {
+            // Solo las EPM_VALUE son condiciones de la línea; una EPM_FORMULA
+            // (línea calculada) u otra fórmula del usuario no entra en el SQL.
+            if (cellHasFormula(csvGrid, R, Col) && /EPM_VALUE\s*\(/i.test(String(cellFormula(csvGrid, R, Col)))) {
 
                 let F = String(cellFormula(csvGrid, R, Col));
 
@@ -2460,21 +2464,18 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     });
     tPerf = draco_perfMark(reportId, "Pintando resultados (total, ver desglose arriba)", tPerf);
 
-    // "Sobrescribir formatos en informes estáticos" (por defecto, no):
-    // cabeceras EPM_VALUE con el estilo de Draco y valores con el formato
-    // de su medida.
-    if (dracoReportPropsFor(reportId).overwriteStaticFormats) {
-        try {
-            await Excel.run(async (context) => {
-                const editReportGrid = await getEditReportGrid(context, reportId);
-                loadReportDefinition(editReportGrid, reportId);
-                await formatDracoFixedReport(context, reportId, editReportGrid);
-            });
-        } catch (e) {
-            console.warn("[Draco] No se pudo dar formato al informe estático:", e);
-        }
-        tPerf = draco_perfMark(reportId, "Formato de celdas estáticas", tPerf);
+    // Líneas EPM_FORMULA (fórmula, formato, barras) y, con "Sobrescribir
+    // formatos en informes estáticos", cabeceras y valores con formato.
+    try {
+        await Excel.run(async (context) => {
+            const editReportGrid = await getEditReportGrid(context, reportId);
+            loadReportDefinition(editReportGrid, reportId);
+            await finishDracoFixedReport(context, reportId, editReportGrid);
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudieron aplicar las fórmulas/formato del informe estático:", e);
     }
+    tPerf = draco_perfMark(reportId, "Líneas EPM_FORMULA y formato estático", tPerf);
 
     } finally {
         await endSuppressPlanningPaint();
@@ -2677,6 +2678,17 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     }
     const lines = Array.from(linesMap.values()).sort((a, b) => a.id - b.id);
 
+    // Líneas EPM_FORMULA del eje estático (no van al SQL; se rellenan al pintar)
+    const formulaLines = [];
+    try {
+        const st = parseAddress(String(cellValue(editReportGrid, 10, staticIsRows ? 8 : 14)).trim());
+        const last = staticIsRows ? lastRowInColumnFormulas(csvGrid, st.col) : lastColInRowFormulas(csvGrid, st.row);
+        for (let i = staticIsRows ? st.row : st.col; i <= last; i++) {
+            const r = staticIsRows ? i : st.row, c = staticIsRows ? st.col : i;
+            if (cellHasFormula(csvGrid, r, c) && /EPM_FORMULA\s*\(/i.test(String(cellFormula(csvGrid, r, c)))) formulaLines.push(i);
+        }
+    } catch (e) { /* sin ancla: no hay líneas */ }
+
     // --- Eje dinámico: campos del diseño (atributos, jerarquías, medidas)
     const fields = readDracoAxisFields(editReportGrid, dynamicIsColumns);
     const dynCols = [];          // [{dim, attr}] columnas SQL (sin repetir)
@@ -2709,6 +2721,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     const plan = {
         staticIsRows, dynamicIsColumns,
         lines: lines.map(l => ({ id: l.id, measure: l.measure || defaultMeasure })),
+        formulaLines,
         fields, dynCols, measureLevelIdx, dynMeasures,
         measureCols: measureCols.map(m => ({ name: m.name, alias: m.alias })),
         hasP: measureLevelIdx > 0 && dynMeasures.length > 0
@@ -2947,7 +2960,8 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
     if (prevDynRange && prevDynRange.worksheet.name === resultSheetName) prevDynRange.clear(clearMode);
     if (prevValsRange && prevValsRange.worksheet.name === resultSheetName) {
         const pv = prevValsRange;
-        for (const l of plan.lines) {
+        const toClear = [...plan.lines, ...(plan.formulaLines || []).map(id => ({ id }))];
+        for (const l of toClear) {
             if (plan.dynamicIsColumns) {
                 if (l.id - 1 >= pv.rowIndex && l.id - 1 < pv.rowIndex + pv.rowCount) {
                     sheet.getRangeByIndexes(l.id - 1, pv.columnIndex, 1, pv.columnCount).clear(Excel.ClearApplyTo.contents);
@@ -3027,7 +3041,7 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
         }
     }
 
-    const lineIds = plan.lines.map(l => l.id);
+    const lineIds = [...plan.lines.map(l => l.id), ...(plan.formulaLines || [])];
     if (lineIds.length && nTuples > 0) {
         const minL = Math.min(...lineIds), maxL = Math.max(...lineIds);
         const rect = plan.dynamicIsColumns
@@ -3072,9 +3086,17 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
     if (baseline) DracoPlanningBaselineValues.set(reportId, baseline);
     else DracoPlanningBaselineValues.delete(reportId);
 
-    // Eje estático: cabeceras EPM_VALUE con estilo Draco (opcional)
+    // Eje estático: líneas EPM_FORMULA (fórmula en cada miembro dinámico,
+    // con su formato y barras) y, opcionalmente, cabeceras con estilo Draco.
+    const staticLines = await scanDracoStaticAxis(context, sheet, editReportGrid, plan.staticIsRows ? "rows" : "cols");
+    DracoCalcCellsByReport.set(dracoStateKey(reportId), new Set());
+    if (nTuples > 0) {
+        const targets = [];
+        for (let j = 0; j < nTuples; j++) targets.push(firstDyn + j);
+        applyDracoFormulaLines(sheet, reportId, staticLines, plan.staticIsRows, targets);
+    }
     if (props.overwriteStaticFormats) {
-        await formatDracoStaticAxis(context, sheet, editReportGrid, plan.staticIsRows ? "rows" : "cols");
+        await formatDracoStaticAxis(context, sheet, editReportGrid, plan.staticIsRows ? "rows" : "cols", staticLines);
     }
 
     if (props.autoFitColumns && nTuples > 0) {
@@ -3114,20 +3136,77 @@ function parseEpmValueArgs(formula) {
     return args;
 }
 
+// Separa los argumentos de una llamada f(a, b, ...) respetando comillas
+// ("" escapadas), paréntesis y llaves. `formula` es la fórmula completa
+// (con o sin "=" / "@"); devuelve null si no es una llamada a `fnName`.
+function splitDracoFunctionArgs(formula, fnName) {
+    const f = String(formula || "");
+    const re = new RegExp("^\\s*=\\s*@?\\s*" + fnName + "\\s*\\(", "i");
+    const m = re.exec(f);
+    if (!m) return null;
+    const args = [];
+    let cur = "", depth = 0, inStr = false;
+    for (let i = m[0].length; i < f.length; i++) {
+        const ch = f[i];
+        if (inStr) {
+            cur += ch;
+            if (ch === '"') {
+                if (f[i + 1] === '"') { cur += '"'; i++; } else inStr = false;
+            }
+            continue;
+        }
+        if (ch === '"') { inStr = true; cur += ch; continue; }
+        if (ch === "(" || ch === "{") { depth++; cur += ch; continue; }
+        if (ch === ")" || ch === "}") {
+            if (depth === 0) { args.push(cur.trim()); return args; }
+            depth--; cur += ch; continue;
+        }
+        if (depth === 0 && (ch === "," || ch === ";")) { args.push(cur.trim()); cur = ""; continue; }
+        cur += ch;
+    }
+    args.push(cur.trim());
+    return args;
+}
+
+const unquoteDraco = (a) => {
+    const t = String(a || "").trim();
+    return (t.length >= 2 && t[0] === '"' && t[t.length - 1] === '"') ? t.slice(1, -1).replace(/""/g, '"') : t;
+};
+
+// "barra|invertir|izq=40|dcha=25|neg=#F0436A|pos=#70D06A" -> opciones (o null)
+function parseDracoBarSpec(spec) {
+    const parts = String(spec || "").split("|").map(x => x.trim()).filter(Boolean);
+    if (!parts.length) return null;
+    const o = { display: null, invert: false, left: 42, right: 30, neg: "#F0436A", pos: "#70D06A" };
+    for (const p of parts) {
+        const low = p.toLowerCase().replace(/\s+/g, " ");
+        const kv = /^([a-z]+)\s*=\s*(.+)$/.exec(low);
+        if (low === "barra" || low === "barras") o.display = "bar";
+        else if (low === "solo barra" || low === "solobarra" || low === "solo barras") o.display = "barOnly";
+        else if (low === "invertir") o.invert = true;
+        else if (kv && kv[1] === "izq") o.left = Math.max(0, Math.min(90, Number(kv[2]) || 0));
+        else if (kv && kv[1] === "dcha") o.right = Math.max(0, Math.min(90, Number(kv[2]) || 0));
+        else if (kv && kv[1] === "neg") o.neg = p.split("=")[1].trim();
+        else if (kv && kv[1] === "pos") o.pos = p.split("=")[1].trim();
+    }
+    return o.display ? o : null;
+}
+
 /**
- * Da a las cabeceras EPM_VALUE de un eje Estático el estilo del modo
- * Dinámico (color por campo y nivel, sangría en jerarquías, borde).
- * Devuelve las líneas del eje: [{line, measure|null}] (fila o columna de la
- * hoja y la medida de esa línea, si tiene una celda MEASURE).
+ * Recorre las cabeceras de un eje Estático (desde EDIT_REPORT!H10 si es
+ * Filas, N10 si es Columnas) y devuelve sus líneas:
+ *   { line, isFormula, measure, cells:[{row,col,indent}],
+ *     formula: { r1c1, format, bar } }   (solo en líneas EPM_FORMULA)
+ * Una línea es EPM_VALUE (datos) o EPM_FORMULA (calculada). Igual que
+ * readRowDefinitions, la línea se corta en la primera celda que no sea EPM.
  */
-async function formatDracoStaticAxis(context, sheet, editReportGrid, axis) {
+async function scanDracoStaticAxis(context, sheet, editReportGrid, axis) {
     const isRows = axis === "rows";
     const anchorRaw = String(cellValue(editReportGrid, 10, isRows ? 8 : 14)).trim();
     if (!anchorRaw) return [];
     let anchor;
     try { anchor = parseAddress(anchorRaw); } catch (e) { return []; }
 
-    // Nivel (sangría) de cada atributo de jerarquía del eje, según el diseño
     const fields = readDracoAxisFields(editReportGrid, !isRows);
     const levelOf = new Map();
     fields.forEach(f => { if (f.type === "hier") f.levels.forEach((l, i) => levelOf.set(f.dim.toUpperCase() + "|" + l.attr.toUpperCase(), i)); });
@@ -3136,72 +3215,194 @@ async function formatDracoStaticAxis(context, sheet, editReportGrid, axis) {
     const used = sheet.getUsedRange(true);
     used.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
     await context.sync();
-    const lastRow = used.rowIndex + used.rowCount;      // 1-based última fila usada
-    const lastCol = used.columnIndex + used.columnCount;
-    const span = isRows ? Math.max(0, lastRow - anchor.row + 1) : Math.max(0, lastCol - anchor.col + 1);
+    const span = isRows
+        ? Math.max(0, used.rowIndex + used.rowCount - anchor.row + 1)
+        : Math.max(0, used.columnIndex + used.columnCount - anchor.col + 1);
     if (span === 0) return [];
 
     const area = isRows
         ? sheet.getRangeByIndexes(anchor.row - 1, anchor.col - 1, span, depth)
         : sheet.getRangeByIndexes(anchor.row - 1, anchor.col - 1, depth, span);
-    area.load("formulas");
+    area.load(["formulas", "formulasR1C1"]);
     await context.sync();
 
-    const cells = new Map();
-    const lines = new Map(); // line -> measure|null
+    const lines = [];
     for (let i = 0; i < span; i++) {
+        let line = null;
         for (let k = 0; k < depth; k++) {
-            const f = isRows ? area.formulas[i][k] : area.formulas[k][i];
-            if (typeof f !== "string" || f.toUpperCase().indexOf("EPM_VALUE") === -1) {
-                if (k === 0) break; // igual que readRowDefinitions: sin fórmula en la 1ª celda, la línea no es estática
-                break;
-            }
-            const args = parseEpmValueArgs(f) || [];
-            const dim = String(args[0] || "").toUpperCase();
-            const attr = String(args[1] || "").toUpperCase();
+            const a1 = isRows ? area.formulas[i][k] : area.formulas[k][i];
+            if (typeof a1 !== "string") break;
             const row = isRows ? anchor.row + i : anchor.row + k;
             const col = isRows ? anchor.col + k : anchor.col + i;
-            const line = isRows ? row : col;
-            if (!lines.has(line)) lines.set(line, null);
-            if (dim === "MEASURE") lines.set(line, args[1] || null);
-            cells.set(row + "_" + col, { row, col, indent: levelOf.get(dim + "|" + attr) || 0 });
+            if (/^\s*=\s*@?\s*EPM_FORMULA\s*\(/i.test(a1)) {
+                const r1c1 = isRows ? area.formulasR1C1[i][k] : area.formulasR1C1[k][i];
+                const args = splitDracoFunctionArgs(r1c1, "EPM_FORMULA") || [];
+                if (!line) line = { line: isRows ? row : col, isFormula: true, measure: null, cells: [] };
+                line.isFormula = true;
+                line.formula = {
+                    r1c1: (args[1] || "").trim(),
+                    format: unquoteDraco(args[2]),
+                    bar: parseDracoBarSpec(unquoteDraco(args[3]))
+                };
+                line.cells.push({ row, col, indent: 0 });
+                break;
+            }
+            if (!/^\s*=\s*@?\s*EPM_VALUE\s*\(/i.test(a1)) break;
+            const args = parseEpmValueArgs(a1) || [];
+            const dim = String(args[0] || "").toUpperCase();
+            const attr = String(args[1] || "").toUpperCase();
+            if (!line) line = { line: isRows ? row : col, isFormula: false, measure: null, cells: [] };
+            if (dim === "MEASURE") line.measure = args[1] || null;
+            line.cells.push({ row, col, indent: levelOf.get(dim + "|" + attr) || 0 });
         }
+        if (line) lines.push(line);
     }
-    await applyDracoHeaderStyle(context, sheet, cells, isRows ? "col" : "row", isRows ? anchor.col - 1 : anchor.row - 1);
-    return Array.from(lines.entries()).map(([line, measure]) => ({ line, measure }));
+    return lines;
 }
 
 /**
- * Modo Estático: cabeceras de los dos ejes con estilo Draco y valores del
- * cruce con el formato de su medida (la de la fila, si no la de la
- * columna, si no la del informe), centrados.
+ * Da a las cabeceras (EPM_VALUE y EPM_FORMULA) de un eje Estático el
+ * estilo del modo Dinámico. Devuelve las líneas (ver scanDracoStaticAxis).
  */
-async function formatDracoFixedReport(context, reportId, editReportGrid) {
+async function formatDracoStaticAxis(context, sheet, editReportGrid, axis, scanned) {
+    const lines = scanned || await scanDracoStaticAxis(context, sheet, editReportGrid, axis);
+    const cells = new Map();
+    lines.forEach(l => l.cells.forEach(c => cells.set(c.row + "_" + c.col, c)));
+    if (cells.size) {
+        const anchor = parseAddress(String(cellValue(editReportGrid, 10, axis === "rows" ? 8 : 14)).trim());
+        await applyDracoHeaderStyle(context, sheet, cells, axis === "rows" ? "col" : "row", axis === "rows" ? anchor.col - 1 : anchor.row - 1);
+    }
+    return lines;
+}
+
+/**
+ * Líneas EPM_FORMULA de un eje Estático: copia su fórmula a cada celda de
+ * valores de la línea (formulasR1C1 = mismas referencias relativas que
+ * copiar y pegar la celda de cabecera), aplica el formato de número si se
+ * indicó y las barras de datos si se pidieron. Las celdas quedan fuera de
+ * la planificación.
+ *   lines   : líneas del eje (scanDracoStaticAxis), solo se usan las isFormula
+ *   isRows  : true si el eje Estático es Filas (las celdas van a lo ancho)
+ *   targets : posiciones (columnas si isRows, filas si no) donde escribir
+ */
+function applyDracoFormulaLines(sheet, reportId, lines, isRows, targets) {
+    const set = DracoCalcCellsByReport.get(dracoStateKey(reportId)) || new Set();
+    const sorted = Array.from(new Set(targets)).sort((a, b) => a - b);
+    // tramos contiguos de destino
+    const runs = [];
+    for (const t of sorted) {
+        const last = runs[runs.length - 1];
+        if (last && t === last.to + 1) last.to = t; else runs.push({ from: t, to: t });
+    }
+
+    for (const l of lines) {
+        if (!l.isFormula || !l.formula || !l.formula.r1c1) continue;
+        const f = "=" + l.formula.r1c1;
+        const fmt = l.formula.format;
+        const bar = l.formula.bar;
+        const ranges = runs.map(run => {
+            const n = run.to - run.from + 1;
+            const rg = isRows
+                ? sheet.getRangeByIndexes(l.line - 1, run.from - 1, 1, n)
+                : sheet.getRangeByIndexes(run.from - 1, l.line - 1, n, 1);
+            rg.formulasR1C1 = isRows ? [new Array(n).fill(f)] : new Array(n).fill(0).map(() => [f]);
+            for (let t = run.from; t <= run.to; t++) set.add(isRows ? (l.line + "_" + t) : (t + "_" + l.line));
+            rg.conditionalFormats.clearAll();
+            return { rg, run };
+        });
+
+        // Formato de número (si se indicó). Con "barra", relleno con espacios
+        // para dejar el número junto al extremo hacia el que crece su barra.
+        let numFmt = fmt || "";
+        if (bar && bar.display === "bar") {
+            const base = numFmt || "#,##0.00";
+            numFmt = base.indexOf(";") !== -1 ? base : "* " + base + "\\ ;\\ -" + base + "* ;* " + base + "\\ ";
+        }
+        if (numFmt) ranges.forEach(({ rg }) => { rg.numberFormat = [[numFmt]]; });
+
+        if (!bar || ranges.length === 0) continue;
+        const addr = ({ run }) => isRows
+            ? "$" + dracoColumnLetter(run.from) + "$" + l.line + ":$" + dracoColumnLetter(run.to) + "$" + l.line
+            : "$" + dracoColumnLetter(l.line) + "$" + run.from + ":$" + dracoColumnLetter(l.line) + "$" + run.to;
+        const list = ranges.slice(0, 200).map(addr).join(",");
+        const barOnly = bar.display === "barOnly";
+        const L = barOnly ? 0.04 : bar.left / 100;
+        const R = barOnly ? 0.04 : bar.right / 100;
+        const mn = "MIN(0,MIN(" + list + "))";
+        const mx = "MAX(0,MAX(" + list + "))";
+        const spanE = "MAX(0.000001," + mx + "-" + mn + ")";
+        const ln = "IF(" + mn + "<0," + L + ",0)";
+        const lp = "IF(" + mx + ">0," + R + ",0)";
+        const barW = "MAX(0.05,1-" + ln + "-" + lp + ")";
+        const lo = "=" + mn + "-" + spanE + "*" + ln + "/" + barW;
+        const hi = "=" + mx + "+" + spanE + "*" + lp + "/" + barW;
+        const neg = bar.invert ? bar.pos : bar.neg;
+        const pos = bar.invert ? bar.neg : bar.pos;
+        ranges.forEach(({ rg }) => {
+            const cf = rg.conditionalFormats.add(Excel.ConditionalFormatType.dataBar);
+            const db = cf.dataBar;
+            db.showDataBarOnly = barOnly;
+            db.barDirection = Excel.ConditionalDataBarDirection.leftToRight;
+            db.axisFormat = Excel.ConditionalDataBarAxisFormat.automatic;
+            db.axisColor = "#000000";
+            db.positiveFormat.fillColor = pos;
+            db.positiveFormat.gradientFill = false;
+            db.negativeFormat.matchPositiveFillColor = false;
+            db.negativeFormat.fillColor = neg;
+            db.lowerBoundRule = { type: Excel.ConditionalFormatRuleType.formula, formula: lo };
+            db.upperBoundRule = { type: Excel.ConditionalFormatRuleType.formula, formula: hi };
+        });
+    }
+    DracoCalcCellsByReport.set(dracoStateKey(reportId), set);
+}
+
+/**
+ * Modo Estático, tras pintar los valores:
+ *   - líneas EPM_FORMULA (siempre): fórmula, formato y barras;
+ *   - "Sobrescribir formatos en informes estáticos": cabeceras con estilo
+ *     Draco y valores con el formato de su medida.
+ * En el cruce de una fila EPM_FORMULA con una columna EPM_FORMULA manda
+ * la de la columna (p. ej. la Variación de la fila Margen).
+ */
+async function finishDracoFixedReport(context, reportId, editReportGrid) {
+    const props = dracoReportPropsFor(reportId);
     const resultSheetName = await getDracoResultSheetName(context, reportId);
     const sheet = context.workbook.worksheets.getItem(resultSheetName);
-    const rowLines = await formatDracoStaticAxis(context, sheet, editReportGrid, "rows");
-    const colLines = await formatDracoStaticAxis(context, sheet, editReportGrid, "cols");
-    const defaultMeasure = (ReportState.FilterMeasureNames && ReportState.FilterMeasureNames[0])
-        || (ReportState.Measures[0] && ReportState.Measures[0].Name) || null;
+    let rowLines = await scanDracoStaticAxis(context, sheet, editReportGrid, "rows");
+    let colLines = await scanDracoStaticAxis(context, sheet, editReportGrid, "cols");
+    DracoCalcCellsByReport.set(dracoStateKey(reportId), new Set());
 
-    const cols = colLines.map(c => c.line).sort((a, b) => a - b);
-    for (const rl of rowLines) {
-        // tramos contiguos de columnas estáticas con el mismo formato
-        let start = 0;
-        for (let i = 1; i <= cols.length; i++) {
+    if (props.overwriteStaticFormats) {
+        await formatDracoStaticAxis(context, sheet, editReportGrid, "rows", rowLines);
+        await formatDracoStaticAxis(context, sheet, editReportGrid, "cols", colLines);
+        const defaultMeasure = (ReportState.FilterMeasureNames && ReportState.FilterMeasureNames[0])
+            || (ReportState.Measures[0] && ReportState.Measures[0].Name) || null;
+        const dataCols = colLines.filter(c => !c.isFormula);
+        const cols = dataCols.map(c => c.line).sort((a, b) => a - b);
+        for (const rl of rowLines.filter(r => !r.isFormula)) {
             const fmtAt = (idx) => dracoMeasureNumberFormatByName(reportId,
-                rl.measure || (colLines.find(c => c.line === cols[idx]) || {}).measure || defaultMeasure);
-            const breakRun = i === cols.length || cols[i] !== cols[i - 1] + 1 || fmtAt(i) !== fmtAt(i - 1);
-            if (breakRun) {
-                const rg = sheet.getRangeByIndexes(rl.line - 1, cols[start] - 1, 1, cols[i - 1] - cols[start] + 1);
-                rg.numberFormat = [[fmtAt(start)]];
-                rg.format.font.name = DRACO_FONT_NAME;
-                rg.format.font.size = DRACO_FONT_SIZE;
-                rg.format.horizontalAlignment = Excel.HorizontalAlignment.center;
-                start = i;
+                rl.measure || (dataCols.find(c => c.line === cols[idx]) || {}).measure || defaultMeasure);
+            let start = 0;
+            for (let i = 1; i <= cols.length; i++) {
+                const breakRun = i === cols.length || cols[i] !== cols[i - 1] + 1 || fmtAt(i) !== fmtAt(i - 1);
+                if (breakRun) {
+                    const rg = sheet.getRangeByIndexes(rl.line - 1, cols[start] - 1, 1, cols[i - 1] - cols[start] + 1);
+                    rg.numberFormat = [[fmtAt(start)]];
+                    rg.format.font.name = DRACO_FONT_NAME;
+                    rg.format.font.size = DRACO_FONT_SIZE;
+                    rg.format.horizontalAlignment = Excel.HorizontalAlignment.center;
+                    start = i;
+                }
             }
         }
     }
+
+    // Filas EPM_FORMULA: en las columnas de datos. Columnas EPM_FORMULA: en
+    // todas las filas (datos y calculadas).
+    applyDracoFormulaLines(sheet, reportId, rowLines, true, colLines.filter(c => !c.isFormula).map(c => c.line));
+    const before = DracoCalcCellsByReport.get(dracoStateKey(reportId));
+    applyDracoFormulaLines(sheet, reportId, colLines, false, rowLines.map(r => r.line));
+    if (before) before.forEach(x => DracoCalcCellsByReport.get(dracoStateKey(reportId)).add(x));
     await context.sync();
 }
 
