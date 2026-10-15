@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>Variables</title>
+    <script src="js/host-bridge.js?v=20261016b"></script>
+    <link rel="stylesheet" href="css/theme.css?v=20261016b">
+    <link rel="stylesheet" href="css/modal.css?v=20261016b">
+    <style>
+        /* Misma estructura que filterDialog.html / calcDialog.html: ventana propia. */
+        html, body {
+            margin: 0; padding: 0; height: 100%;
+            font-family: var(--font-family, 'Segoe UI', Arial, sans-serif);
+            background: var(--surface-card, #fff); color: var(--text-primary, #1A2233);
+            display: flex; flex-direction: column; font-size: var(--fs-base, 12.5px);
+        }
+        .dialog-header {
+            padding: 14px 18px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken);
+            display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-shrink: 0;
+        }
+        .dialog-header h1 { font-size: var(--fs-lg, 15px); margin: 0; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+        .icon-x, .back-btn {
+            background: none; border: none; cursor: pointer; color: var(--text-muted);
+            width: 28px; height: 28px; border-radius: var(--radius-sm); font-size: 18px; line-height: 1; padding: 0;
+        }
+        .icon-x:hover, .back-btn:hover { background: var(--gray-100); color: var(--text-primary); }
+        .var-icon { font-family: Georgia, 'Times New Roman', serif; font-style: italic; font-weight: 700; color: var(--brand-primary); }
+        .dialog-body { flex: 1; display: flex; overflow: hidden; }
+        .main { flex: 1 1 55%; padding: 14px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        .main.with-side { border-right: 1px solid var(--border-subtle); }
+        .side { flex: 1 1 45%; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; background: var(--surface-sunken); overflow: hidden; }
+        .dialog-footer {
+            padding: 12px 18px; border-top: 1px solid var(--border-subtle); background: var(--surface-sunken);
+            display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-shrink: 0;
+        }
+        .msg { margin-right: auto; font-size: var(--fs-sm); color: var(--color-danger); }
+        .hint { font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.4; }
+        .section-title { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin: 4px 0 0; }
+        .empty, .loading { padding: 14px; color: var(--text-muted); font-size: var(--fs-sm); }
+        .row { display: flex; flex-direction: column; gap: 4px; }
+        .row > label { font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary); }
+        .row input, .row select {
+            padding: 6px 8px; font-size: var(--fs-sm); font-family: inherit; color: var(--text-primary);
+            border: 1px solid var(--border-default); border-radius: var(--radius-sm); background: var(--surface-card);
+        }
+        .mono { font-family: Consolas, 'Courier New', monospace; }
+        .table { border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+        .thead, .trow { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(110px, 1.2fr) minmax(90px, 1fr) 110px; gap: 8px; padding: 7px 10px; align-items: center; }
+        .thead { background: var(--surface-sunken); border-bottom: 1px solid var(--border-subtle); font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+        .trow { border-bottom: 1px solid var(--border-subtle); }
+        .trow:last-child { border-bottom: none; }
+        .trow:hover { background: var(--brand-primary-light); }
+        .trow span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .actions { display: flex; justify-content: flex-end; gap: 10px; }
+        .link-btn.danger { color: var(--color-danger); }
+        .list { flex: 1; min-height: 0; overflow-y: auto; max-height: none; }
+        .pick { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+        .pick.selected { background: var(--brand-primary-light); font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div class="dialog-header">
+        <h1 id="title"><span class="var-icon">𝑥</span><span>Variables</span></h1>
+        <button id="btnClose" class="icon-x" title="Cerrar" aria-label="Cerrar">&times;</button>
+    </div>
+    <div class="dialog-body" id="body"><div class="main"><div class="loading">Esperando datos…</div></div></div>
+    <div class="dialog-footer" id="footer"></div>
+    <script src="js/variablesDialog.js?v=1"></script>
+</body>
+</html>

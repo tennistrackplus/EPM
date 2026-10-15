@@ -5,9 +5,9 @@
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Añadir filtro</title>
-    <script src="js/host-bridge.js?v=20261016a"></script>
-    <link rel="stylesheet" href="css/theme.css?v=20261016a">
-    <link rel="stylesheet" href="css/lkmlDialog.css?v=20261016a">
+    <script src="js/host-bridge.js?v=20261016b"></script>
+    <link rel="stylesheet" href="css/theme.css?v=20261016b">
+    <link rel="stylesheet" href="css/lkmlDialog.css?v=20261016b">
     <style>
         #addFilterStatus { font-size: 11.5px; color: #64748b; margin-top: 6px; min-height: 14px; }
         #addFilterStatus.error { color: #c0392b; }
@@ -29,7 +29,7 @@
                 <option value="">Cargando…</option>
             </select>
 
-            <label class="lkml-field-label" for="addFilterReport">Informe</label>
+            <label class="lkml-field-label" for="addFilterReport" id="addFilterReportLabel">Informe</label>
             <select class="lkml-select" id="addFilterReport" disabled></select>
 
             <div id="addFilterStatus"></div>
@@ -67,7 +67,7 @@
             document.getElementById("btnConfirmAddFilterRange").disabled = !dimSelect.value;
         }
 
-        function populateSelects(dimensions, reports) {
+        function populateSelects(dimensions, reports, singleReport) {
             const dimSelect = document.getElementById("addFilterDimension");
             dimSelect.innerHTML = "";
             (dimensions || []).forEach(dim => {
@@ -107,6 +107,14 @@
             optAll.textContent = "Todos los informes";
             reportSelect.appendChild(optAll);
             reportSelect.disabled = false;
+
+            // Un solo informe posible (Tablas Draco en PLANNING): se aplica a él
+            // y no se pregunta.
+            if (singleReport && (reports || []).length) {
+                reportSelect.value = String(reports[0].id);
+                reportSelect.style.display = "none";
+                document.getElementById("addFilterReportLabel").style.display = "none";
+            }
 
             updateConfirmState();
         }
@@ -153,7 +161,7 @@
                 }
 
                 if (payload.type === "data") {
-                    populateSelects(payload.dimensions, payload.reports);
+                    populateSelects(payload.dimensions, payload.reports, payload.singleReport);
                 } else if (payload.type === "error") {
                     showError(payload.message);
                 }
