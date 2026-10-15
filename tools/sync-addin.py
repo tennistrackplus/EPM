@@ -25,14 +25,15 @@ TPL = os.path.join(ROOT, "tools", "templates")
 CHECK = "--check" in sys.argv
 # Se añade a todos los <script src> y <link href> de las páginas generadas: sin ello el navegador puede seguir usando
 # una copia antigua (p. ej. de model-bootstrap.js) tras actualizar. Súbelo cuando cambies tablas-draco/.
-BUNDLE_VERSION = "20261012b"
+BUNDLE_VERSION = "20261016a"
 
 # JS del addin que se copian tal cual (más los parches de abajo)
 JS_COPY = ["semanticModelStore.js", "reportStore.js", "filterRangeStore.js", "excelService.js",
-           "filterModal.js", "distributeValues.js", "commands.js", "taskpane.js", "filterDialog.js", "memberPicker.js"]
+           "filterModal.js", "distributeValues.js", "calcFormula.js", "commands.js", "taskpane.js", "calcEditor.js",
+           "calcDialog.js", "filterDialog.js", "memberPicker.js"]
 CSS_COPY = ["theme.css", "styles.css", "modal.css", "distributeValues.css", "lkmlDialog.css"]
 # Páginas de diálogo (Office.context.ui.displayDialogAsync) que se abren desde el diseñador
-DIALOGS = ["filterDialog.html", "memberPicker.html", "addFilterRange.html"]
+DIALOGS = ["filterDialog.html", "memberPicker.html", "addFilterRange.html", "calcDialog.html"]
 # Plantillas propias -> js/
 TEMPLATES = ["host-bridge.js", "provider-bridge.js", "model-bootstrap.js", "engine-api.js"]
 
@@ -101,6 +102,15 @@ PATCHES = [
     });
     tPerf = draco_perfMark(reportId, "Generando SQL", tPerf);''',
      "informe estático con SQL guardado"),
+    # --- informe HÍBRIDO: igual (el plan de pintado sí se construye: hace falta para pintar)
+    ("js/commands.js",
+     '''            built = await buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid, reportId);
+            await context.sync();''',
+     '''            built = await buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid, reportId);
+            // [Tablas Draco] con SQL ya generado y guardado se ejecuta ese (el plan de pintado sí hace falta)
+            if (window.DracoEngineApi && window.DracoEngineApi.storedSql) built.sql = window.DracoEngineApi.storedSql;
+            await context.sync();''',
+     "informe híbrido con SQL guardado"),
 ]
 
 
@@ -163,9 +173,8 @@ def main():
     <style id="dracoOverrides">
         /* Tablas Draco: una tabla = UN informe, y no hay Excel real: se ocultan los controles que no aplican */
         #reportSelector, #btnAddReport, #btnRefreshAll, #btnDistribuirValores, #btnSaveToBucket {{ display: none !important; }}
-        /* Informes estáticos/asimétricos: escriben fórmulas =EPM_VALUE en celdas que se teclean a mano; no aplican a una
-           rejilla de solo lectura (ver README: Tablas Draco) */
-        .asymmetric-checkbox {{ display: none !important; }}
+        /* Estático / Híbrido: SÍ disponibles. Las líneas del eje Estático se editan en la rejilla del diseñador
+           (seleccionar + Supr, botones «Miembro» y «Fórmula», doble clic): ver js/draco-table-designer.js */
     </style>
 </head>
 <body>
@@ -177,9 +186,11 @@ def main():
     <script src="js/excelService.js"></script>
     <script src="js/filterModal.js"></script>
     <script src="js/distributeValues.js"></script>
+    <script src="js/calcFormula.js"></script>
     <script src="js/commands.js"></script>
     <script src="js/engine-api.js"></script>
     <script src="js/taskpane.js"></script>
+    <script src="js/calcEditor.js"></script>
     <script src="js/model-bootstrap.js"></script>
 </body>
 </html>
@@ -213,7 +224,7 @@ def main():
 <script>if (window.__wteSignalModelsReady) window.__wteSignalModelsReady();</script>
 </head><body>
 <script src="js/semanticModelStore.js"></script><script src="js/reportStore.js"></script><script src="js/filterRangeStore.js"></script>
-<script src="js/excelService.js"></script><script src="js/commands.js"></script><script src="js/engine-api.js"></script>
+<script src="js/excelService.js"></script><script src="js/calcFormula.js"></script><script src="js/commands.js"></script><script src="js/engine-api.js"></script>
 </body></html>
 '''
     for rel in list(files):
