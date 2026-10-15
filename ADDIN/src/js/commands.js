@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-14-calcs-v2";
+const DRACO_BUILD = "2026-10-14-hibrido-v1";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -2509,6 +2509,501 @@ async function actualizarInformeFixed(event) {
         if (event) {
             event.completed();
         }
+    }
+}
+
+/* ==========================================================================
+ * ===============  MODO HÍBRIDO: un eje Estático + uno Dinámico  ===========
+ * ==========================================================================
+ * Tres modos según EDIT_REPORT!H12 (Filas Estático) / N12 (Columnas
+ * Estático), ver dracoReportMode:
+ *   - "fixed"   : los dos Estáticos  -> buildSQLFixed + jsonPaintValues
+ *   - "dynamic" : ninguno Estático   -> buildSQL (GROUPING SETS) + jsonTo3Matrices
+ *   - "hybrid"  : solo uno Estático  -> buildSQLHybrid + jsonPaintHybrid (aquí)
+ *
+ * Eje ESTÁTICO: igual que en el modo Fijo. Cada línea (fila o columna de la
+ * hoja) la define el usuario con fórmulas EPM_VALUE (condiciones
+ * dimensión/atributo/valor, y opcionalmente su propia MEDIDA); se lee de la
+ * hoja (readRowDefinitions / readColumnDefinitions) y NO se repinta nunca.
+ * Puede ser asimétrico, tener huecos, separadores o fórmulas propias del
+ * usuario entre líneas: nada de eso se toca.
+ *
+ * Eje DINÁMICO: sale de los datos en cada refresco (miembros distintos de
+ * sus atributos, ordenados), y se pinta como fórmulas EPM_VALUE —igual que
+ * un eje Estático— para que planificación, "Añadir filtro" y el paso a
+ * Estático lo lean igual que siempre. Las medidas en este eje se reparten
+ * por miembro en la posición en que están en el diseño.
+ *
+ * SQL (BigQuery; Snowflake y Fabric con sus equivalentes, igual que Fijo):
+ *   BASE   : atributos del eje estático + del dinámico + una SUM por
+ *            medida, filtrado por (condiciones estáticas en OR) AND filtros.
+ *   TAGGED : cada fila de BASE etiquetada con las líneas estáticas que cumple.
+ *   AGG    : SUM por línea estática x miembro dinámico.
+ *   final  : LINE_ID, DYN_ID (DENSE_RANK del miembro dinámico), P_ID (rango
+ *            del prefijo anterior a la medida, para ordenar), atributos
+ *            dinámicos y una columna por medida.
+ * Como Fijo, agrega con SUM (los subtotales del eje dinámico no aplican:
+ * se muestran sus miembros de detalle).
+ * ========================================================================== */
+
+function dracoReportMode(editReportGrid) {
+    const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
+    const colsStatic = String(cellValue(editReportGrid, 12, 14)).trim().toUpperCase() === "X";
+    if (rowsStatic && colsStatic) return "fixed";
+    if (rowsStatic || colsStatic) {
+        // Power BI/Fabric semántico: sin consulta híbrida, sigue por el Dinámico de siempre
+        if (window.PowerBIQuery && window.PowerBIQuery.isActiveModel()) return "dynamic";
+        return "hybrid";
+    }
+    return "dynamic";
+}
+
+// Todos los valores "v" del JSON en orden (mismo parser que jsonTo3MatricesCore).
+function extractDracoJsonValues(json) {
+    const valores = [];
+    let pos = 0;
+    while (true) {
+        const idx = json.indexOf('"v":', pos);
+        if (idx === -1) break;
+        let ini = idx + 4;
+        while (json.charAt(ini) === " ") ini++;
+        let fin, texto;
+        if (json.charAt(ini) === '"') {
+            ini++;
+            fin = json.indexOf('"', ini);
+            texto = json.substring(ini, fin);
+        } else {
+            fin = json.indexOf("}", ini);
+            texto = json.substring(ini, fin).trim();
+        }
+        valores.push(texto);
+        pos = fin + 1;
+    }
+    return valores;
+}
+
+// Niveles del eje dinámico en el orden del diseño (EDIT_REPORT a partir de
+// la fila 15): {type:"attr", dim, attr} o {type:"measure"} (todas las
+// medidas del eje forman UN nivel, en la posición de la primera).
+function readDracoHybridDynamicLevels(editReportGrid, dynamicIsColumns) {
+    const dimCol = dynamicIsColumns ? 14 : 8;
+    const levels = [];
+    let R = 15;
+    while (String(cellValue(editReportGrid, R, dimCol)).trim() !== "") {
+        const dim = String(cellValue(editReportGrid, R, dimCol)).trim();
+        const attr = String(cellValue(editReportGrid, R, dimCol + 1)).trim();
+        if (dim.toUpperCase() === "MEASURE") {
+            if (!levels.some(l => l.type === "measure")) levels.push({ type: "measure" });
+        } else if (!levels.some(l => l.type === "attr" && l.dim.toUpperCase() === dim.toUpperCase() && l.attr.toUpperCase() === attr.toUpperCase())) {
+            levels.push({ type: "attr", dim, attr });
+        }
+        R++;
+    }
+    return levels;
+}
+
+async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid) {
+    const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
+    const staticIsRows = rowsStatic;               // si no, el estático es Columnas
+    const dynamicIsColumns = staticIsRows;
+
+    // --- Eje estático: definiciones de la hoja (fórmulas EPM_VALUE)
+    const defsRaw = staticIsRows
+        ? await readRowDefinitions(context, editReportGrid, csvGrid)
+        : await readColumnDefinitions(context, editReportGrid, csvGrid);
+    const isMeasureDef = (d) => String(d.Dimension).toUpperCase() === "MEASURE";
+    const linesMap = new Map(); // R -> {id, defs, measure}
+    for (const d of defsRaw) {
+        if (!linesMap.has(d.R)) linesMap.set(d.R, { id: d.R, defs: [], measure: null });
+        const line = linesMap.get(d.R);
+        if (isMeasureDef(d)) line.measure = d.AttributeName;
+        else line.defs.push(d);
+    }
+    const lines = Array.from(linesMap.values()).sort((a, b) => a.id - b.id);
+
+    // --- Eje dinámico: niveles del diseño
+    const levels = readDracoHybridDynamicLevels(editReportGrid, dynamicIsColumns);
+    const dynAttrs = levels.filter(l => l.type === "attr");
+    const measureLevelIdx = levels.findIndex(l => l.type === "measure");
+    const dynZone = dynamicIsColumns ? "columns" : "rows";
+    const dynMeasures = ReportState.Measures.filter(m => m.Zone === dynZone).map(m => m.Name);
+
+    const defaultMeasure = (ReportState.FilterMeasureNames && ReportState.FilterMeasureNames[0])
+        || (ReportState.Measures[0] && ReportState.Measures[0].Name) || null;
+    const neededMeasures = [];
+    const addM = (n) => { if (n && neededMeasures.indexOf(n) === -1) neededMeasures.push(n); };
+    if (dynMeasures.length) dynMeasures.forEach(addM);
+    else { lines.forEach(l => addM(l.measure)); addM(defaultMeasure); }
+
+    const measureCols = neededMeasures.map((name, k) => {
+        const R = buscarMedida(measuresGrid, name);
+        if (R === 0) throw new Error(`La medida «${name}» no está en el modelo semántico.`);
+        return { name, alias: "M_" + (k + 1), field: String(cellValue(measuresGrid, R, 6)).trim() };
+    });
+
+    const plan = {
+        staticIsRows, dynamicIsColumns,
+        lines: lines.map(l => ({ id: l.id, measure: l.measure || defaultMeasure })),
+        levels, dynAttrs, measureLevelIdx, dynMeasures,
+        measureCols: measureCols.map(m => ({ name: m.name, alias: m.alias })),
+        hasP: measureLevelIdx > 0 && dynMeasures.length > 0
+    };
+
+    if (lines.length === 0) return { sql: null, plan };
+
+    const provider = Provider.key();
+    const isFabric = provider === "fabric";
+    const TRUE_EXPR = isFabric ? "1=1" : "TRUE";
+
+    // --- BASE: atributos estáticos (de las condiciones) + dinámicos + medidas
+    const selectCols = new Map();
+    const addCol = (dim, attr) => {
+        const key = (dim + "|" + attr).toUpperCase();
+        if (!selectCols.has(key)) selectCols.set(key, getTableAlias(relGrid, dim) + "." + attr);
+    };
+    lines.forEach(l => l.defs.forEach(d => addCol(d.Dimension, d.AttributeName)));
+    dynAttrs.forEach(a => addCol(a.dim, a.attr));
+    const dynNames = dynAttrs.map(a => a.attr);
+
+    // Condiciones de cada línea (sobre columnas de BASE, sin alias) y OR de
+    // todas para podar la tabla de hechos (como buildBaseWhere en Fijo).
+    const lineCond = (l) => l.defs.length
+        ? l.defs.map(d => d.AttributeName + "=" + sqlValue(atributesGrid, d.Dimension, d.AttributeName, d.Value)).join(" AND ")
+        : TRUE_EXPR;
+    const prune = [];
+    const anyUnconditioned = lines.some(l => l.defs.length === 0);
+    if (!anyUnconditioned) {
+        const seen = new Set();
+        lines.forEach(l => l.defs.forEach(d => {
+            const c = getTableAlias(relGrid, d.Dimension) + "." + d.AttributeName + "=" + sqlValue(atributesGrid, d.Dimension, d.AttributeName, d.Value);
+            if (!seen.has(c.toUpperCase())) { seen.add(c.toUpperCase()); prune.push(c); }
+        }));
+    }
+    const where = [];
+    if (prune.length) where.push("(" + CRLF + "      " + prune.join(CRLF + "   OR ") + CRLF + ")");
+    buildFilterConditions(atributesGrid, relGrid).forEach(c => where.push(c));
+
+    let sql = "WITH BASE AS (" + CRLF + CRLF;
+    sql += "SELECT" + CRLF;
+    sql += [...selectCols.values(), ...measureCols.map(m => "SUM(f." + m.field + ") AS " + m.alias)]
+        .map(x => "    " + x).join("," + CRLF) + CRLF + CRLF;
+    sql += buildFrom(measuresGrid, measureCols.length ? measureCols[0].name : null, relGrid) + CRLF + CRLF;
+    sql += buildJoins(relGrid) + CRLF + CRLF;
+    if (where.length) sql += "WHERE" + CRLF + where.join(CRLF + "AND ") + CRLF + CRLF;
+    if (selectCols.size) sql += "GROUP BY" + CRLF + [...selectCols.values()].map(x => "    " + x).join("," + CRLF) + CRLF;
+    sql += ")," + CRLF + CRLF;
+
+    const mSel = measureCols.map(m => m.alias);
+    const sumM = measureCols.map(m => "SUM(" + m.alias + ") AS " + m.alias);
+    const groupDyn = dynNames.length ? ", " + dynNames.join(", ") : "";
+
+    // --- Etiquetado por línea estática + agregación (según motor)
+    if (isFabric) {
+        const values = lines.map(l => "(CASE WHEN " + lineCond(l) + " THEN " + l.id + " END)");
+        sql += "AGG AS (" + CRLF
+            + "    SELECT L.LINE_ID" + (dynNames.length ? ", " + dynNames.map(n => "B." + n).join(", ") : "")
+            + (sumM.length ? ", " + measureCols.map(m => "SUM(B." + m.alias + ") AS " + m.alias).join(", ") : "") + CRLF
+            + "    FROM BASE B" + CRLF
+            + "    CROSS APPLY (VALUES" + CRLF + values.map(v => "        " + v).join("," + CRLF) + CRLF + "    ) AS L(LINE_ID)" + CRLF
+            + "    WHERE L.LINE_ID IS NOT NULL" + CRLF
+            + "    GROUP BY L.LINE_ID" + (dynNames.length ? ", " + dynNames.map(n => "B." + n).join(", ") : "") + CRLF
+            + ")" + CRLF + CRLF;
+    } else if (provider === "snowflake") {
+        const items = lines.map(l => "IFF(" + lineCond(l) + ", " + l.id + ", NULL)");
+        sql += "TAGGED AS (" + CRLF
+            + "    SELECT " + [...dynNames, ...mSel].map(x => x + ", ").join("")
+            + "ARRAY_CONSTRUCT_COMPACT(" + CRLF + items.map(x => "        " + x).join("," + CRLF) + CRLF + "    ) AS LINE_IDS" + CRLF
+            + "    FROM BASE" + CRLF + ")," + CRLF + CRLF;
+        sql += "AGG AS (" + CRLF
+            + "    SELECT LINE_ID" + groupDyn + (sumM.length ? ", " + sumM.join(", ") : "") + CRLF
+            + "    FROM (" + CRLF
+            + "        SELECT L.VALUE::INTEGER AS LINE_ID" + [...dynNames, ...mSel].map(x => ", T." + x + " AS " + x).join("") + CRLF
+            + "        FROM TAGGED T, LATERAL FLATTEN(input => T.LINE_IDS) AS L" + CRLF
+            + "    ) X" + CRLF
+            + "    GROUP BY LINE_ID" + groupDyn + CRLF
+            + ")" + CRLF + CRLF;
+    } else {
+        const structs = lines.map(l => "STRUCT(" + l.id + " AS LINE_ID, (" + lineCond(l) + ") AS COND)");
+        sql += "TAGGED AS (" + CRLF
+            + "    SELECT " + [...dynNames, ...mSel].map(x => x + ", ").join("")
+            + "ARRAY(" + CRLF + "        SELECT LINE_ID FROM UNNEST([" + CRLF
+            + structs.map(x => "            " + x).join("," + CRLF) + CRLF
+            + "        ]) WHERE COND" + CRLF + "    ) AS LINE_IDS" + CRLF
+            + "    FROM BASE" + CRLF + ")," + CRLF + CRLF;
+        sql += "AGG AS (" + CRLF
+            + "    SELECT LINE_ID" + groupDyn + (sumM.length ? ", " + sumM.join(", ") : "") + CRLF
+            + "    FROM TAGGED, UNNEST(LINE_IDS) AS LINE_ID" + CRLF
+            + "    GROUP BY LINE_ID" + groupDyn + CRLF
+            + ")" + CRLF + CRLF;
+    }
+
+    // --- SELECT final
+    const rank = (cols) => cols.length ? "DENSE_RANK() OVER (ORDER BY " + cols.join(", ") + ")" : "1";
+    const prefix = plan.hasP ? levels.slice(0, measureLevelIdx).filter(l => l.type === "attr").map(l => l.attr) : [];
+    sql += "SELECT" + CRLF
+        + "    LINE_ID," + CRLF
+        + "    " + rank(dynNames) + " AS DYN_ID," + CRLF
+        + "    " + (plan.hasP ? rank(prefix) : "1") + " AS P_ID"
+        + [...dynNames, ...mSel].map(x => "," + CRLF + "    " + x).join("") + CRLF
+        + "FROM AGG" + CRLF
+        + "ORDER BY LINE_ID, DYN_ID";
+
+    return { sql, plan };
+}
+
+/**
+ * Pinta el resultado híbrido: cabecera del eje dinámico (fórmulas
+ * EPM_VALUE) y valores SOLO en las celdas línea-estática x miembro
+ * dinámico. Las celdas intermedias del usuario no se tocan.
+ */
+async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
+    let tPerf = performance.now();
+    const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
+    const props = Object.assign({ overwriteFormats: true, autoFitColumns: true, planningReport: false },
+        (report && report.reportProperties) || {});
+
+    const resultSheetName = await getDracoResultSheetName(context, reportId);
+    await ensureDracoResultSheetExists(context, resultSheetName);
+    const sheet = context.workbook.worksheets.getItem(resultSheetName);
+    const rn = dracoRangeNames(reportId);
+    const dynName = plan.dynamicIsColumns ? rn.cols : rn.rows;
+
+    // --- Anclas
+    const tryParse = (raw) => { const t = String(raw || "").trim(); if (!t) return null; try { return parseAddress(t); } catch (e) { return null; } };
+    const RRows = tryParse(cellValue(editReportGrid, 10, 8));
+    const RCols = tryParse(cellValue(editReportGrid, 10, 14));
+    let anchor = plan.dynamicIsColumns ? RCols : RRows;
+    if (!anchor) {
+        // Eje dinámico sin campos: una sola columna/fila de valores justo
+        // después de las cabeceras del eje estático.
+        const st = plan.dynamicIsColumns ? RRows : RCols;
+        if (!st) throw new Error("No se encuentra la posición del eje Estático (EDIT_REPORT!H10/N10).");
+        anchor = plan.dynamicIsColumns
+            ? { row: st.row, col: st.col + Math.max(1, ReportState.AttrColumnCount) }
+            : { row: st.row + Math.max(1, ReportState.AttrRowCount), col: st.col };
+    }
+
+    // --- Parseo
+    const nDyn = plan.dynAttrs.length;
+    const nM = plan.measureCols.length;
+    const per = 3 + nDyn + nM;
+    const vals = json ? extractDracoJsonValues(json) : [];
+    const recs = [];
+    for (let i = 0; i + per <= vals.length; i += per) {
+        recs.push({
+            line: Number(vals[i]), dyn: Number(vals[i + 1]), p: Number(vals[i + 2]),
+            attrs: vals.slice(i + 3, i + 3 + nDyn),
+            values: vals.slice(i + 3 + nDyn, i + per)
+        });
+    }
+    tPerf = draco_perfMark(reportId, `Híbrido: parseo (${recs.length} filas)`, tPerf);
+
+    // --- Miembros dinámicos y líneas físicas del eje dinámico
+    const members = new Map(); // dyn -> {p, attrs}
+    recs.forEach(r => { if (!members.has(r.dyn)) members.set(r.dyn, { p: r.p, attrs: r.attrs }); });
+    const tuples = [];
+    if (plan.dynMeasures.length) {
+        for (const [dyn, mem] of members) plan.dynMeasures.forEach((m, mIdx) => tuples.push({ dyn, mIdx, mem }));
+        tuples.sort((a, b) => (a.mem.p - b.mem.p) || (a.mIdx - b.mIdx) || (a.dyn - b.dyn));
+    } else {
+        for (const [dyn, mem] of members) tuples.push({ dyn, mIdx: -1, mem });
+        tuples.sort((a, b) => a.dyn - b.dyn);
+    }
+    if (members.size === 0 && nDyn === 0 && !plan.dynMeasures.length) tuples.push({ dyn: 1, mIdx: -1, mem: { attrs: [] } });
+    const tupleIndex = new Map(tuples.map((t, j) => [t.dyn + "_" + t.mIdx, j]));
+    const headerDepth = plan.levels.length;
+
+    // posición física de la línea dinámica j y del nivel k
+    const hdrCell = (j, k) => plan.dynamicIsColumns ? { r: anchor.row + k, c: anchor.col + j } : { r: anchor.row + j, c: anchor.col + k };
+    const valCell = (lineId, j) => plan.dynamicIsColumns ? { r: lineId, c: anchor.col + j } : { r: anchor.row + j, c: lineId };
+    const firstDyn = plan.dynamicIsColumns ? anchor.col : anchor.row;
+
+    // --- Borrar lo pintado la vez anterior (solo cabecera dinámica y celdas
+    //     línea x miembro; nunca el eje estático ni los huecos del usuario)
+    const prevDyn = context.workbook.names.getItemOrNullObject(dynName);
+    const prevVals = context.workbook.names.getItemOrNullObject(rn.values);
+    prevDyn.load("name"); prevVals.load("name");
+    await context.sync();
+    let prevDynRange = null, prevValsRange = null;
+    if (!prevDyn.isNullObject) { prevDynRange = prevDyn.getRange(); prevDynRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount", "worksheet/name"]); }
+    if (!prevVals.isNullObject) { prevValsRange = prevVals.getRange(); prevValsRange.load(["rowIndex", "columnIndex", "rowCount", "columnCount", "worksheet/name"]); }
+    await context.sync();
+    const clearMode = props.overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents;
+    if (prevDynRange && prevDynRange.worksheet.name === resultSheetName) prevDynRange.clear(clearMode);
+    if (prevValsRange && prevValsRange.worksheet.name === resultSheetName) {
+        const pv = prevValsRange;
+        for (const l of plan.lines) {
+            if (plan.dynamicIsColumns) {
+                if (l.id - 1 >= pv.rowIndex && l.id - 1 < pv.rowIndex + pv.rowCount) {
+                    sheet.getRangeByIndexes(l.id - 1, pv.columnIndex, 1, pv.columnCount).clear(Excel.ClearApplyTo.contents);
+                }
+            } else if (l.id - 1 >= pv.columnIndex && l.id - 1 < pv.columnIndex + pv.columnCount) {
+                sheet.getRangeByIndexes(pv.rowIndex, l.id - 1, pv.rowCount, 1).clear(Excel.ClearApplyTo.contents);
+            }
+        }
+    }
+    if (!prevDyn.isNullObject) prevDyn.delete();
+    if (!prevVals.isNullObject) prevVals.delete();
+
+    // --- Cabecera dinámica (EPM_VALUE, como un eje Estático)
+    const nTuples = tuples.length;
+    if (headerDepth > 0 && nTuples > 0) {
+        const grid = [];
+        const rowsN = plan.dynamicIsColumns ? headerDepth : nTuples;
+        const colsN = plan.dynamicIsColumns ? nTuples : headerDepth;
+        for (let r = 0; r < rowsN; r++) grid.push(new Array(colsN).fill(""));
+        tuples.forEach((t, j) => {
+            plan.levels.forEach((lv, k) => {
+                let f;
+                if (lv.type === "measure") {
+                    const mName = t.mIdx >= 0 ? plan.dynMeasures[t.mIdx] : "";
+                    f = mName ? buildEpmValueFormula("MEASURE", mName, "", mName) : "";
+                } else {
+                    const v = t.mem.attrs[plan.dynAttrs.indexOf(lv)];
+                    f = (v === undefined || isDracoNullLiteral(v)) ? "" : buildEpmValueFormula(lv.dim, lv.attr, v);
+                }
+                if (plan.dynamicIsColumns) grid[k][j] = f; else grid[j][k] = f;
+            });
+        });
+        const hdr = sheet.getRangeByIndexes(anchor.row - 1, anchor.col - 1, rowsN, colsN);
+        hdr.formulas = grid;
+        if (props.overwriteFormats) {
+            hdr.format.font.name = DRACO_FONT_NAME;
+            hdr.format.font.size = DRACO_FONT_SIZE;
+            hdr.format.font.bold = true;
+            hdr.format.horizontalAlignment = plan.dynamicIsColumns ? Excel.HorizontalAlignment.right : Excel.HorizontalAlignment.left;
+        }
+        context.workbook.names.add(dynName, hdr);
+    }
+
+    // --- Valores: solo las celdas línea x miembro
+    const measureColIdx = new Map(plan.measureCols.map((m, k) => [m.name, k]));
+    const lineMeasure = new Map(plan.lines.map(l => [l.id, l.measure]));
+    const cells = [];
+    for (const r of recs) {
+        if (plan.dynMeasures.length) {
+            plan.dynMeasures.forEach((mName, mIdx) => {
+                const j = tupleIndex.get(r.dyn + "_" + mIdx);
+                const k = measureColIdx.get(mName);
+                if (j === undefined || k === undefined) return;
+                const pos = valCell(r.line, j);
+                cells.push({ r: pos.r, c: pos.c, value: coerceCellLiteral(r.values[k]), measure: mName });
+            });
+        } else {
+            const j = tupleIndex.get(r.dyn + "_-1");
+            const mName = lineMeasure.get(r.line);
+            const k = measureColIdx.get(mName);
+            if (j === undefined || k === undefined) continue;
+            const pos = valCell(r.line, j);
+            cells.push({ r: pos.r, c: pos.c, value: coerceCellLiteral(r.values[k]), measure: mName });
+        }
+    }
+
+    // Rectángulo que cubre líneas x miembros (para el rango con nombre)
+    const lineIds = plan.lines.map(l => l.id);
+    if (lineIds.length && nTuples > 0) {
+        const minL = Math.min(...lineIds), maxL = Math.max(...lineIds);
+        const rect = plan.dynamicIsColumns
+            ? sheet.getRangeByIndexes(minL - 1, firstDyn - 1, maxL - minL + 1, nTuples)
+            : sheet.getRangeByIndexes(firstDyn - 1, minL - 1, nTuples, maxL - minL + 1);
+        context.workbook.names.add(rn.values, rect);
+    }
+
+    // Escritura: celda a celda dentro de bloques por línea (una operación por
+    // línea estática), para no pisar nada entre líneas.
+    const byLine = new Map();
+    for (const c of cells) {
+        const key = plan.dynamicIsColumns ? c.r : c.c;
+        if (!byLine.has(key)) byLine.set(key, []);
+        byLine.get(key).push(c);
+    }
+    const baseline = props.planningReport ? new Map() : null;
+    for (const [key, list] of byLine) {
+        const along = (c) => plan.dynamicIsColumns ? c.c : c.r;
+        const lo = Math.min(...list.map(along)), hi = Math.max(...list.map(along));
+        const n = hi - lo + 1;
+        const values = new Array(n).fill("");
+        const formats = new Array(n).fill("#,##0.00");
+        list.forEach(c => {
+            values[along(c) - lo] = c.value;
+            const m = ReportState.Measures.find(x => x.Name === c.measure);
+            formats[along(c) - lo] = (m && m.NumberFormat) || "#,##0.00";
+            if (baseline) baseline.set(c.r + "_" + c.c, c.value);
+        });
+        const rg = plan.dynamicIsColumns
+            ? sheet.getRangeByIndexes(key - 1, lo - 1, 1, n)
+            : sheet.getRangeByIndexes(lo - 1, key - 1, n, 1);
+        rg.values = plan.dynamicIsColumns ? [values] : values.map(v => [v]);
+        if (props.overwriteFormats) {
+            rg.numberFormat = plan.dynamicIsColumns ? [formats] : formats.map(f => [f]);
+            rg.format.font.name = DRACO_FONT_NAME;
+            rg.format.font.size = DRACO_FONT_SIZE;
+        }
+    }
+    if (baseline) DracoPlanningBaselineValues.set(reportId, baseline);
+    else DracoPlanningBaselineValues.delete(reportId);
+
+    if (props.autoFitColumns && plan.dynamicIsColumns && nTuples > 0) {
+        sheet.getRangeByIndexes(anchor.row - 1, anchor.col - 1, 1, nTuples).format.autofitColumns();
+    }
+    await context.sync();
+    draco_perfMark(reportId, `Híbrido: pintado (${nTuples} miembros dinámicos, ${cells.length} valores)`, tPerf);
+}
+
+async function actualizarInformeHybridCore(reportIdOverride) {
+    const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
+    let built;
+    beginDracoPerfLog();
+    const tRefreshStart = performance.now();
+    let tPerf = tRefreshStart;
+
+    await draco_beginManualCalculation();
+    await flushDracoPlanningModifiedCells();
+    if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(reportId, "Generando SQL"));
+    await beginSuppressPlanningPaint();
+    try {
+        let editReportGridForPaint;
+        await Excel.run(async (context) => {
+            const editReportGrid = await getEditReportGrid(context, reportId);
+            editReportGridForPaint = editReportGrid;
+            const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
+            const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+            const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+            const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
+            await ensureDracoResultSheetExists(context, resultSheetName);
+            const csvGrid = await getFormulaGrid(context, resultSheetName);
+
+            loadReportDefinition(editReportGrid, reportId);
+            built = await buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
+            await context.sync();
+        });
+        tPerf = draco_perfMark(reportId, "Híbrido: generando SQL", tPerf);
+
+        let json = "";
+        if (built.sql) {
+            if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
+            json = await executeSQL(built.sql);
+            tPerf = draco_perfMark(reportId, "Híbrido: ejecutando consulta (red)", tPerf);
+        }
+
+        await Excel.run(async (context) => {
+            const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+            editReportSheet.getRange("X1").values = [[built.sql || "(Híbrido: el eje Estático no tiene ninguna línea EPM_VALUE todavía)"]];
+            const LIMIT = 32000;
+            editReportSheet.getRange("Y1").values = [[json.length > LIMIT ? json.substring(0, LIMIT) + " ...(truncado)" : json]];
+            await context.sync();
+        });
+
+        if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Pintando resultados"));
+        await Excel.run(async (context) => {
+            await jsonPaintHybrid(context, json, reportId, built.plan, editReportGridForPaint);
+        });
+    } finally {
+        await endSuppressPlanningPaint();
+        await draco_endManualCalculation();
+        if (window.BusyIndicator) await window.BusyIndicator.hide();
+        draco_perfMark(reportId, "══ TOTAL refresco híbrido ══", tRefreshStart);
+        await endDracoPerfLog();
     }
 }
 
@@ -7919,15 +8414,16 @@ async function actualizarInforme(event) {
  */
 async function actualizarUnInforme(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
-    const isFixed = await Excel.run(async (context) => {
+    // Tres modos (ver dracoReportMode): Fijo, Híbrido o Dinámico.
+    const mode = await Excel.run(async (context) => {
         const grid = await getEditReportGrid(context, reportId);
-        const h12 = String(cellValue(grid, 12, 8)).trim().toUpperCase();
-        const n12 = String(cellValue(grid, 12, 14)).trim().toUpperCase();
-        return h12 === "X" && n12 === "X";
+        return dracoReportMode(grid);
     });
 
-    if (isFixed) {
+    if (mode === "fixed") {
         await actualizarInformeFixedCore(reportId);
+    } else if (mode === "hybrid") {
+        await actualizarInformeHybridCore(reportId);
     } else {
         await actualizarInformeCore(reportId);
     }
@@ -8026,15 +8522,13 @@ async function actualizarTodosCore(concurrency) {
         try {
             const reportId = r.id;
             if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Clasificando informe"));
-            const isFixed = await Excel.run(async (context) => {
+            const mode = await Excel.run(async (context) => {
                 const grid = await getEditReportGrid(context, reportId);
-                const h12 = String(cellValue(grid, 12, 8)).trim().toUpperCase();
-                const n12 = String(cellValue(grid, 12, 14)).trim().toUpperCase();
-                return h12 === "X" && n12 === "X";
+                return dracoReportMode(grid);
             });
 
-            if (isFixed) {
-                fixedReports.push({ reportId, reportName: r.name });
+            if (mode === "fixed" || mode === "hybrid") {
+                fixedReports.push({ reportId, reportName: r.name, mode });
             } else {
                 let sql;
                 if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Generando SQL"));
@@ -8118,9 +8612,10 @@ async function actualizarTodosCore(concurrency) {
     //    entre sí — no solo el pintado, sino el flujo completo.
     for (const f of fixedReports) {
         try {
-            await actualizarInformeFixedCore(f.reportId);
+            if (f.mode === "hybrid") await actualizarInformeHybridCore(f.reportId);
+            else await actualizarInformeFixedCore(f.reportId);
         } catch (err) {
-            console.error(`[Draco] Error actualizando el informe "${f.reportName}" (modo fijo):`, err);
+            console.error(`[Draco] Error actualizando el informe "${f.reportName}" (modo ${f.mode === "hybrid" ? "híbrido" : "fijo"}):`, err);
         }
     }
 

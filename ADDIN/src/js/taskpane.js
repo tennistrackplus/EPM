@@ -82,26 +82,53 @@ const RangeAxis = {
         if (this.rc.row + this.rc.height > this.rr.row) this.moveRR(1, 0);
     },
 
+    // MODO HÍBRIDO (un eje Estático): las líneas del eje Estático son
+    // celdas fijas de la hoja (fórmulas EPM_VALUE del usuario), así que NO
+    // se pueden desplazar. Cuando el otro eje (Dinámico) gana o pierde un
+    // campo, su cabecera crece/encoge HACIA FUERA (Columnas hacia arriba,
+    // Filas hacia la izquierda) en vez de empujar al eje Estático. Si ya
+    // está pegada al borde (fila/columna 1), se hace como siempre.
+
     // Al añadir un campo al eje Filas: crece en anchura y empuja columnas
-    onRowFieldAdded() {
+    onRowFieldAdded(colsStatic) {
+        if (colsStatic && this.rr.col > 1) {
+            this.rr.col -= 1;
+            this.rr.width += 1;
+            return;
+        }
         this.rr.width += 1;
         this.moveRC(0, 1);
     },
 
     // Al quitar un campo del eje Filas
-    onRowFieldRemoved() {
+    onRowFieldRemoved(colsStatic) {
+        if (colsStatic && this.rr.width > 0) {
+            this.rr.width -= 1;
+            this.rr.col += 1;
+            return;
+        }
         this.rr.width = Math.max(0, this.rr.width - 1);
         this.moveRC(0, -1);
     },
 
     // Al añadir un campo al eje Columnas: crece en altura y empuja filas
-    onColFieldAdded() {
+    onColFieldAdded(rowsStatic) {
+        if (rowsStatic && this.rc.row > 1) {
+            this.rc.row -= 1;
+            this.rc.height += 1;
+            return;
+        }
         this.rc.height += 1;
         this.moveRR(1, 0);
     },
 
     // Al quitar un campo del eje Columnas
-    onColFieldRemoved() {
+    onColFieldRemoved(rowsStatic) {
+        if (rowsStatic && this.rc.height > 0) {
+            this.rc.height -= 1;
+            this.rc.row += 1;
+            return;
+        }
         this.rc.height = Math.max(0, this.rc.height - 1);
         this.moveRR(-1, 0);
     }
@@ -1038,6 +1065,17 @@ const TaskPaneApp = {
         if (!label) return;
         label.innerText = isStatic ? "Estático" : "Dinámico";
         label.style.color = isStatic ? "#1D8154" : "#7045A9";
+
+        // Modo del informe (ver dracoReportMode en commands.js): se muestra
+        // como ayuda al pasar el ratón por cualquiera de los dos interruptores.
+        const r = this.state.rowsStatic, c = this.state.colsStatic;
+        const mode = r && c ? "Estático (las dos líneas las defines tú en la hoja)"
+            : (r || c) ? `Híbrido: ${r ? "Filas" : "Columnas"} estático (tus líneas de la hoja) y ${r ? "Columnas" : "Filas"} dinámico (sale de los datos)`
+            : "Dinámico (los dos ejes salen de los datos)";
+        ["lblStaticRows", "lblStaticCols"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el && el.parentElement) el.parentElement.title = "Modo del informe: " + mode;
+        });
     },
 
     refreshRangeLabels() {
@@ -1684,8 +1722,8 @@ const TaskPaneApp = {
         const shouldGrowRange = !isMeasure || isFirstMeasureInZone;
 
         if (shouldGrowRange) {
-            if (zoneId === "rows") RangeAxis.onRowFieldAdded();
-            if (zoneId === "columns") RangeAxis.onColFieldAdded();
+            if (zoneId === "rows") RangeAxis.onRowFieldAdded(this.state.colsStatic && !this.state.rowsStatic);
+            if (zoneId === "columns") RangeAxis.onColFieldAdded(this.state.rowsStatic && !this.state.colsStatic);
         }
         this.refreshRangeLabels();
 
@@ -1715,8 +1753,8 @@ const TaskPaneApp = {
         const shouldShrinkRange = !isMeasure || measureCountLeftInZone === 0;
 
         if (shouldShrinkRange) {
-            if (zoneId === "rows") RangeAxis.onRowFieldRemoved();
-            if (zoneId === "columns") RangeAxis.onColFieldRemoved();
+            if (zoneId === "rows") RangeAxis.onRowFieldRemoved(this.state.colsStatic && !this.state.rowsStatic);
+            if (zoneId === "columns") RangeAxis.onColFieldRemoved(this.state.rowsStatic && !this.state.colsStatic);
         }
         this.refreshRangeLabels();
 
