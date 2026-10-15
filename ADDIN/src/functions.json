@@ -35,6 +35,45 @@
           "dimensionality": "scalar"
         }
       ]
+    },
+    {
+      "id": "EPM_FORMULA",
+      "name": "EPM_FORMULA",
+      "description": "Línea calculada de un eje Estático: muestra el texto; Draco copia la fórmula a cada celda de valores de la línea.",
+      "result": {
+        "type": "string",
+        "dimensionality": "scalar"
+      },
+      "parameters": [
+        {
+          "name": "texto",
+          "description": "Texto a mostrar en la cabecera.",
+          "type": "string",
+          "dimensionality": "scalar"
+        },
+        {
+          "name": "formula",
+          "description": "Fórmula a copiar en cada celda de la línea, escrita como si estuviera en esta celda (p. ej. A6-A7).",
+          "type": "any",
+          "dimensionality": "scalar",
+          "optional": true
+        },
+        {
+          "name": "formato",
+          "description": "Formato de número opcional (p. ej. 0.0%).",
+          "type": "string",
+          "dimensionality": "scalar",
+          "optional": true
+        },
+        {
+          "name": "barras",
+          "description": "Barras opcionales: barra | solo barra, con invertir, izq=40, dcha=25, neg=#color, pos=#color.",
+          "type": "string",
+          "dimensionality": "scalar",
+          "optional": true
+        }
+      ]
     }
-  ]
+  ],
+  "allowErrorForDataTypeAny": true
 }
