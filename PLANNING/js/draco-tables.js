@@ -24,7 +24,7 @@ const DracoTables = {
     MAX_NAME: 120,
     MAX_DESC: 500,
     MAX_ENGINES: 6,
-    ENGINE_URL: "tablas-draco/engine.html?v=20261012b",
+    ENGINE_URL: "tablas-draco/engine.html?v=20261016a",
 
     engines: new Map(),      // "proyecto:id" -> { frame, host, stamp, chain, lastUse }
     pending: {},             // precarga: "proyecto:id" -> { pr, at }
@@ -275,9 +275,40 @@ const DracoTables = {
         if (hidden.EDIT_REPORT) { delete hidden.EDIT_REPORT["0_23"]; delete hidden.EDIT_REPORT["0_24"]; }   // X1 e Y1
         const def = {
             v: 1, reportId, cubo: modelName, settings,
-            hiddenSheets: hidden, hiddenSheetMerges: host.state.hiddenSheetMerges || {}, namedRanges: host.state.namedRanges || {}
+            hiddenSheets: hidden, hiddenSheetMerges: host.state.hiddenSheetMerges || {}, namedRanges: host.state.namedRanges || {},
+            // Informes Estáticos / Híbridos: las líneas del eje Estático SON el informe (celdas =EPM_VALUE /
+            // =EPM_FORMULA de la hoja). Se guardan con su formato; lo pintado desde los datos no (se rehace).
+            cells: this.staticCells(host)
         };
         return def;
+    },
+
+    /** Celdas de la hoja principal con fórmula EPM_VALUE / EPM_FORMULA (definición del eje Estático). */
+    staticCells(host) {
+        const out = {}, cells = host.state.cells || {};
+        Object.keys(cells).forEach(k => {
+            const o = cells[k];
+            if (o && typeof o.f === "string" && /^\s*=\s*@?\s*EPM_(VALUE|FORMULA)\s*\(/i.test(o.f)) {
+                const copy = JSON.parse(JSON.stringify(o));
+                delete copy.db;
+                out[k] = copy;
+            }
+        });
+        return out;
+    },
+
+    /**
+     * CSS de una barra de datos ya calculada por el motor (host-bridge: o.db = {a, p, col, only}; a = eje y
+     * p = extremo de la barra, en fracción del ancho de la celda). Fondo con la barra y la línea del eje.
+     */
+    barCss(db) {
+        if (!db) return "";
+        const pc = (x) => (Math.round(x * 1000) / 10) + "%";
+        const lo = Math.min(db.a, db.p), hi = Math.max(db.a, db.p);
+        const col = /^#[0-9a-f]{3,8}$/i.test(db.col || "") ? db.col : "#70D06A";
+        const axis = `linear-gradient(to right, transparent calc(${pc(db.a)} - 0.5px), #1A2233 calc(${pc(db.a)} - 0.5px), #1A2233 calc(${pc(db.a)} + 0.5px), transparent calc(${pc(db.a)} + 0.5px))`;
+        const bar = `linear-gradient(to right, transparent ${pc(lo)}, ${col} ${pc(lo)}, ${col} ${pc(hi)}, transparent ${pc(hi)})`;
+        return `background-image:${axis},${bar};background-size:100% 70%;background-position:center;background-repeat:no-repeat`;
     },
 
     stateFromDefinition(def) {
@@ -372,6 +403,11 @@ const DracoTables = {
             if (edges.t || edges.r || edges.b || edges.l) cell.bd = edges;
             const t = this.formatValue(o.v, o.nf);
             if (t !== null) cell.t = t;                       // texto ya formateado (el HTML no tiene que saber de formatos de Excel)
+            if (o.db) {                                       // barra de datos (formato condicional), ya como CSS
+                cell.bar = this.barCss(o.db);
+                if (!cell.al) cell.al = Number(o.v) < 0 ? "left" : "right";
+                if (o.db.only) cell.only = 1;
+            }
             if (Object.keys(cell).length) out[`${r - r1}_${c - c1}`] = cell;
         });
         const merges = (host.state.merges || []).filter(m => m.r >= r1 && m.r <= r2 && m.c >= c1 && m.c <= c2)
