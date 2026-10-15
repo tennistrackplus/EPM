@@ -340,9 +340,17 @@ const DracoTables = {
         return { frame, host, ready, chain: Promise.resolve(), lastUse: Date.now() };
     },
 
+    /**
+     * Descarta el motor de una tabla. Sale de la lista AL MOMENTO (la próxima ejecución crea uno nuevo), pero su iframe
+     * se elimina cuando termina lo que estuviera ejecutando: si se quitara en mitad de una ejecución, el código del
+     * motor seguiría corriendo sin anfitrión ("host-bridge: el iframe no tiene anfitrión") y esa ejecución fallaría.
+     */
     dispose(projectId, id) {
         const k = this.key(projectId, id), e = this.engines.get(k);
-        if (e) { try { e.frame.remove(); } catch (x) { /* nada */ } this.engines.delete(k); }
+        if (e) {
+            this.engines.delete(k);
+            Promise.resolve(e.chain).then(() => { try { e.frame.remove(); } catch (x) { /* nada */ } });
+        }
         delete this.pending[k];
     },
 
@@ -500,6 +508,20 @@ const DracoTables = {
      * ejecución (el SQL guardado lleva los marcadores $NOMBRE$ y se sustituyen al ejecutar).
      */
     async run(project, id, force, opts) {
+        try {
+            return await this.runOnce(project, id, force, opts);
+        } catch (err) {
+            // Red de seguridad: el motor se desmontó mientras ejecutaba (p. ej. lo descartó otra petición). Se reintenta
+            // una vez con un motor nuevo en vez de mostrar el error.
+            if (/no tiene anfitri/i.test(String(err && err.message))) {
+                console.warn("DracoTables: el motor se desmontó durante la ejecución; se reintenta con uno nuevo.");
+                return await this.runOnce(project, id, "fresh", opts);
+            }
+            throw err;
+        }
+    },
+
+    async runOnce(project, id, force, opts) {
         const runVars = (opts && opts.variables) || {};
         const k = this.key(project.PROYECTO_ID, id);
         const row = await this.get(project.PROYECTO_ID, id);
