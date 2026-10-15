@@ -2,8 +2,8 @@
  * engine-api.js — API propia de Tablas Draco sobre el motor del addin (commands.js).
  * (Generado por tools/sync-addin.py desde tools/templates/; se carga DESPUÉS de commands.js.)
  *
- *   generateSql(reportId)  -> { sql, fixed }   Construye el SQL del informe SIN ejecutarlo (JS puro del addin:
- *                                              loadReportDefinition + buildSQL / buildSQLFixed).
+ *   generateSql(reportId)  -> { sql, fixed, mode } Construye el SQL del informe SIN ejecutarlo (JS puro del addin:
+ *                                              buildSQL / buildSQLFixed / buildSQLHybrid según el modo).
  *   refresh(reportId, sql) -> pinta el informe en la hoja. Con `sql` NO se vuelve a construir: ejecuta ese SQL
  *                             (parches "con SQL guardado" de tools/sync-addin.py) y pinta el resultado.
  *   usedRange()            -> { r1,c1,r2,c2 } de lo pintado en la hoja principal (o null).
@@ -19,30 +19,34 @@
 
         activeReportId() { return activeReportIdOrNull(); },
 
-        /** ¿Informe estático ("Fijo")? Mismo criterio que actualizarUnInforme(): EDIT_REPORT!H12 y N12 = "X". */
-        async isFixed(reportId) {
-            return await Excel.run(async (context) => {
-                const grid = await getEditReportGrid(context, reportId);
-                return String(cellValue(grid, 12, 8)).trim().toUpperCase() === "X"
-                    && String(cellValue(grid, 12, 14)).trim().toUpperCase() === "X";
-            });
+        /** Modo del informe (mismo criterio que actualizarUnInforme(), ver dracoReportMode en commands.js):
+         *  "fixed" (los dos ejes Estáticos), "hybrid" (uno) o "dynamic" (ninguno). */
+        async mode(reportId) {
+            return await Excel.run(async (context) => dracoReportMode(await getEditReportGrid(context, reportId)));
         },
+
+        async isFixed(reportId) { return (await API.mode(reportId)) === "fixed"; },
 
         async generateSql(reportId) {
             reportId = activeReportIdOrNull();       // ver refresh()
-            const fixed = await API.isFixed(reportId);
+            const mode = await API.mode(reportId);
             let sql = null;
             await Excel.run(async (context) => {
                 const editReportGrid = await getEditReportGrid(context, reportId);
                 const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
                 const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
                 const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
-                if (fixed) {
+                if (mode === "fixed" || mode === "hybrid") {
                     const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
                     await ensureDracoResultSheetExists(context, resultSheetName);
                     const csvGrid = await getFormulaGrid(context, resultSheetName);
                     loadReportDefinition(editReportGrid, reportId);
-                    sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
+                    if (mode === "fixed") {
+                        sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
+                    } else {
+                        const built = await buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid, reportId);
+                        sql = built.sql;
+                    }
                 } else {
                     loadReportDefinition(editReportGrid, reportId);
                     applyFilterMeasuresToDynamicReport();
@@ -50,7 +54,7 @@
                     sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
                 }
             });
-            return { sql: typeof sql === "string" ? sql : (sql && sql.text) || "", fixed };
+            return { sql: typeof sql === "string" ? sql : (sql && sql.text) || "", fixed: mode === "fixed", mode };
         },
 
         async refresh(reportId, sql) {
