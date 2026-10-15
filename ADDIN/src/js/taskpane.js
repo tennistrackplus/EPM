@@ -163,6 +163,7 @@ const TaskPaneApp = {
         subtotalsOnTop: false,
         hierarchyNodesOnTop: true,
         overwriteFormats: true,
+        overwriteStaticFormats: false,
         autoFitColumns: true,
         planningReport: false
     },
@@ -1305,6 +1306,7 @@ const TaskPaneApp = {
                 subtotalsOnTop: false,
                 hierarchyNodesOnTop: true,
                 overwriteFormats: true,
+                overwriteStaticFormats: false,
                 autoFitColumns: true,
                 planningReport: false
             });
@@ -2059,6 +2061,7 @@ const TaskPaneApp = {
         document.getElementById("propSubtotalsOnTop").checked = !!this.reportProperties.subtotalsOnTop;
         document.getElementById("propHierarchyNodesOnTop").checked = this.reportProperties.hierarchyNodesOnTop !== false;
         document.getElementById("propOverwriteFormats").checked = !!this.reportProperties.overwriteFormats;
+        document.getElementById("propOverwriteStaticFormats").checked = !!this.reportProperties.overwriteStaticFormats;
         document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
         document.getElementById("propPlanningReport").checked = !!this.reportProperties.planningReport;
 
@@ -2198,6 +2201,7 @@ const TaskPaneApp = {
             subtotalsOnTop: document.getElementById("propSubtotalsOnTop").checked,
             hierarchyNodesOnTop: document.getElementById("propHierarchyNodesOnTop").checked,
             overwriteFormats: document.getElementById("propOverwriteFormats").checked,
+            overwriteStaticFormats: document.getElementById("propOverwriteStaticFormats").checked,
             autoFitColumns: document.getElementById("propAutoFitColumns").checked,
             planningReport: document.getElementById("propPlanningReport").checked,
             dimensionsBehavior
