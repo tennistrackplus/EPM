@@ -82,26 +82,53 @@ const RangeAxis = {
         if (this.rc.row + this.rc.height > this.rr.row) this.moveRR(1, 0);
     },
 
+    // MODO HÍBRIDO (un eje Estático): las líneas del eje Estático son
+    // celdas fijas de la hoja (fórmulas EPM_VALUE del usuario), así que NO
+    // se pueden desplazar. Cuando el otro eje (Dinámico) gana o pierde un
+    // campo, su cabecera crece/encoge HACIA FUERA (Columnas hacia arriba,
+    // Filas hacia la izquierda) en vez de empujar al eje Estático. Si ya
+    // está pegada al borde (fila/columna 1), se hace como siempre.
+
     // Al añadir un campo al eje Filas: crece en anchura y empuja columnas
-    onRowFieldAdded() {
+    onRowFieldAdded(colsStatic) {
+        if (colsStatic && this.rr.col > 1) {
+            this.rr.col -= 1;
+            this.rr.width += 1;
+            return;
+        }
         this.rr.width += 1;
         this.moveRC(0, 1);
     },
 
     // Al quitar un campo del eje Filas
-    onRowFieldRemoved() {
+    onRowFieldRemoved(colsStatic) {
+        if (colsStatic && this.rr.width > 0) {
+            this.rr.width -= 1;
+            this.rr.col += 1;
+            return;
+        }
         this.rr.width = Math.max(0, this.rr.width - 1);
         this.moveRC(0, -1);
     },
 
     // Al añadir un campo al eje Columnas: crece en altura y empuja filas
-    onColFieldAdded() {
+    onColFieldAdded(rowsStatic) {
+        if (rowsStatic && this.rc.row > 1) {
+            this.rc.row -= 1;
+            this.rc.height += 1;
+            return;
+        }
         this.rc.height += 1;
         this.moveRR(1, 0);
     },
 
     // Al quitar un campo del eje Columnas
-    onColFieldRemoved() {
+    onColFieldRemoved(rowsStatic) {
+        if (rowsStatic && this.rc.height > 0) {
+            this.rc.height -= 1;
+            this.rc.row += 1;
+            return;
+        }
         this.rc.height = Math.max(0, this.rc.height - 1);
         this.moveRR(-1, 0);
     }
@@ -136,6 +163,7 @@ const TaskPaneApp = {
         subtotalsOnTop: false,
         hierarchyNodesOnTop: true,
         overwriteFormats: true,
+        overwriteStaticFormats: false,
         autoFitColumns: true,
         planningReport: false
     },
@@ -1038,6 +1066,17 @@ const TaskPaneApp = {
         if (!label) return;
         label.innerText = isStatic ? "Estático" : "Dinámico";
         label.style.color = isStatic ? "#1D8154" : "#7045A9";
+
+        // Modo del informe (ver dracoReportMode en commands.js): se muestra
+        // como ayuda al pasar el ratón por cualquiera de los dos interruptores.
+        const r = this.state.rowsStatic, c = this.state.colsStatic;
+        const mode = r && c ? "Estático (las dos líneas las defines tú en la hoja)"
+            : (r || c) ? `Híbrido: ${r ? "Filas" : "Columnas"} estático (tus líneas de la hoja) y ${r ? "Columnas" : "Filas"} dinámico (sale de los datos)`
+            : "Dinámico (los dos ejes salen de los datos)";
+        ["lblStaticRows", "lblStaticCols"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el && el.parentElement) el.parentElement.title = "Modo del informe: " + mode;
+        });
     },
 
     refreshRangeLabels() {
@@ -1070,6 +1109,7 @@ const TaskPaneApp = {
             this.state.rowsStatic = design.rowsStatic;
             this.state.colsStatic = design.colsStatic;
             this.state.fieldOptions = design.fieldOptions || {};
+            this.refreshCalcBadges();
 
             RangeAxis.loadFromAddresses(design.rrAddress, design.rcAddress, design.anchorAddress);
 
@@ -1258,6 +1298,7 @@ const TaskPaneApp = {
             this.state.rowsStatic = false;
             this.state.colsStatic = false;
             this.state.fieldOptions = {};
+            this.refreshCalcBadges();
             this.reportProperties = Object.assign({}, this.reportProperties, {
                 reportName: report.name,
                 suppressZeroRows: false,
@@ -1265,6 +1306,7 @@ const TaskPaneApp = {
                 subtotalsOnTop: false,
                 hierarchyNodesOnTop: true,
                 overwriteFormats: true,
+                overwriteStaticFormats: false,
                 autoFitColumns: true,
                 planningReport: false
             });
@@ -1331,6 +1373,11 @@ const TaskPaneApp = {
                 nameSpan.textContent = dim.dimension.toLowerCase();
                 header.appendChild(caretSpan);
                 header.appendChild(nameSpan);
+                // ƒx: cálculos entre miembros de los atributos de esta
+                // dimensión (abre el editor con el primero seleccionado).
+                if (dim.attributes && dim.attributes.length) {
+                    header.appendChild(this.createCalcButton(dim.dimension, null, dim.attributes));
+                }
                 // Contraer/expandir la dimensión oculta sus atributos (y
                 // jerarquías) para dejar el árbol de campos más compacto,
                 // igual que las listas de campos de una tabla dinámica.
@@ -1345,18 +1392,62 @@ const TaskPaneApp = {
                 });
 
                 dim.attributes.forEach(att => {
-                    group.appendChild(this.createFieldElement(dim.dimension, att, false));
+                    group.appendChild(this.createFieldElement(dim.dimension, att, false, dim.attributes));
                 });
 
                 container.appendChild(group);
             });
+            this.refreshCalcBadges();
         } catch (err) {
             console.error("Error al cargar dimensiones:", err);
             container.innerHTML = `<div style='color: #a80000; padding: 4px;'>❌ Error: ${err.message || err}</div>`;
         }
     },
 
-    createFieldElement(dim, name, isHierarchy) {
+    /**
+     * Botón ƒx (a la derecha del campo / de la dimensión) que abre el
+     * editor de cálculos entre miembros (js/calcEditor.js). Solo en
+     * atributos: las jerarquías no admiten cálculos.
+     */
+    createCalcButton(dim, attribute, attributes) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "field-fx-btn";
+        btn.textContent = "ƒx";
+        btn.title = attribute ? `Cálculos de ${attribute.toLowerCase()}` : `Cálculos de ${String(dim).toLowerCase()}`;
+        btn.setAttribute("aria-label", btn.title);
+        btn.dataset.dim = String(dim).toUpperCase();
+        if (attribute) btn.dataset.attr = String(attribute).toUpperCase();
+        btn.draggable = false;
+        btn.addEventListener("mousedown", (e) => e.stopPropagation());
+        btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (!window.DracoCalcEditor) return;
+            // Desde un atributo: ventana de cálculos de ese atributo.
+            // Desde la dimensión: listado de los cálculos de todos sus atributos.
+            window.DracoCalcEditor.open(this, dim, attribute || null, attributes);
+        });
+        return btn;
+    },
+
+    // Marca (ƒx en color) los atributos y dimensiones que tienen cálculos en el informe actual.
+    refreshCalcBadges() {
+        if (!window.DracoCalc) return;
+        const fo = this.state.fieldOptions || {};
+        const withCalcs = new Set(Object.keys(fo)
+            .filter(k => window.DracoCalc.isCalcKey(k) && Array.isArray(fo[k]) && fo[k].length)
+            .map(k => k.split("|").slice(1).join("|")));
+        const dimsWithCalcs = new Set(Array.from(withCalcs).map(k => k.split("|")[0]));
+        document.querySelectorAll(".field-fx-btn").forEach(b => {
+            const has = b.dataset.attr
+                ? withCalcs.has(b.dataset.dim + "|" + b.dataset.attr)
+                : dimsWithCalcs.has(b.dataset.dim);
+            b.classList.toggle("has-calcs", has);
+        });
+    },
+
+    createFieldElement(dim, name, isHierarchy, dimAttributes) {
         const div = document.createElement("div");
         div.className = "field-item";
         div.draggable = true;
@@ -1374,6 +1465,7 @@ const TaskPaneApp = {
         labelSpan.textContent = name.toLowerCase();
         div.appendChild(iconSpan);
         div.appendChild(labelSpan);
+        if (!isHierarchy) div.appendChild(this.createCalcButton(dim, name, [name]));
 
         const fieldData = { dim, name, isHierarchy };
 
@@ -1632,8 +1724,8 @@ const TaskPaneApp = {
         const shouldGrowRange = !isMeasure || isFirstMeasureInZone;
 
         if (shouldGrowRange) {
-            if (zoneId === "rows") RangeAxis.onRowFieldAdded();
-            if (zoneId === "columns") RangeAxis.onColFieldAdded();
+            if (zoneId === "rows") RangeAxis.onRowFieldAdded(this.state.colsStatic && !this.state.rowsStatic);
+            if (zoneId === "columns") RangeAxis.onColFieldAdded(this.state.rowsStatic && !this.state.colsStatic);
         }
         this.refreshRangeLabels();
 
@@ -1663,8 +1755,8 @@ const TaskPaneApp = {
         const shouldShrinkRange = !isMeasure || measureCountLeftInZone === 0;
 
         if (shouldShrinkRange) {
-            if (zoneId === "rows") RangeAxis.onRowFieldRemoved();
-            if (zoneId === "columns") RangeAxis.onColFieldRemoved();
+            if (zoneId === "rows") RangeAxis.onRowFieldRemoved(this.state.colsStatic && !this.state.rowsStatic);
+            if (zoneId === "columns") RangeAxis.onColFieldRemoved(this.state.rowsStatic && !this.state.colsStatic);
         }
         this.refreshRangeLabels();
 
@@ -1969,6 +2061,7 @@ const TaskPaneApp = {
         document.getElementById("propSubtotalsOnTop").checked = !!this.reportProperties.subtotalsOnTop;
         document.getElementById("propHierarchyNodesOnTop").checked = this.reportProperties.hierarchyNodesOnTop !== false;
         document.getElementById("propOverwriteFormats").checked = !!this.reportProperties.overwriteFormats;
+        document.getElementById("propOverwriteStaticFormats").checked = !!this.reportProperties.overwriteStaticFormats;
         document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
         document.getElementById("propPlanningReport").checked = !!this.reportProperties.planningReport;
 
@@ -2108,6 +2201,7 @@ const TaskPaneApp = {
             subtotalsOnTop: document.getElementById("propSubtotalsOnTop").checked,
             hierarchyNodesOnTop: document.getElementById("propHierarchyNodesOnTop").checked,
             overwriteFormats: document.getElementById("propOverwriteFormats").checked,
+            overwriteStaticFormats: document.getElementById("propOverwriteStaticFormats").checked,
             autoFitColumns: document.getElementById("propAutoFitColumns").checked,
             planningReport: document.getElementById("propPlanningReport").checked,
             dimensionsBehavior
@@ -2201,7 +2295,8 @@ const TaskPaneApp = {
         const key = this.fieldOptionsKey(zoneId, entry);
         const isMeasure = String(entry.dimension).toUpperCase() === "MEASURE";
         const defaults = isMeasure
-            ? { numberFormat: "#,##0.00", decimalSeparator: ",", thousandsSeparator: ".", factor: 1, decimals: 2, aggregation: "SUM" }
+            // aggregation "" = la del modelo semántico (no se sobrescribe).
+            ? { numberFormat: "number", decimals: 2, aggregation: "" }
             : { showTotals: false, sortOrder: "none", expandToLevel: null, visibleLevels: null };
         return Object.assign({}, defaults, this.state.fieldOptions[key] || {});
     },
@@ -2378,42 +2473,50 @@ const TaskPaneApp = {
         const wrap = document.createElement("div");
         wrap.className = "field-options-group";
 
+        // Formato: solo Número (con separador de miles) o Porcentaje, con
+        // el nº de decimales de abajo (ver dracoNumberFormatFromOptions en
+        // commands.js). El separador decimal lo pone Excel según el idioma
+        // del usuario, y el factor de escala ya no existe. Los informes
+        // antiguos traen numberFormat "#,##0.00"/"0.00%"/...: lo que lleva
+        // "%" se muestra como Porcentaje y el resto como Número.
+        const formatKind = (String(options.numberFormat || "").indexOf("%") !== -1 || options.numberFormat === "percent") ? "percent" : "number";
+        // Agregaciones soportadas tal cual por el SQL dinámico (GROUPING
+        // SETS) y por DAX. "" = la definida en el modelo semántico.
+        const AGGREGATIONS = [
+            ["", "Según el modelo"],
+            ["SUM", "Suma (SUM)"],
+            ["AVG", "Media (AVG)"],
+            ["COUNT", "Recuento (COUNT)"],
+            ["COUNT_DISTINCT", "Recuento distinto (COUNT DISTINCT)"],
+            ["MIN", "Mínimo (MIN)"],
+            ["MAX", "Máximo (MAX)"]
+        ];
+        const currentAgg = String(options.aggregation || "").toUpperCase();
+        const decimalsValue = Number.isFinite(Number(options.decimals)) ? Number(options.decimals) : 2;
+
         wrap.innerHTML = `
             <div class="field-options-section-title">Formato de número</div>
             <label>
                 Formato
                 <select id="optNumberFormat">
-                    <option value="#,##0" ${options.numberFormat === "#,##0" ? "selected" : ""}>1.234 (sin decimales)</option>
-                    <option value="#,##0.00" ${options.numberFormat === "#,##0.00" ? "selected" : ""}>1.234,00</option>
-                    <option value="0.00%" ${options.numberFormat === "0.00%" ? "selected" : ""}>Porcentaje</option>
-                    <option value="#,##0.00 €" ${options.numberFormat === "#,##0.00 €" ? "selected" : ""}>Moneda (€)</option>
-                </select>
-            </label>
-            <label>
-                Separador decimal
-                <select id="optDecimalSeparator">
-                    <option value="," ${options.decimalSeparator === "," ? "selected" : ""}>Coma (,)</option>
-                    <option value="." ${options.decimalSeparator === "." ? "selected" : ""}>Punto (.)</option>
+                    <option value="number" ${formatKind === "number" ? "selected" : ""}>Número (1.234)</option>
+                    <option value="percent" ${formatKind === "percent" ? "selected" : ""}>Porcentaje (12%)</option>
                 </select>
             </label>
             <label>
                 Nº de decimales
-                <input type="number" id="optDecimals" min="0" max="10" value="${options.decimals}">
+                <input type="number" id="optDecimals" min="0" max="10" value="${decimalsValue}">
             </label>
-            <label>
-                Factor de escala
-                <select id="optFactor">
-                    <option value="1" ${Number(options.factor) === 1 ? "selected" : ""}>Unidades</option>
-                    <option value="1000" ${Number(options.factor) === 1000 ? "selected" : ""}>Miles</option>
-                    <option value="1000000" ${Number(options.factor) === 1000000 ? "selected" : ""}>Millones</option>
-                </select>
-            </label>
+            <div style="font-size:10px; color:#605e5c; margin:2px 0 6px;">
+                Se aplica al actualizar si "Sobrescribir formatos" está activado
+                en las propiedades del informe.
+            </div>
             <div class="field-options-section-title">Agregación</div>
             <label>
                 Función
                 <select id="optAggregation">
-                    ${["SUM", "AVG", "COUNT", "COUNT_DISTINCT", "MIN", "MAX"].map(a =>
-                        `<option value="${a}" ${options.aggregation === a ? "selected" : ""}>${a}</option>`).join("")}
+                    ${AGGREGATIONS.map(([value, label]) =>
+                        `<option value="${value}" ${currentAgg === value ? "selected" : ""}>${label}</option>`).join("")}
                 </select>
             </label>
             <div class="field-options-section-title">Planificación</div>
@@ -2437,10 +2540,13 @@ const TaskPaneApp = {
         const persist = () => {
             const current = this.getFieldOptions(zoneId, entry);
             current.numberFormat = wrap.querySelector("#optNumberFormat").value;
-            current.decimalSeparator = wrap.querySelector("#optDecimalSeparator").value;
-            current.decimals = Number(wrap.querySelector("#optDecimals").value) || 0;
-            current.factor = Number(wrap.querySelector("#optFactor").value) || 1;
+            const dec = Math.floor(Number(wrap.querySelector("#optDecimals").value));
+            current.decimals = Number.isFinite(dec) ? Math.min(10, Math.max(0, dec)) : 0;
             current.aggregation = wrap.querySelector("#optAggregation").value;
+            // Opciones retiradas del panel (ya no se usan en ningún sitio).
+            delete current.decimalSeparator;
+            delete current.thousandsSeparator;
+            delete current.factor;
             current.planificable = wrap.querySelector("#optPlanificable").checked;
             current.dimensionsBehaviorCustom = wrap.querySelector("#optDimensionsBehaviorCustom").checked;
 

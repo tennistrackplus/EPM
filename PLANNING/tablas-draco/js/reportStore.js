@@ -45,6 +45,7 @@
         subtotalsOnTop: false,
         hierarchyNodesOnTop: true,
         overwriteFormats: true,
+        overwriteStaticFormats: false,
         autoFitColumns: true,
         planningReport: false
     };

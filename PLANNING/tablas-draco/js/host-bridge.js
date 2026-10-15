@@ -150,6 +150,296 @@
     }
 
     // ------------------------------------------------------------
+    // FÓRMULAS (Tablas Draco: informes Estáticos / Híbridos)
+    // ------------------------------------------------------------
+    // Cada celda guarda su fórmula en `f` (además del valor mostrado en `v`):
+    //   =EPM_VALUE("DIM","ATTR","VALOR","DISPLAY")  -> muestra DISPLAY
+    //   =EPM_FORMULA("TEXTO", expr, "fmt", "barras") -> muestra TEXTO
+    //   cualquier otra fórmula (=C6-C7, =SUMA(C6:C9)...) se CALCULA (recalc)
+    // Operadores + - * / ^ & y comparaciones, paréntesis, referencias A1
+    // ($ incluidos) y rangos; funciones en inglés o castellano: SUM/SUMA,
+    // MIN, MAX, ABS, AVERAGE/PROMEDIO, ROUND/REDONDEAR, IF/SI,
+    // IFERROR/SI.ERROR. Basta para lo que pinta el addin (EPM_FORMULA y los
+    // límites de las barras de datos) y para lo que se teclea en el diseñador.
+    const FX = (function () {
+        const EPM_RE = /^\s*=\s*@?\s*EPM_(VALUE|FORMULA)\s*\(/i;
+        const isEpm = (f) => typeof f === "string" && EPM_RE.test(f);
+
+        function splitArgs(f) {
+            const i0 = f.indexOf("(");
+            const args = [];
+            let cur = "", depth = 0, inStr = false;
+            for (let i = i0 + 1; i < f.length; i++) {
+                const ch = f[i];
+                if (inStr) { cur += ch; if (ch === '"') { if (f[i + 1] === '"') { cur += '"'; i++; } else inStr = false; } continue; }
+                if (ch === '"') { inStr = true; cur += ch; continue; }
+                if (ch === "(" || ch === "{") { depth++; cur += ch; continue; }
+                if (ch === ")" || ch === "}") { if (depth === 0) { args.push(cur.trim()); return args; } depth--; cur += ch; continue; }
+                if (depth === 0 && (ch === "," || ch === ";")) { args.push(cur.trim()); cur = ""; continue; }
+                cur += ch;
+            }
+            args.push(cur.trim());
+            return args;
+        }
+        const unq = (a) => { const t = String(a || "").trim(); return (t.length >= 2 && t[0] === '"' && t[t.length - 1] === '"') ? t.slice(1, -1).replace(/""/g, '"') : t; };
+
+        function epmDisplay(f) {
+            const kind = EPM_RE.exec(f)[1].toUpperCase();
+            const a = splitArgs(f);
+            return kind === "FORMULA" ? unq(a[0]) : unq(a[3] !== undefined && a[3] !== "" ? a[3] : a[2]);
+        }
+
+        const colToIdx = (L) => { let n = 0; for (const ch of L.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
+        const idxToCol = (i) => { let n = i + 1, s = ""; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; };
+
+        // Recorre la fórmula saltando literales de texto y aplica `fn` a cada trozo de código.
+        function mapCode(f, fn) {
+            let out = "", i = 0;
+            while (i < f.length) {
+                if (f[i] === '"') {
+                    let j = i + 1;
+                    while (j < f.length) { if (f[j] === '"') { if (f[j + 1] === '"') { j += 2; continue; } break; } j++; }
+                    out += f.slice(i, j + 1); i = j + 1;
+                } else {
+                    let j = i; while (j < f.length && f[j] !== '"') j++;
+                    out += fn(f.slice(i, j)); i = j;
+                }
+            }
+            return out;
+        }
+        const A1_RE = /(^|[^A-Za-z0-9_.$!\]])(\$?)([A-Za-z]{1,3})(\$?)(\d{1,7})(?![A-Za-z0-9_(])/g;
+        const R1C1_RE = /(^|[^A-Za-z0-9_.!\]])R(\[-?\d+\]|\d+)?C(\[-?\d+\]|\d+)?(?![A-Za-z0-9_(])/g;
+
+        // A1 -> R1C1 relativo a la celda (r, c) (0-based)
+        function a1ToR1C1(f, r, c) {
+            return mapCode(f, (code) => code.replace(A1_RE, (m, pre, dc, col, dr, row) => {
+                const ci = colToIdx(col), ri = parseInt(row, 10) - 1;
+                if (ci > 16383) return m;
+                const R = dr ? "R" + (ri + 1) : (ri === r ? "R" : "R[" + (ri - r) + "]");
+                const C = dc ? "C" + (ci + 1) : (ci === c ? "C" : "C[" + (ci - c) + "]");
+                return pre + R + C;
+            }));
+        }
+        // R1C1 -> A1 para la celda (r, c) (0-based)
+        function r1c1ToA1(f, r, c) {
+            return mapCode(f, (code) => code.replace(R1C1_RE, (m, pre, rr, cc) => {
+                let ri = r, ci = c, absR = false, absC = false;
+                if (rr) { if (rr[0] === "[") ri = r + parseInt(rr.slice(1, -1), 10); else { ri = parseInt(rr, 10) - 1; absR = true; } }
+                if (cc) { if (cc[0] === "[") ci = c + parseInt(cc.slice(1, -1), 10); else { ci = parseInt(cc, 10) - 1; absC = true; } }
+                if (ri < 0 || ci < 0) return pre + "#REF!";
+                return pre + (absC ? "$" : "") + idxToCol(ci) + (absR ? "$" : "") + (ri + 1);
+            }));
+        }
+
+        // ---- Evaluador
+        const ERR = (code) => ({ err: code });
+        const isErr = (x) => x && typeof x === "object" && x.err;
+        function tokenize(src) {
+            const t = []; let i = 0;
+            while (i < src.length) {
+                const ch = src[i];
+                if (/\s/.test(ch)) { i++; continue; }
+                if (ch === '"') { let j = i + 1, s = ""; while (j < src.length) { if (src[j] === '"') { if (src[j + 1] === '"') { s += '"'; j += 2; continue; } break; } s += src[j++]; } t.push({ k: "str", v: s }); i = j + 1; continue; }
+                let m = /^\$?[A-Za-z]{1,3}\$?\d+(:\$?[A-Za-z]{1,3}\$?\d+)?(?![A-Za-z0-9_(.])/.exec(src.slice(i));
+                if (m) { t.push({ k: "ref", v: m[0].replace(/\$/g, "") }); i += m[0].length; continue; }
+                m = /^\d+(\.\d+)?([eE][+-]?\d+)?%?/.exec(src.slice(i));
+                if (m) { let n = parseFloat(m[0]); if (m[0].endsWith("%")) n /= 100; t.push({ k: "num", v: n }); i += m[0].length; continue; }
+                m = /^[A-Za-z_][A-Za-z0-9_.]*(?=\s*\()/.exec(src.slice(i));
+                if (m) { t.push({ k: "fn", v: m[0].toUpperCase() }); i += m[0].length; continue; }
+                m = /^(TRUE|FALSE|VERDADERO|FALSO)\b/i.exec(src.slice(i));
+                if (m) { t.push({ k: "num", v: /^(TRUE|VERDADERO)$/i.test(m[0]) ? 1 : 0 }); i += m[0].length; continue; }
+                m = /^#(DIV\/0!|REF!|VALUE!|N\/A|NAME\?|¡VALOR!|¡REF!)/.exec(src.slice(i));
+                if (m) { t.push({ k: "err", v: m[0] }); i += m[0].length; continue; }
+                m = /^(<>|<=|>=|[+\-*/^&=<>(),;])/.exec(src.slice(i));
+                if (m) { t.push({ k: "op", v: m[0] === ";" ? "," : m[0] }); i += m[0].length; continue; }
+                throw new Error("token");
+            }
+            return t;
+        }
+        const ALIAS = { SUMA: "SUM", PROMEDIO: "AVERAGE", REDONDEAR: "ROUND", SI: "IF", "SI.ERROR": "IFERROR" };
+
+        function evaluate(src, getCell) {
+            let toks;
+            try { toks = tokenize(src); } catch (e) { return ERR("#NAME?"); }
+            let p = 0;
+            const peek = () => toks[p], next = () => toks[p++];
+            const num = (x) => {
+                if (isErr(x)) return x;
+                if (Array.isArray(x)) x = x[0];
+                if (x === "" || x === null || x === undefined) return 0;
+                if (typeof x === "number") return x;
+                const n = Number(String(x).trim());
+                return String(x).trim() !== "" && isFinite(n) ? n : ERR("#VALUE!");
+            };
+            const flat = (args) => args.flatMap(a => Array.isArray(a) ? a : [a]);
+            const nums = (args, strict) => {
+                const out = [];
+                for (const a of args) {
+                    if (Array.isArray(a)) { for (const x of a) { if (isErr(x)) return x; const n = Number(x); if (x !== "" && x !== null && isFinite(n)) out.push(n); } }
+                    else { const n = num(a); if (isErr(n)) return n; out.push(n); }
+                }
+                return out;
+            };
+            const callFn = (name, args) => {
+                name = ALIAS[name] || name;
+                switch (name) {
+                    case "SUM": { const n = nums(args); return isErr(n) ? n : n.reduce((a, b) => a + b, 0); }
+                    case "AVERAGE": { const n = nums(args); return isErr(n) ? n : (n.length ? n.reduce((a, b) => a + b, 0) / n.length : ERR("#DIV/0!")); }
+                    case "MIN": { const n = nums(args); return isErr(n) ? n : (n.length ? Math.min(...n) : 0); }
+                    case "MAX": { const n = nums(args); return isErr(n) ? n : (n.length ? Math.max(...n) : 0); }
+                    case "ABS": { const n = num(args[0]); return isErr(n) ? n : Math.abs(n); }
+                    case "ROUND": { const n = num(args[0]), d = num(args[1] || 0); if (isErr(n)) return n; const k = Math.pow(10, d); return Math.round(n * k) / k; }
+                    case "IF": { const c = num(args[0]); if (isErr(c)) return c; return c ? (args[1] === undefined ? 1 : args[1]) : (args[2] === undefined ? 0 : args[2]); }
+                    case "IFERROR": { const v = Array.isArray(args[0]) ? args[0][0] : args[0]; return isErr(v) ? args[1] : v; }
+                    default: return ERR("#NAME?");
+                }
+            };
+            function primary() {
+                const tk = next();
+                if (!tk) return ERR("#VALUE!");
+                if (tk.k === "num") return tk.v;
+                if (tk.k === "str") return tk.v;
+                if (tk.k === "err") return ERR(tk.v);
+                if (tk.k === "ref") {
+                    const [a, b] = tk.v.split(":");
+                    const pa = /^([A-Za-z]+)(\d+)$/.exec(a);
+                    const ra = parseInt(pa[2], 10) - 1, ca = colToIdx(pa[1]);
+                    if (!b) return getCell(ra, ca);
+                    const pb = /^([A-Za-z]+)(\d+)$/.exec(b);
+                    const rb = parseInt(pb[2], 10) - 1, cb = colToIdx(pb[1]);
+                    const out = [];
+                    for (let r = Math.min(ra, rb); r <= Math.max(ra, rb); r++) for (let c = Math.min(ca, cb); c <= Math.max(ca, cb); c++) out.push(getCell(r, c));
+                    return out;
+                }
+                if (tk.k === "fn") {
+                    next(); // "("
+                    const args = [];
+                    if (!(peek() && peek().v === ")")) {
+                        args.push(compare());
+                        while (peek() && peek().v === ",") { next(); args.push(compare()); }
+                    }
+                    if (!peek() || peek().v !== ")") return ERR("#NAME?");
+                    next();
+                    return callFn(tk.v, args);
+                }
+                if (tk.v === "(") { const v = compare(); if (peek() && peek().v === ")") next(); return v; }
+                if (tk.v === "-") { const v = num(unaryPow()); return isErr(v) ? v : -v; }
+                if (tk.v === "+") return num(unaryPow());
+                return ERR("#VALUE!");
+            }
+            function unaryPow() {
+                let l = primary();
+                while (peek() && peek().v === "^") { next(); const a = num(l), b = num(primary()); l = isErr(a) ? a : isErr(b) ? b : Math.pow(a, b); }
+                return l;
+            }
+            function term() {
+                let l = unaryPow();
+                while (peek() && (peek().v === "*" || peek().v === "/")) {
+                    const op = next().v, a = num(l), b = num(unaryPow());
+                    if (isErr(a)) l = a; else if (isErr(b)) l = b;
+                    else if (op === "/" && b === 0) l = ERR("#DIV/0!");
+                    else l = op === "*" ? a * b : a / b;
+                }
+                return l;
+            }
+            function arith() {
+                let l = term();
+                while (peek() && (peek().v === "+" || peek().v === "-")) {
+                    const op = next().v, a = num(l), b = num(term());
+                    l = isErr(a) ? a : isErr(b) ? b : (op === "+" ? a + b : a - b);
+                }
+                return l;
+            }
+            function concat() {
+                let l = arith();
+                while (peek() && peek().v === "&") { next(); const r = arith(); l = (isErr(l) ? l : isErr(r) ? r : String(Array.isArray(l) ? l[0] : l) + String(Array.isArray(r) ? r[0] : r)); }
+                return l;
+            }
+            function compare() {
+                let l = concat();
+                while (peek() && ["=", "<>", "<", ">", "<=", ">="].includes(peek().v)) {
+                    const op = next().v, a = num(l), b = num(concat());
+                    if (isErr(a)) { l = a; continue; } if (isErr(b)) { l = b; continue; }
+                    l = (op === "=" ? a === b : op === "<>" ? a !== b : op === "<" ? a < b : op === ">" ? a > b : op === "<=" ? a <= b : a >= b) ? 1 : 0;
+                }
+                return l;
+            }
+            const res = compare();
+            return Array.isArray(res) ? res[0] : res;
+        }
+
+        return { isEpm, epmDisplay, a1ToR1C1, r1c1ToA1, evaluate, splitArgs, unq, isErr };
+    })();
+    window.__dracoFormulaEngine = FX;   // lo usa también el diseñador (mismo motor para la vista previa)
+
+    /**
+     * Recalcula la hoja principal: fórmulas normales (no EPM) y barras de
+     * datos (formato condicional). Se llama al terminar cada Excel.run.
+     */
+    function recalcMainSheet() {
+        const editor = host();
+        const cells = editor.state.cells || {};
+        const memo = new Map(), busy = new Set();
+        const val = (r, c) => {
+            const k = r + "_" + c, o = cells[k];
+            if (!o) return "";
+            if (!o.f || FX.isEpm(o.f)) return o.v === undefined ? "" : o.v;
+            if (memo.has(k)) return memo.get(k);
+            if (busy.has(k)) return { err: "#REF!" };          // referencia circular
+            busy.add(k);
+            const v = FX.evaluate(String(o.f).replace(/^\s*=\s*@?/, ""), val);
+            busy.delete(k);
+            memo.set(k, v);
+            return v;
+        };
+        Object.keys(cells).forEach(k => {
+            const o = cells[k];
+            if (!o || !o.f || FX.isEpm(o.f)) return;
+            const [r, c] = k.split("_").map(Number);
+            const v = val(r, c);
+            o.v = FX.isErr(v) ? v.err : (typeof v === "number" ? String(Math.round(v * 1e10) / 1e10) : String(v));
+        });
+
+        // Barras de datos: posición del eje (a) y extremo de la barra (p) en
+        // fracción del ancho de la celda, con los límites de la regla.
+        Object.keys(cells).forEach(k => { if (cells[k] && cells[k].db) delete cells[k].db; });
+        (editor.state.cf || []).forEach(rule => {
+            const db = rule.db || {};
+            const bound = (rb, fallback) => {
+                if (!rb || !rb.formula) return fallback;
+                const v = FX.evaluate(String(rb.formula).replace(/^\s*=\s*/, ""), val);
+                return typeof v === "number" && isFinite(v) ? v : fallback;
+            };
+            const xs = [];
+            for (let r = rule.r1; r <= rule.r2; r++) for (let c = rule.c1; c <= rule.c2; c++) {
+                const o = cells[r + "_" + c]; const n = o ? Number(o.v) : NaN;
+                if (o && o.v !== "" && isFinite(n)) xs.push(n);
+            }
+            if (!xs.length) return;
+            const lo = bound(db.lowerBoundRule, Math.min(0, ...xs)), hi = bound(db.upperBoundRule, Math.max(0, ...xs));
+            const span = hi - lo || 1;
+            const frac = (x) => Math.max(0, Math.min(1, (x - lo) / span));
+            for (let r = rule.r1; r <= rule.r2; r++) for (let c = rule.c1; c <= rule.c2; c++) {
+                const o = cells[r + "_" + c]; const n = o ? Number(o.v) : NaN;
+                if (!o || o.v === "" || !isFinite(n)) continue;
+                const neg = n < 0;
+                o.db = {
+                    a: Math.round(frac(0) * 1000) / 1000,
+                    p: Math.round(frac(n) * 1000) / 1000,
+                    col: neg ? ((db.negativeFormat && db.negativeFormat.fillColor) || "#F0436A") : ((db.positiveFormat && db.positiveFormat.fillColor) || "#70D06A"),
+                    only: db.showDataBarOnly ? 1 : 0
+                };
+            }
+        });
+    }
+
+    function cfStore() {
+        const editor = host();
+        if (!editor.state.cf) editor.state.cf = [];
+        return editor.state.cf;
+    }
+
+    // ------------------------------------------------------------
     // Rango de Excel (fake) — respaldado por el almacén de la hoja
     // correspondiente (ver arriba).
     // ------------------------------------------------------------
@@ -165,6 +455,26 @@
             if (extra) Object.assign(cells[key], extra);
         }
         function clearCellObj(r, c) { delete cells[`${r}_${c}`]; }
+        // Contenido de una celda: fórmula (empieza por "=") o valor.
+        function setCellContent(r, c, val) {
+            const key = `${r}_${c}`;
+            if (!cells[key]) cells[key] = {};
+            const o = cells[key];
+            const text = val === null || val === undefined ? "" : (typeof val === "string" ? val : String(val));
+            if (typeof val === "string" && text.trim().startsWith("=")) {
+                o.f = text.trim();
+                o.v = FX.isEpm(o.f) ? FX.epmDisplay(o.f) : (o.v === undefined ? "" : o.v); // el resto: recalcMainSheet
+            } else {
+                delete o.f;
+                o.v = text;
+            }
+        }
+        // Excel replica un valor único (escalar o matriz 1x1) a todo el rango.
+        function setMatrix(v, fn) {
+            if (!Array.isArray(v)) { forEachCell((r, c) => fn(r, c, v)); return; }
+            if (v.length === 1 && Array.isArray(v[0]) && v[0].length === 1 && (r2 > r1 || c2 > c1)) { forEachCell((r, c) => fn(r, c, v[0][0])); return; }
+            v.forEach((row, ri) => { if (Array.isArray(row)) row.forEach((val, ci) => fn(r1 + ri, c1 + ci, val)); });
+        }
         function collectStyleFlags() { return getCellObj(r1, c1); }
         function forEachCell(fn) { for (let r = r1; r <= r2; r++) for (let c = c1; c <= c2; c++) fn(r, c); }
 
@@ -187,13 +497,8 @@
                 return out;
             },
             set values(v) {
-                if (!Array.isArray(v)) return;
-                v.forEach((row, ri) => {
-                    if (!Array.isArray(row)) return;
-                    row.forEach((val, ci) => {
-                        writeCellObj(r1 + ri, c1 + ci, val === null || val === undefined ? "" : String(val));
-                    });
-                });
+                // Como en Excel: un texto que empieza por "=" es una fórmula.
+                setMatrix(v, (r, c, val) => setCellContent(r, c, val));
             },
 
             get numberFormat() {
@@ -220,12 +525,49 @@
                 });
             },
 
+            // Fórmulas: la celda guarda la fórmula en `f` y lo que muestra en
+            // `v` (EPM_VALUE/EPM_FORMULA: su texto; el resto se calcula al
+            // terminar el Excel.run, ver recalcMainSheet).
             get formulas() {
-                // No implementamos fórmulas EPM_VALUE reales: se devuelve el
-                // mismo texto que .values, así el patrón /^=\s*EPM_VALUE\(/i
-                // que usa el add-in para detectar "ya está resuelta" da
-                // siempre falso y el reconocimiento de miembros puede seguir.
-                return range.values;
+                const out = [];
+                for (let r = r1; r <= r2; r++) {
+                    const row = [];
+                    for (let c = c1; c <= c2; c++) { const o = getCellObj(r, c); row.push(o.f !== undefined ? o.f : (o.v ?? "")); }
+                    out.push(row);
+                }
+                return out;
+            },
+            set formulas(v) { setMatrix(v, (r, c, val) => setCellContent(r, c, val)); },
+            get formulasR1C1() {
+                const out = [];
+                for (let r = r1; r <= r2; r++) {
+                    const row = [];
+                    for (let c = c1; c <= c2; c++) { const o = getCellObj(r, c); row.push(o.f !== undefined ? FX.a1ToR1C1(o.f, r, c) : (o.v ?? "")); }
+                    out.push(row);
+                }
+                return out;
+            },
+            set formulasR1C1(v) {
+                setMatrix(v, (r, c, val) => setCellContent(r, c, typeof val === "string" && val.trim().startsWith("=") ? FX.r1c1ToA1(val, r, c) : val));
+            },
+            get formulasLocal() { return range.formulas; },
+            set formulasLocal(v) { range.formulas = v; },
+
+            // Formato condicional: solo barras de datos, en la hoja principal.
+            conditionalFormats: {
+                add(type) {
+                    const rule = { r1, c1, r2, c2, type, db: { positiveFormat: {}, negativeFormat: {} } };
+                    if (isMainSheet(sheetName)) cfStore().push(rule);
+                    return { dataBar: rule.db };
+                },
+                clearAll() {
+                    if (!isMainSheet(sheetName)) return;
+                    const list = cfStore();
+                    const keep = list.filter(x => x.r2 < r1 || x.r1 > r2 || x.c2 < c1 || x.c1 > c2);
+                    list.length = 0; list.push(...keep);
+                },
+                load() { return this; },
+                items: []
             },
 
             format: {
@@ -328,7 +670,7 @@
                 forEachCell((r, c) => {
                     if (onlyContents) {
                         const obj = getCellObj(r, c);
-                        if (obj && typeof obj === "object") delete obj.v;
+                        if (obj && typeof obj === "object") { delete obj.v; delete obj.f; delete obj.db; }
                     } else {
                         clearCellObj(r, c);
                     }
@@ -546,10 +888,16 @@
         BorderWeight: { thin: "Thin", medium: "Medium", thick: "Thick" },
         ClearApplyTo: { all: "All", contents: "Contents", formats: "Formats" },
         CalculationMode: { automatic: "Automatic", automaticExceptTables: "AutomaticExceptTables", manual: "Manual" },
+        CalculationType: { recalculate: "Recalculate", full: "Full", fullRebuild: "FullRebuild" },
+        ConditionalFormatType: { dataBar: "DataBar" },
+        ConditionalDataBarDirection: { leftToRight: "LeftToRight", rightToLeft: "RightToLeft", context: "Context" },
+        ConditionalDataBarAxisFormat: { automatic: "Automatic", none: "None", cellMidPoint: "CellMidPoint" },
+        ConditionalFormatRuleType: { formula: "Formula", automatic: "Automatic", lowestValue: "LowestValue", highestValue: "HighestValue", number: "Number" },
         run(callback) {
             return Promise.resolve()
                 .then(() => callback(fakeContext))
                 .then(result => {
+                    try { recalcMainSheet(); } catch (e) { console.warn("host-bridge: recálculo", e); }
                     try { const editor = host(); editor.markDirty(); editor.renderGrid(); } catch (e) { /* el host puede no estar listo aún */ }
                     return result;
                 });
@@ -665,12 +1013,15 @@
                     const id = window.__wteDialogId;
                     window.parent.postMessage({ __wteDialog: id, type: "childMessage", payload: msg }, "*");
                 },
-                addHandlerAsync(eventType, handler) {
+                addHandlerAsync(eventType, handler, callback) {
                     window.addEventListener("message", (ev) => {
                         const m = ev.data;
                         if (!m || m.type !== "parentMessage") return;
                         handler({ message: m.payload });
                     });
+                    // Como en Office: se avisa de que el manejador ya está puesto
+                    // (calcDialog, entre otros, espera a esto para mandar "ready").
+                    if (typeof callback === "function") Promise.resolve().then(() => callback({ status: "succeeded" }));
                 }
             }
         }
