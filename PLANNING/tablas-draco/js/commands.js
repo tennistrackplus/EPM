@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-16-hibrido-autofit";
+const DRACO_BUILD = "2026-10-16-variables-v1";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -2154,6 +2154,14 @@ async function executeSQL(sql, billingProjectId) {
     // JSON de BigQuery, así que el pintado no cambia.
     if (sql && typeof sql === "object" && sql.kind === "powerbi-dax") {
         return await window.PowerBIQuery.execute(sql);
+    }
+
+    // Variables ($NOMBRE$ en las líneas EPM_VALUE de un eje Estático, ver
+    // js/variablesStore.js): el SQL se genera con el marcador y se sustituye
+    // por el valor AQUÍ, justo antes de ejecutarlo. Así un SQL guardado (Tablas
+    // Draco) vale para cualquier valor de la variable.
+    if (typeof sql === "string" && window.DracoVariables) {
+        sql = window.DracoVariables.resolveSql(sql, Provider.key());
     }
 
     // [Tablas Draco] Planning ya tiene la conexión autenticada (BigQuery o Snowflake): se usa siempre ella.
@@ -9218,8 +9226,12 @@ async function loadDracoPlanningCrossContext(context, reportId) {
 
     loadReportDefinition(editReportGrid, reportId); // rellena ReportState (incluye Filters)
 
-    const rowDefs = await readRowDefinitions(context, editReportGrid, csvGrid);
-    const colDefs = await readColumnDefinitions(context, editReportGrid, csvGrid);
+    // Variables ($X$) -> su valor real: la planificación escribe con él.
+    const resolveVars = (defs) => window.DracoVariables
+        ? defs.map(d => Object.assign({}, d, { Value: window.DracoVariables.resolveValue(d.Value) }))
+        : defs;
+    const rowDefs = resolveVars(await readRowDefinitions(context, editReportGrid, csvGrid));
+    const colDefs = resolveVars(await readColumnDefinitions(context, editReportGrid, csvGrid));
 
     const isMeasureDef = (d) => String(d.Dimension).toUpperCase() === "MEASURE";
     const measureDef = rowDefs.find(isMeasureDef) || colDefs.find(isMeasureDef);
@@ -10381,6 +10393,74 @@ async function abrirDistribuirValores(event) {
 // segundo clic mientras ya hay uno abierto simplemente se ignora.
 let dracoFilterDialogOpen = false;
 
+/* ---------------------------------------------------------------------
+ * VARIABLES (js/variablesStore.js + variablesDialog.html)
+ *
+ * Comando de cinta "abrirVariables": abre la ventana de variables (nombre,
+ * campo y valor elegido de la lista de valores del campo). Registrado con
+ * Office.actions.associate, así que en el addin basta con añadir un botón
+ * al manifest que llame a "abrirVariables". En Tablas Draco (PLANNING) lo
+ * abre el botón «Variables» del diseñador, con el mismo diálogo.
+ * ------------------------------------------------------------------- */
+let dracoVariablesDialogOpen = false;
+
+async function dracoModelFieldList() {
+    const grid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+    const out = [];
+    for (let R = 2; String(cellValue(grid, R, 2)).trim() !== ""; R++) {
+        const dim = String(cellValue(grid, R, 2)).trim(), attr = String(cellValue(grid, R, 3)).trim();
+        if (attr) out.push({ dim, attr, label: dim.toLowerCase() + " · " + attr.toLowerCase() });
+    }
+    return out.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+async function dracoFieldMembers(dim, attr) {
+    const sql = await window.ExcelService.buildFilterValuesSQL(dim, attr);
+    if (!sql) throw new Error("No se encuentra el campo en el modelo semántico.");
+    const json = await window.ExcelService.executeSQL(sql);
+    return Array.from(new Set(extractDracoJsonValues(json).filter(v => !isDracoNullLiteral(v)).map(v => String(v)))).slice(0, 5000);
+}
+
+async function abrirVariables(event) {
+    if (dracoVariablesDialogOpen || !window.DracoVariables) { if (event) event.completed(); return; }
+    dracoVariablesDialogOpen = true;
+    try {
+        let fields = [];
+        try { fields = await dracoModelFieldList(); } catch (e) { console.warn("[Draco] Variables: campos del modelo:", e); }
+        const url = new URL("variablesDialog.html", window.location.href).href;
+        await new Promise((resolve) => {
+            Office.context.ui.displayDialogAsync(url, { height: 70, width: 55, displayInIframe: false }, (res) => {
+                if (res.status === Office.AsyncResultStatus.Failed) { console.error("Variables: displayDialogAsync:", res.error && res.error.message); resolve(); return; }
+                const dialog = res.value;
+                const reply = (o) => { try { dialog.messageChild(JSON.stringify(o)); } catch (e) { console.error(e); } };
+                const done = () => { try { dialog.close(); } catch (e) { /* cerrado */ } resolve(); };
+                dialog.addEventHandler(Office.EventType.DialogMessageReceived, async (arg) => {
+                    let p;
+                    try { p = JSON.parse(arg.message); } catch (e) { return; }
+                    if (p.type === "ready") { reply({ type: "init", variables: window.DracoVariables.list(), fields }); return; }
+                    if (p.type === "requestMembers") {
+                        try { reply({ type: "members", dim: p.dim, attr: p.attr, members: await dracoFieldMembers(p.dim, p.attr) }); }
+                        catch (e) { reply({ type: "members", dim: p.dim, attr: p.attr, members: [], error: (e && e.message) || String(e) }); }
+                        return;
+                    }
+                    if (p.type === "save") {
+                        await window.DracoVariables.saveAll(p.variables || []);
+                        // En Tablas Draco el "Excel falso" recalcula al terminar cada Excel.run: así las
+                        // cabeceras $VARIABLE$ muestran ya su nuevo valor. En Excel no hace nada.
+                        try { await Excel.run(async (context) => { await context.sync(); }); } catch (e) { /* nada */ }
+                        return;
+                    }
+                    if (p.type === "close") done();
+                });
+                dialog.addEventHandler(Office.EventType.DialogEventReceived, () => resolve());
+            });
+        });
+    } finally {
+        dracoVariablesDialogOpen = false;
+        if (event) event.completed();
+    }
+}
+
 async function abrirAnadirFiltro(event) {
     if (dracoFilterDialogOpen) {
         console.warn("[Draco] Añadir filtro: ya hay un diálogo abierto; se ignora este segundo clic.");
@@ -10454,7 +10534,10 @@ async function abrirAnadirFiltro(event) {
                             if (dimensionsError) {
                                 dialog.messageChild(JSON.stringify({ type: "error", message: dimensionsError }));
                             } else {
-                                dialog.messageChild(JSON.stringify({ type: "data", dimensions, reports }));
+                                // En Tablas Draco (PLANNING) una tabla = UN informe: el
+                                // diálogo no pregunta a qué informe aplica el filtro.
+                                const singleReport = !!window.DracoEngineApi;
+                                dialog.messageChild(JSON.stringify({ type: "data", dimensions, reports, singleReport }));
                             }
                             return;
                         }
@@ -10750,6 +10833,7 @@ try {
     Office.actions.associate("openFieldOptions", openFieldOptions);
     Office.actions.associate("abrirDistribuirValores", abrirDistribuirValores);
     Office.actions.associate("abrirAnadirFiltro", abrirAnadirFiltro);
+    Office.actions.associate("abrirVariables", abrirVariables);
     Office.actions.associate("guardarPlanificacion", guardarPlanificacion);
     Office.actions.associate("guardarExcelEnBucket", guardarExcelEnBucket);
     Office.actions.associate("abrirDesdeBucket", abrirDesdeBucket);

@@ -186,7 +186,9 @@
         function epmDisplay(f) {
             const kind = EPM_RE.exec(f)[1].toUpperCase();
             const a = splitArgs(f);
-            return kind === "FORMULA" ? unq(a[0]) : unq(a[3] !== undefined && a[3] !== "" ? a[3] : a[2]);
+            const shown = kind === "FORMULA" ? unq(a[0]) : unq(a[3] !== undefined && a[3] !== "" ? a[3] : a[2]);
+            // Variables: "$PERIODO$" se muestra con su valor (js/variablesStore.js)
+            return (window.DracoVariables && kind === "VALUE") ? window.DracoVariables.resolveDisplay(shown) : shown;
         }
 
         const colToIdx = (L) => { let n = 0; for (const ch of L.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
@@ -394,7 +396,9 @@
         };
         Object.keys(cells).forEach(k => {
             const o = cells[k];
-            if (!o || !o.f || FX.isEpm(o.f)) return;
+            if (!o || !o.f) return;
+            // EPM con variable ($X$): el texto mostrado sigue al valor actual de la variable
+            if (FX.isEpm(o.f)) { if (o.f.indexOf("$") !== -1) o.v = FX.epmDisplay(o.f); return; }
             const [r, c] = k.split("_").map(Number);
             const v = val(r, c);
             o.v = FX.isErr(v) ? v.err : (typeof v === "number" ? String(Math.round(v * 1e10) / 1e10) : String(v));
