@@ -1213,7 +1213,8 @@ document.addEventListener('change',function(e){
   Object.keys(DVB).forEach(function(k){ if(DVB[k]!==b&&DVB[k].variable===b.variable) dvRender(k); });
   /* solo las tablas que usan la variable (si no se sabe cu\u00E1les, todas) */
   var refs=(b.refs&&b.refs.length)?b.refs:null;
-  Object.keys(DTB).forEach(function(k){ var d=DTB[k]; if(!d||!d.ref||(refs&&refs.indexOf(d.ref)<0)||!DTS[k]) return; dtLoad(k,true); dtRender(k); });
+  /* sin "forzar": cada ejecuci\u00F3n ya lanza la consulta; forzar recrear\u00EDa el motor de la tabla sin necesidad */
+  Object.keys(DTB).forEach(function(k){ var d=DTB[k]; if(!d||!d.ref||(refs&&refs.indexOf(d.ref)<0)||!DTS[k]) return; dtLoad(k,false); dtRender(k); });
 });
 function tuMountAll(force){ [].forEach.call(document.querySelectorAll('.tu[data-tu]'),function(el){ if(force||!el.getAttribute('data-mounted')) tuMount(el); }); if(typeof dtMountAll==='function') dtMountAll(force); if(typeof dvMountAll==='function') dvMountAll(force); }
 function tuMount(el){
