@@ -1110,7 +1110,7 @@ function dtMount(el){
 function dtLoad(id,force){
   var b=DTB[id], st=DTS[id]; if(!b||!st) return; st.status='loading'; st.err=null;
   var vars=dvVarsPayload(); /* valores elegidos en los \u00ABSelector de variable\u00BB de la p\u00E1gina */
-  dcall('dt.run',vars?{ref:b.ref,force:!!force,variables:vars}:{ref:b.ref,force:!!force}).then(function(res){ if(DTS[id]!==st) return; st.status='ready'; st.res=res; dtRender(id); },function(e){ if(DTS[id]!==st) return; st.status='error'; st.err=e; dtRender(id); });
+  dtRunShared(b.ref,force,vars).then(function(res){ if(DTS[id]!==st) return; st.status='ready'; st.res=res; dtRender(id); },function(e){ if(DTS[id]!==st) return; st.status='error'; st.err=e; dtRender(id); });
 }
 function dtLum(hex){ var m=/^#?([0-9a-f]{6})$/i.exec(hex||''); if(!m) return 1; var n=parseInt(m[1],16); return (0.2126*((n>>16)&255)+0.7152*((n>>8)&255)+0.0722*(n&255))/255; }
 function dtGridHtml(g){
@@ -1136,17 +1136,53 @@ function dtGridHtml(g){
   }
   return h+'</tbody></table>';
 }
-function dtRender(id){
-  var el=dtEl(id), st=DTS[id], b=DTB[id]; if(!el||!st) return;
-  var res=st.res, head='<div class="tu-head"><h3>'+esc(tok(dtTitle(b,res)))+'</h3>'+(res&&res.desfasado?'<span class="dt-warn" title="El cubo cambi\u00F3 despu\u00E9s de generar el SQL de esta tabla">SQL desfasado</span>':'')+'</div>';
-  if(st.status==='loading'){ el.innerHTML=head+'<div class="tu-state"><span class="tu-spin"></span> Cargando datos\u2026</div>'; return; }
-  if(st.status==='error'){ el.innerHTML=head+'<div class="tu-state tu-bad">'+esc(tuErrText(st.err))+'<div class="tu-retry"><button type="button" class="tu-btn" data-dt-act="retry">Reintentar</button></div></div>'; return; }
+/* Al refrescar una tabla que ya se ve NO se quita: se queda en su sitio con un velo semitransparente y la pastilla
+   "Actualizando\u2026" encima (sin saltos de tama\u00F1o). El velo aparece con un peque\u00F1o retardo (CSS) para que un
+   refresco r\u00E1pido no parpadee. Solo la primera carga, sin nada que mostrar, usa el aviso "Cargando datos\u2026". */
+function dtVeil(el,on){
+  var v=el.querySelector(':scope > .dt-veil');
+  if(on){
+    el.classList.add('dt-busy'); el.setAttribute('aria-busy','true');
+    if(!v) el.insertAdjacentHTML('beforeend','<div class="dt-veil" role="status" aria-live="polite"><span class="dt-veil-pill"><span class="tu-spin"></span>Actualizando\u2026</span></div>');
+  } else {
+    el.classList.remove('dt-busy'); el.removeAttribute('aria-busy');
+    if(v) v.remove();
+  }
+}
+function dtTableHtml(b,res,extra){
   var g=res.grid, mh=parseInt(b.maxHeight,10);
+  var head='<div class="tu-head"><h3>'+esc(tok(dtTitle(b,res)))+'</h3>'+(res.desfasado?'<span class="dt-warn" title="El cubo cambi\u00F3 despu\u00E9s de generar el SQL de esta tabla">SQL desfasado</span>':'')+'</div>';
   var bar='<div class="tu-bar"><button type="button" class="tu-btn" data-dt-act="reload" title="Volver a ejecutar la consulta">\u21BB Recargar</button><span class="tu-count">'+g.rows+' fila(s) \u00D7 '+g.cols+' columna(s)</span></div>';
   var warn=res.desfasado?'<div class="tu-msg tu-info" role="status">El modelo del cubo ha cambiado desde que se gener\u00F3 el SQL de esta tabla. \u00C1brela en el dise\u00F1ador y gu\u00E1rdala para regenerarlo.</div>':'';
-  var oldW=el.querySelector('.tu-wrap'), sT=oldW?oldW.scrollTop:0, sL=oldW?oldW.scrollLeft:0;
-  el.innerHTML=head+bar+warn+'<div class="tu-wrap dt-wrap"'+(mh>0?' style="max-height:'+mh+'px"':'')+'>'+dtGridHtml(g)+'</div>';
-  var nw=el.querySelector('.tu-wrap'); if(nw){ nw.scrollTop=sT; nw.scrollLeft=sL; }
+  return head+bar+(extra||'')+warn+'<div class="tu-wrap dt-wrap"'+(mh>0?' style="max-height:'+mh+'px"':'')+'>'+dtGridHtml(g)+'</div>';
+}
+function dtRender(id){
+  var el=dtEl(id), st=DTS[id], b=DTB[id]; if(!el||!st) return;
+  var res=st.res;
+  var keep=function(html){
+    var oldW=el.querySelector('.tu-wrap'), sT=oldW?oldW.scrollTop:0, sL=oldW?oldW.scrollLeft:0;
+    el.innerHTML=html;
+    var nw=el.querySelector('.tu-wrap'); if(nw){ nw.scrollTop=sT; nw.scrollLeft=sL; }
+  };
+  if(st.status==='loading'){
+    if(res&&res.grid){
+      if(!el.querySelector('.dt-wrap')) keep(dtTableHtml(b,res));   /* p. ej. tras un error: se vuelve a mostrar la \u00FAltima */
+      dtVeil(el,true);
+      return;
+    }
+    el.innerHTML='<div class="tu-head"><h3>'+esc(tok(dtTitle(b,res)))+'</h3></div><div class="tu-state"><span class="tu-spin"></span> Cargando datos\u2026</div>';
+    return;
+  }
+  if(st.status==='error'){
+    if(res&&res.grid){
+      /* se mantiene lo \u00FAltimo que se vio y se avisa encima */
+      keep(dtTableHtml(b,res,'<div class="tu-msg tu-bad dt-errbar" role="alert"><span>No se pudo actualizar: '+esc(tuErrText(st.err))+'</span><button type="button" class="tu-btn" data-dt-act="retry">Reintentar</button></div>'));
+      return;
+    }
+    el.innerHTML='<div class="tu-head"><h3>'+esc(tok(dtTitle(b,res)))+'</h3></div><div class="tu-state tu-bad">'+esc(tuErrText(st.err))+'<div class="tu-retry"><button type="button" class="tu-btn" data-dt-act="retry">Reintentar</button></div></div>';
+    return;
+  }
+  keep(dtTableHtml(b,res));
 }
 document.addEventListener('click',function(e){
   var t=e.target; if(!t||!t.closest) return;
@@ -1215,8 +1251,129 @@ document.addEventListener('change',function(e){
   var refs=(b.refs&&b.refs.length)?b.refs:null;
   /* sin "forzar": cada ejecuci\u00F3n ya lanza la consulta; forzar recrear\u00EDa el motor de la tabla sin necesidad */
   Object.keys(DTB).forEach(function(k){ var d=DTB[k]; if(!d||!d.ref||(refs&&refs.indexOf(d.ref)<0)||!DTS[k]) return; dtLoad(k,false); dtRender(k); });
+  Object.keys(DCB).forEach(function(k){ var d=DCB[k]; if(!d||!d.ref||(refs&&refs.indexOf(d.ref)<0)||!DCS[k]) return; dcLoad(k,false); dcRender(k); });
 });
-function tuMountAll(force){ [].forEach.call(document.querySelectorAll('.tu[data-tu]'),function(el){ if(force||!el.getAttribute('data-mounted')) tuMount(el); }); if(typeof dtMountAll==='function') dtMountAll(force); if(typeof dvMountAll==='function') dvMountAll(force); }
+/* Ejecuci\u00F3n compartida de una Tabla Draco: si una tabla y un gr\u00E1fico (o dos gr\u00E1ficos) del informe usan la misma
+   tabla con las mismas variables, la consulta se lanza UNA vez y todos usan el mismo resultado. "forzar" la repite. */
+var RUNQ={};
+function dtRunShared(ref,force,vars){
+  var key=ref+'|'+JSON.stringify(vars||{});
+  if(!force&&RUNQ[key]) return RUNQ[key];
+  var p=dcall('dt.run',vars?{ref:ref,force:!!force,variables:vars}:{ref:ref,force:!!force});
+  RUNQ[key]=p; p.then(null,function(){ if(RUNQ[key]===p) delete RUNQ[key]; });
+  return p;
+}
+
+/* ---------- Gr\u00E1fico Draco (bloque "dracoChart") ----------
+   Ejecuta una Tabla Draco guardada (la misma foto que pinta el bloque de tabla) y convierte su rejilla en las series de
+   un gr\u00E1fico, como Excel al llevar un gr\u00E1fico a PowerPoint. Se pinta con el MISMO motor que el bloque "chart"
+   (chartCard con datos fijos: x + series, o items), as\u00ED que salen los mismos tipos, leyenda y exportaci\u00F3n. */
+var DCB={}, DCS={};
+function dcEl(id){ return document.querySelector('.dc[data-dc="'+id+'"]'); }
+function dcTitle(b,res){ return b.title||(res&&res.nombre)||b.refName||'Gr\u00E1fico Draco'; }
+function dcNote(b){ return '<div class="card" data-block="dracoChart"><h3>'+esc(tok(dcTitle(b)))+'</h3><p class="tu-sub">'+esc('Gr\u00E1fico de la Tabla Draco'+(b.refName?' \u00AB'+b.refName+'\u00BB':'')+'. Se calcula dentro de Draco Planning.')+'</p></div>'; }
+function dcShell(b,id){ DCB[id]=b; return '<div class="dc" data-dc="'+id+'" data-block="dracoChart"></div>'; }
+function dcCard(b,res,inner){ return '<div class="card"><div class="tu-head"><h3>'+esc(tok(dcTitle(b,res)))+'</h3></div>'+inner+'</div>'; }
+function dcMountAll(force){ [].forEach.call(document.querySelectorAll('.dc[data-dc]'),function(el){ if(force||!el.getAttribute('data-mounted')) dcMount(el); }); }
+function dcMount(el){
+  var id=el.getAttribute('data-dc'), b=DCB[id]; if(!b) return; el.setAttribute('data-mounted','1');
+  if(EDIT){ el.innerHTML=dcCard(b,null,'<p class="tu-sub">'+esc(b.ref?'Gr\u00E1fico de \u00AB'+(b.refName||b.ref)+'\u00BB. Pulsa \u00ABVista previa\u00BB para verlo con datos.':'Elige la Tabla Draco en las propiedades de este bloque.')+'</p>'); return; }
+  if(!b.ref){ el.innerHTML=dcCard(b,null,'<p class="tu-sub">Elige la Tabla Draco en las propiedades de este bloque.</p>'); return; }
+  if(!HOSTON){ el.innerHTML=dcCard(b,null,'<p class="tu-sub">Este gr\u00E1fico se calcula dentro de Draco Planning.</p>'); return; }
+  var st=DCS[id];
+  if(!st||st.ref!==b.ref){ st=DCS[id]={ref:b.ref,status:'loading'}; dcLoad(id,false); }
+  dcRender(id);
+}
+function dcLoad(id,force){
+  var b=DCB[id], st=DCS[id]; st.status='loading'; st.err=null;
+  dtRunShared(b.ref,force,dvVarsPayload()).then(function(res){ if(DCS[id]!==st) return; st.status='ready'; st.res=res; dcRender(id); },function(e){ if(DCS[id]!==st) return; st.status='error'; st.err=e; dcRender(id); });
+}
+/* Rejilla de la Tabla Draco -> {xs, series:[{name, values}]} (o {error}).
+   Cabeceras (filas de arriba) y etiquetas (columnas de la izquierda): autom\u00E1tico = hasta la primera fila/columna
+   con alg\u00FAn VALOR (n\u00FAmero sin el fondo de cabecera de Draco), o el n\u00FAmero indicado en las propiedades. */
+function dcFromGrid(g,b){
+  if(!g||!g.rows) return {error:'La tabla no tiene datos.'};
+  var cells=g.cells||{}, R=g.rows, C=g.cols;
+  var at=function(r,c){ return cells[r+'_'+c]; };
+  var txt=function(x){ return x?String(x.t!=null?x.t:(x.v!=null?x.v:'')).trim():''; };
+  var isNum=function(x){ return !!x&&x.v!==undefined&&String(x.v).trim()!==''&&isFinite(Number(x.v)); };
+  var isVal=function(x){ return isNum(x)&&!x.bg; };
+  var hr=parseInt(b.headerRows,10), lc=parseInt(b.labelCols,10), r, c;
+  if(!(hr>=0)){ hr=R; for(r=0;r<R&&hr===R;r++) for(c=0;c<C;c++) if(isVal(at(r,c))){ hr=r; break; } }
+  if(!(lc>=0)){ lc=C; for(c=0;c<C&&lc===C;c++) for(r=hr;r<R;r++) if(isVal(at(r,c))){ lc=c; break; } }
+  if(hr>=R||lc>=C) return {error:'No se encuentran valores num\u00E9ricos en la tabla.'};
+  var rows=[];
+  for(r=hr;r<R;r++){
+    var any=false; for(c=lc;c<C;c++) if(isNum(at(r,c))){ any=true; break; }
+    if(!any) continue;
+    var parts=[], ind=0;
+    for(c=0;c<lc;c++){ var x=at(r,c), t=txt(x); if(t){ parts.push(t); ind=(x&&x.ind)||0; } }
+    rows.push({r:r,label:parts.join(' \u00B7 ')||('Fila '+(r+1)),ind:ind});
+  }
+  var inds=rows.map(function(o){ return o.ind; }), lo=Math.min.apply(null,inds), varied=inds.some(function(i){ return i!==lo; });
+  var lv2=Math.min.apply(null,inds.filter(function(i){ return i>lo; }).concat([Infinity]));
+  var mode=b.rows||'all';
+  if(varied&&mode!=='all') rows=rows.filter(function(o,i){
+    if(mode==='top') return o.ind===lo;
+    if(mode==='second') return o.ind===lv2;
+    if(mode==='notTop') return o.ind>lo;
+    if(mode==='leaf'){ var nx=rows[i+1]; return !nx||nx.ind<=o.ind; }
+    return true;
+  });
+  var cols=[];
+  for(c=lc;c<C;c++){
+    var hasV=rows.some(function(o){ return isNum(at(o.r,c)); }); if(!hasV) continue;
+    var nm=[]; for(r=0;r<hr;r++){ var t2=txt(at(r,c)); if(t2&&nm[nm.length-1]!==t2) nm.push(t2); }
+    cols.push({c:c,name:nm.join(' \u00B7 ')||('Columna '+(c+1))});
+  }
+  if(!rows.length||!cols.length) return {error:'Con estas opciones no queda ning\u00FAn dato que dibujar.'};
+  var val=function(r,c){ var x=at(r,c); return isNum(x)?Number(x.v):NaN; };
+  var lim=parseInt(b.limit,10)||0;
+  if(b.seriesIn==='rows'){
+    if(lim>0) cols=cols.slice(0,lim);
+    return {xs:cols.map(function(k){ return k.name; }),series:rows.map(function(o){ return {name:o.label,values:cols.map(function(k){ return val(o.r,k.c); })}; })};
+  }
+  if(lim>0&&(b.kind==='line'||b.kind==='bar')) rows=rows.slice(0,lim);
+  return {xs:rows.map(function(o){ return o.label; }),series:cols.map(function(k){ return {name:k.name,values:rows.map(function(o){ return val(o.r,k.c); })}; })};
+}
+function dcChartHtml(id){
+  var b=DCB[id], st=DCS[id], res=st.res, D=dcFromGrid(res&&res.grid,b);
+  if(D.error) return dcCard(b,res,'<div class="tu-state">'+esc(D.error)+'</div>');
+  var kind=b.kind||'bar', cb={type:'chart',kind:kind,title:dcTitle(b,res),subtitle:b.subtitle,insight:b.insight,unit:b.unit||''};
+  if(b.decimals!==undefined&&b.decimals!==''&&b.decimals!==null) cb.decimals=parseInt(b.decimals,10);
+  if(kind==='line'||kind==='bar'){ cb.x=D.xs; cb.series=D.series; }
+  else {
+    var si=Math.max(0,Math.min(D.series.length-1,(parseInt(b.seriesIndex,10)||1)-1)), s=D.series[si];
+    var items=D.xs.map(function(x,i){ return {label:x,value:s.values[i]}; }).filter(function(it){ return isFinite(it.value)&&(kind!=='donut'||it.value>0); });
+    var srt=b.sort||(kind==='hbar'?'desc':'none');
+    if(srt==='desc') items.sort(function(a,c2){ return c2.value-a.value; }); else if(srt==='asc') items.sort(function(a,c2){ return a.value-c2.value; });
+    var lim=parseInt(b.limit,10)||0; if(lim>0) items=items.slice(0,lim);
+    cb.items=items; cb.series=[]; cb.x=[];
+    if(D.series.length>1) cb.subtitle=(cb.subtitle?cb.subtitle+' \u00B7 ':'')+s.name;
+  }
+  return chartCard(cb,'dc_'+id);
+}
+function dcRender(id){
+  var el=dcEl(id), st=DCS[id], b=DCB[id]; if(!el||!st) return;
+  if(st.status==='loading'){
+    if(st.res){ if(!el.querySelector('.chart')) el.innerHTML=dcChartHtml(id); dtVeil(el,true); return; }
+    el.innerHTML=dcCard(b,null,'<div class="tu-state"><span class="tu-spin"></span> Calculando el gr\u00E1fico\u2026</div>'); return;
+  }
+  dtVeil(el,false);
+  if(st.status==='error'){
+    var bar='<div class="tu-msg tu-bad dt-errbar" role="alert"><span>'+(st.res?'No se pudo actualizar: ':'')+esc(tuErrText(st.err))+'</span><button type="button" class="tu-btn" data-dc-act="retry">Reintentar</button></div>';
+    el.innerHTML=st.res?bar+dcChartHtml(id):dcCard(b,null,bar); return;
+  }
+  el.innerHTML=dcChartHtml(id);
+}
+document.addEventListener('click',function(e){
+  var t=e.target; if(!t||!t.closest) return;
+  var btn=t.closest('[data-dc-act]'); if(!btn) return;
+  var host=btn.closest('.dc[data-dc]'); if(!host) return;
+  var id=host.getAttribute('data-dc'); if(!DCS[id]) return;
+  dcLoad(id,true); dcRender(id);
+});
+function tuMountAll(force){ [].forEach.call(document.querySelectorAll('.tu[data-tu]'),function(el){ if(force||!el.getAttribute('data-mounted')) tuMount(el); }); if(typeof dtMountAll==='function') dtMountAll(force); if(typeof dvMountAll==='function') dvMountAll(force); if(typeof dcMountAll==='function') dcMountAll(force); }
 function tuMount(el){
   var id=el.getAttribute('data-tu'), b=TUB[id]; if(!b) return; el.setAttribute('data-mounted','1');
   if(EDIT){ var n=tuVarCount(b); el.innerHTML=tuMsgCard(b,'Actualizaci\u00F3n de tablas'+(b.refName?' \u00AB'+b.refName+'\u00BB':'')+(n?' \u00B7 '+n+' variable(s) con valor':'')+'. Pulsa \u00ABVista previa\u00BB para ver y probar la tabla con datos reales.'); return; }
@@ -1545,6 +1702,7 @@ function blockInner(b,id){
       case 'tableUpdate': return tuNote(b);
       case 'dracoTable': return dtNote(b);
       case 'dracoVar': return dvNote(b);
+      case 'dracoChart': return dcNote(b);
     }
   }catch(e){ REPORT.errors.push(id+': '+e.message); return '<div class="card"><p>No se pudo dibujar este bloque.</p></div>'; }
   return '';
@@ -1555,6 +1713,7 @@ function blockWrap(b,id){
   var sh=b.showIf?' data-showif="'+esc(b.showIf)+'"':'';
   if(b.type==='tableUpdate'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="tableUpdate"'+dAttr(b.density)+sh+'>'+tuShell(b,id)+'</div>';
   if(b.type==='dracoTable'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoTable"'+dAttr(b.density)+sh+'>'+dtShell(b,id)+'</div>';
+  if(b.type==='dracoChart'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoChart"'+dAttr(b.density)+sh+'>'+dcShell(b,id)+'</div>';
   if(b.type==='dracoVar'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoVar"'+dAttr(b.density)+sh+'>'+dvShell(b,id)+'</div>';
   return '<div class="'+cls+'" data-bid="'+id+'" data-btype="'+esc(b.type)+'"'+dAttr(b.density)+sh+' '+pAttr(function(){ return blockInner(b,id); })+'></div>';
 }
@@ -2546,6 +2705,12 @@ tr[data-act="cross"]{cursor:pointer}tr[data-act="cross"]:hover td{background:col
 .dv-sel{width:100%;max-width:360px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;font-size:14px}
 .dv-sel:focus{outline:2px solid color-mix(in srgb,var(--brand) 50%,transparent);border-color:var(--brand)}
 /* ---- Tablas Draco (bloque dracoTable) ---- */
+.dt{position:relative}.dc{position:relative}.dc>.dt-errbar{margin-bottom:8px}
+.dt-veil{position:absolute;inset:0;z-index:3;display:flex;align-items:flex-start;justify-content:center;padding-top:clamp(56px,22%,160px);border-radius:inherit;background:color-mix(in srgb,var(--surface) 62%,transparent);-webkit-backdrop-filter:blur(1.5px);backdrop-filter:blur(1.5px);opacity:0;animation:dtveil .22s ease .18s forwards;cursor:progress}
+.dt-veil-pill{display:inline-flex;align-items:center;gap:4px;padding:8px 16px;border-radius:999px;background:var(--surface);border:1px solid var(--line);box-shadow:0 8px 24px rgba(15,23,42,.14);font-size:13px;font-weight:600;color:var(--ink)}
+@keyframes dtveil{to{opacity:1}}
+.dt-errbar{display:flex;align-items:center;justify-content:space-between;gap:12px}
+@media (prefers-reduced-motion:reduce){.dt-veil{animation:none;opacity:1}}
 .dt-wrap{overflow:auto}.dt-grid{border-collapse:collapse;font-size:14px;width:max-content;min-width:100%}
 .dt-grid td{padding:6px 12px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--ink);font-variant-numeric:tabular-nums}
 .dt-grid td.dt-h1{background:color-mix(in srgb,var(--brand) 9%,var(--bg));font-weight:700}
@@ -3064,6 +3229,11 @@ function validate(spec){
     var big=function(str,max,label){ if(typeof str==='string'&&str.length>max) w.push(p+': '+label+' de '+str.length+' caracteres (m\u00E1x. recomendado '+max+' para que quepa en una diapositiva).'); };
     big(b.title,70,'t\u00EDtulo'); big(b.insight,180,'insight'); big(b.subtitle,90,'subt\u00EDtulo');
     if(b.type==='text') big(b.body,600,'texto'); if(b.type==='callout') big(b.body,420,'aviso');
+    if(b.type==='dracoChart'){
+      if(b.ref!==undefined&&typeof b.ref!=='string') e.push(p+': "ref" debe ser texto.');
+      if(b.kind&&KINDS.indexOf(b.kind)<0) e.push(p+': "kind" debe ser uno de '+KINDS.join(', ')+'.');
+      if(!b.ref) w.push(p+': elige la Tabla Draco del gr\u00E1fico en sus propiedades.');
+    }
     if(b.type==='dracoVar'){
       if(b.refs!==undefined&&!Array.isArray(b.refs)) e.push(p+': "refs" debe ser una lista.');
       if(!b.variable) w.push(p+': elige el cubo, el campo y la variable en las propiedades del selector.');
@@ -3653,6 +3823,7 @@ function edBlock(r){
   else if(b.type==='tableUpdate') h=edTU(b);
   else if(b.type==='dracoTable') h=edDT(b);
   else if(b.type==='dracoVar') h=edDV(b);
+  else if(b.type==='dracoChart') h=edDC(b);
   else if(b.type==='tabs') h=edNote('Elige una pesta\u00F1a en el \u00E1rbol de estructura para cambiar su distribuci\u00F3n, espaciado y notas.')+gText('T\u00EDtulo','title',b.title)
     +listBlock('Pesta\u00F1as','tabs',b.tabs,function(it,i){ return gText('Nombre','tabs.'+i+'.label',it.label); },{label:'Nueva pesta\u00F1a',blocks:[{type:'text',title:'Texto',body:'Escribe aqu\u00ED tu texto.'}]},1);
   if(b.type==='tabs') return h+edDensity(b,'este bloque');
@@ -3783,6 +3954,7 @@ function edTemplate(type){
   switch(type){
     case 'tableUpdate': return {type:'tableUpdate',title:'',ref:'',refName:'',values:{}};
     case 'dracoTable': return {type:'dracoTable',title:'',ref:'',refName:''};
+    case 'dracoChart': return {type:'dracoChart',title:'',ref:'',refName:'',kind:'bar',seriesIn:'cols',rows:'all'};
     case 'dracoVar': return {type:'dracoVar',title:'',cube:'',dim:'',attr:'',variable:'',refs:[],defaultValue:''};
     case 'text': return {type:'text',title:'Nuevo texto',body:'Escribe aqu\u00ED tu texto. Puedes usar **negrita**'+(m0?' y cifras vivas como {'+m0+'}':'')+'.'};
     case 'callout': return {type:'callout',title:'Aviso',body:'Texto destacado.'};
@@ -4511,7 +4683,7 @@ function palTemplate(id){
     case 'footer': return {id:'',type:'footer',text:'Mi organización',links:[]};
     case 'section': case 'faq': case 'cta': return edTemplate(id);
     case 'tabs': return {type:'tabs',title:'Pestañas',tabs:[{label:'Pestaña 1',blocks:[edTemplate('text')]},{label:'Pestaña 2',blocks:[edTemplate('text')]}]};
-    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': case 'dracoTable': case 'dracoVar': return edTemplate(id);
+    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': case 'dracoTable': case 'dracoVar': case 'dracoChart': return edTemplate(id);
     default: { var c=edTemplate('chart'), k=id.split(':')[1]; if(c){ if(isLitChart(c)) edConvertLit(c,k); else edConvert(c,k); } return c; }
   }
 }
@@ -4521,8 +4693,8 @@ function palRender(){
     var closed=!!sbState.groups[g.g];
     h+='<div class="pal-g"><button class="pal-gh" data-pg="'+esc(g.g)+'" aria-expanded="'+(!closed)+'"><span class="chev">'+(closed?'▸':'▾')+'</span>'+esc(g.g)+'</button>';
     if(!closed) h+='<div class="pal-grid">'+g.items.map(function(it){
-      var off=(it.id==='nav')||(it.id==='hero'&&has('hero'))||(it.id==='footer'&&has('footer'))||(it.id==='tableUpdate'&&!HOSTED)||(it.id==='dracoTable'&&!HOSTED)||(it.id==='dracoVar'&&!HOSTED);
-      return '<button class="pal-it" data-pal="'+esc(it.id)+'" draggable="'+(off?'false':'true')+'"'+(off?' disabled':'')+' title="'+esc(it.t+(off?((it.id==='tableUpdate'||it.id==='dracoTable'||it.id==='dracoVar')?' (solo disponible dentro de Draco Planning)':' (ya existe en la página)'):''))+'">'+ico(it.i,22)+'<span>'+esc(it.l)+'</span></button>';
+      var off=(it.id==='nav')||(it.id==='hero'&&has('hero'))||(it.id==='footer'&&has('footer'))||(it.id==='tableUpdate'&&!HOSTED)||(it.id==='dracoTable'&&!HOSTED)||(it.id==='dracoVar'&&!HOSTED)||(it.id==='dracoChart'&&!HOSTED);
+      return '<button class="pal-it" data-pal="'+esc(it.id)+'" draggable="'+(off?'false':'true')+'"'+(off?' disabled':'')+' title="'+esc(it.t+(off?((it.id==='tableUpdate'||it.id==='dracoTable'||it.id==='dracoVar'||it.id==='dracoChart')?' (solo disponible dentro de Draco Planning)':' (ya existe en la página)'):''))+'">'+ico(it.i,22)+'<span>'+esc(it.l)+'</span></button>';
     }).join('')+'</div>';
     h+='</div>';
   });
@@ -4535,7 +4707,7 @@ var BLn={kpis:'Cifras',chart:'Gráfico',table:'Tabla',text:'Texto',callout:'Avis
 var BIc={kpis:'kpis',table:'table',text:'text',callout:'callout',cards:'cards',tabs:'tabs'};
 function snip(t,n){ t=String(t==null?'':t).replace(/\s+/g,' ').trim(); return t.length>n?t.slice(0,n-1)+'…':t; }
 function chartIc(b){ return {line:'chart-line',bar:'chart-bar',hbar:'chart-hbar',donut:'chart-donut',funnel:'chart-funnel'}[b.kind]||'chart-line'; }
-function blockSub(b){ if(b.type==='dracoVar') return b.variable?('$'+b.variable+'$'):(b.title||''); if(b.type==='tableUpdate'||b.type==='dracoTable') return b.refName||b.title||''; return b.title||b.body||(b.items&&b.items[0]&&(b.items[0].title||b.items[0].label))||''; }
+function blockSub(b){ if(b.type==='dracoVar') return b.variable?('$'+b.variable+'$'):(b.title||''); if(b.type==='tableUpdate'||b.type==='dracoTable'||b.type==='dracoChart') return b.refName||b.title||''; return b.title||b.body||(b.items&&b.items[0]&&(b.items[0].title||b.items[0].label))||''; }
 function rowsOf(blocks,n){
   var rows=[], cur=[], used=0;
   blocks.forEach(function(b,i){
@@ -4691,7 +4863,7 @@ function crumbText(){
 function edAfterSync(){ var c=$('inspCrumb'); if(c) c.textContent=crumbText(); treeRender(); }
 function edAfterRender(){
   var c=$('inspCrumb'); if(c) c.textContent=crumbText();
-  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender(); if(typeof dtAfterRender==='function') dtAfterRender(); if(typeof dvAfterRender==='function') dvAfterRender();
+  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender(); if(typeof dtAfterRender==='function') dtAfterRender(); if(typeof dvAfterRender==='function') dvAfterRender(); if(typeof dcAfterRender==='function') dcAfterRender();
 }
 
 /* ---------- acciones sobre nodos ---------- */
@@ -5154,6 +5326,71 @@ $('inspBody').addEventListener('click',function(e){
   if(e.target.closest('[data-dtdesign]')) return dtDesign();
   var a=e.target.closest('[data-tuadd]'); if(a) return tuVarRows(a.getAttribute('data-tuadd'),true);
   var d=e.target.closest('[data-tudel]'); if(d) return tuVarRows(d.getAttribute('data-tudel'),false,d.getAttribute('data-i'));
+});
+
+/* =====================================================================
+   Bloque "dracoChart" (Gr\u00E1fico Draco): gr\u00E1fico calculado a partir de una Tabla Draco guardada. Propiedades: la
+   tabla, el tipo de gr\u00E1fico (los mismos que el bloque "chart"), si las series son las columnas o las filas, qu\u00E9
+   filas entran (por nivel de jerarqu\u00EDa), cabeceras/etiquetas (autom\u00E1tico o a mano) y, para anillo/barras
+   horizontales/embudo, la serie, el orden y el m\u00E1ximo de elementos.
+   ===================================================================== */
+BLOCK_TYPES.push('dracoChart'); BLOCK_LABEL.dracoChart='Gr\u00E1fico Draco';
+BLn.dracoChart='Gr\u00E1fico Draco'; BIc.dracoChart='draco-chart';
+IC['draco-chart']='<path d="M4 19V5"/><path d="M4 19h16"/><rect x="7" y="11" width="3" height="6" rx=".5"/><rect x="12" y="7" width="3" height="10" rx=".5"/><rect x="17" y="13" width="3" height="4" rx=".5"/>';
+(function(){
+  var g=PAL.filter(function(x){ return x.g==='Datos'; })[0], i=g.items.map(function(x){ return x.id; }).indexOf('dracoTable');
+  g.items.splice(i+1,0,{id:'dracoChart',l:'Gr\u00E1fico Draco',i:'draco-chart',t:'Gr\u00E1fico calculado a partir de una Tabla Draco del proyecto (como un gr\u00E1fico de Excel llevado a PowerPoint): l\u00EDneas, columnas, barras, anillo o embudo. Solo disponible dentro de Draco Planning.'});
+})();
+function dcSelBlock(){ var r=edResolve(edSel); return (r&&r.kind==='block'&&r.obj&&r.obj.type==='dracoChart')?r.obj:null; }
+function edDC(b){
+  var h=gText('T\u00EDtulo','title',b.title,'Si lo dejas vac\u00EDo, el nombre de la tabla');
+  var tbl=HOSTED
+    ?'<div id="dcViewBox"><p class="insp-hint">Cargando las tablas del proyecto\u2026</p></div>'
+    :edNote('Elegir la tabla solo se puede hacer dentro de Draco Planning. Aqu\u00ED se conserva lo ya elegido.')+(b.ref?'<p class="insp-hint"><b>'+esc(b.refName||b.ref)+'</b></p>':'');
+  var k=b.kind||'bar', single=(k==='donut'||k==='hbar'||k==='funnel');
+  return h+'<div class="insp-sec">Datos: Tabla Draco</div>'+tbl
+    +'<div class="insp-sec">Gr\u00E1fico</div>'
+    +gSel('Tipo','kind',k,[['bar','Columnas'],['line','L\u00EDneas'],['hbar','Barras horizontales'],['donut','Anillo'],['funnel','Embudo']])
+    +gSel('Series en','seriesIn',b.seriesIn||'cols',[['cols','Columnas (cada columna es una serie)'],['rows','Filas (cada fila es una serie)']])
+    +gSel('Filas a incluir','rows',b.rows||'all',[['all','Todas'],['top','Solo el primer nivel'],['second','Solo el segundo nivel (p. ej. grupos)'],['notTop','Sin el primer nivel (quita totales)'],['leaf','Solo el \u00FAltimo nivel (hojas)']])
+    +(single
+      ?gSel('Serie que se dibuja','seriesIndex',String(b.seriesIndex||1),[['1','1.\u00AA'],['2','2.\u00AA'],['3','3.\u00AA'],['4','4.\u00AA'],['5','5.\u00AA'],['6','6.\u00AA']])
+        +gSel('Orden','sort',b.sort||(k==='hbar'?'desc':'none'),[['none','Como en la tabla'],['desc','De mayor a menor'],['asc','De menor a mayor']])
+      :'')
+    +gSel('M\u00E1ximo de elementos','limit',String(b.limit||''),[['','Todos'],['5','5'],['8','8'],['10','10'],['12','12'],['20','20']])
+    +'<div class="insp-sec">Formato</div>'
+    +gText('Unidad','unit',b.unit,'Por ejemplo: \u20AC o %')
+    +gSel('Decimales','decimals',(b.decimals===undefined||b.decimals===null)?'':String(b.decimals),[['','Autom\u00E1tico'],['0','0'],['1','1'],['2','2']])
+    +'<div class="insp-sec">Lectura de la tabla</div>'
+    +gSel('Filas de cabecera','headerRows',String(b.headerRows==null?'':b.headerRows),[['','Autom\u00E1tico'],['0','0'],['1','1'],['2','2'],['3','3']])
+    +gSel('Columnas de etiquetas','labelCols',String(b.labelCols==null?'':b.labelCols),[['','Autom\u00E1tico'],['0','0'],['1','1'],['2','2'],['3','3']])
+    +'<p class="insp-hint">Autom\u00E1tico: las cabeceras son las filas de arriba y las columnas de la izquierda que no tienen n\u00FAmeros (o llevan el color de cabecera de Draco). C\u00E1mbialo si la tabla es irregular.</p>';
+}
+function dcAfterRender(){
+  if(!HOSTED) return;
+  var b=dcSelBlock(); if(!b||!$('dcViewBox')) return;
+  var bid=edSel.bid, still=function(){ return edSel&&edSel.bid===bid; };
+  dtEnsureList().then(function(){ if(still()) dcPaintView(b); },function(e){ if(still()) tuPaintErr('dcViewBox',e,function(){ DTV.list=null; edRender(); }); });
+}
+function dcPaintView(b){
+  var el=$('dcViewBox'); if(!el) return;
+  var L=DTV.list||[], cur=L.filter(function(x){ return x.id===b.ref; })[0];
+  var opts='<option value="">\u2014 elige una tabla \u2014</option>'+L.map(function(x){ return '<option value="'+esc(x.id)+'"'+(x.id===b.ref?' selected':'')+'>'+esc(x.nombre)+'</option>'; }).join('');
+  if(b.ref&&!cur) opts+='<option value="'+esc(b.ref)+'" selected>'+esc((b.refName||b.ref)+' (ya no existe)')+'</option>';
+  el.innerHTML='<label class="ef"><span>Tabla</span><select data-dcview>'+opts+'</select></label>'
+    +(cur?'<p class="insp-hint">Cubo <b>'+esc(cur.cubo||'\u2014')+'</b>'+(cur.tieneSql?'':' \u00B7 <span style="color:#C2362B">sin SQL generado: \u00E1brela en el dise\u00F1ador y guarda</span>')+'</p>':'')
+    +'<p class="insp-hint">'+(L.length?'El gr\u00E1fico se calcula con lo que pinta esa tabla. Para cambiar sus datos, usa el dise\u00F1ador desde un bloque \u00ABTabla Draco\u00BB.':'Este proyecto todav\u00EDa no tiene Tablas Draco: crea una con el bloque \u00ABTabla Draco\u00BB.')+'</p>';
+}
+$('inspBody').addEventListener('change',function(e){
+  /* el tipo decide qu\u00E9 opciones se ven (serie y orden solo en anillo / barras horizontales / embudo) */
+  if(e.target.getAttribute('data-p')==='kind'&&dcSelBlock()) setTimeout(edRender,0);
+});
+$('inspBody').addEventListener('change',function(e){
+  var t=e.target; if(!t.hasAttribute('data-dcview')) return;
+  var b=dcSelBlock(); if(!b) return; edPrevSel=edSel;
+  var cur=(DTV.list||[]).filter(function(x){ return x.id===t.value; })[0];
+  b.ref=t.value||''; b.refName=cur?cur.nombre:'';
+  edSync(true); edRender();
 });
 
 /* =====================================================================

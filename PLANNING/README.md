@@ -722,6 +722,14 @@ botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un infor
   del campo (`dt.members`: `SELECT DISTINCT` sobre la tabla de la dimensión, máx. 5.000, caché 10 min) y, al
   cambiarlo, vuelve a ejecutar solo esas tablas con el nuevo valor (`dt.run` con `variables`), sin regenerar SQL.
   Varios selectores de la misma variable van sincronizados. Solo disponible dentro de Draco Planning.
+- **Bloque «Gráfico Draco» (`dracoChart`).** Gráfico calculado a partir de una Tabla Draco guardada (como un gráfico
+  de Excel llevado a PowerPoint), pintado con el mismo motor que el bloque «chart» (`chartCard` con datos fijos), así
+  que tiene sus mismos tipos: columnas, líneas, barras horizontales, anillo y embudo. Propiedades: la tabla, el tipo,
+  series en columnas o en filas, filas a incluir por nivel de jerarquía (todas, primer nivel, segundo nivel, sin el
+  primero, hojas), serie/orden para anillo/barras/embudo, máximo de elementos, unidad y decimales, y cabeceras/etiquetas
+  (automático: filas y columnas sin números o con el color de cabecera de Draco; o a mano). Se recalcula con el
+  «Selector de variable». Si varios bloques usan la misma tabla con las mismas variables, la consulta se lanza una vez
+  (`dtRunShared`). En la exportación a diapositivas sale como nota, igual que la Tabla Draco.
 
 **Actualizar la herramienta.** `informes-herramienta.html` es un único archivo
 autocontenido, que fuera de Draco funciona también por sí solo. Para actualizar
