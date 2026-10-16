@@ -204,3 +204,8 @@ html.vw-full .project-bar,
 html.vw-full .vw-side,
 html.vw-full .vw-toolbar { display: none !important; }
 html.vw-full .vw-layout { height: 100vh; }
+
+/* Vista previa a pantalla completa del generador: sin cabecera ni barra de proyecto (la herramienta muestra su
+   botón flotante «Volver al diseño») */
+body.gen-preview-full .app-topbar,
+body.gen-preview-full .project-bar { display: none; }

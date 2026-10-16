@@ -72,3 +72,25 @@
 .dtd-row2[hidden] { display: none; }
 .dtd-prev { display: block; font-family: Consolas, monospace; font-size: 11.5px; background: var(--surface-sunken, #f8fafc); border: 1px solid var(--border-subtle, #eef2f7); border-radius: 6px; padding: 6px 8px; white-space: pre-wrap; word-break: break-all; color: var(--text-secondary, #475569); }
 .dtd-modal { position: relative; }
+
+/* Selector de miembros: pestañas Valores / Variables */
+.dtd-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border-default, #e2e8f0); }
+.dtd-tab { border: 0; background: none; padding: 6px 12px; font: inherit; font-size: 12.5px; font-weight: 600; color: var(--text-muted, #64748b); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; display: flex; align-items: center; gap: 6px; }
+.dtd-tab.active { color: var(--brand-primary, #2f6df6); border-bottom-color: var(--brand-primary, #2f6df6); }
+.dtd-badge { font-size: 11px; background: var(--surface-sunken, #f1f5f9); color: var(--text-secondary, #475569); border-radius: 999px; padding: 0 7px; }
+.dtd-mlist[hidden], .dtd-in[hidden], .dtd-mfoot[hidden] { display: none; }
+
+/* Iconos de formato condicional (EPM_FORMULA: semáforo / señales) */
+.dx-ic{display:inline-block;width:11px;height:11px;margin-right:8px;vertical-align:-1px;float:left;margin-top:4px}
+.dx-ic-t0,.dx-ic-t1,.dx-ic-t2,.dx-ic-s2{border-radius:50%}
+.dx-ic-t0{background:#E5484D}.dx-ic-t1{background:#F5B300}.dx-ic-t2{background:#30A46C}
+.dx-ic-s0{background:#E5484D;transform:rotate(45deg) scale(.82)}
+.dx-ic-s1{background:#F5B300;clip-path:polygon(50% 4%,100% 96%,0 96%)}
+.dx-ic-s2{background:#30A46C}
+
+.dtd-ops + .dtd-ops { margin-top: -4px; }
+.dtd-op-w { min-width: 44px; font-size: 12px; }
+.dtd-muted code { font-family: Consolas, monospace; background: var(--surface-sunken, #f1f5f9); padding: 0 4px; border-radius: 4px; }
+.dtd-fxpanel { max-height: calc(100% - 40px); }
+.dtd-fxpanel .dtd-dlg-body { overflow-y: auto; }
+.dtd-banner.info { background: #eef4ff; color: #1e3a8a; }
