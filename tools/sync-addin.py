@@ -25,15 +25,15 @@ TPL = os.path.join(ROOT, "tools", "templates")
 CHECK = "--check" in sys.argv
 # Se añade a todos los <script src> y <link href> de las páginas generadas: sin ello el navegador puede seguir usando
 # una copia antigua (p. ej. de model-bootstrap.js) tras actualizar. Súbelo cuando cambies tablas-draco/.
-BUNDLE_VERSION = "20261016a"
+BUNDLE_VERSION = "20261019a"
 
 # JS del addin que se copian tal cual (más los parches de abajo)
 JS_COPY = ["semanticModelStore.js", "reportStore.js", "filterRangeStore.js", "excelService.js",
-           "filterModal.js", "distributeValues.js", "calcFormula.js", "commands.js", "taskpane.js", "calcEditor.js",
-           "calcDialog.js", "filterDialog.js", "memberPicker.js"]
+           "filterModal.js", "distributeValues.js", "variablesStore.js", "calcFormula.js", "commands.js", "taskpane.js",
+           "calcEditor.js", "calcDialog.js", "variablesDialog.js", "filterDialog.js", "memberPicker.js"]
 CSS_COPY = ["theme.css", "styles.css", "modal.css", "distributeValues.css", "lkmlDialog.css"]
 # Páginas de diálogo (Office.context.ui.displayDialogAsync) que se abren desde el diseñador
-DIALOGS = ["filterDialog.html", "memberPicker.html", "addFilterRange.html", "calcDialog.html"]
+DIALOGS = ["filterDialog.html", "memberPicker.html", "addFilterRange.html", "calcDialog.html", "variablesDialog.html"]
 # Plantillas propias -> js/
 TEMPLATES = ["host-bridge.js", "provider-bridge.js", "model-bootstrap.js", "engine-api.js"]
 
@@ -186,6 +186,7 @@ def main():
     <script src="js/excelService.js"></script>
     <script src="js/filterModal.js"></script>
     <script src="js/distributeValues.js"></script>
+    <script src="js/variablesStore.js"></script>
     <script src="js/calcFormula.js"></script>
     <script src="js/commands.js"></script>
     <script src="js/engine-api.js"></script>
@@ -224,7 +225,7 @@ def main():
 <script>if (window.__wteSignalModelsReady) window.__wteSignalModelsReady();</script>
 </head><body>
 <script src="js/semanticModelStore.js"></script><script src="js/reportStore.js"></script><script src="js/filterRangeStore.js"></script>
-<script src="js/excelService.js"></script><script src="js/calcFormula.js"></script><script src="js/commands.js"></script><script src="js/engine-api.js"></script>
+<script src="js/excelService.js"></script><script src="js/variablesStore.js"></script><script src="js/calcFormula.js"></script><script src="js/commands.js"></script><script src="js/engine-api.js"></script>
 </body></html>
 '''
     for rel in list(files):
