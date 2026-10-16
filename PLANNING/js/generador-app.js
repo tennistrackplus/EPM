@@ -139,7 +139,7 @@ const GeneradorApp = {
         if (this.pendingInformeId) { qs.set("informe_id", this.pendingInformeId); this.pendingInformeId = null; }
         document.getElementById("toolEmpty").hidden = true;
         frame.hidden = false;
-        qs.set("v", "20261017c");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
+        qs.set("v", "20261018b");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
         frame.src = "informes-herramienta.html?" + qs.toString();
     },
 
@@ -155,6 +155,8 @@ const GeneradorApp = {
 
         if (d.op === "dirty") { this.dirty = !!d.value; return; }
         if (d.op === "ready") return;
+        // Vista previa a pantalla completa: la herramienta pide ocultar la cabecera y la fila de proyecto
+        if (d.op === "chrome") { document.body.classList.toggle("gen-preview-full", !!d.full); return; }
         if (d.op === "page") { this.handlePage(d.payload, frame); return; }
         if (!d.id) return;
 
