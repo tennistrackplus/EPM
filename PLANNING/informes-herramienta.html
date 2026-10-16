@@ -209,6 +209,12 @@ if(/[?&]host=draco/.test(location.search)&&window.parent!==window) document.docu
   body.pv-full header.bar, body.pv-full .stage-bar, body.pv-full #repBar{display:none !important;}
   #btnBackDesign{position:fixed; bottom:20px; left:20px; z-index:60; box-shadow:0 8px 24px rgba(15,23,42,.22); border-radius:999px; padding:8px 16px; font-weight:600;}
   #btnBackDesign[hidden]{display:none;}
+  .dk-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line,#e5e7eb)}
+  .dk-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}.dk-main b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dk-main code{font-size:11px;color:var(--muted,#64748b)}.dk-acts{display:flex;gap:4px}
+  .dk-ac{position:fixed;z-index:9999;background:#fff;border:1px solid #d8dce3;border-radius:8px;box-shadow:0 10px 30px rgba(15,23,42,.18);padding:4px;max-height:260px;overflow:auto;font-size:12.5px}
+  .dk-ac[hidden]{display:none}.dk-ac-i{display:flex;justify-content:space-between;gap:12px;padding:6px 8px;border-radius:6px;cursor:pointer}
+  .dk-ac-i span{color:#64748b}.dk-ac-i.on,.dk-ac-i:hover{background:#eaf0fe}
   .stage-body{flex:1; display:flex; min-height:0; min-width:0;}
   .inspector{width:310px; flex-shrink:0; border-left:1px solid var(--line); background:var(--panel); overflow:auto; padding:14px 16px 20px; font-size:13px;}
   .inspector[hidden]{display:none;}
@@ -822,7 +828,35 @@ function dlt(id,o){
   var cls=rounded===0?'d-flat':((d>0)===good?'d-good':'d-bad');
   return {text:sign+fmt(Math.abs(d),dec)+(pp?' pp':'%'),cls:cls,val:d};
 }
+/* ---------- KPIs Draco (SPEC.dracoKpis) ----------
+   Cada KPI del informe: { id (Tabla Draco KPI), name (para $$NAME$$), label, fmt: 'number'|'percent', decimals, unit }.
+   Todos se calculan con UNA petici\u00F3n (dt.kpis: una consulta con agregaci\u00F3n condicional, ver DracoTables.kpis) y se
+   vuelven a pedir cuando cambia un \u00ABSelector de variable\u00BB. Mientras llegan, "\u2026"; si un KPI falla, "\u2014". */
+var KPV={key:'',status:'idle',values:{},errors:{}};
+function kpiDefs(){ return (typeof SPEC!=='undefined'&&SPEC&&SPEC.dracoKpis)||[]; }
+function kpiByName(n){ n=String(n).toUpperCase(); return kpiDefs().filter(function(k){ return String(k.name).toUpperCase()===n; })[0]; }
+function kpiEnsure(){
+  if(EDIT||!HOSTON) return;
+  var refs=kpiDefs().map(function(k){ return k.id; }).filter(Boolean); if(!refs.length) return;
+  var vars=(typeof dvVarsPayload==='function')?dvVarsPayload():null, key=JSON.stringify([refs,vars]);
+  if(KPV.key===key) return;
+  KPV={key:key,status:'loading',values:{},errors:{}};
+  dcall('dt.kpis',vars?{refs:refs,variables:vars}:{refs:refs}).then(function(r){ if(KPV.key!==key) return; KPV.status='ready'; KPV.values=r.values||{}; KPV.errors=r.errors||{}; update(); },
+    function(e){ if(KPV.key!==key) return; KPV.status='error'; KPV.err=e; update(); });
+}
+function kpiRefresh(){ KPV.key=''; kpiEnsure(); }
+function kpiValueText(k){
+  if(EDIT||!HOSTON) return '\u00AB'+(k.label||k.name)+'\u00BB';
+  kpiEnsure();
+  if(KPV.status==='loading'||KPV.status==='idle') return '\u2026';
+  var v=KPV.values[k.id]; if(v===null||v===undefined||!isFinite(v)) return '\u2014';
+  var d=(k.decimals===''||k.decimals==null)?undefined:parseInt(k.decimals,10);
+  var txt=k.fmt==='percent'?fmt(v*100,d===undefined?1:d)+'%':fmt(v,d);
+  return txt+(k.unit?' '+k.unit:'');
+}
+function kpiErr(k){ return KPV.errors&&KPV.errors[k.id]; }
 function tok(s){
+  s=String(s==null?'':s).replace(/\$\$([A-Za-z][A-Za-z0-9_]*)\$\$/g,function(m,n){ var k=kpiByName(n); return k?kpiValueText(k):m; });
   return String(s==null?'':s).replace(/\{([a-z0-9_]+)(?:@([A-Za-z0-9_]+)=([^:}]+))?(?::(delta|prev|share|abs))?\}/g,function(m,id,dim,val,suf){
     if(!MET[id]) return m;
     var where=null, ign=null; if(dim){ where={}; where[dim]=val; ign=[dim]; }
@@ -996,6 +1030,13 @@ function chartCard(b,bid){
 }
 
 /* ---------- KPIs ---------- */
+function dkHtml(b){
+  var defs=kpiDefs(), show=(b.show&&b.show.length)?b.show:null;
+  var items=defs.filter(function(k){ return !show||show.indexOf(k.id)>=0; });
+  if(!items.length) return '<div class="card" data-block="dracoKpi">'+(b.title?'<h3>'+esc(tok(b.title))+'</h3>':'')+'<p class="tu-sub">'+(defs.length?'Elige qu\u00E9 KPIs mostrar en las propiedades de este bloque.':'Este informe todav\u00EDa no tiene KPIs: cr\u00E9alos en las propiedades de este bloque.')+'</p></div>';
+  var head=b.title?'<h3 class="dk-t">'+esc(tok(b.title))+'</h3>':'';
+  return head+kpisHtml(items.map(function(k){ var er=kpiErr(k); return {label:k.label||k.name,value:kpiValueText(k),note:er?'No disponible':''}; }));
+}
 function kpisHtml(items){
   return '<div class="kpis">'+items.map(function(k,ki){
     var v, delta=null;
@@ -1125,6 +1166,7 @@ function dtLoad(id,force){
   dtRunShared(b.ref,force,vars).then(function(res){ if(DTS[id]!==st) return; st.status='ready'; st.res=res; dtRender(id); },function(e){ if(DTS[id]!==st) return; st.status='error'; st.err=e; dtRender(id); });
 }
 function dtLum(hex){ var m=/^#?([0-9a-f]{6})$/i.exec(hex||''); if(!m) return 1; var n=parseInt(m[1],16); return (0.2126*((n>>16)&255)+0.7152*((n>>8)&255)+0.0722*(n&255))/255; }
+function dxIcon(ic){ var n=ic.k==='signs'?['Rombo rojo','Tri\u00E1ngulo \u00E1mbar','C\u00EDrculo verde'][ic.i]:['Rojo','\u00C1mbar','Verde'][ic.i]; return '<span class="dx-ic dx-ic-'+(ic.k==='signs'?'s':'t')+Math.max(0,Math.min(2,ic.i|0))+'" role="img" aria-label="'+n+'" title="'+n+'"></span>'; }
 function dtGridHtml(g){
   if(!g||!g.rows||!g.cols) return '<div class="tu-state">El informe no ha devuelto datos.</div>';
   var cov={}, anc={}, i, j, k, h='<table class="dt-grid"><tbody>';
@@ -1142,7 +1184,9 @@ function dtGridHtml(g){
       if(o.bar){ st.push(o.bar); if(o.only) st.push('color:transparent'); }
       if(o.bd){ if(o.bd.t) st.push('border-top:1px solid var(--line)'); if(o.bd.r) st.push('border-right:1px solid var(--line)'); if(o.bd.b) st.push('border-bottom:1px solid var(--line)'); if(o.bd.l) st.push('border-left:1px solid var(--line)'); }
       var tg=/^[\u25B8\u25BE] /.test(txt); if(tg) cls.push('dt-tg');
-      h+='<td'+(cls.length?' class="'+cls.join(' ')+'"':'')+(m?' rowspan="'+(m.rowSpan||1)+'" colspan="'+(m.colSpan||1)+'"':'')+(tg?' data-dt-r="'+i+'" data-dt-c="'+j+'" title="Expandir o contraer"':'')+' style="'+st.join(';')+'">'+esc(txt)+'</td>';
+      /* icono de formato condicional (sem\u00E1foro / se\u00F1ales): a la izquierda de la celda, como en Excel */
+      var icH=o.ic?dxIcon(o.ic):'', txtH=(o.ic&&o.ic.only)?'':esc(txt);
+      h+='<td'+(cls.length?' class="'+cls.join(' ')+'"':'')+(m?' rowspan="'+(m.rowSpan||1)+'" colspan="'+(m.colSpan||1)+'"':'')+(tg?' data-dt-r="'+i+'" data-dt-c="'+j+'" title="Expandir o contraer"':'')+' style="'+st.join(';')+'">'+icH+txtH+'</td>';
     }
     h+='</tr>';
   }
@@ -1265,6 +1309,7 @@ document.addEventListener('change',function(e){
   /* sin "forzar": cada ejecuci\u00F3n ya lanza la consulta; forzar recrear\u00EDa el motor de la tabla sin necesidad */
   Object.keys(DTB).forEach(function(k){ var d=DTB[k]; if(!d||!d.ref||(refs&&refs.indexOf(d.ref)<0)||!DTS[k]) return; dtLoad(k,false); dtRender(k); });
   Object.keys(DCB).forEach(function(k){ var d=DCB[k]; if(!d||!d.ref||(refs&&refs.indexOf(d.ref)<0)||!DCS[k]) return; dcLoad(k,false); dcRender(k); });
+  if(kpiDefs().length) kpiRefresh();
 });
 /* ---------- Tooltip de los gr\u00E1ficos ----------
    Uno propio (el nativo del navegador tarda y no se ve bien): sale al pasar por cualquier elemento con data-tip. Los
@@ -1743,6 +1788,7 @@ function blockInner(b,id){
       case 'dracoTable': return dtNote(b);
       case 'dracoVar': return dvNote(b);
       case 'dracoChart': return dcNote(b);
+      case 'dracoKpi': return dkHtml(b);
     }
   }catch(e){ REPORT.errors.push(id+': '+e.message); return '<div class="card"><p>No se pudo dibujar este bloque.</p></div>'; }
   return '';
@@ -2747,11 +2793,20 @@ tr:last-child td{border-bottom:none}tr.tot td{font-weight:800;color:var(--ink);b
 tr[data-act="cross"]{cursor:pointer}tr[data-act="cross"]:hover td{background:color-mix(in srgb,var(--brand) 6%,transparent)}tr.sel td{background:color-mix(in srgb,var(--brand) 12%,transparent)}tr.dim td{opacity:.45}
 .tsearch{width:100%;max-width:280px;margin:0 0 14px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;font-size:14px}.tsearch:focus{outline:2px solid color-mix(in srgb,var(--brand) 50%,transparent);border-color:var(--brand)}
 
+/* ---- Iconos de formato condicional (Tablas Draco) ---- */
+.dx-ic{display:inline-block;width:11px;height:11px;margin-right:8px;vertical-align:-1px;float:left;margin-top:4px}
+.dx-ic-t0,.dx-ic-t1,.dx-ic-t2,.dx-ic-s2{border-radius:50%}
+.dx-ic-t0{background:#E5484D}.dx-ic-t1{background:#F5B300}.dx-ic-t2{background:#30A46C}
+.dx-ic-s0{background:#E5484D;transform:rotate(45deg) scale(.82)}
+.dx-ic-s1{background:#F5B300;clip-path:polygon(50% 4%,100% 96%,0 96%)}
+.dx-ic-s2{background:#30A46C}
 /* ---- Tooltip de gr\u00E1ficos ---- */
 .ch-tip{position:fixed;z-index:9999;pointer-events:none;max-width:320px;padding:7px 10px;border-radius:8px;background:var(--ink);color:var(--surface);font-size:12.5px;line-height:1.45;white-space:pre-line;box-shadow:0 8px 24px rgba(15,23,42,.22)}
 .ch-tip[hidden]{display:none}
 .ch-hit{fill:transparent;cursor:crosshair}.ch-hit:hover{fill:color-mix(in srgb,var(--ink) 6%,transparent)}
 .chart [data-tip]{cursor:default}
+/* ---- KPI Draco ---- */
+.dk-t{margin:0 0 12px;font-size:17px}
 /* ---- Subsecci\u00F3n (bloque group) ---- */
 .subsec{min-width:0}.subsec-t{margin:0 0 12px;font-size:17px}
 .edit-mode .subsec{outline:1px dashed color-mix(in srgb,var(--brand) 45%,transparent);outline-offset:6px;border-radius:10px}
@@ -3180,6 +3235,13 @@ function validate(spec){
       if(spec.view.width!==undefined&&['standard','wide','full'].indexOf(spec.view.width)<0) e.push('view.width debe ser "standard", "wide" o "full".');
       if(spec.view.sections!==undefined&&['auto','screen','paged'].indexOf(spec.view.sections)<0) e.push('view.sections debe ser "auto", "screen" o "paged".');
     }
+  }
+  if(spec.dracoKpis!==undefined){
+    if(!Array.isArray(spec.dracoKpis)) e.push('"dracoKpis" debe ser una lista.');
+    else { var kn={}; spec.dracoKpis.forEach(function(k,i){ var p='dracoKpis['+i+']';
+      if(!k||typeof k!=='object'||!k.id) e.push(p+': falta "id" (la Tabla Draco del KPI).');
+      else if(!/^[A-Z][A-Z0-9_]{0,39}$/.test(String(k.name||''))) e.push(p+': "name" debe ir en may\u00FAsculas, sin espacios ni acentos (se usa como $$NAME$$).');
+      else if(kn[k.name]) e.push(p+': el nombre '+k.name+' est\u00E1 repetido.'); else kn[k.name]=1; }); }
   }
   if(!Array.isArray(spec.sections)||!spec.sections.length){ e.push('"sections" debe ser un array con al menos una sección.'); return {errors:e,warnings:w}; }
   var D=spec.data, hasData=!!D, dimSet={}, measIds=[], metSet={}, swSet={}, ids={};
@@ -3746,6 +3808,8 @@ function bidWalk(spec,bid){
 function edResolve(sel){
   if(!currentSpec||!sel) return null;
   if(sel.page) return {kind:'page',obj:currentSpec};
+  if(sel.dkpis) return {kind:'dkpis',obj:dkList()};
+  if(sel.dk!=null){ var dl=dkList(); return dl[sel.dk]?{kind:'dkpi',obj:dl[sel.dk],list:dl,idx:sel.dk}:null; }
   var secs=currentSpec.sections||[], m;
   if(sel.bid==null){ var s0=secs[sel.si]; return s0?{kind:'section',obj:s0,si:sel.si,list:secs,idx:sel.si}:null; }
   if((m=/^s(\d+)bk$/.exec(sel.bid))){
@@ -3895,6 +3959,7 @@ function edBlock(r){
   else if(b.type==='dracoTable') h=edDT(b);
   else if(b.type==='dracoVar') h=edDV(b);
   else if(b.type==='dracoChart') h=edDC(b);
+  else if(b.type==='dracoKpi') h=edDK(b);
   else if(b.type==='group'){
     var gg=isGrid(b);
     h=gText('T\u00EDtulo (opcional)','title',b.title,'Sin t\u00EDtulo')
@@ -4035,6 +4100,7 @@ function edTemplate(type){
     case 'dracoTable': return {type:'dracoTable',title:'',ref:'',refName:''};
     case 'dracoChart': return {type:'dracoChart',title:'',ref:'',refName:'',kind:'bar',seriesIn:'cols',rows:'all'};
     case 'group': return {type:'group',title:'',layout:'grid',cols:[1,1],blocks:[]};
+    case 'dracoKpi': return {type:'dracoKpi',title:'',show:[]};
     case 'dracoVar': return {type:'dracoVar',title:'',cube:'',dim:'',attr:'',variable:'',refs:[],defaultValue:''};
     case 'text': return {type:'text',title:'Nuevo texto',body:'Escribe aqu\u00ED tu texto. Puedes usar **negrita**'+(m0?' y cifras vivas como {'+m0+'}':'')+'.'};
     case 'callout': return {type:'callout',title:'Aviso',body:'Texto destacado.'};
@@ -4058,6 +4124,8 @@ function edRender0(){
   var h='', t='', pn=edSel&&edSel.pn;
   if(pn&&edPanel(r,pn)){ h=PANEL.h; t=PANEL.t; }
   else if(r.kind==='page'){ t='P\u00E1gina'; h=edPage(r.obj); }
+  else if(r.kind==='dkpis'){ t='KPIs del informe'; h=dkManager(null); }
+  else if(r.kind==='dkpi'){ t='KPI \u00B7 '+(r.obj.label||r.obj.name); h=edDKpi(r.obj,r.idx); }
   else if(r.kind==='kpi'){ t='Cifra clave'; h=edKpi(r.obj)+'<div class="insp-sec">Cifra</div>'+opBar(r,'\u2190','\u2192'); }
   else if(r.kind==='section'){ t=SEC_LABEL[r.obj.type]||'Secci\u00F3n'; h=edSection(r)+'<div class="insp-sec">Esta secci\u00F3n</div>'+opBar(r,'\u2191','\u2193'); }
   else { var b=r.obj; t=(BLOCK_LABEL[b.type]||'Bloque')+(b.type==='chart'?' \u00B7 '+(ED_KIND[b.kind]||''):''); h=edBlock(r)+'<div class="insp-sec">Este bloque</div>'+opBar(r,'\u2191','\u2193')+'<div class="insp-sec">A\u00F1adir debajo</div>'+addBox('block'); }
@@ -4763,7 +4831,7 @@ function palTemplate(id){
     case 'footer': return {id:'',type:'footer',text:'Mi organización',links:[]};
     case 'section': case 'faq': case 'cta': return edTemplate(id);
     case 'tabs': return {type:'tabs',title:'Pestañas',tabs:[{label:'Pestaña 1',blocks:[edTemplate('text')]},{label:'Pestaña 2',blocks:[edTemplate('text')]}]};
-    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': case 'dracoTable': case 'dracoVar': case 'dracoChart': case 'group': return edTemplate(id);
+    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': case 'dracoTable': case 'dracoVar': case 'dracoChart': case 'group': case 'dracoKpi': return edTemplate(id);
     default: { var c=edTemplate('chart'), k=id.split(':')[1]; if(c){ if(isLitChart(c)) edConvertLit(c,k); else edConvert(c,k); } return c; }
   }
 }
@@ -4773,8 +4841,8 @@ function palRender(){
     var closed=!!sbState.groups[g.g];
     h+='<div class="pal-g"><button class="pal-gh" data-pg="'+esc(g.g)+'" aria-expanded="'+(!closed)+'"><span class="chev">'+(closed?'▸':'▾')+'</span>'+esc(g.g)+'</button>';
     if(!closed) h+='<div class="pal-grid">'+g.items.map(function(it){
-      var off=(it.id==='nav')||(it.id==='hero'&&has('hero'))||(it.id==='footer'&&has('footer'))||(it.id==='tableUpdate'&&!HOSTED)||(it.id==='dracoTable'&&!HOSTED)||(it.id==='dracoVar'&&!HOSTED)||(it.id==='dracoChart'&&!HOSTED);
-      return '<button class="pal-it" data-pal="'+esc(it.id)+'" draggable="'+(off?'false':'true')+'"'+(off?' disabled':'')+' title="'+esc(it.t+(off?((it.id==='tableUpdate'||it.id==='dracoTable'||it.id==='dracoVar'||it.id==='dracoChart')?' (solo disponible dentro de Draco Planning)':' (ya existe en la página)'):''))+'">'+ico(it.i,22)+'<span>'+esc(it.l)+'</span></button>';
+      var off=(it.id==='nav')||(it.id==='hero'&&has('hero'))||(it.id==='footer'&&has('footer'))||(it.id==='tableUpdate'&&!HOSTED)||(it.id==='dracoTable'&&!HOSTED)||(it.id==='dracoVar'&&!HOSTED)||(it.id==='dracoChart'&&!HOSTED)||(it.id==='dracoKpi'&&!HOSTED);
+      return '<button class="pal-it" data-pal="'+esc(it.id)+'" draggable="'+(off?'false':'true')+'"'+(off?' disabled':'')+' title="'+esc(it.t+(off?((it.id==='tableUpdate'||it.id==='dracoTable'||it.id==='dracoVar'||it.id==='dracoChart'||it.id==='dracoKpi')?' (solo disponible dentro de Draco Planning)':' (ya existe en la página)'):''))+'">'+ico(it.i,22)+'<span>'+esc(it.l)+'</span></button>';
     }).join('')+'</div>';
     h+='</div>';
   });
@@ -4860,6 +4928,12 @@ function treeRoot(){
   var sp=currentSpec, root={id:'page',kind:'page',ico:'page',label:'Página',sub:snip((sp.meta&&sp.meta.title)||'',28),sel:{page:true},children:[]};
   root.children.push({id:'nav',kind:'nav',ico:'menu',label:'Menú',sub:snip((sp.meta&&sp.meta.brand)||'',20),sel:{page:true,pn:'nav'},field:'meta.brand',children:[]});
   (sp.sections||[]).forEach(function(s,si){ root.children.push(secNode(s,si)); });
+  /* KPIs del informe: al final, sin colgar de ninguna secci\u00F3n */
+  if(HOSTED||(sp.dracoKpis&&sp.dracoKpis.length)){
+    var kg={id:'KPIS',kind:'dkpis',ico:'draco-kpi',label:'KPIs',sub:String((sp.dracoKpis||[]).length),sel:{dkpis:true},children:[]};
+    (sp.dracoKpis||[]).forEach(function(k,i){ kg.children.push({id:'KPIS.'+i,kind:'dkpi',ico:'draco-kpi',label:k.label||k.name,sub:'$$'+k.name+'$$',sel:{dk:i},children:[]}); });
+    root.children.push(kg);
+  }
   return root;
 }
 function leafSuffix(){
@@ -4872,6 +4946,8 @@ function selNodeId(){
   if(!edSel) return null;
   if(edSel.pn==='row'&&edSel.rid) return edSel.rid;
   if(edSel.page) return (edSel.pn==='nav'||(edField&&edField.indexOf('meta')===0))?'nav':'page';
+  if(edSel.dkpis) return 'KPIS';
+  if(edSel.dk!=null) return 'KPIS.'+edSel.dk;
   if(edSel.bid==null) return 'S'+edSel.si+leafSuffix();
   var m=/^s(\d+)bk$/.exec(edSel.bid);
   if(m) return edSel.ki!=null?('S'+m[1]+'.K'+edSel.ki):('S'+m[1]);
@@ -4930,6 +5006,8 @@ function edFocusField(){
 function crumbText(){
   var r=edResolve(edSel); if(!r||!currentSpec) return '';
   if(r.kind==='page') return 'Página';
+  if(r.kind==='dkpis') return 'Página › KPIs';
+  if(r.kind==='dkpi') return 'Página › KPIs › '+(r.obj.label||r.obj.name);
   var parts=['Página'];
   var s=(r.si!=null)?currentSpec.sections[r.si]:null;
   if(s) parts.push((TL[s.type]||'Sección')+(s.title?' «'+snip(s.title,20)+'»':(s.text?' «'+snip(s.text,20)+'»':'')));
@@ -5420,6 +5498,133 @@ $('inspBody').addEventListener('click',function(e){
   var a=e.target.closest('[data-tuadd]'); if(a) return tuVarRows(a.getAttribute('data-tuadd'),true);
   var d=e.target.closest('[data-tudel]'); if(d) return tuVarRows(d.getAttribute('data-tudel'),false,d.getAttribute('data-i'));
 });
+
+/* =====================================================================
+   KPIs Draco: lista del informe (currentSpec.dracoKpis) y bloque "dracoKpi".
+   Cada KPI es una Tabla Draco con una medida y filtros, creada/editada con el dise\u00F1ador en modo KPI. En el informe se
+   guarda { id, name (para $$NAME$$ en los textos), label, fmt, decimals, unit }. En el \u00E1rbol cuelgan de un grupo
+   \u00ABKPIs\u00BB al final (selecci\u00F3n {dkpis:true} / {dk:i}).
+   ===================================================================== */
+BLOCK_TYPES.push('dracoKpi'); BLOCK_LABEL.dracoKpi='KPI Draco'; BLn.dracoKpi='KPI Draco'; BIc.dracoKpi='draco-kpi';
+IC['draco-kpi']='<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 15l3-3 2 2 5-5"/><path d="M14 9h3v3"/>';
+(function(){
+  var g=PAL.filter(function(x){ return x.g==='Datos'; })[0], i=g.items.map(function(x){ return x.id; }).indexOf('dracoChart');
+  g.items.splice(i+1,0,{id:'dracoKpi',l:'KPI Draco',i:'draco-kpi',t:'Tarjetas con KPIs calculados desde los cubos (una medida con sus filtros). Los KPIs tambi\u00E9n se pueden poner en cualquier texto con $$NOMBRE$$. Solo disponible dentro de Draco Planning.'});
+})();
+function dkList(){ if(!currentSpec) return []; currentSpec.dracoKpis=currentSpec.dracoKpis||[]; return currentSpec.dracoKpis; }
+function dkVarName(txt,skip){
+  var base=String(txt||'KPI').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]+/g,'_').replace(/^_+|_+$/g,'')||'KPI';
+  if(!/^[A-Z]/.test(base)) base='K_'+base; base=base.slice(0,36);
+  var used={}; dkList().forEach(function(k,i){ if(i!==skip) used[k.name]=1; }); var n=base, j=2; while(used[n]){ n=base+'_'+j; j++; } return n;
+}
+function dkSelBlock(){ var r=edResolve(edSel); return (r&&r.kind==='block'&&r.obj&&r.obj.type==='dracoKpi')?r.obj:null; }
+/* Lista de KPIs del informe (en el bloque, con casillas "mostrar en este bloque"; en el grupo del \u00E1rbol, sin ellas). */
+function dkManager(b){
+  var L=dkList(), show=b&&b.show&&b.show.length?b.show:null;
+  var h='<div class="insp-sec">KPIs del informe</div>';
+  if(!HOSTED) return h+edNote('Crear o editar KPIs solo se puede hacer dentro de Draco Planning.')+L.map(function(k){ return '<p class="insp-hint"><b>'+esc(k.label||k.name)+'</b> \u00B7 $$'+esc(k.name)+'$$</p>'; }).join('');
+  if(!L.length) h+='<p class="insp-hint">Todav\u00EDa no hay KPIs. Un KPI es una medida con sus filtros (p. ej. Ventas de 2026 en Espa\u00F1a); se dise\u00F1a como una Tabla Draco.</p>';
+  h+=L.map(function(k,i){
+    var on=!show||show.indexOf(k.id)>=0;
+    return '<div class="dk-row">'+(b?'<input type="checkbox" data-dk-show="'+esc(k.id)+'"'+(on?' checked':'')+' title="Mostrar en este bloque">':'')
+      +'<div class="dk-main"><b>'+esc(k.label||k.name)+'</b><code>$$'+esc(k.name)+'$$</code></div>'
+      +'<div class="dk-acts"><button class="mini" data-dk-edit="'+i+'" title="Abrir en el dise\u00F1ador">\uD83E\uDDE9</button><button class="mini" data-dk-props="'+i+'" title="Propiedades">\u2699</button><button class="mini" data-dk-del="'+i+'" title="Quitar del informe">\u2715</button></div></div>';
+  }).join('');
+  h+='<button class="btn small" data-dk-new type="button" style="margin-top:8px">+ Nuevo KPI</button>';
+  h+='<p class="insp-hint">En cualquier texto: escribe <b>$$</b> y elige el KPI.</p>';
+  return h;
+}
+function edDK(b){ return gText('T\u00EDtulo (opcional)','title',b.title,'Sin t\u00EDtulo')+dkManager(b); }
+function edDKpi(k,i){
+  return '<label class="ef"><span>Nombre para los textos</span><input data-dk-name="'+i+'" value="'+esc(k.name)+'" spellcheck="false"></label>'
+    +'<p class="insp-hint">Se usa como <b>$$'+esc(k.name)+'$$</b> en t\u00EDtulos y textos.</p>'
+    +gText('Etiqueta','label',k.label,'Texto de la tarjeta')
+    +'<div class="insp-sec">Formato</div>'
+    +gSel('Formato','fmt',k.fmt||'number',[['number','N\u00FAmero'],['percent','Porcentaje (\u00D7100 y %)']])
+    +gSel('Decimales','decimals',(k.decimals==null?'':String(k.decimals)),[['','Autom\u00E1tico'],['0','0'],['1','1'],['2','2']])
+    +gText('Unidad','unit',k.unit,'Por ejemplo: \u20AC')
+    +'<div class="insp-sec">Datos</div>'
+    +(HOSTED?'<button class="btn small" data-dk-edit="'+i+'" type="button">\uD83E\uDDE9 Abrir en el dise\u00F1ador</button> ':'')
+    +'<button class="btn small" data-dk-del="'+i+'" type="button">Quitar del informe</button>'
+    +'<p class="insp-hint">Quitarlo del informe no borra el KPI del proyecto.</p>';
+}
+function dkDesign(ref,after){
+  dtCallLong('dt.design',{ref:ref||null,kpi:true}).then(function(res){ if(res) after(res); edRender(); },function(e){ setStatus('No se pudo abrir el dise\u00F1ador: '+((e&&e.message)||e),6000); });
+}
+$('inspBody').addEventListener('click',function(e){
+  var t=e.target.closest&&e.target.closest('[data-dk-new],[data-dk-edit],[data-dk-del],[data-dk-props]'); if(!t) return;
+  e.preventDefault();
+  if(t.hasAttribute('data-dk-new')) return dkDesign(null,function(res){ edPrevSel=edSel; dkList().push({id:res.id,name:dkVarName(res.nombre),label:res.nombre,fmt:'number',decimals:'',unit:''}); edSync(true); });
+  var i=+(t.getAttribute('data-dk-edit')||t.getAttribute('data-dk-del')||t.getAttribute('data-dk-props')), L=dkList(), k=L[i]; if(!k) return;
+  if(t.hasAttribute('data-dk-edit')) return dkDesign(k.id,function(res){ edPrevSel=edSel; if(!k.label) k.label=res.nombre; edSync(true); });
+  if(t.hasAttribute('data-dk-props')){ edSel={dk:i}; edRender(); if(typeof treeRender==='function') treeRender(); return; }
+  if(t.hasAttribute('data-dk-del')){
+    if(!confirm('\u00BFQuitar el KPI \u00AB'+(k.label||k.name)+'\u00BB del informe? (sigue existiendo en el proyecto)')) return;
+    edPrevSel=edSel; L.splice(i,1);
+    var walk=function(bl){ (bl||[]).forEach(function(b){ if(!b) return; if(b.type==='dracoKpi'&&b.show) b.show=b.show.filter(function(x){ return x!==k.id; }); if(b.tabs) b.tabs.forEach(function(tb){ walk(tb.blocks); }); if(b.type==='group') walk(b.blocks); }); };
+    (currentSpec.sections||[]).forEach(function(sc){ walk(sc.blocks); });
+    if(edSel&&edSel.dk!=null) edSel={dkpis:true};
+    edSync(true); edRender(); return;
+  }
+});
+$('inspBody').addEventListener('change',function(e){
+  var t=e.target;
+  if(t.hasAttribute('data-dk-show')){
+    var b=dkSelBlock(); if(!b) return; edPrevSel=edSel;
+    var all=dkList().map(function(k){ return k.id; }), cur=(b.show&&b.show.length)?b.show.slice():all.slice(), id=t.getAttribute('data-dk-show');
+    cur=t.checked?(cur.indexOf(id)<0?cur.concat([id]):cur):cur.filter(function(x){ return x!==id; });
+    b.show=(cur.length===all.length)?[]:all.filter(function(x){ return cur.indexOf(x)>=0; });
+    edSync(true); return;
+  }
+  if(t.hasAttribute('data-dk-name')){
+    var i=+t.getAttribute('data-dk-name'), k=dkList()[i]; if(!k) return;
+    var old=k.name, nv=dkVarName(t.value||k.label,i);
+    if(nv===old){ t.value=old; return; }
+    edPrevSel=edSel; k.name=nv;
+    /* los textos que usaban $$OLD$$ pasan a $$NUEVO$$ */
+    var re=new RegExp('\\$\\$'+old+'\\$\\$','g'), fix=function(o){ if(!o||typeof o!=='object') return; Object.keys(o).forEach(function(kk){ var v=o[kk]; if(typeof v==='string'&&v.indexOf('$$')>=0) o[kk]=v.replace(re,'$$$$'+nv+'$$$$'); else if(typeof v==='object') fix(v); }); };
+    fix(currentSpec.sections); edSync(true); edRender();
+  }
+});
+
+/* ---------- Autocompletar $$KPI$$ en los campos de texto del inspector ---------- */
+(function(){
+  var box=null, fld=null, items=[], at=0, start=-1;
+  var close=function(){ if(box) box.hidden=true; fld=null; };
+  var pick=function(k){
+    if(!fld||!k) return close();
+    var v=fld.value, pos=fld.selectionStart, ins=k.name+'$$';
+    fld.value=v.slice(0,start)+ins+v.slice(pos); var np=start+ins.length; fld.setSelectionRange(np,np);
+    var f=fld; close(); f.dispatchEvent(new Event('input',{bubbles:true})); f.dispatchEvent(new Event('change',{bubbles:true})); f.focus();
+  };
+  var paint=function(){
+    box.innerHTML=items.map(function(k,i){ return '<div class="dk-ac-i'+(i===at?' on':'')+'" data-i="'+i+'"><b>$$'+esc(k.name)+'$$</b><span>'+esc(k.label||'')+'</span></div>'; }).join('');
+  };
+  document.addEventListener('input',function(e){
+    var t=e.target; if(!t||!t.closest||!t.closest('#inspBody')||!(t.tagName==='TEXTAREA'||(t.tagName==='INPUT'&&(!t.type||t.type==='text')))||t.hasAttribute('data-dk-name')) return;
+    var before=t.value.slice(0,t.selectionStart), m=/\$\$([A-Za-z0-9_]*)$/.exec(before);
+    /* solo si hay un $$ ABIERTO (n\u00FAmero impar de $$ antes del cursor): tras \u00ABNOMBRE$$\u00BB no se vuelve a abrir */
+    if(m&&((before.match(/\$\$/g)||[]).length%2)!==1) m=null;
+    var L=(typeof dkList==='function')?dkList():[];
+    if(!m||!L.length) return close();
+    var q=m[1].toUpperCase();
+    items=L.filter(function(k){ return !q||k.name.indexOf(q)===0||String(k.label||'').toUpperCase().indexOf(q)>=0; }).slice(0,12);
+    if(!items.length) return close();
+    fld=t; start=before.length-m[1].length; at=0;
+    if(!box){ box=document.createElement('div'); box.className='dk-ac'; box.setAttribute('role','listbox'); document.body.appendChild(box);
+      box.addEventListener('mousedown',function(ev){ var it=ev.target.closest('.dk-ac-i'); if(it){ ev.preventDefault(); pick(items[+it.getAttribute('data-i')]); } }); }
+    var rc=t.getBoundingClientRect(); box.style.left=rc.left+'px'; box.style.top=(rc.bottom+4)+'px'; box.style.minWidth=Math.max(220,rc.width)+'px';
+    box.hidden=false; paint();
+  },true);
+  document.addEventListener('keydown',function(e){
+    if(!box||box.hidden||e.target!==fld) return;
+    if(e.key==='ArrowDown'){ at=(at+1)%items.length; paint(); e.preventDefault(); }
+    else if(e.key==='ArrowUp'){ at=(at-1+items.length)%items.length; paint(); e.preventDefault(); }
+    else if(e.key==='Enter'||e.key==='Tab'){ pick(items[at]); e.preventDefault(); }
+    else if(e.key==='Escape'){ close(); e.preventDefault(); }
+  },true);
+  document.addEventListener('focusout',function(e){ if(e.target===fld) setTimeout(close,150); },true);
+})();
 
 /* =====================================================================
    Bloque "dracoChart" (Gr\u00E1fico Draco): gr\u00E1fico calculado a partir de una Tabla Draco guardada. Propiedades: la

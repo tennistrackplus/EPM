@@ -706,7 +706,12 @@ botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un infor
   guardan con la definición (`DEFINICION_JSON.cells`). El "Excel falso" (`host-bridge`) guarda la fórmula de cada
   celda, calcula las fórmulas normales (`+ - * / ^`, referencias y rangos, `SUM/SUMA`, `MIN`, `MAX`, `ABS`,
   `AVERAGE/PROMEDIO`, `ROUND/REDONDEAR`, `IF/SI`, `IFERROR/SI.ERROR`), convierte A1 ↔ R1C1 y calcula las barras de
-  datos, que el visor dibuja con CSS. El doble clic y «Miembro» proponen el campo según la fila/columna (posición
+  datos, que el visor dibuja con CSS. Las fórmulas admiten condiciones: `SI`/`IF(condición; sí; no)` y comparaciones `= <> < > <= >=` entre
+  números o textos (sin distinguir mayúsculas), p. ej. `SI(A6="HOLA";5;A6+10)`; el panel guarda la fórmula con la
+  sintaxis inglesa de Excel (`IF`, `,`). Formato condicional de **iconos** en el 4.º parámetro de `EPM_FORMULA`
+  (combinable con las barras): `semaforo` (pelotitas) o `señales`, `cortes=a,b` (fijos; si no, 33 %/67 % entre el
+  mínimo y el máximo), `invertir-iconos`, `solo-icono`. En Excel se aplican con el formato condicional nativo
+  (`iconSet`); en el web los calcula el host-bridge y el visor los dibuja. El doble clic y «Miembro» proponen el campo según la fila/columna (posición
   en el eje del diseño o, si no, las celdas EPM_VALUE vecinas). «Refrescar» relee el diseño y el eje Estático y
   muestra los errores en el aviso. «Filtro» no pregunta el informe (una tabla = un informe).
 - **Variables.** «Variables» abre `variablesDialog.html` (diálogo del addin, comando `abrirVariables`): nombre, campo
@@ -731,6 +736,18 @@ botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un infor
   «Selector de variable». Si varios bloques usan la misma tabla con las mismas variables, la consulta se lanza una vez
   (`dtRunShared`). En la exportación a diapositivas sale como nota, igual que la Tabla Draco. Desde sus propiedades se abre el
   diseñador del informe (`dt.design`) para editar su tabla o crear una nueva, sin necesidad de un bloque de tabla.
+- **KPIs Draco.** Un KPI es una Tabla Draco con UNA medida y solo filtros, diseñada con el diseñador en modo KPI
+  (`dt.design` con `kpi:true`); al guardarla se guardan sus piezas (`DEFINICION_JSON.kpi`: agregación, campo, tabla de
+  hechos, joins y condiciones; `buildDracoKpiParts` en el addin). El informe lista sus KPIs en `spec.dracoKpis`
+  (`{id, name, label, fmt, decimals, unit}`), que salen en el árbol en un grupo «KPIs» al final. Se muestran con el
+  bloque «KPI Draco» (`dracoKpi`, tarjetas) o en cualquier texto con `$$NOMBRE$$` (autocompletar al escribir `$$`).
+  **Todos los KPIs del informe se calculan con UNA consulta** (`DracoTables.kpis`/`kpiSql`, operación `dt.kpis`): se
+  agrupan por tabla de hechos + joins y cada KPI es una columna de agregación condicional
+  (`SUM(IF(<filtros>, f.campo, NULL))`, `IFF` en Snowflake, `CASE WHEN` en Fabric, también `COUNT(DISTINCT …)`); el
+  `WHERE` de cada grupo es el OR de sus filtros y los grupos se unen con `CROSS JOIN` (una fila, una columna por KPI).
+  Cada tabla de hechos se lee una vez aunque haya 100 KPIs. Las definiciones se leen con una consulta a la tabla de
+  control; las `$VARIABLES$` se resuelven por KPI (valor guardado o el del «Selector de variable»); si la consulta
+  combinada falla, se reintenta grupo a grupo para que un KPI roto no tumbe a los demás. Caché de 30 s.
 - **Subsección (`group`).** Bloque contenedor (sustituye a la antigua «Fila», que no hacía nada): título opcional,
   distribución propia (una columna o en columnas, 1-4) y sus bloques en `blocks`. Se puede anidar a cualquier nivel;
   los identificadores siguen el patrón `s{sección}b{bloque}` + tramos `t{pestaña}_{bloque}` / `g{bloque}` (`bidWalk`).
