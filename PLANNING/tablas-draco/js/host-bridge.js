@@ -291,7 +291,15 @@
                     case "MAX": { const n = nums(args); return isErr(n) ? n : (n.length ? Math.max(...n) : 0); }
                     case "ABS": { const n = num(args[0]); return isErr(n) ? n : Math.abs(n); }
                     case "ROUND": { const n = num(args[0]), d = num(args[1] || 0); if (isErr(n)) return n; const k = Math.pow(10, d); return Math.round(n * k) / k; }
-                    case "IF": { const c = num(args[0]); if (isErr(c)) return c; return c ? (args[1] === undefined ? 1 : args[1]) : (args[2] === undefined ? 0 : args[2]); }
+                    case "IF": {
+                        const c0 = Array.isArray(args[0]) ? args[0][0] : args[0];
+                        if (isErr(c0)) return c0;
+                        const t = typeof c0 === "string" ? c0.trim().toUpperCase() : c0;
+                        const c = (t === "TRUE" || t === "VERDADERO") ? 1 : (t === "FALSE" || t === "FALSO" || t === "") ? 0 : num(c0);
+                        if (isErr(c)) return c;
+                        const pick = c ? args[1] : args[2];
+                        return pick === undefined ? (c ? 1 : 0) : (Array.isArray(pick) ? pick[0] : pick);
+                    }
                     case "IFERROR": { const v = Array.isArray(args[0]) ? args[0][0] : args[0]; return isErr(v) ? args[1] : v; }
                     default: return ERR("#NAME?");
                 }
@@ -357,12 +365,21 @@
                 while (peek() && peek().v === "&") { next(); const r = arith(); l = (isErr(l) ? l : isErr(r) ? r : String(Array.isArray(l) ? l[0] : l) + String(Array.isArray(r) ? r[0] : r)); }
                 return l;
             }
+            // Comparaciones como en Excel: dos números se comparan como números; si alguno es texto, como texto sin
+            // distinguir mayúsculas (="HOLA" vale para "hola"). Una celda vacía es 0 frente a un número y "" frente a un texto.
+            const scalar = (x) => Array.isArray(x) ? x[0] : x;
+            const isNumLike = (x) => typeof x === "number" || (typeof x === "string" && x.trim() !== "" && isFinite(Number(x.trim())));
             function compare() {
                 let l = concat();
                 while (peek() && ["=", "<>", "<", ">", "<=", ">="].includes(peek().v)) {
-                    const op = next().v, a = num(l), b = num(concat());
+                    const op = next().v;
+                    let a = scalar(l), b = scalar(concat());
                     if (isErr(a)) { l = a; continue; } if (isErr(b)) { l = b; continue; }
-                    l = (op === "=" ? a === b : op === "<>" ? a !== b : op === "<" ? a < b : op === ">" ? a > b : op === "<=" ? a <= b : a >= b) ? 1 : 0;
+                    const empty = (x) => x === "" || x === null || x === undefined;
+                    let A, B;
+                    if ((isNumLike(a) || empty(a)) && (isNumLike(b) || empty(b))) { A = empty(a) ? 0 : Number(a); B = empty(b) ? 0 : Number(b); }
+                    else { A = String(empty(a) ? "" : a).toLowerCase(); B = String(empty(b) ? "" : b).toLowerCase(); }
+                    l = (op === "=" ? A === B : op === "<>" ? A !== B : op === "<" ? A < B : op === ">" ? A > B : op === "<=" ? A <= B : A >= B) ? 1 : 0;
                 }
                 return l;
             }
@@ -401,13 +418,14 @@
             if (FX.isEpm(o.f)) { if (o.f.indexOf("$") !== -1) o.v = FX.epmDisplay(o.f); return; }
             const [r, c] = k.split("_").map(Number);
             const v = val(r, c);
-            o.v = FX.isErr(v) ? v.err : (typeof v === "number" ? String(Math.round(v * 1e10) / 1e10) : String(v));
+            o.v = FX.isErr(v) ? v.err : (typeof v === "number" ? String(Math.round(v * 1e10) / 1e10) : (v === undefined || v === null ? "" : String(v)));
         });
 
         // Barras de datos: posición del eje (a) y extremo de la barra (p) en
         // fracción del ancho de la celda, con los límites de la regla.
-        Object.keys(cells).forEach(k => { if (cells[k] && cells[k].db) delete cells[k].db; });
+        Object.keys(cells).forEach(k => { if (cells[k]) { delete cells[k].db; delete cells[k].ic; } });
         (editor.state.cf || []).forEach(rule => {
+            if (rule.type === "IconSet") { applyIconSet(rule); return; }
             const db = rule.db || {};
             const bound = (rb, fallback) => {
                 if (!rb || !rb.formula) return fallback;
@@ -435,6 +453,43 @@
                 };
             }
         });
+    }
+
+    /**
+     * Conjunto de iconos (semáforo / señales), como en Excel: criteria[1] es el corte del icono intermedio y
+     * criteria[2] el del superior (tipo Number = valor; Percent = % entre el mínimo y el máximo; Percentile).
+     * Deja en la celda o.ic = { k: "traffic"|"signs", i: 0 (peor) .. 2 (mejor), only }.
+     */
+    function applyIconSet(rule) {
+        const cells = host().state.cells || {};
+        const is = rule.is || {};
+        const kind = /sign/i.test(is.style || "") ? "signs" : "traffic";
+        const xs = [];
+        for (let r = rule.r1; r <= rule.r2; r++) for (let c = rule.c1; c <= rule.c2; c++) {
+            const o = cells[r + "_" + c]; const n = o ? Number(o.v) : NaN;
+            if (o && o.v !== "" && isFinite(n)) xs.push(n);
+        }
+        if (!xs.length) return;
+        const mn = Math.min(...xs), mx = Math.max(...xs);
+        const sorted = xs.slice().sort((a, b) => a - b);
+        const cut = (cr, defPct) => {
+            const type = (cr && cr.type) || "Percent";
+            let v = cr && cr.formula !== undefined ? FX.evaluate(String(cr.formula).replace(/^\s*=\s*/, ""), () => "") : defPct;
+            if (typeof v !== "number" || !isFinite(v)) v = defPct;
+            if (/^number$/i.test(type)) return v;
+            if (/^percentile$/i.test(type)) return sorted[Math.min(sorted.length - 1, Math.max(0, Math.round((v / 100) * (sorted.length - 1))))];
+            return mn + (mx - mn) * v / 100;
+        };
+        const c1 = cut(is.criteria && is.criteria[1], 33), c2 = cut(is.criteria && is.criteria[2], 67);
+        const gte = (cr) => !cr || !/^greaterThan$/i.test(cr.operator || "");
+        const ok = (x, t, cr) => gte(cr) ? x >= t : x > t;
+        for (let r = rule.r1; r <= rule.r2; r++) for (let c = rule.c1; c <= rule.c2; c++) {
+            const o = cells[r + "_" + c]; const n = o ? Number(o.v) : NaN;
+            if (!o || o.v === "" || !isFinite(n)) continue;
+            let i = ok(n, c2, is.criteria && is.criteria[2]) ? 2 : (ok(n, c1, is.criteria && is.criteria[1]) ? 1 : 0);
+            if (is.reverseIconOrder) i = 2 - i;
+            o.ic = { k: kind, i, only: is.showIconOnly ? 1 : 0 };
+        }
     }
 
     function cfStore() {
@@ -560,9 +615,10 @@
             // Formato condicional: solo barras de datos, en la hoja principal.
             conditionalFormats: {
                 add(type) {
-                    const rule = { r1, c1, r2, c2, type, db: { positiveFormat: {}, negativeFormat: {} } };
+                    const rule = { r1, c1, r2, c2, type, db: { positiveFormat: {}, negativeFormat: {} },
+                                   is: { style: "", criteria: [], reverseIconOrder: false, showIconOnly: false } };
                     if (isMainSheet(sheetName)) cfStore().push(rule);
-                    return { dataBar: rule.db };
+                    return { dataBar: rule.db, iconSet: rule.is };
                 },
                 clearAll() {
                     if (!isMainSheet(sheetName)) return;
@@ -893,7 +949,10 @@
         ClearApplyTo: { all: "All", contents: "Contents", formats: "Formats" },
         CalculationMode: { automatic: "Automatic", automaticExceptTables: "AutomaticExceptTables", manual: "Manual" },
         CalculationType: { recalculate: "Recalculate", full: "Full", fullRebuild: "FullRebuild" },
-        ConditionalFormatType: { dataBar: "DataBar" },
+        ConditionalFormatType: { dataBar: "DataBar", iconSet: "IconSet" },
+        IconSet: { threeTrafficLights1: "ThreeTrafficLights1", threeTrafficLights2: "ThreeTrafficLights2", threeSigns: "ThreeSigns" },
+        ConditionalFormatIconRuleType: { number: "Number", percent: "Percent", percentile: "Percentile", formula: "Formula" },
+        ConditionalIconCriterionOperator: { greaterThan: "GreaterThan", greaterThanOrEqual: "GreaterThanOrEqual" },
         ConditionalDataBarDirection: { leftToRight: "LeftToRight", rightToLeft: "RightToLeft", context: "Context" },
         ConditionalDataBarAxisFormat: { automatic: "Automatic", none: "None", cellMidPoint: "CellMidPoint" },
         ConditionalFormatRuleType: { formula: "Formula", automatic: "Automatic", lowestValue: "LowestValue", highestValue: "HighestValue", number: "Number" },

@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-16-variables-v1";
+const DRACO_BUILD = "2026-10-19-kpis";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -1207,6 +1207,37 @@ function dracoSqlString(v) {
 function dracoCalcOrderPart(part) {
     const o = ReportState.CalcOrder && ReportState.CalcOrder[part];
     return o || part;
+}
+
+/**
+ * PIEZAS DE UN KPI (Tablas Draco en PLANNING: bloque «KPI Draco» y $$NOMBRE$$ en los textos).
+ * Un KPI es un informe con UNA medida y, como mucho, filtros (sin campos en Filas ni Columnas). En vez de un SQL
+ * completo, devuelve sus piezas para que PLANNING junte TODOS los KPIs de un informe en una sola consulta con
+ * agregación condicional (una lectura por tabla de hechos, ver DracoTables.kpiSql):
+ *   { measure, agg: "SUM"|"AVG"|"COUNT"|"COUNT_DISTINCT"|"MIN"|"MAX"|<otra tal cual>, field: "f.CAMPO",
+ *     from: "FROM <tabla de hechos> f", joins: "<JOINs de las dimensiones usadas>", conds: [<condiciones>] }
+ * Las condiciones pueden llevar marcadores $VARIABLE$ (se sustituyen al ejecutar).
+ * Requiere ReportState cargado (loadReportDefinition + applyFilterMeasuresToDynamicReport).
+ */
+function buildDracoKpiParts(relGrid, measuresGrid, atributesGrid) {
+    const dims = [...ReportState.Columns, ...ReportState.Rows];
+    if (dims.length) throw new Error("Un KPI no lleva campos en Filas ni en Columnas: quítalos y deja solo la medida (y los filtros que quieras).");
+    if (ReportState.Measures.length !== 1) throw new Error(ReportState.Measures.length ? "Un KPI tiene UNA sola medida: deja solo una." : "Añade la medida del KPI (en Columnas o en Filas).");
+    const m = ReportState.Measures[0];
+    const R = buscarMedida(measuresGrid, m.Name);
+    if (R === 0) throw new Error(`La medida «${m.Name}» no está en el modelo semántico.`);
+    const field = String(cellValue(measuresGrid, R, 6)).trim();
+    const modelAgg = String(cellValue(measuresGrid, R, 7)).trim();
+    const agg = normalizeDracoAggregation(m.Aggregation) || normalizeDracoAggregation(modelAgg) || modelAgg || "SUM";
+    return {
+        measure: m.Name,
+        agg,
+        field: "f." + field,
+        from: buildFrom(measuresGrid, m.Name, relGrid),
+        joins: buildJoins(relGrid),
+        conds: buildFilterConditions(atributesGrid, relGrid),
+        provider: Provider.key()
+    };
 }
 
 /**
@@ -3207,6 +3238,33 @@ function parseDracoBarSpec(spec) {
 }
 
 /**
+ * Iconos del 4.º parámetro de EPM_FORMULA (se combinan con las barras), separados por "|":
+ *   semaforo (o pelotitas)  -> 3 semáforos (círculos rojo / ámbar / verde)
+ *   señales                 -> 3 señales (rombo rojo / triángulo ámbar / círculo verde)
+ *   cortes=a,b              -> cortes FIJOS del icono intermedio (>= a) y del superior (>= b);
+ *                              sin cortes: 33 % y 67 % entre el mínimo y el máximo, como Excel
+ *   invertir-iconos         -> el verde para los valores bajos (p. ej. costes)
+ *   solo-icono              -> oculta el número
+ * Devuelve { style: "traffic"|"signs", cuts: [a,b]|null, invert, only } o null.
+ */
+function parseDracoIconSpec(spec) {
+    const parts = String(spec || "").split("|").map(x => x.trim()).filter(Boolean);
+    let style = null, cuts = null, invert = false, only = false;
+    for (const p of parts) {
+        const low = p.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ");
+        if (low === "semaforo" || low === "semaforos" || low === "pelotitas") style = "traffic";
+        else if (low === "senales" || low === "senal") style = "signs";
+        else if (low === "invertir-iconos" || low === "invertir iconos") invert = true;
+        else if (low === "solo-icono" || low === "solo icono") only = true;
+        else if (low.indexOf("cortes=") === 0) {
+            const v = p.split("=")[1].split(/[,;]/).map(x => Number(String(x).trim().replace(",", ".")));
+            if (v.length === 2 && v.every(isFinite)) cuts = v[0] <= v[1] ? v : [v[1], v[0]];
+        }
+    }
+    return style ? { style, cuts, invert, only } : null;
+}
+
+/**
  * Recorre las cabeceras de un eje Estático (desde EDIT_REPORT!H10 si es
  * Filas, N10 si es Columnas) y devuelve sus líneas:
  *   { line, isFormula, measure, cells:[{row,col,indent}],
@@ -3256,7 +3314,8 @@ async function scanDracoStaticAxis(context, sheet, editReportGrid, axis) {
                 line.formula = {
                     r1c1: (args[1] || "").trim(),
                     format: unquoteDraco(args[2]),
-                    bar: parseDracoBarSpec(unquoteDraco(args[3]))
+                    bar: parseDracoBarSpec(unquoteDraco(args[3])),
+                    icons: parseDracoIconSpec(unquoteDraco(args[3]))
                 };
                 line.cells.push({ row, col, indent: 0 });
                 break;
@@ -3333,6 +3392,25 @@ function applyDracoFormulaLines(sheet, reportId, lines, isRows, targets) {
             numFmt = base.indexOf(";") !== -1 ? base : "* " + base + "\\ ;\\ -" + base + "* ;* " + base + "\\ ";
         }
         if (numFmt) ranges.forEach(({ rg }) => { rg.numberFormat = [[numFmt]]; });
+
+        // Iconos (semáforo / señales): formato condicional de Excel, con o sin barras
+        const icons = l.formula.icons;
+        if (icons && ranges.length) {
+            ranges.forEach(({ rg }) => {
+                const cf = rg.conditionalFormats.add(Excel.ConditionalFormatType.iconSet);
+                const is = cf.iconSet;
+                is.style = icons.style === "signs" ? Excel.IconSet.threeSigns : Excel.IconSet.threeTrafficLights1;
+                is.reverseIconOrder = !!icons.invert;
+                is.showIconOnly = !!icons.only;
+                const type = icons.cuts ? Excel.ConditionalFormatIconRuleType.number : Excel.ConditionalFormatIconRuleType.percent;
+                const v = icons.cuts || [33, 67];
+                is.criteria = [
+                    {},
+                    { type, operator: Excel.ConditionalIconCriterionOperator.greaterThanOrEqual, formula: "=" + v[0] },
+                    { type, operator: Excel.ConditionalIconCriterionOperator.greaterThanOrEqual, formula: "=" + v[1] }
+                ];
+            });
+        }
 
         if (!bar || ranges.length === 0) continue;
         const addr = ({ run }) => isRows
