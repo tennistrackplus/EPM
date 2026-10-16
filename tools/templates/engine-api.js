@@ -57,6 +57,22 @@
             return { sql: typeof sql === "string" ? sql : (sql && sql.text) || "", fixed: mode === "fixed", mode };
         },
 
+        /** Piezas del KPI del informe activo (una medida + filtros), ver buildDracoKpiParts en commands.js. */
+        async kpiParts(reportId) {
+            reportId = activeReportIdOrNull();
+            let parts = null;
+            await Excel.run(async (context) => {
+                const editReportGrid = await getEditReportGrid(context, reportId);
+                const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
+                const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+                const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+                loadReportDefinition(editReportGrid, reportId);
+                applyFilterMeasuresToDynamicReport();
+                parts = buildDracoKpiParts(relGrid, measuresGrid, atributesGrid);
+            });
+            return parts;
+        },
+
         async refresh(reportId, sql) {
             // Una tabla Draco = UN informe: siempre el activo, con el MISMO tipo de id (número) que usa el addin al
             // atender un clic en el +/-. Si aquí se pasara "1" (texto) y allí 1 (número), el estado de jerarquías
