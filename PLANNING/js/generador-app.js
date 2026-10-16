@@ -139,7 +139,7 @@ const GeneradorApp = {
         if (this.pendingInformeId) { qs.set("informe_id", this.pendingInformeId); this.pendingInformeId = null; }
         document.getElementById("toolEmpty").hidden = true;
         frame.hidden = false;
-        qs.set("v", "20261018b");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
+        qs.set("v", "20261019a");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
         frame.src = "informes-herramienta.html?" + qs.toString();
     },
 
@@ -211,11 +211,12 @@ const GeneradorApp = {
             case "dt.cubes":
             case "dt.fields":
             case "dt.varsFor":
+            case "dt.kpis":
                 return DracoTables.handle(this.currentProject, op, p);      // el editor configura un «Selector de variable»
             case "dt.list":
             case "dt.design":
                 // el editor elige una Tabla Draco o abre su diseñador (pseudo-Excel con el taskpane del addin)
-                return DracoTables.handle(this.currentProject, op, p, { openDesigner: (project, ref) => DracoTableDesigner.open(project, ref) });
+                return DracoTables.handle(this.currentProject, op, p, { openDesigner: (project, ref, opts) => DracoTableDesigner.open(project, ref, opts) });
             default:
                 throw Object.assign(new Error("Operación desconocida: " + op), { code: "BAD_INPUT" });
         }

@@ -11,13 +11,17 @@
  * Al guardar se genera el SQL del informe y se guarda junto a su definición en TABLAS_DRACO (ver draco-tables.js).
  */
 const DracoTableDesigner = {
-    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261016b",
+    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261019a",
     MAX_ROWS: 600,
     MAX_COLS: 80,
     ctx: null,
 
     /** Abre el diseñador (ref = tabla existente o null para una nueva). Devuelve { id, nombre } al guardar, o null. */
-    async open(project, ref) {
+    /**
+     * opts.kpi: diseñador de KPI (bloque «KPI Draco»): misma pantalla, pero el informe debe tener UNA medida y solo
+     * filtros; al guardar se guardan además sus piezas (def.kpi) para calcular todos los KPIs en una consulta.
+     */
+    async open(project, ref, opts) {
         if (this.ctx) throw Object.assign(new Error("El diseñador ya está abierto."), { code: "BUSY" });
         let cubes = [], row = null, def = null;
         try {
@@ -28,8 +32,10 @@ const DracoTableDesigner = {
             throw err;
         }
         return new Promise((resolve) => {
-            this.ctx = { project, ref, row, cubes, resolve, saved: null, initialSig: null, ready: false, raf: 0, sel: { r: 0, c: 0 } };
+            this.ctx = { project, ref, row, cubes, resolve, saved: null, initialSig: null, ready: false, raf: 0, sel: { r: 0, c: 0 },
+                         kpi: !!((opts && opts.kpi) || (def && def.kpi)) };
             this.buildModal();
+            if (this.ctx.kpi) this.banner("KPI: deja UNA medida (por ejemplo en Columnas) y los filtros que quieras, sin campos en Filas ni Columnas. La rejilla muestra su valor.", "info");
             if (!cubes.length) this.banner("Este proyecto no tiene cubos, y el informe se diseña sobre uno. Crea un cubo en «Cubos» y vuelve a abrir el diseñador.", "warn");
             this.startTaskpane(def);
         });
@@ -46,8 +52,8 @@ const DracoTableDesigner = {
         overlay.innerHTML = `
             <div class="dtd-modal" role="dialog" aria-label="Diseñador de tabla Draco">
                 <div class="dtd-head">
-                    <strong class="dtd-title">Tabla Draco · diseño del informe</strong>
-                    <input id="dtdName" class="dtd-name" type="text" maxlength="${DracoTables.MAX_NAME}" placeholder="Nombre de la tabla" value="${E(c.row ? c.row.NOMBRE : "")}">
+                    <strong class="dtd-title">${c.kpi ? "KPI Draco · diseño" : "Tabla Draco · diseño del informe"}</strong>
+                    <input id="dtdName" class="dtd-name" type="text" maxlength="${DracoTables.MAX_NAME}" placeholder="${c.kpi ? "Nombre del KPI" : "Nombre de la tabla"}" value="${E(c.row ? c.row.NOMBRE : "")}">
                     <input id="dtdDesc" class="dtd-desc" type="text" maxlength="${DracoTables.MAX_DESC}" placeholder="Descripción (opcional)" value="${E(c.row ? (c.row.DESCRIPCION || "") : "")}">
                     <span class="dtd-spacer"></span>
                     <span id="dtdStatus" class="dtd-status" role="status"></span>
@@ -202,7 +208,7 @@ const DracoTableDesigner = {
         this.status("Refrescando…");
         try {
             await w.DracoEngineApi.refresh(undefined, null);
-            this.banner("");
+            this.banner(c.kpi ? "KPI: deja UNA medida (por ejemplo en Columnas) y los filtros que quieras, sin campos en Filas ni Columnas. La rejilla muestra su valor." : "", c.kpi ? "info" : undefined);
             this.status("");
         } catch (err) {
             console.error("DracoTableDesigner: refresco", err);
@@ -284,7 +290,7 @@ const DracoTableDesigner = {
                 const isEpm = typeof o.f === "string" && /EPM_(VALUE|FORMULA)\s*\(/i.test(o.f);
                 if (isEpm) cls.push(/EPM_FORMULA/i.test(o.f) ? "dtd-epmf" : "dtd-epm");
                 const tip = o.f ? ` title="${E(o.f)}"` : "";
-                h += `<td class="${cls.join(" ")}" data-r="${r}" data-c="${cc}"${m ? ` rowspan="${m.rowSpan || 1}" colspan="${m.colSpan || 1}"` : ""}${tip} style="${st.join(";")}">${E(text)}</td>`;
+                h += `<td class="${cls.join(" ")}" data-r="${r}" data-c="${cc}"${m ? ` rowspan="${m.rowSpan || 1}" colspan="${m.colSpan || 1}"` : ""}${tip} style="${st.join(";")}">${o.ic ? DracoTables.iconHtml(o.ic) : ""}${o.ic && o.ic.only ? "" : E(text)}</td>`;
             }
             h += `</tr>`;
         }
@@ -689,6 +695,11 @@ const DracoTableDesigner = {
         const bars = String(a[3] || "").toLowerCase().split("|").map(x => x.trim());
         const barKind = bars.indexOf("solo barra") !== -1 ? "barOnly" : (bars.indexOf("barra") !== -1 || bars.indexOf("barras") !== -1 ? "bar" : "");
         const kv = (k, d) => { const x = bars.find(b => b.indexOf(k + "=") === 0); return x ? x.split("=")[1] : d; };
+        const noAcc = (t) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const iconKind = bars.some(b => ["semaforo", "semaforos", "pelotitas"].indexOf(noAcc(b)) !== -1) ? "traffic"
+            : (bars.some(b => ["senales", "senal"].indexOf(noAcc(b)) !== -1) ? "signs" : "");
+        const cutsTxt = kv("cortes", "");
+        const cutsV = cutsTxt ? cutsTxt.split(/[,;]/).map(x => x.trim()) : ["", ""];
 
         const panel = document.createElement("div");
         panel.className = "dtd-fxpanel";
@@ -699,6 +710,8 @@ const DracoTableDesigner = {
                 <label class="dtd-lbl">Texto<input id="dtdFText" class="dtd-in" type="text" value="${E(a[0] || "")}" placeholder="p. ej. Margen"></label>
                 <label class="dtd-lbl">Fórmula<input id="dtdFExpr" class="dtd-in dtd-mono" type="text" value="${E(a[1] || "")}" placeholder="Haz clic en las celdas de la rejilla" autocomplete="off" spellcheck="false"></label>
                 <div class="dtd-ops">${["+", "-", "*", "/", "(", ")"].map(o => `<button type="button" class="dtd-op" data-op="${o}">${o === "*" ? "×" : o === "/" ? "÷" : o === "-" ? "−" : o}</button>`).join("")}</div>
+                <div class="dtd-ops">${[["SI(", "SI("], [";", ";"], ["=", "="], ["<>", "≠"], ["<", "<"], [">", ">"], ["<=", "≤"], [">=", "≥"], ['""', '"texto"']].map(([o, l]) => `<button type="button" class="dtd-op${o.length > 2 ? " dtd-op-w" : ""}" data-op="${E(o)}" title="${o === '""' ? "Texto entre comillas" : o === "SI(" ? "SI(condición; si se cumple; si no)" : "Comparar"}">${E(l)}</button>`).join("")}</div>
+                <div class="dtd-muted">Condiciones: <code>SI(A6="HOLA";5;A6+10)</code>. Compara números o textos (sin distinguir mayúsculas) con = &lt;&gt; &lt; &gt; &lt;= &gt;=.</div>
                 <div class="dtd-muted">Haz clic en una celda (o arrastra un rango) de la rejilla para insertarla. Escribe la fórmula como si estuviera en ${E(this.addr(r, cc))}: se copia a cada celda de la línea igual que copiar y pegar (p. ej. las cabeceras de las líneas a restar).</div>
                 <div class="dtd-row2">
                     <label class="dtd-lbl">Formato
@@ -713,6 +726,22 @@ const DracoTableDesigner = {
                     <label class="dtd-check"><input id="dtdFInv" type="checkbox"${bars.indexOf("invertir") !== -1 ? " checked" : ""}> Invertir colores</label>
                     <label class="dtd-lbl">Esp. izq. %<input id="dtdFIzq" class="dtd-in" type="number" min="0" max="90" value="${E(kv("izq", "40"))}"></label>
                     <label class="dtd-lbl">Esp. dcha. %<input id="dtdFDcha" class="dtd-in" type="number" min="0" max="90" value="${E(kv("dcha", "25"))}"></label>
+                </div>
+                <div class="dtd-row2">
+                    <label class="dtd-lbl">Iconos
+                        <select id="dtdFIcon"><option value="">Sin iconos</option><option value="traffic"${iconKind === "traffic" ? " selected" : ""}>Semáforo (pelotitas)</option><option value="signs"${iconKind === "signs" ? " selected" : ""}>Señales</option></select>
+                    </label>
+                    <label class="dtd-lbl">Cortes
+                        <select id="dtdFCuts"><option value="">Automáticos (33 % / 67 %)</option><option value="fixed"${cutsTxt ? " selected" : ""}>Fijos</option></select>
+                    </label>
+                </div>
+                <div class="dtd-row2" id="dtdFIconOpts">
+                    <label class="dtd-lbl" id="dtdFC1L">Ámbar desde<input id="dtdFC1" class="dtd-in" type="number" step="any" value="${E(cutsV[0] || "")}" placeholder="p. ej. 0"></label>
+                    <label class="dtd-lbl" id="dtdFC2L">Verde desde<input id="dtdFC2" class="dtd-in" type="number" step="any" value="${E(cutsV[1] || "")}" placeholder="p. ej. 10"></label>
+                </div>
+                <div class="dtd-row2" id="dtdFIconOpts2">
+                    <label class="dtd-check"><input id="dtdFIInv" type="checkbox"${bars.indexOf("invertir-iconos") !== -1 ? " checked" : ""}> Invertir (verde para valores bajos)</label>
+                    <label class="dtd-check"><input id="dtdFIOnly" type="checkbox"${bars.indexOf("solo-icono") !== -1 ? " checked" : ""}> Solo el icono</label>
                 </div>
                 <code id="dtdFPrev" class="dtd-prev"></code>
             </div>
@@ -744,7 +773,15 @@ const DracoTableDesigner = {
         $(".dtd-x").addEventListener("click", () => this.closeFormulaPanel());
         $("#dtdFCancel").addEventListener("click", () => this.closeFormulaPanel());
         panel.querySelectorAll(".dtd-op").forEach(b => b.addEventListener("click", () => this.fxInsert(b.dataset.op)));
-        const syncBar = () => { $("#dtdFBarOpts").hidden = !$("#dtdFBar").value; $("#dtdFIzq").disabled = $("#dtdFDcha").disabled = $("#dtdFBar").value !== "bar"; };
+        const syncBar = () => {
+            $("#dtdFBarOpts").hidden = !$("#dtdFBar").value; $("#dtdFIzq").disabled = $("#dtdFDcha").disabled = $("#dtdFBar").value !== "bar";
+            const ic = $("#dtdFIcon").value;
+            $("#dtdFCuts").disabled = !ic; $("#dtdFIconOpts2").hidden = !ic;
+            $("#dtdFIconOpts").hidden = !ic || $("#dtdFCuts").value !== "fixed";
+            const sig = ic === "signs";
+            $("#dtdFC1L").firstChild.textContent = sig ? "Triángulo desde" : "Ámbar desde";
+            $("#dtdFC2L").firstChild.textContent = sig ? "Círculo verde desde" : "Verde desde";
+        };
         const build = () => {
             const esc = (t) => String(t).replace(/"/g, '""');
             const text = $("#dtdFText").value.trim(), expr = $("#dtdFExpr").value.trim(), fmt = $("#dtdFFmt").value.trim();
@@ -755,10 +792,23 @@ const DracoTableDesigner = {
                 if ($("#dtdFBar").value === "bar") { parts.push("izq=" + (Number($("#dtdFIzq").value) || 0)); parts.push("dcha=" + (Number($("#dtdFDcha").value) || 0)); }
                 barSpec = parts.join("|");
             }
-            const args = ['"' + esc(text) + '"', expr];
+            const icon = $("#dtdFIcon").value;
+            if (icon) {
+                const ip = [icon === "signs" ? "señales" : "semaforo"];
+                if ($("#dtdFCuts").value === "fixed" && $("#dtdFC1").value !== "" && $("#dtdFC2").value !== "") ip.push("cortes=" + Number($("#dtdFC1").value) + "," + Number($("#dtdFC2").value));
+                if ($("#dtdFIInv").checked) ip.push("invertir-iconos");
+                if ($("#dtdFIOnly").checked) ip.push("solo-icono");
+                barSpec = barSpec ? barSpec + "|" + ip.join("|") : ip.join("|");
+            }
+            // ";" fuera de comillas -> "," (sintaxis inglesa de Excel, la que usa el addin al copiar la fórmula)
+            // y nombres de función en castellano -> inglés (SI -> IF...), fuera de comillas
+            const FN = { "SI.ERROR": "IFERROR", "SI": "IF", "SUMA": "SUM", "PROMEDIO": "AVERAGE", "REDONDEAR": "ROUND", "ABS": "ABS" };
+            const exprEn = expr.replace(/("(?:[^"]|"")*")|;|\b(SI\.ERROR|SI|SUMA|PROMEDIO|REDONDEAR)\s*\(/gi,
+                (m, q, fn) => q ? q : (fn ? FN[fn.toUpperCase()] + "(" : ","));
+            const args = ['"' + esc(text) + '"', exprEn];
             if (fmt || barSpec) args.push('"' + esc(fmt) + '"');
             if (barSpec) args.push('"' + barSpec + '"');
-            return { text, expr, f: "=EPM_FORMULA(" + args.join(",") + ")" };
+            return { text, expr: exprEn, f: "=EPM_FORMULA(" + args.join(",") + ")" };
         };
         const validate = () => {
             const b = build();
@@ -770,6 +820,7 @@ const DracoTableDesigner = {
                 let d = 0;
                 for (const ch of b.expr.replace(/"[^"]*"/g, "")) { if (ch === "(") d++; if (ch === ")") d--; if (d < 0) break; }
                 if (d !== 0) err = "Los paréntesis no cuadran.";
+                else if ((b.expr.match(/"/g) || []).length % 2) err = "Hay unas comillas sin cerrar.";
                 else if (w.__dracoFormulaEngine) {
                     const v = w.__dracoFormulaEngine.evaluate(b.expr, () => 1);
                     if (v && v.err === "#NAME?") err = "Hay una función o un nombre que no se reconoce.";
@@ -781,6 +832,8 @@ const DracoTableDesigner = {
         };
         panel.addEventListener("input", validate);
         $("#dtdFBar").addEventListener("change", () => { syncBar(); validate(); });
+        $("#dtdFIcon").addEventListener("change", () => { syncBar(); validate(); });
+        $("#dtdFCuts").addEventListener("change", () => { syncBar(); validate(); });
         $("#dtdFOk").addEventListener("click", async () => {
             const b = validate();
             if (!b) return;
@@ -819,7 +872,7 @@ const DracoTableDesigner = {
         if (!c || !c.ready) return;
         const nameEl = c.overlay.querySelector("#dtdName");
         const nombre = nameEl.value.trim();
-        if (!nombre) { UI.toast("Ponle un nombre a la tabla.", "error"); nameEl.focus(); return; }
+        if (!nombre) { UI.toast(c.kpi ? "Ponle un nombre al KPI." : "Ponle un nombre a la tabla.", "error"); nameEl.focus(); return; }
         const btn = c.overlay.querySelector("#dtdSave");
         btn.disabled = true; btn.textContent = "Guardando…";
         try {
@@ -833,6 +886,11 @@ const DracoTableDesigner = {
                 ? "El eje Estático no tiene ninguna línea: selecciona celdas y añade miembros con «Miembro» (o doble clic)."
                 : "El informe no tiene campos en Filas o Columnas: no hay nada que consultar.");
             const definition = await DracoTables.exportDefinition(w, c.host);
+            // KPI: piezas para calcularlo junto a los demás KPIs del informe en una sola consulta (valida que sea un KPI)
+            if (c.kpi) {
+                this.status("Comprobando el KPI…");
+                definition.kpi = await w.DracoEngineApi.kpiParts();
+            }
             const cube = c.cubes.find(x => x.name === report.semanticModelName);
             const res = await DracoTables.save({
                 id: c.ref, projectId: c.project.PROYECTO_ID, nombre,
@@ -840,7 +898,9 @@ const DracoTableDesigner = {
                 definition, sql: gen.sql, modeloFecha: cube ? cube.fecha : ""
             });
             c.saved = { id: res.id, nombre: res.nombre };
-            UI.toast(`Tabla Draco «${res.nombre}» guardada.`, "success");
+            UI.toast(c.kpi ? `KPI «${res.nombre}» guardado.` : `Tabla Draco «${res.nombre}» guardada.`, "success");
+            // los valores de KPI en caché ya no valen
+            DracoTables._kpiCache = {};
             this.close();
         } catch (err) {
             UI.toast("No se pudo guardar: " + (err.message || err), "error");

@@ -24,7 +24,7 @@ const DracoTables = {
     MAX_NAME: 120,
     MAX_DESC: 500,
     MAX_ENGINES: 6,
-    ENGINE_URL: "tablas-draco/engine.html?v=20261016b",
+    ENGINE_URL: "tablas-draco/engine.html?v=20261019a",
 
     engines: new Map(),      // "proyecto:id" -> { frame, host, stamp, chain, lastUse }
     pending: {},             // precarga: "proyecto:id" -> { pr, at }
@@ -301,6 +301,13 @@ const DracoTables = {
      * CSS de una barra de datos ya calculada por el motor (host-bridge: o.db = {a, p, col, only}; a = eje y
      * p = extremo de la barra, en fracción del ancho de la celda). Fondo con la barra y la línea del eje.
      */
+    /** HTML del icono de una celda (semáforo / señales): mismo dibujo en el diseñador y en el visor. */
+    iconHtml(ic) {
+        if (!ic) return "";
+        const name = ic.k === "signs" ? ["Rombo rojo", "Triángulo ámbar", "Círculo verde"][ic.i] : ["Rojo", "Ámbar", "Verde"][ic.i];
+        return `<span class="dx-ic dx-ic-${ic.k === "signs" ? "s" : "t"}${Math.max(0, Math.min(2, ic.i | 0))}" role="img" aria-label="${name}" title="${name}"></span>`;
+    },
+
     barCss(db) {
         if (!db) return "";
         const pc = (x) => (Math.round(x * 1000) / 10) + "%";
@@ -411,6 +418,7 @@ const DracoTables = {
             if (edges.t || edges.r || edges.b || edges.l) cell.bd = edges;
             const t = this.formatValue(o.v, o.nf);
             if (t !== null) cell.t = t;                       // texto ya formateado (el HTML no tiene que saber de formatos de Excel)
+            if (o.ic) cell.ic = { k: o.ic.k, i: o.ic.i, only: o.ic.only ? 1 : 0 };   // icono (semáforo / señales)
             if (o.db) {                                       // barra de datos (formato condicional), ya como CSS
                 cell.bar = this.barCss(o.db);
                 if (!cell.al) cell.al = Number(o.v) < 0 ? "left" : "right";
@@ -433,6 +441,142 @@ const DracoTables = {
         let vars = {};
         try { vars = JSON.parse(((def.settings || {}).epm_variables) || "{}"); } catch (e) { vars = {}; }
         return Object.keys(vars).sort().map(name => Object.assign({ name }, vars[name]));
+    },
+
+    // ---------------------------------------------------------------------
+    // KPIs (bloque "dracoKpi" y $$NOMBRE$$ en los textos)
+    // ---------------------------------------------------------------------
+    // Un KPI es una Tabla Draco con UNA medida y solo filtros. Al guardarlo, el diseñador guarda en la definición sus
+    // piezas (def.kpi = { agg, field, from, joins, conds }, ver buildDracoKpiParts en el addin). Todos los KPIs de un
+    // informe se calculan con UNA consulta (kpiSql):
+    //   - se agrupan por tabla de hechos + joins: cada grupo lee su tabla de hechos UNA vez;
+    //   - cada KPI es una columna de agregación condicional: SUM(IF(<sus filtros>, f.campo, NULL)) AS K_n;
+    //   - el WHERE del grupo es el OR de los filtros de sus KPIs (solo se leen las filas que interesan);
+    //   - los grupos (una fila cada uno) se unen con CROSS JOIN: el resultado es UNA fila con una columna por KPI.
+    // Así 100 KPIs del mismo cubo cuestan una lectura, no 100 (UNION ALL de subconsultas leería la tabla 100 veces).
+    _kpiCache: {},
+    KPI_TTL: 30000,
+
+    /** Sustituye $NOMBRE$ en un trozo de SQL con los valores de `vars` (escapando según el motor). Lanza si falta alguna. */
+    resolveKpiVars(sqlPart, vars) {
+        const bq = Provider.key() === "bigquery";
+        const escIn = (v) => bq ? String(v).replace(/\\/g, "\\\\").replace(/'/g, "\\'") : String(v).replace(/'/g, "''");
+        let out = "", inStr = false, i = 0;
+        while (i < sqlPart.length) {
+            const ch = sqlPart[i];
+            if (ch === "'") {
+                if (inStr && !bq && sqlPart[i + 1] === "'") { out += "''"; i += 2; continue; }
+                inStr = !inStr; out += ch; i++; continue;
+            }
+            if (inStr && bq && ch === "\\") { out += sqlPart.substr(i, 2); i += 2; continue; }
+            const m = ch === "$" ? /^\$([A-Za-z][A-Za-z0-9_]{0,39})\$/.exec(sqlPart.slice(i)) : null;
+            if (m) {
+                const k = m[1].toUpperCase();
+                if (!Object.prototype.hasOwnProperty.call(vars, k)) throw new Error(`usa la variable $${k}$, que no existe`);
+                const v = String(vars[k]);
+                out += inStr ? escIn(v) : (/^-?\d+(\.\d+)?$/.test(v.trim()) ? v.trim() : "'" + escIn(v) + "'");
+                i += m[0].length; continue;
+            }
+            out += ch; i++;
+        }
+        return out;
+    },
+
+    /**
+     * SQL de todos los KPIs. items: [{ key, parts, conds (ya con las variables resueltas) }].
+     * Devuelve { sql, groups: [{ sql, keys: [[col, key]] }] } (los grupos sueltos sirven para reintentar si falla).
+     */
+    kpiSql(items) {
+        const prov = Provider.key();
+        const iff = (cond, x) => !cond ? x : (prov === "snowflake" ? `IFF(${cond}, ${x}, NULL)` : prov === "fabric" ? `CASE WHEN ${cond} THEN ${x} END` : `IF(${cond}, ${x}, NULL)`);
+        const AGG = { SUM: "SUM", AVG: "AVG", COUNT: "COUNT", MIN: "MIN", MAX: "MAX" };
+        const byGroup = new Map();
+        items.forEach(it => {
+            const gk = String(it.parts.from) + "\n" + String(it.parts.joins || "");
+            if (!byGroup.has(gk)) byGroup.set(gk, []);
+            byGroup.get(gk).push(it);
+        });
+        let n = 0;
+        const groups = Array.from(byGroup.values()).map(list => {
+            const keys = [], cols = [], conds = [];
+            let all = true;
+            list.forEach(it => {
+                const col = "K_" + (n++);
+                const cond = it.conds.length ? it.conds.map(c => "(" + c + ")").join(" AND ") : null;
+                if (cond) conds.push("(" + cond + ")"); else all = false;
+                const x = iff(cond, it.parts.field);
+                const agg = String(it.parts.agg || "SUM").toUpperCase();
+                const e = agg === "COUNT_DISTINCT" ? `COUNT(DISTINCT ${x})` : (AGG[agg] ? `${AGG[agg]}(${x})` : `${it.parts.agg}(${x})`);
+                cols.push("    " + e + " AS " + col);
+                keys.push([col, it.key]);
+            });
+            const first = list[0].parts;
+            const where = (all && conds.length) ? "\nWHERE\n    " + Array.from(new Set(conds)).join("\n    OR ") : "";
+            return { sql: "SELECT\n" + cols.join(",\n") + "\n" + first.from + "\n" + (first.joins || "").trim() + where, keys };
+        });
+        const sql = groups.length === 1 ? groups[0].sql
+            : "SELECT * FROM\n" + groups.map((g, i) => "(\n" + g.sql + "\n) G" + i).join("\nCROSS JOIN\n");
+        return { sql, groups };
+    },
+
+    /**
+     * Valores de varios KPIs con una consulta (más una a la tabla de control para leer sus definiciones).
+     * refs: ids de Tablas Draco que son KPI; variables: { NOMBRE: valor } de la página (opcional).
+     * Devuelve { values: { ref: número|null }, errors: { ref: mensaje }, nombres: { ref: nombre } }.
+     */
+    async kpis(project, refs, variables) {
+        refs = Array.from(new Set((refs || []).filter(Boolean)));
+        const out = { values: {}, errors: {}, nombres: {} };
+        if (!refs.length) return out;
+        const vkey = JSON.stringify(variables || {});
+        const ck = project.PROYECTO_ID + "|" + refs.slice().sort().join(",") + "|" + vkey;
+        const hit = this._kpiCache[ck];
+        if (hit && Date.now() - hit.at < this.KPI_TTL) return hit.res;
+
+        await Informes.guard();
+        const rows = await Informes.q(`
+            SELECT TABLA_DRACO_ID, NOMBRE, DEFINICION_JSON
+            FROM ${this.t()}
+            WHERE PROYECTO_ID = '${Provider.esc(project.PROYECTO_ID)}'
+              AND TABLA_DRACO_ID IN (${refs.map(r => "'" + Provider.esc(r) + "'").join(", ")})`);
+        const over = {};
+        Object.keys(variables || {}).forEach(k => { const v = variables[k]; over[k.toUpperCase()] = (v && typeof v === "object") ? v.value : v; });
+        const items = [];
+        const found = new Set();
+        rows.forEach(row => {
+            const ref = row.TABLA_DRACO_ID; found.add(ref);
+            out.nombres[ref] = row.NOMBRE;
+            let def = {};
+            try { def = JSON.parse(row.DEFINICION_JSON || "{}"); } catch (e) { def = {}; }
+            const parts = def.kpi;
+            if (!parts || !parts.from || !parts.field) { out.errors[ref] = "No es un KPI (guárdalo desde el diseñador de KPI)."; return; }
+            const vars = {};
+            try { const d = JSON.parse(((def.settings || {}).epm_variables) || "{}"); Object.keys(d).forEach(k => { vars[k.toUpperCase()] = d[k].value; }); } catch (e) { /* sin variables */ }
+            Object.assign(vars, over);
+            try { items.push({ key: ref, parts, conds: (parts.conds || []).map(c => this.resolveKpiVars(c, vars)) }); }
+            catch (e) { out.errors[ref] = "El KPI " + e.message + "."; }
+        });
+        refs.forEach(r => { if (!found.has(r)) out.errors[r] = "Este KPI ya no existe."; });
+
+        if (items.length) {
+            const { sql, groups } = this.kpiSql(items);
+            const take = (row, keys) => keys.forEach(([col, key]) => {
+                const v = row ? (row[col] ?? row[col.toLowerCase()]) : null;
+                out.values[key] = (v === null || v === undefined || v === "") ? null : Number(v);
+            });
+            try {
+                const res = await Provider.runQuery(sql);
+                take(res[0], groups.flatMap(g => g.keys));
+            } catch (err) {
+                // Un KPI roto no debe tumbar a los demás: se reintenta grupo a grupo.
+                for (const g of groups) {
+                    try { const r = await Provider.runQuery(g.sql); take(r[0], g.keys); }
+                    catch (e2) { g.keys.forEach(([, key]) => { out.errors[key] = String(e2.message || e2); }); }
+                }
+            }
+        }
+        this._kpiCache[ck] = { at: Date.now(), res: out };
+        return out;
     },
 
     // ---------------------------------------------------------------------
@@ -610,10 +754,11 @@ const DracoTables = {
                 case "dt.fields": return await this.fields(project, p.cube);
                 case "dt.members": return await this.members(project, p.cube, p.dim, p.attr);
                 case "dt.varsFor": return await this.varsFor(project, p.refs || []);
+                case "dt.kpis": return await this.kpis(project, p.refs || [], p.variables || null);
                 case "dt.toggle": return await this.toggle(project, p.ref, p.r, p.c);
                 case "dt.design":
                     if (!ui || typeof ui.openDesigner !== "function") throw this.fail("NOT_AVAILABLE", "El diseñador solo está disponible en el generador de informes.");
-                    return await ui.openDesigner(project, p.ref || null);
+                    return await ui.openDesigner(project, p.ref || null, { kpi: !!p.kpi });
                 default: throw this.fail("NOT_AVAILABLE", "Esta función todavía no está disponible.");
             }
         } catch (err) {
