@@ -729,7 +729,17 @@ botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un infor
   primero, hojas), serie/orden para anillo/barras/embudo, máximo de elementos, unidad y decimales, y cabeceras/etiquetas
   (automático: filas y columnas sin números o con el color de cabecera de Draco; o a mano). Se recalcula con el
   «Selector de variable». Si varios bloques usan la misma tabla con las mismas variables, la consulta se lanza una vez
-  (`dtRunShared`). En la exportación a diapositivas sale como nota, igual que la Tabla Draco.
+  (`dtRunShared`). En la exportación a diapositivas sale como nota, igual que la Tabla Draco. Desde sus propiedades se abre el
+  diseñador del informe (`dt.design`) para editar su tabla o crear una nueva, sin necesidad de un bloque de tabla.
+- **Subsección (`group`).** Bloque contenedor (sustituye a la antigua «Fila», que no hacía nada): título opcional,
+  distribución propia (una columna o en columnas, 1-4) y sus bloques en `blocks`. Se puede anidar a cualquier nivel;
+  los identificadores siguen el patrón `s{sección}b{bloque}` + tramos `t{pestaña}_{bloque}` / `g{bloque}` (`bidWalk`).
+  Con la subsección seleccionada, lo que se añade desde la paleta se coloca dentro.
+- **Vista previa a pantalla completa** (dentro de Draco Planning): sin barras de la herramienta ni la cabecera/fila de
+  proyecto del generador (mensaje `chrome` al anfitrión); botón flotante «Volver al diseño».
+- **Tabla Draco sin título**: no muestra cabecera; ya no hay barra de «Recargar» ni recuento de filas/columnas.
+- **Tooltips en los gráficos** (`.ch-tip`): en líneas, franja por categoría con el valor de todas las series; en el
+  resto, el de cada barra, sector o fila.
 
 **Actualizar la herramienta.** `informes-herramienta.html` es un único archivo
 autocontenido, que fuera de Draco funciona también por sí solo. Para actualizar

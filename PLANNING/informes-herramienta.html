@@ -204,6 +204,11 @@ if(/[?&]host=draco/.test(location.search)&&window.parent!==window) document.docu
   .tuv>span{display:block; margin-bottom:4px;} .ef-chk{flex-direction:row; align-items:center; gap:8px;} .tu-fields{margin-top:12px; font-size:12.5px;} .tu-fields summary{cursor:pointer; color:var(--muted); font-weight:600;} .tu-f{padding:5px 0; border-bottom:1px solid var(--line);} .tu-f small{display:block; color:var(--muted);}
   .sb-left{display:flex; align-items:center; gap:12px; min-width:0;}
   #btnEdit.on{background:var(--brand,#2F6FED); color:#fff; border-color:transparent;}
+  /* Vista previa a pantalla completa (dentro de Draco Planning): sin barras de la herramienta, solo el informe y un
+     bot\u00F3n flotante para volver al dise\u00F1o. El generador oculta tambi\u00E9n su cabecera y la fila de proyecto. */
+  body.pv-full header.bar, body.pv-full .stage-bar, body.pv-full #repBar{display:none !important;}
+  #btnBackDesign{position:fixed; bottom:20px; left:20px; z-index:60; box-shadow:0 8px 24px rgba(15,23,42,.22); border-radius:999px; padding:8px 16px; font-weight:600;}
+  #btnBackDesign[hidden]{display:none;}
   .stage-body{flex:1; display:flex; min-height:0; min-width:0;}
   .inspector{width:310px; flex-shrink:0; border-left:1px solid var(--line); background:var(--panel); overflow:auto; padding:14px 16px 20px; font-size:13px;}
   .inspector[hidden]{display:none;}
@@ -276,6 +281,7 @@ if(/[?&]host=draco/.test(location.search)&&window.parent!==window) document.docu
   </div>
 </header>
 
+<button class="btn" id="btnBackDesign" type="button" hidden title="Volver al diseño del informe">✎ Volver al diseño</button>
 <div class="main">
   <section class="stage">
     <div class="stage-bar">
@@ -924,6 +930,12 @@ function chLine(R,bid,isBar){
       out+='<path d="'+d+'" fill="none" stroke="'+col+'" stroke-width="'+(si===0?2.6:2)+'" stroke-linecap="round" stroke-linejoin="round"'+(s.dashed?' stroke-dasharray="5 4" opacity=".85"':'')+'/>';
       s.values.forEach(function(v,i){ if(isFinite(v)) out+='<circle cx="'+xAt(i).toFixed(1)+'" cy="'+y(v).toFixed(1)+'" r="3" fill="'+col+'"><title>'+esc(s.name+' \u00B7 '+xs[i]+': '+fmt(v,R.dec)+uS(R.unit))+'</title></circle>'; });
     });
+    /* franjas invisibles por categor\u00EDa: al pasar por encima, tooltip con el valor de TODAS las series */
+    var bw2=n>1?(W-L-Rr)/(n-1):(W-L-Rr);
+    xs.forEach(function(lb,i){
+      var lines=[lb]; R.series.forEach(function(s){ if(!hidden(bid,s.name)&&isFinite(s.values[i])) lines.push(s.name+': '+fmt(s.values[i],R.dec)+uS(R.unit)); });
+      if(lines.length>1) out+='<rect class="ch-hit" x="'+Math.max(L,xAt(i)-bw2/2).toFixed(1)+'" y="'+T+'" width="'+Math.min(bw2,W-Rr-Math.max(L,xAt(i)-bw2/2)).toFixed(1)+'" height="'+(H-T-B)+'" data-tip="'+esc(lines.join('\n'))+'"/>';
+    });
   } else {
     var band=(W-L-Rr)/n, xb=function(i){ return L+band*i+band/2; };
     out=gridAxes(ticks,y,L,Rr,W,H,B,xs,xb,R);
@@ -955,13 +967,13 @@ function chDonut(R,bid){
 }
 function chHbar(R){
   var mx=Math.max.apply(null,R.items.map(function(i){ return i.value; })), dd=itemDec(R);
-  return '<div class="hb">'+R.items.map(function(it){ return '<div class="hb-r'+selState(R,it.label)+'"'+crossAttrs(R,it.label)+'><span>'+esc(it.label)+'</span><div class="hb-t"><div class="hb-f" style="width:'+(it.value/mx*100).toFixed(1)+'%"></div></div><span class="hb-v">'+fmt(it.value,dd)+esc(uS(R.unit))+'</span></div>'; }).join('')+'</div>';
+  return '<div class="hb">'+R.items.map(function(it){ return '<div class="hb-r'+selState(R,it.label)+'" data-tip="'+esc(it.label+': '+fmt(it.value,dd)+uS(R.unit))+'"'+crossAttrs(R,it.label)+'><span>'+esc(it.label)+'</span><div class="hb-t"><div class="hb-f" style="width:'+(it.value/mx*100).toFixed(1)+'%"></div></div><span class="hb-v">'+fmt(it.value,dd)+esc(uS(R.unit))+'</span></div>'; }).join('')+'</div>';
 }
 function chFunnel(R){
   var first=R.items[0].value;
   return '<div class="fn">'+R.items.map(function(it,i){
     var w=first?it.value/first*100:0, conv=i?'<div class="fn-c">'+fmt(it.value/(R.items[i-1].value||1)*100,1)+'% de la etapa anterior</div>':'';
-    return '<div><div class="fn-top"><span>'+esc(it.label)+'</span><b>'+fmt(it.value,0)+'</b></div><div class="fn-t"><div class="fn-f" style="width:'+w.toFixed(1)+'%;opacity:'+(0.45+0.55*(i/Math.max(1,R.items.length-1))).toFixed(2)+'">'+(w>22?fmt(w,1)+'%':'')+'</div></div>'+conv+'</div>';
+    return '<div data-tip="'+esc(it.label+': '+fmt(it.value,0)+(i?' \u00B7 '+fmt(it.value/(R.items[i-1].value||1)*100,1)+'% de la etapa anterior':''))+'"><div class="fn-top"><span>'+esc(it.label)+'</span><b>'+fmt(it.value,0)+'</b></div><div class="fn-t"><div class="fn-f" style="width:'+w.toFixed(1)+'%;opacity:'+(0.45+0.55*(i/Math.max(1,R.items.length-1))).toFixed(2)+'">'+(w>22?fmt(w,1)+'%':'')+'</div></div>'+conv+'</div>';
   }).join('')+'<div class="fn-c" style="margin-top:2px"><strong style="color:var(--ink)">'+fmt(R.items[R.items.length-1].value/(first||1)*100,1)+'%</strong> de conversi\u00F3n global</div></div>';
 }
 function chartCard(b,bid){
@@ -1151,8 +1163,9 @@ function dtVeil(el,on){
 }
 function dtTableHtml(b,res,extra){
   var g=res.grid, mh=parseInt(b.maxHeight,10);
-  var head='<div class="tu-head"><h3>'+esc(tok(dtTitle(b,res)))+'</h3>'+(res.desfasado?'<span class="dt-warn" title="El cubo cambi\u00F3 despu\u00E9s de generar el SQL de esta tabla">SQL desfasado</span>':'')+'</div>';
-  var bar='<div class="tu-bar"><button type="button" class="tu-btn" data-dt-act="reload" title="Volver a ejecutar la consulta">\u21BB Recargar</button><span class="tu-count">'+g.rows+' fila(s) \u00D7 '+g.cols+' columna(s)</span></div>';
+  /* sin t\u00EDtulo propio no hay cabecera (solo el aviso de SQL desfasado, si lo hay); sin barra de recargar/recuento */
+  var head=b.title?'<div class="tu-head"><h3>'+esc(tok(b.title))+'</h3>'+(res.desfasado?'<span class="dt-warn" title="El cubo cambi\u00F3 despu\u00E9s de generar el SQL de esta tabla">SQL desfasado</span>':'')+'</div>':'';
+  var bar='';
   var warn=res.desfasado?'<div class="tu-msg tu-info" role="status">El modelo del cubo ha cambiado desde que se gener\u00F3 el SQL de esta tabla. \u00C1brela en el dise\u00F1ador y gu\u00E1rdala para regenerarlo.</div>':'';
   return head+bar+(extra||'')+warn+'<div class="tu-wrap dt-wrap"'+(mh>0?' style="max-height:'+mh+'px"':'')+'>'+dtGridHtml(g)+'</div>';
 }
@@ -1170,7 +1183,7 @@ function dtRender(id){
       dtVeil(el,true);
       return;
     }
-    el.innerHTML='<div class="tu-head"><h3>'+esc(tok(dtTitle(b,res)))+'</h3></div><div class="tu-state"><span class="tu-spin"></span> Cargando datos\u2026</div>';
+    el.innerHTML=(b.title?'<div class="tu-head"><h3>'+esc(tok(b.title))+'</h3></div>':'')+'<div class="tu-state"><span class="tu-spin"></span> Cargando datos\u2026</div>';
     return;
   }
   if(st.status==='error'){
@@ -1179,7 +1192,7 @@ function dtRender(id){
       keep(dtTableHtml(b,res,'<div class="tu-msg tu-bad dt-errbar" role="alert"><span>No se pudo actualizar: '+esc(tuErrText(st.err))+'</span><button type="button" class="tu-btn" data-dt-act="retry">Reintentar</button></div>'));
       return;
     }
-    el.innerHTML='<div class="tu-head"><h3>'+esc(tok(dtTitle(b,res)))+'</h3></div><div class="tu-state tu-bad">'+esc(tuErrText(st.err))+'<div class="tu-retry"><button type="button" class="tu-btn" data-dt-act="retry">Reintentar</button></div></div>';
+    el.innerHTML=(b.title?'<div class="tu-head"><h3>'+esc(tok(b.title))+'</h3></div>':'')+'<div class="tu-state tu-bad">'+esc(tuErrText(st.err))+'<div class="tu-retry"><button type="button" class="tu-btn" data-dt-act="retry">Reintentar</button></div></div>';
     return;
   }
   keep(dtTableHtml(b,res));
@@ -1253,6 +1266,32 @@ document.addEventListener('change',function(e){
   Object.keys(DTB).forEach(function(k){ var d=DTB[k]; if(!d||!d.ref||(refs&&refs.indexOf(d.ref)<0)||!DTS[k]) return; dtLoad(k,false); dtRender(k); });
   Object.keys(DCB).forEach(function(k){ var d=DCB[k]; if(!d||!d.ref||(refs&&refs.indexOf(d.ref)<0)||!DCS[k]) return; dcLoad(k,false); dcRender(k); });
 });
+/* ---------- Tooltip de los gr\u00E1ficos ----------
+   Uno propio (el nativo del navegador tarda y no se ve bien): sale al pasar por cualquier elemento con data-tip. Los
+   <title> de los SVG (barras, puntos, sectores del anillo) se pasan a data-tip la primera vez, para no ver dos. */
+(function(){
+  var tipEl=null, cur=null;
+  var findTip=function(t){
+    while(t&&t.nodeType===1&&t!==document.body){
+      if(t.hasAttribute('data-tip')) return t;
+      var ti=t.querySelector&&t.querySelector(':scope > title');
+      if(ti&&t.closest('.chart')){ t.setAttribute('data-tip',ti.textContent); ti.remove(); return t; }
+      t=t.parentNode;
+    }
+    return null;
+  };
+  var place=function(e){ if(!tipEl) return; var x=e.clientX+14, y=e.clientY+14, w=tipEl.offsetWidth, h=tipEl.offsetHeight;
+    if(x+w>window.innerWidth-8) x=e.clientX-w-14; if(y+h>window.innerHeight-8) y=e.clientY-h-14; tipEl.style.left=x+'px'; tipEl.style.top=y+'px'; };
+  document.addEventListener('mouseover',function(e){
+    var t=findTip(e.target); if(!t||!t.closest('.chart')){ if(tipEl) tipEl.hidden=true; cur=null; return; }
+    if(!tipEl){ tipEl=document.createElement('div'); tipEl.className='ch-tip'; tipEl.setAttribute('role','tooltip'); document.body.appendChild(tipEl); }
+    cur=t; tipEl.textContent=t.getAttribute('data-tip'); tipEl.hidden=false; place(e);
+  });
+  document.addEventListener('mousemove',function(e){ if(cur&&tipEl&&!tipEl.hidden) place(e); });
+  document.addEventListener('mouseout',function(e){ if(cur&&(!e.relatedTarget||!cur.contains(e.relatedTarget))&&tipEl){ var nt=e.relatedTarget&&findTip(e.relatedTarget); if(!nt){ tipEl.hidden=true; cur=null; } } });
+  window.addEventListener('scroll',function(){ if(tipEl) tipEl.hidden=true; cur=null; },true);
+})();
+
 /* Ejecuci\u00F3n compartida de una Tabla Draco: si una tabla y un gr\u00E1fico (o dos gr\u00E1ficos) del informe usan la misma
    tabla con las mismas variables, la consulta se lanza UNA vez y todos usan el mismo resultado. "forzar" la repite. */
 var RUNQ={};
@@ -1699,6 +1738,7 @@ function blockInner(b,id){
       case 'callout': return '<div class="co" data-block="callout">'+(b.title?'<h3>'+esc(tok(b.title))+'</h3>':'')+paras(b.body)+'</div>';
       case 'cards': return '<div class="cards" data-block="cards">'+b.items.map(function(it){ return '<div class="card">'+(it.tag?'<span class="tag">'+esc(it.tag)+'</span>':'')+'<h3>'+esc(tok(it.title))+'</h3><p>'+inl(it.body)+'</p></div>'; }).join('')+'</div>';
       case 'tabs': return tabsHtml(b,id);
+      case 'group': return groupHtml(b,id);
       case 'tableUpdate': return tuNote(b);
       case 'dracoTable': return dtNote(b);
       case 'dracoVar': return dvNote(b);
@@ -1722,6 +1762,13 @@ function gridHtml(blocks,layout,cols,pre,flat){
   var h='<div class="grid g'+cs.length+(flat?' flat':'')+'" style="--cols:'+cs.map(function(c){ return c+'fr'; }).join(' ')+'">';
   blocks.forEach(function(b,i){ h+=blockWrap(b,pre+i); });
   return h+'</div>';
+}
+/* Subsecci\u00F3n: contenedor sin tarjeta con t\u00EDtulo opcional y su propia distribuci\u00F3n en columnas. Sus bloques
+   llevan el identificador del padre + "g" + \u00EDndice (s0b2g1, s0b2g1g0\u2026): se pueden anidar a cualquier nivel. */
+function groupHtml(b,id){
+  var bl=b.blocks||[];
+  var body=bl.length?gridHtml(bl,b.layout||'grid',b.cols,id+'g',false):(EDIT?'<div class="subsec-empty">Subsecci\u00F3n vac\u00EDa: selecci\u00F3nala y a\u00F1ade componentes desde la paleta.</div>':'');
+  return '<div class="subsec">'+(b.title?'<h3 class="subsec-t">'+esc(tok(b.title))+'</h3>':'')+body+'</div>';
 }
 function tabsHtml(b,id){
   var cur=S.tab[id]||0;
@@ -2700,6 +2747,15 @@ tr:last-child td{border-bottom:none}tr.tot td{font-weight:800;color:var(--ink);b
 tr[data-act="cross"]{cursor:pointer}tr[data-act="cross"]:hover td{background:color-mix(in srgb,var(--brand) 6%,transparent)}tr.sel td{background:color-mix(in srgb,var(--brand) 12%,transparent)}tr.dim td{opacity:.45}
 .tsearch{width:100%;max-width:280px;margin:0 0 14px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;font-size:14px}.tsearch:focus{outline:2px solid color-mix(in srgb,var(--brand) 50%,transparent);border-color:var(--brand)}
 
+/* ---- Tooltip de gr\u00E1ficos ---- */
+.ch-tip{position:fixed;z-index:9999;pointer-events:none;max-width:320px;padding:7px 10px;border-radius:8px;background:var(--ink);color:var(--surface);font-size:12.5px;line-height:1.45;white-space:pre-line;box-shadow:0 8px 24px rgba(15,23,42,.22)}
+.ch-tip[hidden]{display:none}
+.ch-hit{fill:transparent;cursor:crosshair}.ch-hit:hover{fill:color-mix(in srgb,var(--ink) 6%,transparent)}
+.chart [data-tip]{cursor:default}
+/* ---- Subsecci\u00F3n (bloque group) ---- */
+.subsec{min-width:0}.subsec-t{margin:0 0 12px;font-size:17px}
+.edit-mode .subsec{outline:1px dashed color-mix(in srgb,var(--brand) 45%,transparent);outline-offset:6px;border-radius:10px}
+.subsec-empty{padding:22px;border:1px dashed var(--line);border-radius:10px;color:var(--muted);font-size:13px;text-align:center}
 /* ---- Selector de variable (bloque dracoVar) ---- */
 .dv{display:flex;flex-direction:column;gap:8px}.dv-lbl{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .dv-sel{width:100%;max-width:360px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;font-size:14px}
@@ -3266,6 +3322,12 @@ function validate(spec){
       (b.variants||[]).forEach(function(v,k){ if(!v||!v.label) e.push(p+'.variants['+k+']: falta "label".'); else chartCheck(Object.assign({},b,v),p+'.variants['+k+']'); });
     }
     else if(b.type==='table'){ tableCheck(b,p); (b.variants||[]).forEach(function(v,k){ if(!v||!v.label) e.push(p+'.variants['+k+']: falta "label".'); }); }
+    else if(b.type==='group'){
+      if(!Array.isArray(b.blocks)) e.push(p+': "blocks" debe ser una lista.');
+      else { if(!b.blocks.length) w.push(p+': subsecci\u00F3n vac\u00EDa.'); b.blocks.forEach(function(bb,j){ blockCheck(bb,p+'.blocks['+j+']',inTabs); }); }
+      if(b.layout!==undefined&&['single','grid','two'].indexOf(b.layout)<0) e.push(p+': "layout" debe ser "single" o "grid".');
+      if(b.cols!==undefined&&!(Array.isArray(b.cols)&&b.cols.length>=1&&b.cols.length<=4)) e.push(p+': "cols" debe tener de 1 a 4 columnas.');
+    }
     else if(b.type==='tabs'){
       if(inTabs) e.push(p+': no se puede anidar "tabs" dentro de "tabs".');
       if(!Array.isArray(b.tabs)||b.tabs.length<2) e.push(p+': "tabs" necesita al menos 2 pestañas.');
@@ -3397,9 +3459,7 @@ function parseAgentJson(text){
   return JSON.parse(t.slice(a,b+1));
 }
 function blockTitle(bid){
-  var m=/^s(\d+)b(\d+)(?:t(\d+)_(\d+))?$/.exec(bid); if(!m||!currentSpec) return bid;
-  var s=currentSpec.sections[+m[1]]; var b=s&&s.blocks&&s.blocks[+m[2]];
-  if(b&&m[3]!==undefined&&b.tabs&&b.tabs[+m[3]]) b=b.tabs[+m[3]].blocks[+m[4]];
+  var W=bidWalk(currentSpec,bid); if(!W) return bid; var b=W.b;
   return (b&&(b.title||b.type))?('"'+(b.title||b.type)+'"'):bid;
 }
 function showReport(){
@@ -3423,7 +3483,7 @@ function showReport(){
   }
   el.innerHTML=h;
 }
-function countBlocks(spec){ var n=0; spec.sections.forEach(function(s){ (s.blocks||[]).forEach(function(b){ n++; if(b.tabs) b.tabs.forEach(function(t){ n+=t.blocks.length; }); }); }); return n; }
+function countBlocks(spec){ var n=0, walk=function(bl){ (bl||[]).forEach(function(b){ if(!b) return; n++; if(b.tabs) b.tabs.forEach(function(t){ walk(t.blocks); }); if(b.type==='group') walk(b.blocks); }); }; spec.sections.forEach(function(s){ walk(s.blocks); }); return n; }
 var QS=new URLSearchParams(location.search), HOSTED=(QS.get('host')==='draco'&&window.parent!==window), VIEWER=(QS.get('mode')==='viewer'&&window.parent!==window);
 function renderFromText(text){
   var spec;
@@ -3432,7 +3492,7 @@ function renderFromText(text){
   var res=validate(spec);
   if(res.errors.length){ baseReport=res; showReport(); return false; }
   currentSpec=spec; runtimeNotes=null; slidesInfo=null; edSel=null; showEmpty(false); renderBrandReport(); closeModal('mdPaste'); closeAiPanel();
-  loadPreview(); if(editOn){ edBase=JSON.stringify(currentSpec,null,2); edHist=[]; edRender(); } else if(!VIEWER&&editPref&&previewMode!=='slides'){ setEditMode(true); }
+  loadPreview(); if(editOn){ edBase=JSON.stringify(currentSpec,null,2); edHist=[]; edRender(); } else if(!VIEWER&&editPref&&previewMode!=='slides'){ setEditMode(true); } layoutBars();
   baseReport={errors:[],warnings:res.warnings,sections:spec.sections.length,blocks:countBlocks(spec),filters:(spec.filters||[]).length};
   showReport();
   $('pageInfo').textContent=(spec.meta&&spec.meta.title)||'Vista previa';
@@ -3670,6 +3730,19 @@ function edInfo(){
   var ds=Object.keys(d.dims||{}).filter(function(k){ return k!==tm.year; }).map(function(k){ return {id:k,label:(d.labels&&d.labels[k])||k}; });
   return {metrics:ms,dims:ds,month:tm.month||null,hasTime:!!(tm.year&&tm.month)};
 }
+/* Recorre un identificador de bloque: s{secci\u00F3n}b{bloque} seguido de cualquier n\u00FAmero de tramos
+   t{pesta\u00F1a}_{bloque} (dentro de unas pesta\u00F1as) o g{bloque} (dentro de una subsecci\u00F3n). */
+function bidWalk(spec,bid){
+  var m=/^s(\d+)b(\d+)((?:t\d+_\d+|g\d+)*)$/.exec(bid||''); if(!m||!spec) return null;
+  var si=+m[1], sec=(spec.sections||[])[si], list=sec&&sec.blocks, idx=+m[2], b=list&&list[idx], pre='s'+si+'b', cont=sec, path='S'+si+'.B'+idx;
+  var re=/t(\d+)_(\d+)|g(\d+)/g, mm, here=pre+idx, inTab=false;
+  while(b&&(mm=re.exec(m[3]))){
+    if(mm[1]!==undefined){ var tb=b.tabs&&b.tabs[+mm[1]]; cont=tb; list=tb&&tb.blocks; pre=here+'t'+mm[1]+'_'; idx=+mm[2]; path+='.T'+mm[1]+'.B'+idx; inTab=true; }
+    else { cont=b; list=b.blocks; pre=here+'g'; idx=+mm[3]; path+='.B'+idx; }
+    b=list&&list[idx]; here=pre+idx;
+  }
+  return b?{b:b,list:list,idx:idx,pre:pre,si:si,sec:sec,cont:cont,node:path,deep:m[3]!==''}:null;
+}
 function edResolve(sel){
   if(!currentSpec||!sel) return null;
   if(sel.page) return {kind:'page',obj:currentSpec};
@@ -3680,10 +3753,8 @@ function edResolve(sel){
     if(sel.ki==null) return {kind:'section',obj:h,si:+m[1],list:secs,idx:+m[1]};
     return h.kpis[sel.ki]?{kind:'kpi',obj:h.kpis[sel.ki],list:h.kpis,idx:sel.ki,si:+m[1],bid:sel.bid}:null;
   }
-  if(!(m=/^s(\d+)b(\d+)(?:t(\d+)_(\d+))?$/.exec(sel.bid))) return null;
-  var si=+m[1], sec=secs[si], list=sec&&sec.blocks, pre='s'+si+'b', idx=+m[2], b=list&&list[idx], cont=sec;
-  if(b&&m[3]!==undefined){ var tb=b.tabs&&b.tabs[+m[3]]; cont=tb; list=tb&&tb.blocks; pre='s'+si+'b'+idx+'t'+m[3]+'_'; idx=+m[4]; b=list&&list[idx]; }
-  if(!b) return null;
+  var W=bidWalk(currentSpec,sel.bid); if(!W) return null;
+  var si=W.si, sec=W.sec, list=W.list, pre=W.pre, idx=W.idx, b=W.b, cont=W.cont;
   if(b.type==='kpis'&&sel.ki!=null) return (b.items&&b.items[sel.ki])?{kind:'kpi',obj:b.items[sel.ki],list:b.items,idx:sel.ki,si:si,bid:sel.bid}:null;
   return {kind:'block',obj:b,list:list,idx:idx,pre:pre,si:si,sec:sec,cont:cont};
 }
@@ -3800,7 +3871,7 @@ function edSpan(b,cont){
 function edDensity(o,what){ return gSel('Espaciado de '+what,'density',o.density||'',[['','Como la p\u00E1gina'],['normal','Normal'],['tight','Ajustado'],['dense','Muy ajustado']]); }
 function edLayoutBox(r){
   var c=r.cont; if(!c) return '';
-  var grid=isGrid(c), h='<div class="insp-sec">Esta zona ('+(c===r.sec?'secci\u00F3n':'pesta\u00F1a')+')</div>';
+  var grid=isGrid(c), h='<div class="insp-sec">Esta zona ('+(c===r.sec?'secci\u00F3n':(c.type==='group'?'subsecci\u00F3n':'pesta\u00F1a'))+')</div>';
   h+=gSel('Distribuci\u00F3n','layout',grid?'grid':'single',[['single','Una columna: cada bloque a todo el ancho'],['grid','En columnas']]).replace('data-p="','data-pc="');
   if(grid) h+=gSel('Reparto de columnas','cols',(c.cols&&c.cols.length?c.cols:[1,1]).join(','),colOpts(c.cols)).replace('data-p="','data-pc="');
   return h;
@@ -3824,6 +3895,14 @@ function edBlock(r){
   else if(b.type==='dracoTable') h=edDT(b);
   else if(b.type==='dracoVar') h=edDV(b);
   else if(b.type==='dracoChart') h=edDC(b);
+  else if(b.type==='group'){
+    var gg=isGrid(b);
+    h=gText('T\u00EDtulo (opcional)','title',b.title,'Sin t\u00EDtulo')
+      +'<div class="insp-sec">Distribuci\u00F3n de la subsecci\u00F3n</div>'
+      +gSel('Distribuci\u00F3n','layout',gg?'grid':'single',[['single','Una columna: cada bloque a todo el ancho'],['grid','En columnas']])
+      +(gg?gSel('Reparto de columnas','cols',(b.cols&&b.cols.length?b.cols:[1,1]).join(','),colOpts(b.cols)):'')
+      +'<p class="insp-hint">Con la subsecci\u00F3n seleccionada, lo que a\u00F1adas desde la paleta se coloca dentro (tambi\u00E9n otra subsecci\u00F3n). '+(b.blocks&&b.blocks.length?'Tiene '+b.blocks.length+(b.blocks.length===1?' bloque.':' bloques.'):'Ahora est\u00E1 vac\u00EDa.')+'</p>';
+  }
   else if(b.type==='tabs') h=edNote('Elige una pesta\u00F1a en el \u00E1rbol de estructura para cambiar su distribuci\u00F3n, espaciado y notas.')+gText('T\u00EDtulo','title',b.title)
     +listBlock('Pesta\u00F1as','tabs',b.tabs,function(it,i){ return gText('Nombre','tabs.'+i+'.label',it.label); },{label:'Nueva pesta\u00F1a',blocks:[{type:'text',title:'Texto',body:'Escribe aqu\u00ED tu texto.'}]},1);
   if(b.type==='tabs') return h+edDensity(b,'este bloque');
@@ -3955,6 +4034,7 @@ function edTemplate(type){
     case 'tableUpdate': return {type:'tableUpdate',title:'',ref:'',refName:'',values:{}};
     case 'dracoTable': return {type:'dracoTable',title:'',ref:'',refName:''};
     case 'dracoChart': return {type:'dracoChart',title:'',ref:'',refName:'',kind:'bar',seriesIn:'cols',rows:'all'};
+    case 'group': return {type:'group',title:'',layout:'grid',cols:[1,1],blocks:[]};
     case 'dracoVar': return {type:'dracoVar',title:'',cube:'',dim:'',attr:'',variable:'',refs:[],defaultValue:''};
     case 'text': return {type:'text',title:'Nuevo texto',body:'Escribe aqu\u00ED tu texto. Puedes usar **negrita**'+(m0?' y cifras vivas como {'+m0+'}':'')+'.'};
     case 'callout': return {type:'callout',title:'Aviso',body:'Texto destacado.'};
@@ -4643,7 +4723,7 @@ var PAL=[
  {g:'Estructura',items:[
   {id:'nav',l:'Menú',i:'menu',t:'Barra superior de la página: marca, icono, opciones y botones. Solo puede haber una.'},
   {id:'section',l:'Sección',i:'section',t:'Zona de la página. Su tipo (cabecera, contenido, preguntas frecuentes, llamada a la acción…) se elige en sus propiedades.'},
-  {id:'row',l:'Fila',i:'row',t:'Fila de una sección. Por ahora no hace nada.'},
+  {id:'group',l:'Subsecci\u00F3n',i:'row',t:'Zona dentro de una secci\u00F3n con su propia distribuci\u00F3n en columnas (p. ej. una con 2 columnas y otra con 3). Se puede meter una subsecci\u00F3n dentro de otra. Con la subsecci\u00F3n seleccionada, los componentes que a\u00F1adas se colocan dentro.'},
   {id:'tabs',l:'Pestañas',i:'tabs',t:'Agrupa contenido en pestañas dentro de una sección.'},
   {id:'footer',l:'Pie',i:'footer',t:'Pie de página con texto y enlaces. Solo puede haber uno.'}]},
  {g:'Textos',items:[
@@ -4683,7 +4763,7 @@ function palTemplate(id){
     case 'footer': return {id:'',type:'footer',text:'Mi organización',links:[]};
     case 'section': case 'faq': case 'cta': return edTemplate(id);
     case 'tabs': return {type:'tabs',title:'Pestañas',tabs:[{label:'Pestaña 1',blocks:[edTemplate('text')]},{label:'Pestaña 2',blocks:[edTemplate('text')]}]};
-    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': case 'dracoTable': case 'dracoVar': case 'dracoChart': return edTemplate(id);
+    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': case 'dracoTable': case 'dracoVar': case 'dracoChart': case 'group': return edTemplate(id);
     default: { var c=edTemplate('chart'), k=id.split(':')[1]; if(c){ if(isLitChart(c)) edConvertLit(c,k); else edConvert(c,k); } return c; }
   }
 }
@@ -4727,6 +4807,7 @@ function fieldLeaf(id,ico_,label,val,sel,field,extra){
 function blockNode(b,id,bid,badge,meta){
   var n={id:id,kind:'blk',ico:(b.type==='chart'?chartIc(b):(BIc[b.type]||'text')),label:(b.type==='chart'?'Gráfico':(BLn[b.type]||'Bloque')),sub:snip(blockSub(b),32),badge:badge||'',sel:{bid:bid},children:[],meta:meta,btype:b.type};
   if(b.type==='kpis') (b.items||[]).forEach(function(k,ki){ n.children.push({id:id+'.K'+ki,kind:'kpi',ico:'kpis',label:k.label||'Cifra',sub:snip(k.value!=null?k.value:(k.metric||''),16),sel:{bid:bid,ki:ki},children:[],si:meta.si}); });
+  if(b.type==='group'){ b.blocks=b.blocks||[]; contentNodes(n,b.blocks,b.layout||'grid',b.cols,id,bid+'g',true,meta.si,{bid:bid},null); }
   if(b.type==='tabs') (b.tabs||[]).forEach(function(t,ti){
     var tid=id+'.T'+ti, pre=bid+'t'+ti+'_';
     t.blocks=t.blocks||[];
@@ -4794,10 +4875,10 @@ function selNodeId(){
   if(edSel.bid==null) return 'S'+edSel.si+leafSuffix();
   var m=/^s(\d+)bk$/.exec(edSel.bid);
   if(m) return edSel.ki!=null?('S'+m[1]+'.K'+edSel.ki):('S'+m[1]);
-  m=/^s(\d+)b(\d+)(?:t(\d+)_(\d+))?$/.exec(edSel.bid); if(!m) return null;
-  var base=(m[3]!==undefined)?('S'+m[1]+'.B'+m[2]+'.T'+m[3]+'.B'+m[4]):('S'+m[1]+'.B'+m[2]);
+  var W=bidWalk(currentSpec,edSel.bid); if(!W) return null;
+  var base=W.node;
   if(edSel.ki!=null) return base+'.K'+edSel.ki;
-  if(edTab!=null&&m[3]===undefined){ var b=edResolve({bid:edSel.bid}); if(b&&b.obj&&b.obj.type==='tabs') return base+'.T'+edTab; }
+  if(edTab!=null&&W.b&&W.b.type==='tabs') return base+'.T'+edTab;
   return base;
 }
 function treeAct(n){
@@ -4906,6 +4987,9 @@ function addBlockC(id,at){
   }
   var r=edResolve(edSel); if(r&&r.kind==='kpi') r=edResolve({bid:r.bid});
   if(r&&r.kind==='block'){
+    if(r.obj.type==='group'&&tpl.type!=='tabs'){
+      r.obj.blocks=r.obj.blocks||[]; r.obj.blocks.push(tpl); edSel={bid:r.pre+r.idx+'g'+(r.obj.blocks.length-1)}; edTab=null; edField=null; return true;
+    }
     if(r.obj.type==='tabs'&&edTab!=null&&tpl.type!=='tabs'&&r.obj.tabs[edTab]){
       var tb=r.obj.tabs[edTab]; tb.blocks=tb.blocks||[]; tb.blocks.push(tpl); edSel={bid:r.pre+r.idx+'t'+edTab+'_'+(tb.blocks.length-1)}; return true;
     }
@@ -5027,9 +5111,15 @@ function layoutBars(){
   $('sbCompH').setAttribute('aria-expanded',String(sbState.comp)); $('sbTreeH').setAttribute('aria-expanded',String(sbState.tree));
   $('sbCompH').querySelector('.chev').textContent=sbState.comp?'▾':'▸'; $('sbTreeH').querySelector('.chev').textContent=sbState.tree?'▾':'▸';
   document.body.style.setProperty('--rbar',(!show?0:(sbState.r?310:38))+'px');
+  var full=!!(HOSTED&&currentSpec&&!editOn&&!VIEWER);
+  if(document.body.classList.contains('pv-full')!==full){
+    document.body.classList.toggle('pv-full',full); $('btnBackDesign').hidden=!full;
+    try{ hostPost({dpTool:1,op:'chrome',full:full}); }catch(e){}
+  }
   $('btnEdit').textContent=editOn?'👁 Vista previa':'✎ Diseñar';
   $('btnEdit').title=editOn?'Ocultar las barras y probar la página tal como la verá quien la use':'Mostrar las barras de componentes, estructura y propiedades';
 }
+$('btnBackDesign').addEventListener('click',function(){ setEditMode(true); });
 $('lbarToggle').addEventListener('click',function(){ sbState.l=!sbState.l; sbSave(); layoutBars(); });
 $('inspClose').addEventListener('click',function(){ sbState.r=!sbState.r; sbSave(); layoutBars(); });
 $('sbCompH').addEventListener('click',function(e){ if(e.target.closest('.mini')) return; sbState.comp=!sbState.comp; sbSave(); layoutBars(); });
@@ -5299,19 +5389,22 @@ function dtPickView(ref){
   b.ref=ref||''; b.refName=cur?cur.nombre:'';
   edSync(true); edRender();
 }
+/* Bloques que pueden abrir el dise\u00F1ador del informe: la Tabla Draco y el Gr\u00E1fico Draco (este \u00FAltimo no necesita
+   un bloque de tabla: crea o edita su tabla directamente y, al guardar, queda enlazada al gr\u00E1fico). */
+function dtDesignBlock(bid){ var r=edResolve({bid:bid}); return (r&&r.kind==='block'&&r.obj&&(r.obj.type==='dracoTable'||r.obj.type==='dracoChart'))?r.obj:null; }
 function dtDesign(){
-  var b=dtSelBlock(); if(!b||!edSel) return; var bid=edSel.bid, btn=document.querySelector('[data-dtdesign]');
+  if(!edSel) return; var b=dtDesignBlock(edSel.bid); if(!b) return; var bid=edSel.bid, btn=document.querySelector('[data-dtdesign]');
   if(btn){ btn.disabled=true; btn.textContent='Dise\u00F1ador abierto\u2026'; }
   dtCallLong('dt.design',{ref:b.ref||null}).then(function(res){
     DTV.list=null;
     if(res&&res.id){
-      var bb=dtBlock(bid);
+      var bb=dtDesignBlock(bid);
       if(bb){ edPrevSel=edSel; bb.ref=res.id; bb.refName=res.nombre; edSync(true); }
     }
     edRender();
   },function(e){
     DTV.list=null; edRender();
-    var box=$('dtViewBox'); if(box) box.insertAdjacentHTML('beforeend','<p class="insp-hint" style="color:#C2362B">'+esc((e&&e.message)||'No se pudo abrir el dise\u00F1ador.')+'</p>');
+    var box=$('dtViewBox')||$('dcViewBox'); if(box) box.insertAdjacentHTML('beforeend','<p class="insp-hint" style="color:#C2362B">'+esc((e&&e.message)||'No se pudo abrir el dise\u00F1ador.')+'</p>');
   });
 }
 
@@ -5334,6 +5427,7 @@ $('inspBody').addEventListener('click',function(e){
    filas entran (por nivel de jerarqu\u00EDa), cabeceras/etiquetas (autom\u00E1tico o a mano) y, para anillo/barras
    horizontales/embudo, la serie, el orden y el m\u00E1ximo de elementos.
    ===================================================================== */
+BLOCK_TYPES.push('group'); BLOCK_LABEL.group='Subsecci\u00F3n'; BLn.group='Subsecci\u00F3n'; BIc.group='row';
 BLOCK_TYPES.push('dracoChart'); BLOCK_LABEL.dracoChart='Gr\u00E1fico Draco';
 BLn.dracoChart='Gr\u00E1fico Draco'; BIc.dracoChart='draco-chart';
 IC['draco-chart']='<path d="M4 19V5"/><path d="M4 19h16"/><rect x="7" y="11" width="3" height="6" rx=".5"/><rect x="12" y="7" width="3" height="10" rx=".5"/><rect x="17" y="13" width="3" height="4" rx=".5"/>';
@@ -5379,7 +5473,8 @@ function dcPaintView(b){
   if(b.ref&&!cur) opts+='<option value="'+esc(b.ref)+'" selected>'+esc((b.refName||b.ref)+' (ya no existe)')+'</option>';
   el.innerHTML='<label class="ef"><span>Tabla</span><select data-dcview>'+opts+'</select></label>'
     +(cur?'<p class="insp-hint">Cubo <b>'+esc(cur.cubo||'\u2014')+'</b>'+(cur.tieneSql?'':' \u00B7 <span style="color:#C2362B">sin SQL generado: \u00E1brela en el dise\u00F1ador y guarda</span>')+'</p>':'')
-    +'<p class="insp-hint">'+(L.length?'El gr\u00E1fico se calcula con lo que pinta esa tabla. Para cambiar sus datos, usa el dise\u00F1ador desde un bloque \u00ABTabla Draco\u00BB.':'Este proyecto todav\u00EDa no tiene Tablas Draco: crea una con el bloque \u00ABTabla Draco\u00BB.')+'</p>';
+    +'<button class="btn small" data-dtdesign type="button" style="margin-top:8px">\uD83E\uDDE9 Dise\u00F1ador del informe</button>'
+    +'<p class="insp-hint">'+(b.ref?'El gr\u00E1fico se calcula con lo que pinta esa tabla. Abre el dise\u00F1ador para cambiarla (campos, filtros, medidas\u2026).':'Elige una tabla o crea una nueva en el dise\u00F1ador: al guardarla queda enlazada a este gr\u00E1fico.')+'</p>';
 }
 $('inspBody').addEventListener('change',function(e){
   /* el tipo decide qu\u00E9 opciones se ven (serie y orden solo en anillo / barras horizontales / embudo) */
@@ -5411,7 +5506,7 @@ function dvSelBlock(){ var r=edResolve(edSel); return (r&&r.kind==='block'&&r.ob
 /* Referencias de todas las Tablas Draco del informe (secciones y pesta\u00F1as) */
 function dvTableRefs(){
   var out=[];
-  var walk=function(blocks){ (blocks||[]).forEach(function(b){ if(!b) return; if(b.type==='dracoTable'&&b.ref&&out.indexOf(b.ref)<0) out.push(b.ref); if(b.type==='tabs') (b.tabs||[]).forEach(function(t){ walk(t.blocks); }); }); };
+  var walk=function(blocks){ (blocks||[]).forEach(function(b){ if(!b) return; if(b.type==='dracoTable'&&b.ref&&out.indexOf(b.ref)<0) out.push(b.ref); if(b.type==='tabs') (b.tabs||[]).forEach(function(t){ walk(t.blocks); }); if(b.type==='group') walk(b.blocks); }); };
   ((currentSpec&&currentSpec.sections)||[]).forEach(function(sec){ walk(sec.blocks); });
   return out;
 }
