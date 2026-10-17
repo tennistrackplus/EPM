@@ -24,7 +24,7 @@ const DracoTables = {
     MAX_NAME: 120,
     MAX_DESC: 500,
     MAX_ENGINES: 6,
-    ENGINE_URL: "tablas-draco/engine.html?v=20261020a",
+    ENGINE_URL: "tablas-draco/engine.html?v=20261021a",
 
     engines: new Map(),      // "proyecto:id" -> { frame, host, stamp, chain, lastUse }
     pending: {},             // precarga: "proyecto:id" -> { pr, at }
@@ -496,6 +496,9 @@ const DracoTables = {
             if (!byGroup.has(gk)) byGroup.set(gk, []);
             byGroup.get(gk).push(it);
         });
+        // joins de los filtros de la barra: se comparten en todo el grupo (LEFT JOIN 1:1 a dimensiones, no cambia el
+        // resultado de los KPIs que no los usan) para seguir leyendo la tabla de hechos UNA vez
+        const extraJoins = (lst) => { const m = new Map(); lst.forEach(it => (it.extraJoins || []).forEach(j => m.set(j, 1))); return Array.from(m.keys()); };
         let n = 0;
         const groups = Array.from(byGroup.values()).map(list => {
             const keys = [], cols = [], conds = [];
@@ -514,7 +517,8 @@ const DracoTables = {
             });
             const first = list[0].parts;
             const where = (all && conds.length) ? "\nWHERE\n    " + Array.from(new Set(conds)).join("\n    OR ") : "";
-            return { sql: "SELECT\n" + cols.join(",\n") + "\n" + first.from + "\n" + (first.joins || "").trim() + where, keys };
+            const ej = extraJoins(list);
+            return { sql: "SELECT\n" + cols.join(",\n") + "\n" + first.from + "\n" + (first.joins || "").trim() + (ej.length ? "\n" + ej.join("\n") : "") + where, keys };
         });
         const sql = groups.length === 1 ? groups[0].sql
             : "SELECT * FROM\n" + groups.map((g, i) => "(\n" + g.sql + "\n) G" + i).join("\nCROSS JOIN\n");
@@ -530,23 +534,43 @@ const DracoTables = {
      * KPIs que viven DENTRO del informe (spec.dracoKpis): la herramienta los manda ya con sus piezas
      * ([{ id, parts, vars }], tomadas de SU copia del informe, nunca de la página). Una sola consulta.
      */
-    async kpisInline(project, kpis, variables) {
+    /** Join y condición de un filtro de la barra sobre un KPI (alias fijo por dimensión: xf_<DIM>). */
+    kpiFilterSql(f) {
+        const sf = Provider.key() === "snowflake";
+        const db = f.fld.relProject || (sf ? SF.getDatabase() : BQ.getGcpProject());
+        const table = sf ? `${db}.${f.fld.relDataset}.${f.fld.relTable}` : `\`${db}.${f.fld.relDataset}.${f.fld.relTable}\``;
+        const key = (f.fld.attributes || []).find(a => a.isKey) || (f.fld.attributes || [])[0];
+        const ok = (x) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(x || ""));
+        if (!key || !ok(f.fld.name) || !ok(key.name) || !ok(f.att.name)) return null;
+        const alias = "xf_" + String(f.fld.name).replace(/[^A-Za-z0-9_]/g, "_");
+        const num = /INT|NUMERIC|FLOAT|DECIMAL|NUMBER|DOUBLE|BIGNUMERIC/i.test(f.att.dataType || "") && /^-?\d+(\.\d+)?$/.test(f.value.trim());
+        const lit = num ? f.value.trim() : "'" + this.resolveKpiVars("'$V$'", { V: f.value }).slice(1, -1) + "'";
+        return { join: `LEFT JOIN ${table} ${alias} ON f.${f.fld.name} = ${alias}.${key.name}`, cond: `${alias}.${f.att.name} = ${lit}` };
+    },
+
+    async kpisInline(project, kpis, variables, filtersByKpi) {
         const out = { values: {}, errors: {}, nombres: {} };
         const list = (kpis || []).filter(k => k && k.id);
         if (!list.length) return out;
-        const ck = project.PROYECTO_ID + "|inline|" + JSON.stringify(list.map(k => [k.id, k.parts, k.vars])) + "|" + JSON.stringify(variables || {});
+        const ck = project.PROYECTO_ID + "|inline|" + JSON.stringify(list.map(k => [k.id, k.parts, k.vars])) + "|" + JSON.stringify(variables || {}) + "|" + JSON.stringify(filtersByKpi || {});
         const hit = this._kpiCache[ck];
         if (hit && Date.now() - hit.at < this.KPI_TTL) return hit.res;
         const over = {};
         Object.keys(variables || {}).forEach(k => { const v = variables[k]; over[k.toUpperCase()] = (v && typeof v === "object") ? v.value : v; });
         const items = [];
-        list.forEach(k => {
+        for (const k of list) {
             const parts = k.parts;
-            if (!parts || !parts.from || !parts.field) { out.errors[k.id] = "Este KPI no está terminado: ábrelo en el diseñador y pulsa Guardar."; return; }
+            if (!parts || !parts.from || !parts.field) { out.errors[k.id] = "Este KPI no está terminado: ábrelo en el diseñador y pulsa Guardar."; continue; }
             const vars = Object.assign({}, k.vars || {}, over);
-            try { items.push({ key: k.id, parts, conds: (parts.conds || []).map(c => this.resolveKpiVars(c, vars)) }); }
-            catch (e) { out.errors[k.id] = "El KPI " + e.message + "."; }
-        });
+            let conds;
+            try { conds = (parts.conds || []).map(c => this.resolveKpiVars(c, vars)); }
+            catch (e) { out.errors[k.id] = "El KPI " + e.message + "."; continue; }
+            // filtros de la barra aplicados directamente a este KPI (validados contra el modelo de su cubo)
+            const extraJoins = [];
+            const fl = await this.validRuntimeFilters(project, k.cubo, (filtersByKpi || {})[k.id]);
+            fl.forEach(f => { const x = this.kpiFilterSql(f); if (x) { extraJoins.push(x.join); conds.push(x.cond); } });
+            items.push({ key: k.id, parts, conds, extraJoins });
+        }
         await this.runKpiItems(items, out);
         this._kpiCache[ck] = { at: Date.now(), res: out };
         return out;
@@ -713,8 +737,28 @@ const DracoTables = {
         }
     },
 
+    /**
+     * Filtros de la barra que se aplican DIRECTAMENTE a una tabla/gráfico/KPI: [{dim, attr, value}] -> solo los que
+     * existen en el modelo del cubo (el resto se ignora: ese objeto no tiene ese campo). Devuelve también el campo del
+     * modelo (para construir joins de KPI).
+     */
+    async validRuntimeFilters(project, cubeName, filters) {
+        const list = (filters || []).filter(f => f && f.dim && f.attr && f.value !== undefined && f.value !== null && String(f.value) !== "");
+        if (!list.length || !cubeName) return [];
+        let model;
+        try { model = await this.resolveModel(project, await this.cubeByName(project, cubeName)); } catch (e) { return []; }
+        const out = [];
+        list.forEach(f => {
+            const fld = (model.fields || []).find(x => x.type === "DIMENSION" && String(x.name).toUpperCase() === String(f.dim).toUpperCase());
+            const att = fld && (fld.attributes || []).find(a => String(a.name).toUpperCase() === String(f.attr).toUpperCase());
+            if (fld && att) out.push({ dim: fld.name, attr: att.name, value: String(f.value), fld, att });
+        });
+        return out;
+    },
+
     async runOnce(project, id, force, opts) {
         const runVars = (opts && opts.variables) || {};
+        const runFilters = (opts && opts.filters) || [];
         const k = this.key(project.PROYECTO_ID, id);
         const row = await this.get(project.PROYECTO_ID, id);
         const item = this.toItem(row);
@@ -738,7 +782,11 @@ const DracoTables = {
             const win = eng.frame.contentWindow;
             await win.Office.onReady();
             if (win.DracoVariables) win.DracoVariables.setOverrides(runVars);
-            await win.DracoEngineApi.refresh(def.reportId, row.SQL_TEXT);
+            // Filtros de la barra aplicados directamente: el motor regenera el SQL con ellos (el guardado no los lleva)
+            const rf = await this.validRuntimeFilters(project, row.CUBO, runFilters);
+            win.__dracoRuntimeFilters = rf.length ? rf.map(f => ({ dim: f.dim, attr: f.attr, value: f.value })) : null;
+            try { await win.DracoEngineApi.refresh(def.reportId, rf.length ? null : row.SQL_TEXT); }
+            finally { win.__dracoRuntimeFilters = null; }
             const variables = win.DracoVariables ? win.DracoVariables.list() : [];
             return { id, nombre: row.NOMBRE, motor: row.MOTOR || "", sqlGenerado: row.SQL_GENERADO || null, desfasado: item.desfasado, variables, grid: this.snapshot(eng.host) };
         });
@@ -792,10 +840,10 @@ const DracoTables = {
             switch (op) {
                 case "dt.list": return await this.list(project.PROYECTO_ID);
                 case "dt.run": {
-                    // p.variables (opcional): valores de variables para ESTA ejecución (futuro selector del generador)
-                    const hasVars = p.variables && Object.keys(p.variables).length;
+                    // p.variables / p.filters (opcionales): valores de variables y filtros de la barra para ESTA ejecución
+                    const hasVars = (p.variables && Object.keys(p.variables).length) || (p.filters && p.filters.length);
                     const pre = (p.force || hasVars) ? null : this.takePending(project, p.ref);
-                    return pre ? await pre : await this.run(project, p.ref, p.force ? "fresh" : undefined, { variables: p.variables || {} });
+                    return pre ? await pre : await this.run(project, p.ref, p.force ? "fresh" : undefined, { variables: p.variables || {}, filters: p.filters || [] });
                 }
                 case "dt.variables": return await this.variables(project, p.ref);
                 case "dt.cubes": return (await this.cubes(project.PROYECTO_ID)).map(c => ({ name: c.name }));
@@ -804,7 +852,7 @@ const DracoTables = {
                 case "dt.varsFor": return await this.varsFor(project, p.refs || []);
                 case "dt.kpis":
                     // KPIs del informe (con sus piezas, los añade la herramienta); si no vienen, el formato antiguo por id
-                    return Array.isArray(p.kpis) ? await this.kpisInline(project, p.kpis, p.variables || null)
+                    return Array.isArray(p.kpis) ? await this.kpisInline(project, p.kpis, p.variables || null, p.filters || null)
                                                  : await this.kpis(project, p.refs || [], p.variables || null);
                 case "dt.toggle": return await this.toggle(project, p.ref, p.r, p.c);
                 case "dt.design":
