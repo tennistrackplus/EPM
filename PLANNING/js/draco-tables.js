@@ -24,7 +24,7 @@ const DracoTables = {
     MAX_NAME: 120,
     MAX_DESC: 500,
     MAX_ENGINES: 6,
-    ENGINE_URL: "tablas-draco/engine.html?v=20261019a",
+    ENGINE_URL: "tablas-draco/engine.html?v=20261019b",
 
     engines: new Map(),      // "proyecto:id" -> { frame, host, stamp, chain, lastUse }
     pending: {},             // precarga: "proyecto:id" -> { pr, at }
@@ -524,6 +524,52 @@ const DracoTables = {
      * refs: ids de Tablas Draco que son KPI; variables: { NOMBRE: valor } de la página (opcional).
      * Devuelve { values: { ref: número|null }, errors: { ref: mensaje }, nombres: { ref: nombre } }.
      */
+    /**
+     * KPIs que viven DENTRO del informe (spec.dracoKpis): la herramienta los manda ya con sus piezas
+     * ([{ id, parts, vars }], tomadas de SU copia del informe, nunca de la página). Una sola consulta.
+     */
+    async kpisInline(project, kpis, variables) {
+        const out = { values: {}, errors: {}, nombres: {} };
+        const list = (kpis || []).filter(k => k && k.id);
+        if (!list.length) return out;
+        const ck = project.PROYECTO_ID + "|inline|" + JSON.stringify(list.map(k => [k.id, k.parts, k.vars])) + "|" + JSON.stringify(variables || {});
+        const hit = this._kpiCache[ck];
+        if (hit && Date.now() - hit.at < this.KPI_TTL) return hit.res;
+        const over = {};
+        Object.keys(variables || {}).forEach(k => { const v = variables[k]; over[k.toUpperCase()] = (v && typeof v === "object") ? v.value : v; });
+        const items = [];
+        list.forEach(k => {
+            const parts = k.parts;
+            if (!parts || !parts.from || !parts.field) { out.errors[k.id] = "Este KPI no está terminado: ábrelo en el diseñador y pulsa Guardar."; return; }
+            const vars = Object.assign({}, k.vars || {}, over);
+            try { items.push({ key: k.id, parts, conds: (parts.conds || []).map(c => this.resolveKpiVars(c, vars)) }); }
+            catch (e) { out.errors[k.id] = "El KPI " + e.message + "."; }
+        });
+        await this.runKpiItems(items, out);
+        this._kpiCache[ck] = { at: Date.now(), res: out };
+        return out;
+    },
+
+    /** Ejecuta la consulta única de los KPIs y reparte los valores (si falla, grupo a grupo). */
+    async runKpiItems(items, out) {
+        if (!items.length) return;
+        await Informes.guard();
+        const { sql, groups } = this.kpiSql(items);
+        const take = (row, keys) => keys.forEach(([col, key]) => {
+            const v = row ? (row[col] ?? row[col.toLowerCase()]) : null;
+            out.values[key] = (v === null || v === undefined || v === "") ? null : Number(v);
+        });
+        try {
+            const res = await Provider.runQuery(sql);
+            take(res[0], groups.flatMap(g => g.keys));
+        } catch (err) {
+            for (const g of groups) {
+                try { const r = await Provider.runQuery(g.sql); take(r[0], g.keys); }
+                catch (e2) { g.keys.forEach(([, key]) => { out.errors[key] = String(e2.message || e2); }); }
+            }
+        }
+    },
+
     async kpis(project, refs, variables) {
         refs = Array.from(new Set((refs || []).filter(Boolean)));
         const out = { values: {}, errors: {}, nombres: {} };
@@ -754,11 +800,14 @@ const DracoTables = {
                 case "dt.fields": return await this.fields(project, p.cube);
                 case "dt.members": return await this.members(project, p.cube, p.dim, p.attr);
                 case "dt.varsFor": return await this.varsFor(project, p.refs || []);
-                case "dt.kpis": return await this.kpis(project, p.refs || [], p.variables || null);
+                case "dt.kpis":
+                    // KPIs del informe (con sus piezas, los añade la herramienta); si no vienen, el formato antiguo por id
+                    return Array.isArray(p.kpis) ? await this.kpisInline(project, p.kpis, p.variables || null)
+                                                 : await this.kpis(project, p.refs || [], p.variables || null);
                 case "dt.toggle": return await this.toggle(project, p.ref, p.r, p.c);
                 case "dt.design":
                     if (!ui || typeof ui.openDesigner !== "function") throw this.fail("NOT_AVAILABLE", "El diseñador solo está disponible en el generador de informes.");
-                    return await ui.openDesigner(project, p.ref || null, { kpi: !!p.kpi });
+                    return await ui.openDesigner(project, p.ref || null, { kpi: !!p.kpi, def: p.def || null, nombre: p.nombre || "" });
                 default: throw this.fail("NOT_AVAILABLE", "Esta función todavía no está disponible.");
             }
         } catch (err) {

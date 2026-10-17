@@ -11,7 +11,7 @@
  * Al guardar se genera el SQL del informe y se guarda junto a su definición en TABLAS_DRACO (ver draco-tables.js).
  */
 const DracoTableDesigner = {
-    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261019a",
+    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261019b",
     MAX_ROWS: 600,
     MAX_COLS: 80,
     ctx: null,
@@ -24,18 +24,22 @@ const DracoTableDesigner = {
     async open(project, ref, opts) {
         if (this.ctx) throw Object.assign(new Error("El diseñador ya está abierto."), { code: "BUSY" });
         let cubes = [], row = null, def = null;
+        // KPI del informe: vive DENTRO del informe (no en la base de datos). Se edita su definición en memoria y, al
+        // guardar, se devuelve { kpi: { nombre, cubo, def, parts, vars } } para que el generador lo guarde en el informe.
+        const inlineKpi = !!(opts && opts.kpi && !ref);
         try {
             cubes = await DracoTables.cubes(project.PROYECTO_ID);
-            if (ref) { row = await DracoTables.get(project.PROYECTO_ID, ref); def = JSON.parse(row.DEFINICION_JSON || "{}"); }
+            if (inlineKpi) { def = opts.def || null; row = { NOMBRE: opts.nombre || "", DESCRIPCION: "" }; }
+            else if (ref) { row = await DracoTables.get(project.PROYECTO_ID, ref); def = JSON.parse(row.DEFINICION_JSON || "{}"); }
         } catch (err) {
             UI.toast("No se pudo abrir el diseñador: " + err.message, "error");
             throw err;
         }
         return new Promise((resolve) => {
             this.ctx = { project, ref, row, cubes, resolve, saved: null, initialSig: null, ready: false, raf: 0, sel: { r: 0, c: 0 },
-                         kpi: !!((opts && opts.kpi) || (def && def.kpi)) };
+                         kpi: !!((opts && opts.kpi) || (def && def.kpi)), inlineKpi, hasDef: !!def };
             this.buildModal();
-            if (this.ctx.kpi) this.banner("KPI: deja UNA medida (por ejemplo en Columnas) y los filtros que quieras, sin campos en Filas ni Columnas. La rejilla muestra su valor.", "info");
+            if (this.ctx.kpi) this.banner("KPI: arrastra UNA medida a «Filtros», junto con los filtros que quieras. El valor aparece a la derecha.", "info");
             if (!cubes.length) this.banner("Este proyecto no tiene cubos, y el informe se diseña sobre uno. Crea un cubo en «Cubos» y vuelve a abrir el diseñador.", "warn");
             this.startTaskpane(def);
         });
@@ -47,7 +51,7 @@ const DracoTableDesigner = {
     buildModal() {
         const c = this.ctx, E = UI.escapeHtml;
         const overlay = document.createElement("div");
-        overlay.className = "modal-overlay visible dtd-overlay";
+        overlay.className = "modal-overlay visible dtd-overlay" + (c.kpi ? " dtd-kpi" : "");
         overlay.id = "dtdOverlay";
         overlay.innerHTML = `
             <div class="dtd-modal" role="dialog" aria-label="Diseñador de tabla Draco">
@@ -81,6 +85,12 @@ const DracoTableDesigner = {
                     <div class="dtd-grid-wrap" id="dtdGridWrap"><div class="dtd-loading"><span class="spinner"></span> Preparando el diseñador…</div></div>
                     <div class="dtd-resizer" id="dtdResizer" title="Arrastra para cambiar el ancho del panel"></div>
                     <div class="dtd-panel" id="dtdPanel"></div>
+                    <aside class="dtd-kpival" id="dtdKpiVal" aria-live="polite">
+                        <div class="dtd-kpival-l">Valor del KPI</div>
+                        <div class="dtd-kpival-v" id="dtdKpiV">—</div>
+                        <div class="dtd-kpival-m" id="dtdKpiM"></div>
+                        <p class="dtd-kpival-h">Pon una sola medida en «Filtros» y, si quieres, filtros por dimensión. Pulsa «Refrescar» para recalcular.</p>
+                    </aside>
                 </div>
             </div>`;
         document.body.appendChild(overlay);
@@ -170,8 +180,14 @@ const DracoTableDesigner = {
             await Promise.race([w.__wteInitDonePromise || Promise.resolve(), new Promise(r => setTimeout(r, 15000))]);
             // Una tabla Draco = UN informe: si no hay ninguno (tabla nueva), se crea
             if (!w.ReportStore.getActiveReport()) await w.TaskPaneApp.addReport();
+            if (c.kpi) {
+                // KPI: solo campos y «Filtros» (la medida va en Filtros); sin Filas, Columnas ni opciones de campo
+                const st = w.document.createElement("style");
+                st.textContent = '[data-zone="rows"],[data-zone="columns"]{display:none!important}';
+                w.document.head.appendChild(st);
+            }
             // Una tabla ya guardada guarda su DISEÑO, no su resultado: se actualiza al abrir para que se vea
-            if (c.ref) {
+            if (c.ref || (c.inlineKpi && c.hasDef)) {
                 this.status("Cargando datos…");
                 try { await w.DracoEngineApi.refresh(undefined, null); }
                 catch (err) { this.status("No se pudo actualizar: " + err.message, "bad"); }
@@ -208,7 +224,7 @@ const DracoTableDesigner = {
         this.status("Refrescando…");
         try {
             await w.DracoEngineApi.refresh(undefined, null);
-            this.banner(c.kpi ? "KPI: deja UNA medida (por ejemplo en Columnas) y los filtros que quieras, sin campos en Filas ni Columnas. La rejilla muestra su valor." : "", c.kpi ? "info" : undefined);
+            this.banner(c.kpi ? "KPI: arrastra UNA medida a «Filtros», junto con los filtros que quieras. El valor aparece a la derecha." : "", c.kpi ? "info" : undefined);
             this.status("");
         } catch (err) {
             console.error("DracoTableDesigner: refresco", err);
@@ -299,6 +315,7 @@ const DracoTableDesigner = {
         wrap.innerHTML = h;
         wrap.scrollTop = top; wrap.scrollLeft = left;
         this.updateFormulaBar();
+        if (c.kpi) this.updateKpiValue();
     },
 
     /** Un clic en una celda hace lo que haría en Excel: selecciona y, si es un +/- de jerarquía, la expande o contrae. */
@@ -326,6 +343,25 @@ const DracoTableDesigner = {
     // exactamente igual que en Excel.
     // ---------------------------------------------------------------------
     addr(r, c) { return this.colLabel(c) + (r + 1); },
+
+    /** KPI: muestra el valor (la primera celda numérica que no es cabecera de lo que pinta el informe). */
+    updateKpiValue() {
+        const c = this.ctx, el = c && c.overlay.querySelector("#dtdKpiV");
+        if (!el) return;
+        const cells = (c.host && c.host.state.cells) || {};
+        const keys = Object.keys(cells).map(k => k.split("_").map(Number)).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+        let val = null, label = "";
+        for (const [r, cc] of keys) {
+            const o = cells[r + "_" + cc];
+            if (o && !o.bg && o.v !== undefined && String(o.v).trim() !== "" && isFinite(Number(o.v)) && !(typeof o.f === "string" && /EPM_/i.test(o.f))) {
+                val = DracoTables.formatValue(o.v, o.nf) || Number(o.v).toLocaleString("es-ES", { maximumFractionDigits: 2 });
+                const above = cells[(r - 1) + "_" + cc]; label = above ? String(above.v || "") : "";
+                break;
+            }
+        }
+        el.textContent = val === null ? "—" : val;
+        c.overlay.querySelector("#dtdKpiM").textContent = val === null ? "Todavía no hay valor." : (label ? "Medida: " + label : "");
+    },
 
     selRect() {
         const s = this.ctx.selRange || { r1: this.ctx.sel.r, c1: this.ctx.sel.c, r2: this.ctx.sel.r, c2: this.ctx.sel.c };
@@ -880,6 +916,18 @@ const DracoTableDesigner = {
             if (w.TaskPaneApp && typeof w.TaskPaneApp.saveDesignOnly === "function") await w.TaskPaneApp.saveDesignOnly();
             const report = w.ReportStore.getActiveReport();
             if (!report || !report.semanticModelName) throw new Error("Elige un modelo semántico (cubo) para el informe.");
+            if (c.inlineKpi) {
+                this.status("Comprobando el KPI…");
+                const parts = await w.DracoEngineApi.kpiParts();
+                const def = await DracoTables.exportDefinition(w, c.host);
+                const vars = {};
+                try { const d = JSON.parse(((def.settings || {}).epm_variables) || "{}"); Object.keys(d).forEach(k => { vars[k.toUpperCase()] = d[k].value; }); } catch (e) { /* sin variables */ }
+                c.saved = { kpi: { nombre, cubo: report.semanticModelName, def, parts, vars } };
+                UI.toast(`KPI «${nombre}» listo. Guarda el informe para conservarlo.`, "success");
+                DracoTables._kpiCache = {};
+                this.close();
+                return;
+            }
             this.status("Generando el SQL…");
             const gen = await w.DracoEngineApi.generateSql();
             if (!gen.sql) throw new Error(gen.mode && gen.mode !== "dynamic"
