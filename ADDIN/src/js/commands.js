@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-19-kpis";
+const DRACO_BUILD = "2026-10-20-escala";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -1221,8 +1221,8 @@ function dracoCalcOrderPart(part) {
  */
 function buildDracoKpiParts(relGrid, measuresGrid, atributesGrid) {
     const dims = [...ReportState.Columns, ...ReportState.Rows];
-    if (dims.length) throw new Error("Un KPI no lleva campos en Filas ni en Columnas: quítalos y deja solo la medida (y los filtros que quieras).");
-    if (ReportState.Measures.length !== 1) throw new Error(ReportState.Measures.length ? "Un KPI tiene UNA sola medida: deja solo una." : "Añade la medida del KPI (en Columnas o en Filas).");
+    if (dims.length) throw new Error("Un KPI no lleva campos en Filas ni en Columnas: quítalos y deja solo la medida y los filtros.");
+    if (ReportState.Measures.length !== 1) throw new Error(ReportState.Measures.length ? "Un KPI tiene UNA sola medida: deja solo una en «Filtros»." : "Añade la medida del KPI: arrástrala a «Filtros».");
     const m = ReportState.Measures[0];
     const R = buscarMedida(measuresGrid, m.Name);
     if (R === 0) throw new Error(`La medida «${m.Name}» no está en el modelo semántico.`);
@@ -1232,6 +1232,9 @@ function buildDracoKpiParts(relGrid, measuresGrid, atributesGrid) {
     return {
         measure: m.Name,
         agg,
+        scale: m.Scale || 1,
+        fmtKind: m.FmtKind || "",
+        decimals: m.FmtDecimals,
         field: "f." + field,
         from: buildFrom(measuresGrid, m.Name, relGrid),
         joins: buildJoins(relGrid),
@@ -1453,6 +1456,18 @@ function decorateDracoMeasure(m) {
     const opts = dracoMeasureFieldOptions(ReportState.ReportId, m.Zone, m.Name);
     m.Aggregation = opts ? normalizeDracoAggregation(opts.aggregation) : "";
     m.NumberFormat = dracoNumberFormatFromOptions(opts);
+    // Factor de escala (Opciones de campo): el valor se divide en la consulta (1 = sin escala)
+    const sc = opts ? Number(opts.scale) : 1;
+    m.Scale = (isFinite(sc) && sc > 1) ? sc : 1;
+    // Formato "en bruto" (para los KPIs de PLANNING: número / porcentaje y decimales)
+    m.FmtKind = opts ? ((String(opts.numberFormat || "").indexOf("%") !== -1 || opts.numberFormat === "percent") ? "percent" : "number") : "";
+    m.FmtDecimals = (opts && isFinite(Number(opts.decimals))) ? Number(opts.decimals) : null;
+}
+
+// "(expr) / factor" si hay factor de escala
+function dracoScaled(expr, scale) {
+    const f = Number(scale);
+    return (isFinite(f) && f > 1) ? "(" + expr + ") / " + f : expr;
 }
 
 function attachDracoMeasureOptions() {
@@ -2754,7 +2769,8 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     const measureCols = neededMeasures.map((name, k) => {
         const R = buscarMedida(measuresGrid, name);
         if (R === 0) throw new Error(`La medida «${name}» no está en el modelo semántico.`);
-        return { name, alias: "M_" + (k + 1), field: String(cellValue(measuresGrid, R, 6)).trim() };
+        const mm = ReportState.Measures.find(x => String(x.Name).toUpperCase() === String(name).toUpperCase());
+        return { name, alias: "M_" + (k + 1), field: String(cellValue(measuresGrid, R, 6)).trim(), scale: mm ? mm.Scale : 1 };
     });
 
     const plan = {
@@ -2799,7 +2815,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
 
     let sql = "WITH BASE AS (" + CRLF + CRLF;
     sql += "SELECT" + CRLF;
-    sql += [...selectCols.values(), ...measureCols.map(m => "SUM(f." + m.field + ") AS " + m.alias)]
+    sql += [...selectCols.values(), ...measureCols.map(m => dracoScaled("SUM(f." + m.field + ")", m.scale) + " AS " + m.alias)]
         .map(x => "    " + x).join("," + CRLF) + CRLF + CRLF;
     sql += buildFrom(measuresGrid, measureCols.length ? measureCols[0].name : null, relGrid) + CRLF + CRLF;
     sql += buildJoins(relGrid) + CRLF + CRLF;
@@ -3595,7 +3611,7 @@ async function autofitDracoHybrid(reportId, plan) {
 // aggregationOverride (opcional): la agregación elegida en "Opciones de
 // campo" de la medida (SUM/AVG/COUNT/COUNT_DISTINCT/MIN/MAX). Vacía =
 // la del modelo semántico (MODEL_MEASURES!G), como hasta ahora.
-function getMeasureSQL(measuresGrid, measureName, aggregationOverride) {
+function getMeasureSQL(measuresGrid, measureName, aggregationOverride, scale) {
     const R = buscarMedida(measuresGrid, measureName);
     if (R === 0) return "";
     const aggregation = String(cellValue(measuresGrid, R, 7)).trim(); // G: AGGREGATION
@@ -3607,9 +3623,9 @@ function getMeasureSQL(measuresGrid, measureName, aggregationOverride) {
     // cualquier otra se deja tal cual, como siempre.
     const effective = normalizeDracoAggregation(aggregationOverride) || normalizeDracoAggregation(aggregation);
     if (effective) {
-        return DRACO_SQL_AGGREGATIONS[effective]("f." + field) + " AS " + measureName;
+        return dracoScaled(DRACO_SQL_AGGREGATIONS[effective]("f." + field), scale) + " AS " + measureName;
     }
-    return aggregation + "(f." + field + ") AS " + measureName;
+    return dracoScaled(aggregation + "(f." + field + ")", scale) + " AS " + measureName;
 }
 
 /**
@@ -3633,7 +3649,7 @@ function buildSelect(measuresGrid, relGrid) {
 
     for (const m of ReportState.Measures) {
         if (!first) sql += "," + CRLF;
-        sql += "    " + getMeasureSQL(measuresGrid, m.Name, m.Aggregation);
+        sql += "    " + getMeasureSQL(measuresGrid, m.Name, m.Aggregation, m.Scale);
         first = false;
     }
 
