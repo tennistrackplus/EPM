@@ -2507,6 +2507,13 @@ const TaskPaneApp = {
                 Nº de decimales
                 <input type="number" id="optDecimals" min="0" max="10" value="${decimalsValue}">
             </label>
+            <label>
+                Factor de escala
+                <select id="optScale">
+                    ${[1, 10, 100, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9].map(f =>
+                        `<option value="${f}" ${Number(options.scale || 1) === f ? "selected" : ""}>${f === 1 ? "1 (sin escala)" : "÷ " + f.toLocaleString("es-ES")}</option>`).join("")}
+                </select>
+            </label>
             <div style="font-size:10px; color:#605e5c; margin:2px 0 6px;">
                 Se aplica al actualizar si "Sobrescribir formatos" está activado
                 en las propiedades del informe.
@@ -2542,6 +2549,9 @@ const TaskPaneApp = {
             current.numberFormat = wrap.querySelector("#optNumberFormat").value;
             const dec = Math.floor(Number(wrap.querySelector("#optDecimals").value));
             current.decimals = Number.isFinite(dec) ? Math.min(10, Math.max(0, dec)) : 0;
+            // Factor de escala: el valor se divide en la consulta (1 = sin escala)
+            const sc = Number(wrap.querySelector("#optScale").value);
+            if (sc > 1) current.scale = sc; else delete current.scale;
             current.aggregation = wrap.querySelector("#optAggregation").value;
             // Opciones retiradas del panel (ya no se usan en ningún sitio).
             delete current.decimalSeparator;
