@@ -1221,8 +1221,8 @@ function dracoCalcOrderPart(part) {
  */
 function buildDracoKpiParts(relGrid, measuresGrid, atributesGrid) {
     const dims = [...ReportState.Columns, ...ReportState.Rows];
-    if (dims.length) throw new Error("Un KPI no lleva campos en Filas ni en Columnas: quítalos y deja solo la medida (y los filtros que quieras).");
-    if (ReportState.Measures.length !== 1) throw new Error(ReportState.Measures.length ? "Un KPI tiene UNA sola medida: deja solo una." : "Añade la medida del KPI (en Columnas o en Filas).");
+    if (dims.length) throw new Error("Un KPI no lleva campos en Filas ni en Columnas: quítalos y deja solo la medida y los filtros.");
+    if (ReportState.Measures.length !== 1) throw new Error(ReportState.Measures.length ? "Un KPI tiene UNA sola medida: deja solo una en «Filtros»." : "Añade la medida del KPI: arrástrala a «Filtros».");
     const m = ReportState.Measures[0];
     const R = buscarMedida(measuresGrid, m.Name);
     if (R === 0) throw new Error(`La medida «${m.Name}» no está en el modelo semántico.`);
