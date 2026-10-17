@@ -736,18 +736,19 @@ botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un infor
   «Selector de variable». Si varios bloques usan la misma tabla con las mismas variables, la consulta se lanza una vez
   (`dtRunShared`). En la exportación a diapositivas sale como nota, igual que la Tabla Draco. Desde sus propiedades se abre el
   diseñador del informe (`dt.design`) para editar su tabla o crear una nueva, sin necesidad de un bloque de tabla.
-- **KPIs Draco.** Un KPI es una Tabla Draco con UNA medida y solo filtros, diseñada con el diseñador en modo KPI
-  (`dt.design` con `kpi:true`); al guardarla se guardan sus piezas (`DEFINICION_JSON.kpi`: agregación, campo, tabla de
-  hechos, joins y condiciones; `buildDracoKpiParts` en el addin). El informe lista sus KPIs en `spec.dracoKpis`
-  (`{id, name, label, fmt, decimals, unit}`), que salen en el árbol en un grupo «KPIs» al final. Se muestran con el
-  bloque «KPI Draco» (`dracoKpi`, tarjetas) o en cualquier texto con `$$NOMBRE$$` (autocompletar al escribir `$$`).
-  **Todos los KPIs del informe se calculan con UNA consulta** (`DracoTables.kpis`/`kpiSql`, operación `dt.kpis`): se
-  agrupan por tabla de hechos + joins y cada KPI es una columna de agregación condicional
-  (`SUM(IF(<filtros>, f.campo, NULL))`, `IFF` en Snowflake, `CASE WHEN` en Fabric, también `COUNT(DISTINCT …)`); el
-  `WHERE` de cada grupo es el OR de sus filtros y los grupos se unen con `CROSS JOIN` (una fila, una columna por KPI).
-  Cada tabla de hechos se lee una vez aunque haya 100 KPIs. Las definiciones se leen con una consulta a la tabla de
-  control; las `$VARIABLES$` se resuelven por KPI (valor guardado o el del «Selector de variable»); si la consulta
-  combinada falla, se reintenta grupo a grupo para que un KPI roto no tumbe a los demás. Caché de 30 s.
+- **KPIs Draco.** Los KPIs viven DENTRO del informe (`spec.dracoKpis`: `{id, name, label, fmt, decimals, unit, cubo,
+  def, parts, vars}`), así que borrarlo lo elimina y otro informe puede tener un KPI con el mismo nombre. Se crean y
+  editan con el diseñador en modo KPI (`dt.design` con `kpi:true` y la definición; no se guarda en la base de datos):
+  ventana compacta con los campos, «Filtros» (la medida va en Filtros) y el valor. Al guardar se calculan sus piezas
+  (`buildDracoKpiParts` en el addin: agregación, campo, tabla de hechos, joins y condiciones). En el árbol salen en un
+  grupo «KPIs» al final; se muestran con el bloque «KPI Draco» (tarjetas) o en cualquier texto con `$$NOMBRE$$`
+  (autocompletar al escribir `$$`). **Todos los KPIs del informe se calculan con UNA consulta** (`DracoTables.kpisInline`
+  / `kpiSql`, operación `dt.kpis`): se agrupan por tabla de hechos + joins y cada KPI es una columna de agregación
+  condicional (`SUM(IF(<filtros>, f.campo, NULL))`, `IFF` en Snowflake, `CASE WHEN` en Fabric, también
+  `COUNT(DISTINCT …)`); el `WHERE` de cada grupo es el OR de sus filtros y los grupos se unen con `CROSS JOIN` (una
+  fila, una columna por KPI): cada tabla de hechos se lee una vez aunque haya 100 KPIs. Las piezas SQL las añade la
+  herramienta desde su copia del informe (`relayPage`), nunca la página. Las `$VARIABLES$` se resuelven por KPI; si la
+  consulta combinada falla, se reintenta grupo a grupo. Caché de 30 s.
 - **Subsección (`group`).** Bloque contenedor (sustituye a la antigua «Fila», que no hacía nada): título opcional,
   distribución propia (una columna o en columnas, 1-4) y sus bloques en `blocks`. Se puede anidar a cualquier nivel;
   los identificadores siguen el patrón `s{sección}b{bloque}` + tramos `t{pestaña}_{bloque}` / `g{bloque}` (`bidWalk`).

@@ -2662,7 +2662,7 @@ window.addEventListener('message',function(ev){
   if(d.dp==='host') HOST_SAVE=true;
   else if(d.dp==='edit'){ setEdit(!!d.on); }
   else if(d.dp==='draco-reply'){ dreply(d); }
-  else if(d.dp==='dracoon'){ HOSTON=true; tuMountAll(true); }
+  else if(d.dp==='dracoon'){ HOSTON=true; tuMountAll(true); if(kpiDefs().length) kpiEnsure(); }
   else if(d.dp==='focus'){ EDSEL=d.sel||null; var tbn=d.tab&&document.querySelector('.tab[data-act="tab"][data-bid="'+d.tab.bid+'"][data-i="'+d.tab.i+'"]'); var needTab=!!(tbn&&!tbn.classList.contains('on')); if(needTab){ window.__noSel=true; tbn.click(); window.__noSel=false; } setTimeout(function(){ markSel(); if(d.scroll){ var fe=document.querySelector('.edit-sel'); if(fe) fe.scrollIntoView({block:'center',behavior:'instant'}); } },needTab?90:0); }
   else if(d.dp==='spec'&&d.spec&&typeof d.spec==='object'){ try{ applySpec(d.spec); }catch(err){ try{ parent.postMessage({dp:'xstatus',msg:'No se pudo redibujar: '+String(err.message).slice(0,80)},'*'); }catch(x){} } }
   else if(d.dp==='export'){ if(d.kind==='pdf') exportPdf(); else if(d.kind==='pptx') exportPptx(); }
@@ -5523,12 +5523,12 @@ function dkManager(b){
   var L=dkList(), show=b&&b.show&&b.show.length?b.show:null;
   var h='<div class="insp-sec">KPIs del informe</div>';
   if(!HOSTED) return h+edNote('Crear o editar KPIs solo se puede hacer dentro de Draco Planning.')+L.map(function(k){ return '<p class="insp-hint"><b>'+esc(k.label||k.name)+'</b> \u00B7 $$'+esc(k.name)+'$$</p>'; }).join('');
-  if(!L.length) h+='<p class="insp-hint">Todav\u00EDa no hay KPIs. Un KPI es una medida con sus filtros (p. ej. Ventas de 2026 en Espa\u00F1a); se dise\u00F1a como una Tabla Draco.</p>';
+  if(!L.length) h+='<p class="insp-hint">Todav\u00EDa no hay KPIs. Un KPI es una medida con sus filtros (p. ej. Ventas de 2026 en Espa\u00F1a). Pertenece a este informe: otro informe puede tener un KPI con el mismo nombre.</p>';
   h+=L.map(function(k,i){
     var on=!show||show.indexOf(k.id)>=0;
     return '<div class="dk-row">'+(b?'<input type="checkbox" data-dk-show="'+esc(k.id)+'"'+(on?' checked':'')+' title="Mostrar en este bloque">':'')
       +'<div class="dk-main"><b>'+esc(k.label||k.name)+'</b><code>$$'+esc(k.name)+'$$</code></div>'
-      +'<div class="dk-acts"><button class="mini" data-dk-edit="'+i+'" title="Abrir en el dise\u00F1ador">\uD83E\uDDE9</button><button class="mini" data-dk-props="'+i+'" title="Propiedades">\u2699</button><button class="mini" data-dk-del="'+i+'" title="Quitar del informe">\u2715</button></div></div>';
+      +'<div class="dk-acts"><button class="mini" data-dk-edit="'+i+'" title="Editar en el dise\u00F1ador">\uD83E\uDDE9</button><button class="mini" data-dk-props="'+i+'" title="Propiedades">\u2699</button><button class="mini" data-dk-del="'+i+'" title="Borrar el KPI">\u2715</button></div></div>';
   }).join('');
   h+='<button class="btn small" data-dk-new type="button" style="margin-top:8px">+ Nuevo KPI</button>';
   h+='<p class="insp-hint">En cualquier texto: escribe <b>$$</b> y elige el KPI.</p>';
@@ -5544,22 +5544,25 @@ function edDKpi(k,i){
     +gSel('Decimales','decimals',(k.decimals==null?'':String(k.decimals)),[['','Autom\u00E1tico'],['0','0'],['1','1'],['2','2']])
     +gText('Unidad','unit',k.unit,'Por ejemplo: \u20AC')
     +'<div class="insp-sec">Datos</div>'
-    +(HOSTED?'<button class="btn small" data-dk-edit="'+i+'" type="button">\uD83E\uDDE9 Abrir en el dise\u00F1ador</button> ':'')
-    +'<button class="btn small" data-dk-del="'+i+'" type="button">Quitar del informe</button>'
-    +'<p class="insp-hint">Quitarlo del informe no borra el KPI del proyecto.</p>';
+    +(HOSTED?'<button class="btn small" data-dk-edit="'+i+'" type="button">\uD83E\uDDE9 Editar en el dise\u00F1ador</button> ':'')
+    +'<button class="btn small" data-dk-del="'+i+'" type="button">Borrar el KPI</button>'
+    +(k.parts?'':'<p class="insp-hint" style="color:#C2362B">Sin terminar: \u00E1brelo en el dise\u00F1ador y pulsa Guardar.</p>')
+    +'<p class="insp-hint">El KPI se guarda dentro de este informe (al guardar el informe).</p>';
 }
-function dkDesign(ref,after){
-  dtCallLong('dt.design',{ref:ref||null,kpi:true}).then(function(res){ if(res) after(res); edRender(); },function(e){ setStatus('No se pudo abrir el dise\u00F1ador: '+((e&&e.message)||e),6000); });
+/* Abre el dise\u00F1ador en modo KPI con la definici\u00F3n del KPI (si lo hay); al guardar devuelve { kpi: { nombre, cubo, def, parts, vars } } */
+function dkDesign(k,after){
+  dtCallLong('dt.design',{kpi:true,def:(k&&k.def)||null,nombre:(k&&k.label)||''}).then(function(res){ if(res&&res.kpi) after(res.kpi); edRender(); },function(e){ setStatus('No se pudo abrir el dise\u00F1ador: '+((e&&e.message)||e),6000); });
 }
+function dkUid(){ return 'k'+Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
 $('inspBody').addEventListener('click',function(e){
   var t=e.target.closest&&e.target.closest('[data-dk-new],[data-dk-edit],[data-dk-del],[data-dk-props]'); if(!t) return;
   e.preventDefault();
-  if(t.hasAttribute('data-dk-new')) return dkDesign(null,function(res){ edPrevSel=edSel; dkList().push({id:res.id,name:dkVarName(res.nombre),label:res.nombre,fmt:'number',decimals:'',unit:''}); edSync(true); });
+  if(t.hasAttribute('data-dk-new')) return dkDesign(null,function(kp){ edPrevSel=edSel; dkList().push({id:dkUid(),name:dkVarName(kp.nombre),label:kp.nombre,fmt:'number',decimals:'',unit:'',cubo:kp.cubo,def:kp.def,parts:kp.parts,vars:kp.vars||{}}); edSync(true); });
   var i=+(t.getAttribute('data-dk-edit')||t.getAttribute('data-dk-del')||t.getAttribute('data-dk-props')), L=dkList(), k=L[i]; if(!k) return;
-  if(t.hasAttribute('data-dk-edit')) return dkDesign(k.id,function(res){ edPrevSel=edSel; if(!k.label) k.label=res.nombre; edSync(true); });
+  if(t.hasAttribute('data-dk-edit')) return dkDesign(k,function(kp){ edPrevSel=edSel; k.label=kp.nombre||k.label; k.cubo=kp.cubo; k.def=kp.def; k.parts=kp.parts; k.vars=kp.vars||{}; edSync(true); });
   if(t.hasAttribute('data-dk-props')){ edSel={dk:i}; edRender(); if(typeof treeRender==='function') treeRender(); return; }
   if(t.hasAttribute('data-dk-del')){
-    if(!confirm('\u00BFQuitar el KPI \u00AB'+(k.label||k.name)+'\u00BB del informe? (sigue existiendo en el proyecto)')) return;
+    if(!confirm('\u00BFBorrar el KPI \u00AB'+(k.label||k.name)+'\u00BB? Los textos que usen $$'+k.name+'$$ dejar\u00E1n de mostrar su valor.')) return;
     edPrevSel=edSel; L.splice(i,1);
     var walk=function(bl){ (bl||[]).forEach(function(b){ if(!b) return; if(b.type==='dracoKpi'&&b.show) b.show=b.show.filter(function(x){ return x!==k.id; }); if(b.tabs) b.tabs.forEach(function(tb){ walk(tb.blocks); }); if(b.type==='group') walk(b.blocks); }); };
     (currentSpec.sections||[]).forEach(function(sc){ walk(sc.blocks); });
@@ -5794,7 +5797,14 @@ window.addEventListener('message',function(ev){
   if(d.op==='load'&&VIEWER) viewerLoad(d.spec,d.nombre);
   else if(d.op==='page-reply'){ try{ $('frame').contentWindow.postMessage({dp:'draco-reply',id:d.id,ok:d.ok,data:d.data,error:d.error},'*'); }catch(e){} }
 });
-function relayPage(d){ hostPost({dpTool:1,op:'page',payload:d}); }   /* puente futuro: la p\u00E1gina pide cosas a Draco (tablas, SQL) */
+function relayPage(d){
+  /* KPIs: sus piezas SQL las pone la herramienta desde su copia del informe (nunca las de la p\u00E1gina) */
+  if(d&&d.op==='dt.kpis'){
+    var pl=d.payload||{};
+    d={dp:d.dp,id:d.id,op:d.op,payload:{refs:pl.refs,variables:pl.variables,kpis:((currentSpec&&currentSpec.dracoKpis)||[]).map(function(k){ return {id:k.id,parts:k.parts||null,vars:k.vars||{}}; })}};
+  }
+  hostPost({dpTool:1,op:'page',payload:d});
+}   /* puente futuro: la p\u00E1gina pide cosas a Draco (tablas, SQL) */
 
 /* ---------- modo visor ---------- */
 function viewerMsg(t,err){ var m=$('vwMsg'); if(!t){ m.hidden=true; return; } m.hidden=false; m.textContent=t; m.classList.toggle('err',!!err); }
