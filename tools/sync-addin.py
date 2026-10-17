@@ -25,7 +25,7 @@ TPL = os.path.join(ROOT, "tools", "templates")
 CHECK = "--check" in sys.argv
 # Se añade a todos los <script src> y <link href> de las páginas generadas: sin ello el navegador puede seguir usando
 # una copia antigua (p. ej. de model-bootstrap.js) tras actualizar. Súbelo cuando cambies tablas-draco/.
-BUNDLE_VERSION = "20261021a"
+BUNDLE_VERSION = "20261021b"
 
 # JS del addin que se copian tal cual (más los parches de abajo)
 JS_COPY = ["semanticModelStore.js", "reportStore.js", "filterRangeStore.js", "excelService.js",
