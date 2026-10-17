@@ -842,19 +842,31 @@ function kpiEnsure(){
   var refs=kpiDefs().map(function(k){ return k.id; }).filter(Boolean); if(!refs.length) return;
   var vars=(typeof dvVarsPayload==='function')?dvVarsPayload():null, kf={};
   kpiDefs().forEach(function(k){ var fl=dfFiltersFor('kpi',k.id); if(fl.length) kf[k.id]=fl; });
-  var key=JSON.stringify([kpiDefs().map(function(k){ return [k.id,k.parts||null,k.vars||null]; }),vars,kf]);
+  var key=JSON.stringify([kpiDefs().map(function(k){ return [k.id,k.parts||null,k.vars||null,k.exc||null]; }),vars,kf]);
   if(KPV.key===key) return;
-  KPV={key:key,status:'loading',values:{},errors:{}};
+  /* firma de cada KPI (lo que le afecta): mientras se recalcula, los KPIs cuya firma no cambia siguen mostrando su valor
+     y solo los que dependen del filtro / variable cambiado se ven como "actualizando" */
+  var vu={}; Object.keys(vars||{}).forEach(function(n){ var v=vars[n]; vu[String(n).toUpperCase()]=(v&&typeof v==='object')?v.value:v; });
+  var sigs={}; kpiDefs().forEach(function(k){ var vv={}; dfKpiVars(k).forEach(function(n){ vv[n]=vu[n]; }); sigs[k.id]=JSON.stringify([k.parts||null,k.vars||null,k.exc||null,vv,kf[k.id]||null]); });
+  var prev=(KPV.status==='ready')?KPV:KPV.prev; if(prev) prev.prev=null;
+  KPV={key:key,status:'loading',values:{},errors:{},sigs:sigs,prev:prev||null};
   var kp={refs:refs}; if(vars) kp.variables=vars; if(Object.keys(kf).length) kp.filters=kf;
   dcall('dt.kpis',kp).then(function(r){ if(KPV.key!==key) return; KPV.status='ready'; KPV.values=r.values||{}; KPV.errors=r.errors||{}; update(); },
     function(e){ if(KPV.key!==key) return; KPV.status='error'; KPV.err=e; update(); });
 }
-function kpiRefresh(){ KPV.key=''; kpiEnsure(); }
+function kpiRefresh(){ KPV.key=''; kpiEnsure(); if(KPV.status==='loading') setTimeout(paintAll,0); }   /* pinta ya el "actualizando" */
+/* KPI pendiente de recalcular: su valor anterior ya no vale (le afecta lo que ha cambiado) */
+function kpiPending(k){
+  if(KPV.status!=='loading'&&KPV.status!=='idle') return false;
+  var p=KPV.prev; return !(p&&p.sigs&&KPV.sigs&&p.sigs[k.id]===KPV.sigs[k.id]&&Object.prototype.hasOwnProperty.call(p.values,k.id));
+}
 function kpiValueText(k){
   if(EDIT||!HOSTON) return '\u00AB'+(k.label||k.name)+'\u00BB';
   kpiEnsure();
-  if(KPV.status==='loading'||KPV.status==='idle') return '\u2026';
-  var v=KPV.values[k.id]; if(v===null||v===undefined||!isFinite(v)) return '\u2014';
+  var v;
+  if(KPV.status==='loading'||KPV.status==='idle'){ if(kpiPending(k)) return '\u2026'; v=KPV.prev.values[k.id]; }
+  else v=KPV.values[k.id];
+  if(v===null||v===undefined||!isFinite(v)) return '\u2014';
   /* formato: el del KPI si se fij\u00F3 (n\u00FAmero / porcentaje); si no ("Seg\u00FAn la medida"), el de la medida */
   var P=k.parts||{}, kind=(k.fmt==='number'||k.fmt==='percent')?k.fmt:(P.fmtKind||'number');
   var d=(k.decimals===''||k.decimals==null)?((P.decimals===null||P.decimals===undefined||(k.fmt&&k.fmt!=='auto'))?undefined:parseInt(P.decimals,10)):parseInt(k.decimals,10);
@@ -946,6 +958,12 @@ function axesOf(vis,forceZero){
   return niceTicks(mn,mx,4);
 }
 function frame(inner,W,H,label){ return '<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(label||'')+'">'+inner+'</svg>'; }
+/* margen izquierdo para que quepan las etiquetas del eje Y (11px: ~6,4px por car\u00E1cter); mismos decimales que gridAxes */
+function axisL(ticks,L){
+  var td=0; ticks.forEach(function(t){ if(Math.floor(t)!==t){ var d=(String(t).split('.')[1]||'').length; if(d>td) td=d; } }); td=Math.min(td,2);
+  var mx=0; ticks.forEach(function(t){ var n=String(fmt(t,td)).length; if(n>mx) mx=n; });
+  return Math.max(L,Math.round(mx*6.4)+14);
+}
 function gridAxes(ticks,y,L,Rr,W,H,B,xs,xAt,R){
   var td=0; ticks.forEach(function(t){ if(Math.floor(t)!==t){ var d=(String(t).split('.')[1]||'').length; if(d>td) td=d; } }); td=Math.min(td,2);
   var g=ticks.map(function(t){ return '<line x1="'+L+'" x2="'+(W-Rr)+'" y1="'+y(t).toFixed(1)+'" y2="'+y(t).toFixed(1)+'" stroke="var(--line)" stroke-width="1"/><text x="'+(L-8)+'" y="'+(y(t)+4).toFixed(1)+'" text-anchor="end">'+fmt(t,td)+'</text>'; }).join('');
@@ -957,6 +975,7 @@ function chLine(R,bid,isBar){
   var W=PW,H=Math.round(Math.max(CHMIN,Math.min(CHMAX,PW*0.46))),L=PW<380?40:50,Rr=12,T=14,B=30,xs=R.xs,n=xs.length;
   var vis=R.series.filter(function(s){ return !hidden(bid,s.name); }), ticks=axesOf(vis,isBar);
   if(!ticks) return legendHtml(R,bid)+'<div class="empty">Sin series visibles.</div>';
+  L=axisL(ticks,L);
   var lo=ticks[0], hi=ticks[ticks.length-1];
   var y=function(v){ return T+(H-T-B)*(1-(v-lo)/((hi-lo)||1)); };
   var out;
@@ -1042,7 +1061,7 @@ function dkHtml(b){
   var items=defs.filter(function(k){ return !show||show.indexOf(k.id)>=0; });
   if(!items.length) return '<div class="card" data-block="dracoKpi">'+(b.title?'<h3>'+esc(tok(b.title))+'</h3>':'')+'<p class="tu-sub">'+(defs.length?'Elige qu\u00E9 KPIs mostrar en las propiedades de este bloque.':'Este informe todav\u00EDa no tiene KPIs: cr\u00E9alos en las propiedades de este bloque.')+'</p></div>';
   var head=b.title?'<h3 class="dk-t">'+esc(tok(b.title))+'</h3>':'';
-  return head+kpisHtml(items.map(function(k){ var er=kpiErr(k); return {label:k.label||k.name,value:kpiValueText(k),note:er?'No disponible':''}; }));
+  return head+kpisHtml(items.map(function(k){ var er=kpiErr(k); var val=kpiValueText(k), pend=kpiPending(k)&&!EDIT&&HOSTON; return {label:k.label||k.name,value:val,note:er?'No disponible':(pend?'Actualizando\u2026':''),pending:pend}; }));
 }
 function kpisHtml(items){
   return '<div class="kpis">'+items.map(function(k,ki){
@@ -1055,7 +1074,7 @@ function kpisHtml(items){
       if(k.delta){ var dt=tok(k.delta); delta={text:dt,cls:dClass(dt,k.sentiment)}; }
     }
     var arrow=delta?(signOf(delta.text)>0?'\u25B2 ':(signOf(delta.text)<0?'\u25BC ':'')):'';
-    return '<div class="kpi" data-ki="'+ki+'"><div class="l">'+esc(tok(k.label))+'</div><div class="v">'+v+'</div>'+(delta?'<div class="d '+delta.cls+'">'+arrow+esc(delta.text)+'</div>':'')+(k.note?'<div class="n">'+esc(tok(k.note))+'</div>':'')+'</div>';
+    return '<div class="kpi'+(k.pending?' kpi-busy':'')+'" data-ki="'+ki+'"'+(k.pending?' aria-busy="true"':'')+'><div class="l">'+esc(tok(k.label))+'</div><div class="v">'+v+'</div>'+(delta?'<div class="d '+delta.cls+'">'+arrow+esc(delta.text)+'</div>':'')+(k.note?'<div class="n">'+(k.pending?'<span class="tu-spin"></span> ':'')+esc(tok(k.note))+'</div>':'')+'</div>';
   }).join('')+'</div>';
 }
 
@@ -1373,6 +1392,67 @@ function dfFiltersFor(kind,id){
     if((f.objs||[]).some(function(o){ return o.k===kind&&o.id===id; })) out.push({dim:f.dim,attr:f.attr,value:v}); });
   return out;
 }
+/* ---------- Filtros por secci\u00F3n ----------
+   La barra solo muestra los filtros Draco que afectan a algo de la secci\u00F3n que se est\u00E1 viendo:
+   - Tablas/Gr\u00E1ficos Draco de la secci\u00F3n marcados en \u00ABFiltrar directamente\u00BB del filtro;
+   - KPIs de la secci\u00F3n (bloque \u00ABKPI Draco\u00BB o $$NOMBRE$$ en cualquier texto) marcados en el filtro;
+   - variables del filtro que use algo de la secci\u00F3n: una tabla/gr\u00E1fico (dt.varsFor), un KPI (sus condiciones) o un
+     \u00ABSelector de variable\u00BB.
+   Un filtro que no afecta a ninguna secci\u00F3n se muestra siempre. En el editor y en diapositivas se ven todos. */
+var DFSEC={id:null,info:null,vars:{},vload:false,io:null};
+function dfWalk(bl,fn){ (bl||[]).forEach(function(b){ if(!b) return; fn(b); if(b.type==='group') dfWalk(b.blocks,fn); if(b.tabs) b.tabs.forEach(function(t){ dfWalk(t&&t.blocks,fn); }); }); }
+function dfKpiVars(k){ var o={}; (((k&&k.parts)||{}).conds||[]).forEach(function(c){ String(c).replace(/\$([A-Za-z][A-Za-z0-9_]*)\$/g,function(m,n){ o[n.toUpperCase()]=1; return m; }); }); return Object.keys(o); }
+function dfSecOf(s){
+  var tc={}, kp={}, vr={};
+  dfWalk(s.blocks,function(b){
+    if((b.type==='dracoTable'||b.type==='dracoChart')&&b.ref) tc[b.ref]=1;
+    if(b.type==='dracoKpi') ((b.show&&b.show.length)?b.show:kpiDefs().map(function(k){ return k.id; })).forEach(function(id){ kp[id]=1; });
+    if(b.type==='dracoVar'&&b.variable) vr[String(b.variable).toUpperCase()]=1;
+  });
+  JSON.stringify(s).replace(/\$\$([A-Za-z][A-Za-z0-9_]*)\$\$/g,function(m,n){ var k=kpiByName(n); if(k) kp[k.id]=1; return m; });
+  Object.keys(tc).forEach(function(r){ (DFSEC.vars[r]||[]).forEach(function(n){ vr[n]=1; }); });
+  kpiDefs().forEach(function(k){ if(kp[k.id]) dfKpiVars(k).forEach(function(n){ vr[n]=1; }); });
+  return {tc:tc,kp:kp,vr:vr};
+}
+function dfHits(f,x){
+  if((f.objs||[]).some(function(o){ return o.k==='tc'?!!x.tc[o.id]:(o.k==='kpi'?!!x.kp[o.id]:false); })) return true;
+  return (f.vars||[]).some(function(n){ return !!x.vr[String(n).toUpperCase()]; });
+}
+function dfSecInfo(){
+  if(DFSEC.info) return DFSEC.info;
+  var by={}, any={};
+  ((SPEC&&SPEC.sections)||[]).forEach(function(s){ if(!s||!s.id) return; var x=dfSecOf(s); by[s.id]=x; DFS.forEach(function(f){ if(dfHits(f,x)) any[f.id]=1; }); });
+  DFSEC.info={by:by,any:any}; return DFSEC.info;
+}
+/* variables que usa cada Tabla/Gr\u00E1fico Draco (solo hace falta si alg\u00FAn filtro da valor a variables) */
+function dfSecVars(){
+  if(DFSEC.vload||EDIT||!HOSTON||!DFS.some(function(f){ return f.vars&&f.vars.length; })) return;
+  var refs={}; ((SPEC&&SPEC.sections)||[]).forEach(function(s){ dfWalk(s&&s.blocks,function(b){ if((b.type==='dracoTable'||b.type==='dracoChart')&&b.ref) refs[b.ref]=1; }); });
+  var l=Object.keys(refs); DFSEC.vload=true; if(!l.length) return;
+  dcall('dt.varsFor',{refs:l}).then(function(r){ var m={};
+    (r||[]).forEach(function(v){ (v.refs||[]).forEach(function(ref){ (m[ref]=m[ref]||[]).push(String(v.name).toUpperCase()); }); });
+    DFSEC.vars=m; DFSEC.info=null; dfPaint(); },function(){ /* sin esa informaci\u00F3n se decide solo por tablas, gr\u00E1ficos y KPIs */ });
+}
+function dfShown(f){
+  if(EDIT||SLIDES||!DFSEC.id) return true;
+  var I=dfSecInfo(); if(!I.any[f.id]) return true;
+  var x=I.by[DFSEC.id]; return !!(x&&dfHits(f,x));
+}
+function dfSecSet(id){ if(!id||id===DFSEC.id) return; DFSEC.id=id; dfPaint(); }
+function dfSecSpy(){
+  if(DFSEC.io){ try{ DFSEC.io.disconnect(); }catch(e){} DFSEC.io=null; }
+  DFSEC.info=null; dfSecVars();
+  if(!DFS.length||EDIT||SLIDES) return;
+  var secs=[].slice.call(document.querySelectorAll('main > section[data-section]'));
+  if(!secs.length) return;
+  if(pagedOn()){ dfSecSet(PG_ID||secs[0].getAttribute('data-section')); return; }
+  if(!DFSEC.id) DFSEC.id=secs[0].getAttribute('data-section');
+  if('IntersectionObserver' in window){
+    DFSEC.io=new IntersectionObserver(function(en){ if(pagedOn()) return; en.forEach(function(x){ if(x.isIntersecting) dfSecSet(x.target.getAttribute('data-section')); }); },{rootMargin:'-45% 0px -50% 0px'});
+    secs.forEach(function(x){ DFSEC.io.observe(x); });
+  }
+  dfPaint();
+}
 function dfLoad(f){
   if(!f.cube||!f.dim||DFM[f.id]) return; DFM[f.id]={status:'loading',list:[]};
   dcall('dt.members',{cube:f.cube,dim:f.dim,attr:f.attr}).then(function(l){ DFM[f.id]={status:'ready',list:l||[]}; dfPaint(); },function(){ DFM[f.id]={status:'error',list:[]}; dfPaint(); });
@@ -1382,12 +1462,13 @@ function dfCtl(f){
   if(HOSTON&&!EDIT&&!M) dfLoad(f);
   var list=(M&&M.list)||[]; if(v&&list.indexOf(v)<0) list=[v].concat(list);
   var off=(EDIT||!HOSTON)?' disabled title="Funciona en la vista previa, dentro de Draco Planning"':'';
+  var hid=dfShown(f)?'':' style="display:none"';
   if(f.type==='pills'||f.type==='chips'){
     var cls=f.type==='chips'?'chipb':'pill', wrapc=f.type==='chips'?'chipsb':'pills';
-    return '<div class="fc">'+lab+'<div class="'+wrapc+'"><button class="'+cls+(v===''?' on':'')+'" data-act="dfpill" data-df="'+esc(f.id)+'" data-v=""'+off+'>Todos</button>'
+    return '<div class="fc"'+hid+'>'+lab+'<div class="'+wrapc+'"><button class="'+cls+(v===''?' on':'')+'" data-act="dfpill" data-df="'+esc(f.id)+'" data-v=""'+off+'>Todos</button>'
       +list.map(function(x){ return '<button class="'+cls+(v===x?' on':'')+'" data-act="dfpill" data-df="'+esc(f.id)+'" data-v="'+esc(x)+'"'+off+'>'+esc(x)+'</button>'; }).join('')+'</div></div>';
   }
-  return '<label class="fc">'+lab+'<select data-df="'+esc(f.id)+'"'+off+'><option value="">Todos</option>'+list.map(function(x){ return '<option'+(v===x?' selected':'')+'>'+esc(x)+'</option>'; }).join('')+'</select></label>';
+  return '<label class="fc"'+hid+'>'+lab+'<select data-df="'+esc(f.id)+'"'+off+'><option value="">Todos</option>'+list.map(function(x){ return '<option'+(v===x?' selected':'')+'>'+esc(x)+'</option>'; }).join('')+'</select></label>';
 }
 function dfChanged(){ return DFS.some(function(f){ return (DFV[f.id]||'')!==(f.def||''); }); }
 function dfPaint(){ var fb=document.getElementById('fbar'); if(fb) fb.innerHTML=fbarHtml(); }
@@ -1505,7 +1586,22 @@ function dcChartHtml(id){
   }
   return chartCard(cb,'dc_'+id);
 }
+/* PW (ancho de dibujo de los gr\u00E1ficos) es global y lo fija paintEl para cada bloque; los Gr\u00E1ficos Draco se pintan
+   aparte, as\u00ED que aqu\u00ED se fija con el ancho de SU bloque (si no, heredan el del \u00FAltimo bloque pintado y el SVG se
+   estira: letras enormes en una columna ancha o diminutas en una estrecha). Se recuerda el ancho para redibujar
+   solo si cambia (ver dcRefit). */
 function dcRender(id){
+  var el=dcEl(id); if(!el) return;
+  var cw=el.clientWidth, old=PW;
+  if(cw>0){ PW=Math.max(240,cw-(SLIDES?38:48)); el.setAttribute('data-w',String(cw)); }
+  try{ dcRenderIn(id); } finally { PW=old; }
+}
+/* tras repintar la p\u00E1gina (cambio de tama\u00F1o, pesta\u00F1as, columnas): redibuja los gr\u00E1ficos cuyo ancho ha cambiado */
+function dcRefit(){
+  Object.keys(DCS).forEach(function(id){ var el=dcEl(id), st=DCS[id]; if(!el||!st||!st.res) return;
+    var cw=el.clientWidth; if(cw>0&&el.getAttribute('data-w')!==String(cw)) dcRender(id); });
+}
+function dcRenderIn(id){
   var el=dcEl(id), st=DCS[id], b=DCB[id]; if(!el||!st) return;
   if(st.status==='loading'){
     if(st.res){ if(!el.querySelector('.chart')) el.innerHTML=dcChartHtml(id); dtVeil(el,true); return; }
@@ -1930,7 +2026,8 @@ function ctl(f){
 function fbarHtml(){
   var xs=Object.keys(S.x);
   if(!FS.length&&!SW.length&&!xs.length&&!DFS.length) return '';
-  var h='<div class="wrap fbar-in">'+FS.map(ctl).join('')+DFS.map(dfCtl).join('')+(dfChanged()?'<button class="clear" data-act="dfclear">Quitar filtros</button>':'');
+  var dfVis=DFS.filter(dfShown).length;
+  var h='<div class="wrap fbar-in">'+FS.map(ctl).join('')+DFS.map(dfCtl).join('')+((DFS.length&&!dfVis&&!FS.length&&!SW.length)?'<span class="fc" style="font-style:italic">Sin filtros para esta secci\u00F3n</span>':'')+(dfChanged()?'<button class="clear" data-act="dfclear">Quitar filtros</button>':'');
   SW.forEach(function(s){ h+='<button class="sw'+(S.sw[s.id]?' on':'')+'" role="switch" aria-checked="'+(S.sw[s.id]?'true':'false')+'" data-act="sw" data-id="'+esc(s.id)+'"><i></i><span>'+esc(s.label)+'</span></button>'; });
   xs.forEach(function(k){ h+='<button class="xtag" data-act="unx" data-dim="'+esc(k)+'">'+esc(dl(k))+': '+esc(S.x[k])+' \u2715</button>'; });
   h+='</div>';
@@ -1956,7 +2053,7 @@ function update(){
   MEMO={}; REPORT.empty=[];
   paintAll(); applyVis();
   var fb=document.getElementById('fbar'); if(fb) fb.innerHTML=fbarHtml();
-  tuMountAll();
+  tuMountAll(); dcRefit();
 }
 function build(){
   var app=document.getElementById('app'), meta=SPEC.meta||{}, nav=SPEC.nav||{}, name=meta.brand||meta.title||'P\u00E1gina';
@@ -2770,7 +2867,7 @@ window.addEventListener('message',function(ev){
   if(d.dp==='host') HOST_SAVE=true;
   else if(d.dp==='edit'){ setEdit(!!d.on); }
   else if(d.dp==='draco-reply'){ dreply(d); }
-  else if(d.dp==='dracoon'){ HOSTON=true; tuMountAll(true); if(kpiDefs().length) kpiEnsure(); }
+  else if(d.dp==='dracoon'){ HOSTON=true; tuMountAll(true); if(kpiDefs().length) kpiEnsure(); dfSecVars(); }
   else if(d.dp==='focus'){ EDSEL=d.sel||null; var tbn=d.tab&&document.querySelector('.tab[data-act="tab"][data-bid="'+d.tab.bid+'"][data-i="'+d.tab.i+'"]'); var needTab=!!(tbn&&!tbn.classList.contains('on')); if(needTab){ window.__noSel=true; tbn.click(); window.__noSel=false; } setTimeout(function(){ markSel(); if(d.scroll){ var fe=document.querySelector('.edit-sel'); if(fe) fe.scrollIntoView({block:'center',behavior:'instant'}); } },needTab?90:0); }
   else if(d.dp==='spec'&&d.spec&&typeof d.spec==='object'){ try{ applySpec(d.spec); }catch(err){ try{ parent.postMessage({dp:'xstatus',msg:'No se pudo redibujar: '+String(err.message).slice(0,80)},'*'); }catch(x){} } }
   else if(d.dp==='export'){ if(d.kind==='pdf') exportPdf(); else if(d.kind==='pptx') exportPptx(); }
@@ -2790,7 +2887,7 @@ function pagedOn(){ return document.documentElement.getAttribute('data-sections'
 function pagedShow(id,push){
   var secs=[].slice.call(document.querySelectorAll('main > section')), hit=false;
   secs.forEach(function(x){ var on=x.getAttribute('data-section')===id; x.classList.toggle('on-sec',on); if(on) hit=true; });
-  if(!hit) return false; PG_ID=id;
+  if(!hit) return false; PG_ID=id; if(typeof dfSecSet==='function') dfSecSet(id);
   var m=document.querySelector('main'); if(m) m.scrollTop=0;
   [].forEach.call(document.querySelectorAll('[data-nav]'),function(a){ a.classList.toggle('on',a.getAttribute('data-nav')===id); });
   if(push&&window.history&&history.replaceState){ try{ history.replaceState(null,'','#'+id); }catch(e){} }
@@ -2811,6 +2908,7 @@ document.addEventListener('click',function(e){
 });
 window.addEventListener('hashchange',function(){ if((typeof EDIT!=='undefined'&&EDIT)||!pagedOn()) return; var id=(location.hash||'').slice(1); if(id) pagedShow(id,false); });
 function setupSpy(){
+  dfSecSpy();
   if(window.__io){ try{ window.__io.disconnect(); }catch(e){} }
   if('IntersectionObserver' in window){
     var links={}; document.querySelectorAll('[data-nav]').forEach(function(a){ links[a.getAttribute('data-nav')]=a; });
@@ -2889,6 +2987,7 @@ a{color:inherit;text-decoration:none}.num{font-variant-numeric:tabular-nums}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px}
 .kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px}.hero .kpi{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.14)}
 .kpi .l{font-size:13px;color:var(--muted);font-weight:500}.kpi .v{font-size:clamp(28px,3vw,36px);font-weight:var(--hw);color:var(--ink);letter-spacing:var(--ht);margin-top:6px;font-variant-numeric:tabular-nums;line-height:1.1}
+.kpi.kpi-busy .v{opacity:.4;transition:opacity .2s}.kpi .n .tu-spin{width:11px;height:11px;border-width:2px}
 .kpi .d{font-size:13px;font-weight:700;margin-top:8px}.kpi .n{font-size:12.5px;color:var(--muted);margin-top:4px}
 .d-good{color:var(--good)}.d-bad{color:var(--bad)}
 .tone-dark .d-good{color:color-mix(in srgb,var(--good) 45%,#fff)}
@@ -3365,7 +3464,9 @@ function validate(spec){
     else { var kn={}; spec.dracoKpis.forEach(function(k,i){ var p='dracoKpis['+i+']';
       if(!k||typeof k!=='object'||!k.id) e.push(p+': falta "id" (la Tabla Draco del KPI).');
       else if(!/^[A-Z][A-Z0-9_]{0,39}$/.test(String(k.name||''))) e.push(p+': "name" debe ir en may\u00FAsculas, sin espacios ni acentos (se usa como $$NAME$$).');
-      else if(kn[k.name]) e.push(p+': el nombre '+k.name+' est\u00E1 repetido.'); else kn[k.name]=1; }); }
+      else if(kn[k.name]) e.push(p+': el nombre '+k.name+' est\u00E1 repetido.'); else kn[k.name]=1;
+      if(k&&k.exc&&(['MIN','MAX','AVG','SUM','COUNT'].indexOf(k.exc.agg)<0||!Array.isArray(k.exc.dims))) w.push(p+': la agregaci\u00F3n de excepci\u00F3n no es v\u00E1lida y se ignora.');
+      else if(k&&k.exc&&!k.exc.dims.length) w.push(p+': la agregaci\u00F3n de excepci\u00F3n no tiene campos de referencia y se ignora.'); }); }
   }
   if(!Array.isArray(spec.sections)||!spec.sections.length){ e.push('"sections" debe ser un array con al menos una sección.'); return {errors:e,warnings:w}; }
   var D=spec.data, hasData=!!D, dimSet={}, measIds=[], metSet={}, swSet={}, ids={};
@@ -5164,7 +5265,7 @@ function crumbText(){
 function edAfterSync(){ var c=$('inspCrumb'); if(c) c.textContent=crumbText(); treeRender(); }
 function edAfterRender(){
   var c=$('inspCrumb'); if(c) c.textContent=crumbText();
-  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender(); if(typeof dtAfterRender==='function') dtAfterRender(); if(typeof dvAfterRender==='function') dvAfterRender(); if(typeof dcAfterRender==='function') dcAfterRender(); if(typeof dfAfterRender==='function') dfAfterRender();
+  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender(); if(typeof dtAfterRender==='function') dtAfterRender(); if(typeof dvAfterRender==='function') dvAfterRender(); if(typeof dcAfterRender==='function') dcAfterRender(); if(typeof dfAfterRender==='function') dfAfterRender(); if(typeof dkAfterRender==='function') dkAfterRender();
 }
 
 /* ---------- acciones sobre nodos ---------- */
@@ -5807,11 +5908,36 @@ function edDKpi(k,i){
     +gSel('Decimales','decimals',(k.decimals==null?'':String(k.decimals)),[['','Seg\u00FAn la medida'],['0','0'],['1','1'],['2','2'],['3','3']])
     +(k.parts&&k.parts.scale>1?'<p class="insp-hint">La medida tiene factor de escala: \u00F7 '+Number(k.parts.scale).toLocaleString('es-ES')+'.</p>':'')
     +gText('Unidad','unit',k.unit,'Por ejemplo: \u20AC')
+    +dkExcHtml(k,i)
     +'<div class="insp-sec">Datos</div>'
-    +(HOSTED?'<button class="btn small" data-dk-edit="'+i+'" type="button">\uD83E\uDDE9 Editar en el dise\u00F1ador</button> ':'')
+    +(HOSTED?'<button class="btn small" data-dk-edit=\"'+i+'" type="button">\uD83E\uDDE9 Editar en el dise\u00F1ador</button> ':'')
     +'<button class="btn small" data-dk-del="'+i+'" type="button">Borrar el KPI</button>'
     +(k.parts?'':'<p class="insp-hint" style="color:#C2362B">Sin terminar: \u00E1brelo en el dise\u00F1ador y pulsa Guardar.</p>')
     +'<p class="insp-hint">El KPI se guarda dentro de este informe (al guardar el informe).</p>';
+}
+/* Agregaci\u00F3n de excepci\u00F3n (como en BPC): primero se agrega la medida por las dimensiones de referencia y sobre esos
+   valores se aplica la agregaci\u00F3n de excepci\u00F3n. k.exc = { agg: 'MIN'|'MAX'|'AVG'|'SUM'|'COUNT', dims: [{dim, attr}] } */
+var DK_EXC=[['','Ninguna (agregaci\u00F3n normal)'],['MIN','M\u00EDnimo'],['MAX','M\u00E1ximo'],['AVG','Media'],['SUM','Suma'],['COUNT','N\u00FAmero de valores']];
+function dkExcHtml(k,i){
+  var a=(k.exc&&k.exc.agg)||'';
+  var h='<div class="insp-sec">Agregaci\u00F3n de excepci\u00F3n</div>'
+    +'<label class="ef"><span>Despu\u00E9s de agregar, quedarse con</span><select data-dk-exc-agg="'+i+'">'+DK_EXC.map(function(o){ return '<option value="'+o[0]+'"'+(o[0]===a?' selected':'')+'>'+esc(o[1])+'</option>'; }).join('')+'</select></label>';
+  if(!a) return h+'<p class="insp-hint">Por ejemplo, el m\u00EDnimo mensual: se suma la medida por mes (por todo lo dem\u00E1s se agrega como siempre) y se toma el m\u00EDnimo de esos meses.</p>';
+  return h+'<p class="insp-hint">Dimensiones de referencia: la medida se agrega <b>por cada valor</b> de estos campos (por todos los dem\u00E1s, como siempre) y despu\u00E9s se aplica la agregaci\u00F3n elegida sobre esos resultados.</p>'
+    +'<div id="dkExcBox" data-i="'+i+'">'+(HOSTED?'<div class="tu-state"><span class="tu-spin"></span> Cargando campos\u2026</div>':'<p class="insp-hint">Los campos se eligen dentro de Draco Planning.</p>')+'</div>';
+}
+function dkAfterRender(){
+  var el=$('dkExcBox'); if(!el||!HOSTED) return;
+  var i=+el.getAttribute('data-i'), k=dkList()[i]; if(!k) return;
+  if(!k.cubo){ el.innerHTML='<p class="insp-hint" style="color:#C2362B">Abre el KPI en el dise\u00F1ador y pulsa Guardar para poder elegir sus dimensiones.</p>'; return; }
+  var key=JSON.stringify(edSel), cube=k.cubo;
+  var pF=DFE.fields[cube]?Promise.resolve(DFE.fields[cube]):dtCall('dt.fields',{cube:cube}).then(function(l){ DFE.fields[cube]=l; return l; });
+  pF.then(function(l){
+    if(JSON.stringify(edSel)!==key||!$('dkExcBox')) return;
+    var sel=(k.exc&&k.exc.dims)||[], has=function(x){ return sel.some(function(d){ return d.dim===x.dim&&d.attr===x.attr; }); };
+    $('dkExcBox').innerHTML=(sel.length?'':'<p class="insp-hint" style="color:#8a5a00">Elige al menos un campo: sin campos de referencia el KPI se calcula sin la agregaci\u00F3n de excepci\u00F3n.</p>')
+      +'<div style="max-height:220px;overflow:auto">'+(l||[]).map(function(x){ return '<label class="df-chk"><input type="checkbox" data-dk-exc-dim="'+esc(x.dim+'|'+x.attr)+'"'+(has(x)?' checked':'')+'><span>'+esc(x.label)+'</span></label>'; }).join('')+'</div>';
+  },function(e){ if(JSON.stringify(edSel)===key) tuPaintErr('dkExcBox',e,function(){ delete DFE.fields[cube]; edRender(); }); });
 }
 /* Abre el dise\u00F1ador en modo KPI con la definici\u00F3n del KPI (si lo hay); al guardar devuelve { kpi: { nombre, cubo, def, parts, vars } } */
 function dkDesign(k,after){
@@ -5841,6 +5967,18 @@ $('inspBody').addEventListener('change',function(e){
     var all=dkList().map(function(k){ return k.id; }), cur=(b.show&&b.show.length)?b.show.slice():all.slice(), id=t.getAttribute('data-dk-show');
     cur=t.checked?(cur.indexOf(id)<0?cur.concat([id]):cur):cur.filter(function(x){ return x!==id; });
     b.show=(cur.length===all.length)?[]:all.filter(function(x){ return cur.indexOf(x)>=0; });
+    edSync(true); return;
+  }
+  if(t.hasAttribute('data-dk-exc-agg')){
+    var ke=dkList()[+t.getAttribute('data-dk-exc-agg')]; if(!ke) return; edPrevSel=edSel;
+    if(!t.value) delete ke.exc; else ke.exc={agg:t.value,dims:(ke.exc&&ke.exc.dims)||[]};
+    edSync(true); edRender(); return;
+  }
+  if(t.hasAttribute('data-dk-exc-dim')){
+    var bx=$('dkExcBox'), kd=bx&&dkList()[+bx.getAttribute('data-i')]; if(!kd||!kd.exc) return; edPrevSel=edSel;
+    var pr=t.getAttribute('data-dk-exc-dim').split('|'), d={dim:pr[0],attr:pr[1]};
+    var rest=(kd.exc.dims||[]).filter(function(x){ return !(x.dim===d.dim&&x.attr===d.attr); });
+    kd.exc.dims=t.checked?rest.concat([d]):rest;
     edSync(true); return;
   }
   if(t.hasAttribute('data-dk-name')){
@@ -6065,7 +6203,7 @@ function relayPage(d){
   /* KPIs: sus piezas SQL las pone la herramienta desde su copia del informe (nunca las de la p\u00E1gina) */
   if(d&&d.op==='dt.kpis'){
     var pl=d.payload||{};
-    d={dp:d.dp,id:d.id,op:d.op,payload:{refs:pl.refs,variables:pl.variables,filters:pl.filters,kpis:((currentSpec&&currentSpec.dracoKpis)||[]).map(function(k){ return {id:k.id,cubo:k.cubo||null,parts:k.parts||null,vars:k.vars||{}}; })}};
+    d={dp:d.dp,id:d.id,op:d.op,payload:{refs:pl.refs,variables:pl.variables,filters:pl.filters,kpis:((currentSpec&&currentSpec.dracoKpis)||[]).map(function(k){ return {id:k.id,cubo:k.cubo||null,parts:k.parts||null,vars:k.vars||{},exc:k.exc||null}; })}};
   }
   hostPost({dpTool:1,op:'page',payload:d});
 }   /* puente futuro: la p\u00E1gina pide cosas a Draco (tablas, SQL) */
