@@ -398,6 +398,10 @@
             background: #f8fafc;
         }
 
+        /* Los estilos .lkml-* de los antiguos popups "Abrir/Guardar modelo
+           semántico" ahora viven en css/lkmlDialog.css (diálogo
+           independiente, ver openSemanticModel.html / saveSemanticModel.html). */
+
         .tree-list {
             list-style: none;
             padding-left: 14px;
@@ -664,9 +668,61 @@
             padding: 8px 4px;
             text-align: center;
         }
+
+        /* Toast de confirmación / error */
+        #appToastContainer {
+            position: fixed;
+            top: 12px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            align-items: center;
+            width: 100%;
+            max-width: 92%;
+            pointer-events: none;
+        }
+
+        .app-toast {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 14px;
+            border-radius: var(--radius-md, 6px);
+            font-size: var(--fs-sm, 11.5px);
+            font-weight: 600;
+            box-shadow: var(--shadow-md, 0 4px 12px rgba(16, 24, 40, 0.10));
+            border: 1px solid transparent;
+            opacity: 0;
+            transform: translateY(-8px);
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            max-width: 100%;
+            word-break: break-word;
+        }
+
+        .app-toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .app-toast.success {
+            background-color: var(--color-success-light, #E4F8F1);
+            color: var(--color-success, #12805C);
+            border-color: #BFEBDC;
+        }
+
+        .app-toast.error {
+            background-color: var(--color-danger-light, #FBEAE9);
+            color: var(--color-danger, #D8342A);
+            border-color: #F3C9C6;
+        }
     </style>
 </head>
 <body>
+
+    <div id="appToastContainer" aria-live="polite"></div>
 
     <div class="page-content">
 
@@ -675,6 +731,8 @@
             <div class="card-header">
                 <span class="card-title">Modelo semántico</span>
                 <div class="model-manager-actions">
+                    <button type="button" class="icon-btn" id="btnOpenLkmlModel" title="Abrir modelo semántico desde LookML (.lkml)" style="display:none;">📂 Abrir</button>
+                    <button type="button" class="icon-btn" id="btnSaveLkmlModel" title="Guardar modelo semántico como LookML (.lkml)" style="display:none;">📤 LookML</button>
                     <button type="button" class="btn-generate" id="btnGenerateModel" title="Guardar modelo semántico en Excel">💾 Guardar</button>
                     <button type="button" class="icon-btn" id="btnNewModel" title="Crear nuevo modelo">+</button>
                     <button type="button" class="icon-btn danger" id="btnDeleteModel" title="Eliminar modelo">🗑</button>
@@ -688,8 +746,9 @@
             </div>
         </div>
 
-        <!-- CAJA 2: TABLA DE HECHOS -->
-        <div class="card compact">
+        <!-- CAJA 2: TABLA DE HECHOS (oculta hasta que haya un modelo semántico
+             seleccionado o creado: ver setFactCardVisible() en semantic_model.js) -->
+        <div class="card compact" id="factTableCard" style="display: none;">
             <div class="card-header">
                 <div class="card-title-group">
                     <span class="card-title">Tabla de hechos</span>
@@ -722,6 +781,14 @@
         </div>
 
     </div>
+
+    <!-- Los antiguos popups "Abrir/Guardar modelo semántico (.lkml)" ya no
+         viven aquí dentro del taskpane: ahora son un diálogo independiente
+         (Office.context.ui.displayDialogAsync) — ver openSemanticModel.html
+         y saveSemanticModel.html — que se abre igual desde los botones del
+         ribbon (manifest) que desde "📂 Abrir" / "📤 LookML" de arriba, sin
+         depender de este taskpane. Ver openLkmlDialogFromTaskpane() /
+         openSaveLkmlDialogFromTaskpane() en semantic_model.js. -->
 
     <!-- MODAL SELECCIÓN JERÁRQUICA DE TABLA -->
     <div id="treeModal" class="modal">
@@ -850,6 +917,14 @@
         </div>
     </div>
 
+    <script src="js/config.js"></script>
+    <script src="js/bigquery.js"></script>
+    <script src="js/snowflake.js"></script>
+    <script src="js/fabric.js"></script>
+    <script src="js/provider.js"></script>
+    <script src="js/semanticModelStore.js"></script>
+    <script src="js/lkmlSaveBridge.js"></script>
+    <script src="js/lkmlOpenBridge.js"></script>
     <script src="js/semantic_model.js"></script>
 </body>
 </html>
