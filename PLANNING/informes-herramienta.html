@@ -6065,7 +6065,7 @@ function relayPage(d){
   /* KPIs: sus piezas SQL las pone la herramienta desde su copia del informe (nunca las de la p\u00E1gina) */
   if(d&&d.op==='dt.kpis'){
     var pl=d.payload||{};
-    d={dp:d.dp,id:d.id,op:d.op,payload:{refs:pl.refs,variables:pl.variables,filters:pl.filters,kpis:((currentSpec&&currentSpec.dracoKpis)||[]).map(function(k){ return {id:k.id,parts:k.parts||null,vars:k.vars||{}}; })}};
+    d={dp:d.dp,id:d.id,op:d.op,payload:{refs:pl.refs,variables:pl.variables,filters:pl.filters,kpis:((currentSpec&&currentSpec.dracoKpis)||[]).map(function(k){ return {id:k.id,cubo:k.cubo||null,parts:k.parts||null,vars:k.vars||{}}; })}};
   }
   hostPost({dpTool:1,op:'page',payload:d});
 }   /* puente futuro: la p\u00E1gina pide cosas a Draco (tablas, SQL) */
