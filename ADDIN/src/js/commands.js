@@ -1486,6 +1486,31 @@ function dracoScaled(expr, scale) {
     return (isFinite(f) && f > 1) ? "(" + expr + ") / " + f : expr;
 }
 
+/**
+ * Factor de escala de una medida por su NOMBRE. Sirve para los modos Fijo e Híbrido, donde la medida puede no estar
+ * en ReportState.Measures (la pintada como MEASURE en el modo Fijo, o la de «Filtros», que solo se añade a Measures
+ * en el modo dinámico): primero la de ReportState.Measures (ya decorada) y si no, sus Opciones de campo en cualquier
+ * zona (filtros, columnas, filas). 1 = sin escala.
+ */
+function dracoMeasureScale(measureName) {
+    if (!measureName) return 1;
+    const up = String(measureName).toUpperCase();
+    const m = (ReportState.Measures || []).find(x => String(x.Name).toUpperCase() === up);
+    if (m && Number(m.Scale) > 1) return Number(m.Scale);
+    let all = {};
+    try {
+        const report = (window.ReportStore && ReportState.ReportId !== null && ReportState.ReportId !== undefined)
+            ? window.ReportStore.getReport(ReportState.ReportId) : null;
+        all = (report && report.design && report.design.fieldOptions) || {};
+    } catch (e) { all = {}; }
+    for (const zone of ["filters", "columns", "rows"]) {
+        const key = Object.keys(all).find(k => k.toUpperCase() === (zone + "|MEASURE|" + up).toUpperCase());
+        const sc = key && all[key] ? Number(all[key].scale) : 1;
+        if (isFinite(sc) && sc > 1) return sc;
+    }
+    return 1;
+}
+
 function attachDracoMeasureOptions() {
     (ReportState.Measures || []).forEach(decorateDracoMeasure);
 }
@@ -1774,7 +1799,7 @@ async function readColumnDefinitions(context, editReportGrid, csvGrid) {
 // ningún sitio, se deja tal cual venga (SUM(f.) sería un SQL claramente
 // inválido, y así se detecta a simple vista en vez de sumar en silencio
 // un campo que no es).
-function buildSelectBase(relGrid, rowsDefs, colDefs, measureField) {
+function buildSelectBase(relGrid, rowsDefs, colDefs, measureField, scale) {
     const dict = new Map();
 
     for (const v of rowsDefs) {
@@ -1795,7 +1820,7 @@ function buildSelectBase(relGrid, rowsDefs, colDefs, measureField) {
     for (const val of dict.values()) {
         sql += "    " + val + "," + CRLF;
     }
-    sql += "    SUM(f." + (measureField || "") + ") AS IMPORTE";
+    sql += "    " + dracoScaled("SUM(f." + (measureField || "") + ")", scale) + " AS IMPORTE";
 
     return sql;
 }
@@ -2091,7 +2116,7 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
 
     // ---- CTE BASE: se escanea la tabla de hechos UNA sola vez ----
     sql += "WITH BASE AS (" + CRLF + CRLF;
-    sql += buildSelectBase(relGrid, rowsDefs, colDefs, measureField) + CRLF + CRLF;
+    sql += buildSelectBase(relGrid, rowsDefs, colDefs, measureField, dracoMeasureScale(measureName)) + CRLF + CRLF;
     sql += buildFrom(measuresGrid, measureName) + CRLF + CRLF;
     sql += buildJoins(relGrid) + CRLF + CRLF;
     sql += buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs);
@@ -2785,8 +2810,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     const measureCols = neededMeasures.map((name, k) => {
         const R = buscarMedida(measuresGrid, name);
         if (R === 0) throw new Error(`La medida «${name}» no está en el modelo semántico.`);
-        const mm = ReportState.Measures.find(x => String(x.Name).toUpperCase() === String(name).toUpperCase());
-        return { name, alias: "M_" + (k + 1), field: String(cellValue(measuresGrid, R, 6)).trim(), scale: mm ? mm.Scale : 1 };
+        return { name, alias: "M_" + (k + 1), field: String(cellValue(measuresGrid, R, 6)).trim(), scale: dracoMeasureScale(name) };
     });
 
     const plan = {
