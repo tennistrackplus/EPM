@@ -748,11 +748,23 @@ botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un infor
   `COUNT(DISTINCT …)`); el `WHERE` de cada grupo es el OR de sus filtros y los grupos se unen con `CROSS JOIN` (una
   fila, una columna por KPI): cada tabla de hechos se lee una vez aunque haya 100 KPIs. Las piezas SQL las añade la
   herramienta desde su copia del informe (`relayPage`), nunca la página. Las `$VARIABLES$` se resuelven por KPI; si la
-  consulta combinada falla, se reintenta grupo a grupo. Caché de 30 s.
+  consulta combinada falla, se reintenta grupo a grupo. Sin caché: se calculan al entrar y cada vez que cambia la
+  definición de un KPI o sus variables. Formato «Según la medida» (número / % y decimales de las Opciones de campo de
+  la medida) o forzado; el factor de escala de la medida se aplica en la consulta. `$$KPI$$` también funciona en las
+  tarjetas de cifras (etiqueta, valor, variación y nota).
 - **Subsección (`group`).** Bloque contenedor (sustituye a la antigua «Fila», que no hacía nada): título opcional,
   distribución propia (una columna o en columnas, 1-4) y sus bloques en `blocks`. Se puede anidar a cualquier nivel;
   los identificadores siguen el patrón `s{sección}b{bloque}` + tramos `t{pestaña}_{bloque}` / `g{bloque}` (`bidWalk`).
   Con la subsección seleccionada, lo que se añade desde la paleta se coloca dentro.
+- **Mover y borrar en el diseño.** En el árbol de estructura se arrastran bloques también dentro y fuera de las
+  subsecciones (soltar en el centro de una subsección la mete dentro; en sus bordes, antes o después). En el lienzo,
+  en modo diseño, cada bloque se arrastra a su nuevo sitio (línea azul a izquierda/derecha si la rejilla tiene varias
+  columnas, arriba/abajo si tiene una; o dentro de una subsección vacía); la herramienta lo aplica (`edMoveBid`).
+  **Supr** borra el bloque o la sección seleccionados (desde el lienzo, el árbol o el inspector; no mientras se escribe).
+- **Factor de escala de las medidas** (Opciones de campo: 1, 10, 100… 1.000.000.000): el valor se divide en la
+  consulta (`(AGG(f.campo)) / factor`) en los informes dinámicos, híbridos y en los KPIs.
+- **Propiedades de distribución**: columnas y reparto solo en página, sección y subsección; los bloques conservan su
+  ancho dentro de la rejilla y su propio espaciado (normal / compacto / muy ajustado).
 - **Vista previa a pantalla completa** (dentro de Draco Planning): sin barras de la herramienta ni la cabecera/fila de
   proyecto del generador (mensaje `chrome` al anfitrión); botón flotante «Volver al diseño».
 - **Tabla Draco sin título**: no muestra cabecera; ya no hay barra de «Recargar» ni recuento de filas/columnas.
