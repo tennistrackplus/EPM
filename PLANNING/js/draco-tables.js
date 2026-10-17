@@ -491,8 +491,9 @@ const DracoTables = {
         const iff = (cond, x) => !cond ? x : (prov === "snowflake" ? `IFF(${cond}, ${x}, NULL)` : prov === "fabric" ? `CASE WHEN ${cond} THEN ${x} END` : `IF(${cond}, ${x}, NULL)`);
         const AGG = { SUM: "SUM", AVG: "AVG", COUNT: "COUNT", MIN: "MIN", MAX: "MAX" };
         const byGroup = new Map();
-        items.forEach(it => {
-            const gk = String(it.parts.from) + "\n" + String(it.parts.joins || "");
+        items.forEach((it, ix) => {
+            // un KPI con agregación de excepción necesita su propia subconsulta (GROUP BY por sus dimensiones de referencia)
+            const gk = it.exc ? "exc#" + ix : String(it.parts.from) + "\n" + String(it.parts.joins || "");
             if (!byGroup.has(gk)) byGroup.set(gk, []);
             byGroup.get(gk).push(it);
         });
@@ -516,6 +517,19 @@ const DracoTables = {
                 keys.push([col, it.key]);
             });
             const first = list[0].parts;
+            if (list[0].exc) {
+                // AGREGACIÓN DE EXCEPCIÓN: 1) la medida se agrega (con su agregación normal) por las dimensiones de
+                // referencia; 2) sobre esos valores se aplica la agregación de excepción (MIN, MAX, AVG...).
+                const it = list[0], x = it.exc;
+                const inner = cols[0].trim().replace(/ AS K_\d+$/, "");
+                const cond = it.conds.length ? it.conds.map(c => "(" + c + ")").join(" AND ") : null;
+                const joins = [(first.joins || "").trim()].concat(it.extraJoins || [], x.joins || []).filter(Boolean);
+                const outer = x.agg === "COUNT" ? "COUNT(v)" : x.agg + "(v)";
+                const sql = "SELECT\n    " + outer + " AS " + keys[0][0] + "\nFROM (\nSELECT\n    " + inner + " AS v\n" + first.from
+                    + (joins.length ? "\n" + joins.join("\n") : "") + (cond ? "\nWHERE\n    " + cond : "")
+                    + "\nGROUP BY " + x.cols.join(", ") + "\n) xg";
+                return { sql, keys };
+            }
             const where = (all && conds.length) ? "\nWHERE\n    " + Array.from(new Set(conds)).join("\n    OR ") : "";
             const ej = extraJoins(list);
             return { sql: "SELECT\n" + cols.join(",\n") + "\n" + first.from + "\n" + (first.joins || "").trim() + (ej.length ? "\n" + ej.join("\n") : "") + where, keys };
@@ -548,11 +562,40 @@ const DracoTables = {
         return { join: `LEFT JOIN ${table} ${alias} ON f.${f.fld.name} = ${alias}.${key.name}`, cond: `${alias}.${f.att.name} = ${lit}` };
     },
 
+    /**
+     * Dimensiones de referencia de una agregación de excepción: [{dim, attr}] -> { cols: [expr], joins: [sql] }.
+     * Si el atributo es la clave de la dimensión se usa la columna de la tabla de hechos (f.<DIM>); si no, se une la
+     * tabla de la dimensión (alias fijo xe_<DIM>). Lanza si alguna no está en el modelo del cubo.
+     */
+    async kpiExcDims(project, cubeName, dims) {
+        const model = await this.resolveModel(project, await this.cubeByName(project, cubeName));
+        const ok = (x) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(x || ""));
+        const sf = Provider.key() === "snowflake";
+        const cols = [], joins = [];
+        (dims || []).forEach(d => {
+            const fld = (model.fields || []).find(x => x.type === "DIMENSION" && String(x.name).toUpperCase() === String(d.dim).toUpperCase());
+            const att = fld && (fld.attributes || []).find(a => String(a.name).toUpperCase() === String(d.attr).toUpperCase());
+            if (!fld || !att) throw new Error(`usa «${d.dim} · ${d.attr}» en la agregación de excepción, que no está en el cubo «${cubeName}»`);
+            const key = (fld.attributes || []).find(a => a.isKey) || (fld.attributes || [])[0];
+            if (!ok(fld.name) || !ok(att.name) || !ok(key && key.name)) throw new Error(`tiene un nombre de campo no válido en la agregación de excepción`);
+            if (att === key) { cols.push("f." + fld.name); return; }
+            const db = fld.relProject || (sf ? SF.getDatabase() : BQ.getGcpProject());
+            const table = sf ? `${db}.${fld.relDataset}.${fld.relTable}` : `\`${db}.${fld.relDataset}.${fld.relTable}\``;
+            const alias = "xe_" + String(fld.name).replace(/[^A-Za-z0-9_]/g, "_");
+            const j = `LEFT JOIN ${table} ${alias} ON f.${fld.name} = ${alias}.${key.name}`;
+            if (joins.indexOf(j) < 0) joins.push(j);
+            cols.push(alias + "." + att.name);
+        });
+        return { cols, joins };
+    },
+
+    KPI_EXC_AGGS: ["MIN", "MAX", "AVG", "SUM", "COUNT"],
+
     async kpisInline(project, kpis, variables, filtersByKpi) {
         const out = { values: {}, errors: {}, nombres: {} };
         const list = (kpis || []).filter(k => k && k.id);
         if (!list.length) return out;
-        const ck = project.PROYECTO_ID + "|inline|" + JSON.stringify(list.map(k => [k.id, k.parts, k.vars])) + "|" + JSON.stringify(variables || {}) + "|" + JSON.stringify(filtersByKpi || {});
+        const ck = project.PROYECTO_ID + "|inline|" + JSON.stringify(list.map(k => [k.id, k.parts, k.vars, k.exc || null])) + "|" + JSON.stringify(variables || {}) + "|" + JSON.stringify(filtersByKpi || {});
         const hit = this._kpiCache[ck];
         if (hit && Date.now() - hit.at < this.KPI_TTL) return hit.res;
         const over = {};
@@ -569,7 +612,15 @@ const DracoTables = {
             const extraJoins = [];
             const fl = await this.validRuntimeFilters(project, k.cubo, (filtersByKpi || {})[k.id]);
             fl.forEach(f => { const x = this.kpiFilterSql(f); if (x) { extraJoins.push(x.join); conds.push(x.cond); } });
-            items.push({ key: k.id, parts, conds, extraJoins });
+            // agregación de excepción (opcional): { agg: MIN|MAX|AVG|SUM|COUNT, dims: [{dim, attr}] }
+            let exc = null;
+            const ex = k.exc;
+            if (ex && this.KPI_EXC_AGGS.indexOf(String(ex.agg || "").toUpperCase()) >= 0 && Array.isArray(ex.dims) && ex.dims.length) {
+                if (!k.cubo) { out.errors[k.id] = "Para la agregación de excepción, abre el KPI en el diseñador y pulsa Guardar."; continue; }
+                try { exc = Object.assign({ agg: String(ex.agg).toUpperCase() }, await this.kpiExcDims(project, k.cubo, ex.dims)); }
+                catch (e) { out.errors[k.id] = "El KPI " + e.message + "."; continue; }
+            }
+            items.push({ key: k.id, parts, conds, extraJoins, exc });
         }
         await this.runKpiItems(items, out);
         this._kpiCache[ck] = { at: Date.now(), res: out };
