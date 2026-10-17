@@ -24,7 +24,7 @@ const DracoTables = {
     MAX_NAME: 120,
     MAX_DESC: 500,
     MAX_ENGINES: 6,
-    ENGINE_URL: "tablas-draco/engine.html?v=20261019b",
+    ENGINE_URL: "tablas-draco/engine.html?v=20261020a",
 
     engines: new Map(),      // "proyecto:id" -> { frame, host, stamp, chain, lastUse }
     pending: {},             // precarga: "proyecto:id" -> { pr, at }
@@ -455,7 +455,7 @@ const DracoTables = {
     //   - los grupos (una fila cada uno) se unen con CROSS JOIN: el resultado es UNA fila con una columna por KPI.
     // Así 100 KPIs del mismo cubo cuestan una lectura, no 100 (UNION ALL de subconsultas leería la tabla 100 veces).
     _kpiCache: {},
-    KPI_TTL: 30000,
+    KPI_TTL: 0,          // sin caché: los KPIs se calculan al entrar y siempre que cambie su definición o sus filtros
 
     /** Sustituye $NOMBRE$ en un trozo de SQL con los valores de `vars` (escapando según el motor). Lanza si falta alguna. */
     resolveKpiVars(sqlPart, vars) {
@@ -506,7 +506,9 @@ const DracoTables = {
                 if (cond) conds.push("(" + cond + ")"); else all = false;
                 const x = iff(cond, it.parts.field);
                 const agg = String(it.parts.agg || "SUM").toUpperCase();
-                const e = agg === "COUNT_DISTINCT" ? `COUNT(DISTINCT ${x})` : (AGG[agg] ? `${AGG[agg]}(${x})` : `${it.parts.agg}(${x})`);
+                let e = agg === "COUNT_DISTINCT" ? `COUNT(DISTINCT ${x})` : (AGG[agg] ? `${AGG[agg]}(${x})` : `${it.parts.agg}(${x})`);
+                const sc = Number(it.parts.scale);
+                if (isFinite(sc) && sc > 1) e = "(" + e + ") / " + sc;      // factor de escala de la medida
                 cols.push("    " + e + " AS " + col);
                 keys.push([col, it.key]);
             });

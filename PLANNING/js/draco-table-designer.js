@@ -11,7 +11,7 @@
  * Al guardar se genera el SQL del informe y se guarda junto a su definición en TABLAS_DRACO (ver draco-tables.js).
  */
 const DracoTableDesigner = {
-    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261019b",
+    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261020a",
     MAX_ROWS: 600,
     MAX_COLS: 80,
     ctx: null,
