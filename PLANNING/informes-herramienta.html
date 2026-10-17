@@ -210,6 +210,8 @@ if(/[?&]host=draco/.test(location.search)&&window.parent!==window) document.docu
   #btnBackDesign{position:fixed; bottom:20px; left:20px; z-index:60; box-shadow:0 8px 24px rgba(15,23,42,.22); border-radius:999px; padding:8px 16px; font-weight:600;}
   #btnBackDesign[hidden]{display:none;}
   .dk-row{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--line,#e5e7eb)}
+  .df-chk{display:flex;gap:8px;align-items:flex-start;padding:5px 0;font-size:12.5px;line-height:1.35;cursor:pointer}.df-chk input{margin-top:2px}
+  .df-chk i{color:#64748b;font-style:normal}.df-chk small{color:#64748b}
   .dk-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}.dk-main b{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .dk-main code{font-size:11px;color:var(--muted,#64748b)}.dk-acts{display:flex;gap:4px}
   .dk-ac{position:fixed;z-index:9999;background:#fff;border:1px solid #d8dce3;border-radius:8px;box-shadow:0 10px 30px rgba(15,23,42,.18);padding:4px;max-height:260px;overflow:auto;font-size:12.5px}
@@ -838,10 +840,13 @@ function kpiByName(n){ n=String(n).toUpperCase(); return kpiDefs().filter(functi
 function kpiEnsure(){
   if(EDIT||!HOSTON) return;
   var refs=kpiDefs().map(function(k){ return k.id; }).filter(Boolean); if(!refs.length) return;
-  var vars=(typeof dvVarsPayload==='function')?dvVarsPayload():null, key=JSON.stringify([kpiDefs().map(function(k){ return [k.id,k.parts||null,k.vars||null]; }),vars]);
+  var vars=(typeof dvVarsPayload==='function')?dvVarsPayload():null, kf={};
+  kpiDefs().forEach(function(k){ var fl=dfFiltersFor('kpi',k.id); if(fl.length) kf[k.id]=fl; });
+  var key=JSON.stringify([kpiDefs().map(function(k){ return [k.id,k.parts||null,k.vars||null]; }),vars,kf]);
   if(KPV.key===key) return;
   KPV={key:key,status:'loading',values:{},errors:{}};
-  dcall('dt.kpis',vars?{refs:refs,variables:vars}:{refs:refs}).then(function(r){ if(KPV.key!==key) return; KPV.status='ready'; KPV.values=r.values||{}; KPV.errors=r.errors||{}; update(); },
+  var kp={refs:refs}; if(vars) kp.variables=vars; if(Object.keys(kf).length) kp.filters=kf;
+  dcall('dt.kpis',kp).then(function(r){ if(KPV.key!==key) return; KPV.status='ready'; KPV.values=r.values||{}; KPV.errors=r.errors||{}; update(); },
     function(e){ if(KPV.key!==key) return; KPV.status='error'; KPV.err=e; update(); });
 }
 function kpiRefresh(){ KPV.key=''; kpiEnsure(); }
@@ -1158,13 +1163,15 @@ function dtMount(el){
   if(EDIT){ el.innerHTML=dtMsg(b,'Tabla Draco'+(b.refName?' \u00AB'+b.refName+'\u00BB':'')+'. Pulsa \u00ABVista previa\u00BB para ver los datos.'); return; }
   if(!b.ref){ el.innerHTML=dtMsg(b,'Elige o crea la tabla en las propiedades de este bloque (bot\u00F3n \u00ABDise\u00F1ador del informe\u00BB).'); return; }
   if(!HOSTON){ el.innerHTML=dtMsg(b,'Esta tabla se consulta desde Draco Planning.'); return; }
-  var sig=JSON.stringify([b.ref]), st=DTS[id];
-  if(!st||st.sig!==sig){ st=DTS[id]={sig:sig,status:'loading'}; dtLoad(id); }
+  /* la firma incluye las variables y los filtros efectivos: si cambian, se recalcula al montar */
+  var sig=JSON.stringify([b.ref,dvVarsPayload(),dfFiltersFor('tc',b.ref)]), st=DTS[id];
+  if(!st||st.sig!==sig){ var prev=st&&st.res; st=DTS[id]={sig:sig,status:'loading',res:prev}; dtLoad(id); }
   dtRender(id);
 }
 function dtLoad(id,force){
   var b=DTB[id], st=DTS[id]; if(!b||!st) return; st.status='loading'; st.err=null;
   var vars=dvVarsPayload(); /* valores elegidos en los \u00ABSelector de variable\u00BB de la p\u00E1gina */
+  st.sig=JSON.stringify([b.ref,vars,dfFiltersFor('tc',b.ref)]);
   dtRunShared(b.ref,force,vars).then(function(res){ if(DTS[id]!==st) return; st.status='ready'; st.res=res; dtRender(id); },function(e){ if(DTS[id]!==st) return; st.status='error'; st.err=e; dtRender(id); });
 }
 function dtLum(hex){ var m=/^#?([0-9a-f]{6})$/i.exec(hex||''); if(!m) return 1; var n=parseInt(m[1],16); return (0.2126*((n>>16)&255)+0.7152*((n>>8)&255)+0.0722*(n&255))/255; }
@@ -1339,13 +1346,71 @@ document.addEventListener('change',function(e){
   window.addEventListener('scroll',function(){ if(tipEl) tipEl.hidden=true; cur=null; },true);
 })();
 
+/* ---------- Barra de filtros Draco (SPEC.dracoFilters) ----------
+   Cada filtro: { id, label, cube, dim, attr, type: 'select'|'pills'|'chips', def (valor inicial; '' = Todos),
+   vars: [NOMBRES de variables], objs: [{k:'tc', id:<ref de Tabla/Gr\u00E1fico Draco>} | {k:'kpi', id:<id de KPI>}] }.
+   - vars: el valor elegido da valor a esas variables ($NOMBRE$) para todas las tablas, gr\u00E1ficos y KPIs que las usan;
+   - objs: "Filtrar directamente": a esos objetos se les a\u00F1ade la condici\u00F3n campo = valor (Draco lo valida contra el
+     modelo de su cubo). '' (Todos) no filtra. */
+var DFS=[], DFV={}, DFM={}, DFD={};
+/* el valor elegido se conserva entre repintados; si cambia el valor inicial en la definici\u00F3n, vuelve a \u00E9l */
+function dfInit(){
+  DFS=(SPEC&&SPEC.dracoFilters)||[]; var changed=false;
+  DFS.forEach(function(f){ var d=f.def||''; if(!Object.prototype.hasOwnProperty.call(DFV,f.id)||DFD[f.id]!==d){ if(DFV[f.id]!==d&&DFD[f.id]!==undefined) changed=true; DFV[f.id]=d; DFD[f.id]=d; } });
+  /* en el editor: si cambia el valor efectivo de un filtro, los objetos Draco ya cargados se vuelven a calcular */
+  if(changed) setTimeout(function(){ dfApplyVars(); dfReload(); },0);
+}
+function dfReload(){
+  Object.keys(DTB).forEach(function(k){ if(DTS[k]){ dtLoad(k,false); dtRender(k); } });
+  Object.keys(DCB).forEach(function(k){ if(DCS[k]){ dcLoad(k,false); dcRender(k); } });
+  if(kpiDefs().length) kpiRefresh();
+}
+function dfApplyVars(){
+  DFS.forEach(function(f){ var v=DFV[f.id]; (f.vars||[]).forEach(function(n){ n=String(n).toUpperCase(); if(v!==''&&v!=null) PVARS[n]=v; else delete PVARS[n]; }); });
+}
+function dfFiltersFor(kind,id){
+  var out=[]; DFS.forEach(function(f){ var v=DFV[f.id]; if(v===''||v==null||!f.dim||!f.attr) return;
+    if((f.objs||[]).some(function(o){ return o.k===kind&&o.id===id; })) out.push({dim:f.dim,attr:f.attr,value:v}); });
+  return out;
+}
+function dfLoad(f){
+  if(!f.cube||!f.dim||DFM[f.id]) return; DFM[f.id]={status:'loading',list:[]};
+  dcall('dt.members',{cube:f.cube,dim:f.dim,attr:f.attr}).then(function(l){ DFM[f.id]={status:'ready',list:l||[]}; dfPaint(); },function(){ DFM[f.id]={status:'error',list:[]}; dfPaint(); });
+}
+function dfCtl(f){
+  var v=DFV[f.id]||'', lab='<span>'+esc(f.label||f.attr||'Filtro')+'</span>', M=DFM[f.id];
+  if(HOSTON&&!EDIT&&!M) dfLoad(f);
+  var list=(M&&M.list)||[]; if(v&&list.indexOf(v)<0) list=[v].concat(list);
+  var off=(EDIT||!HOSTON)?' disabled title="Funciona en la vista previa, dentro de Draco Planning"':'';
+  if(f.type==='pills'||f.type==='chips'){
+    var cls=f.type==='chips'?'chipb':'pill', wrapc=f.type==='chips'?'chipsb':'pills';
+    return '<div class="fc">'+lab+'<div class="'+wrapc+'"><button class="'+cls+(v===''?' on':'')+'" data-act="dfpill" data-df="'+esc(f.id)+'" data-v=""'+off+'>Todos</button>'
+      +list.map(function(x){ return '<button class="'+cls+(v===x?' on':'')+'" data-act="dfpill" data-df="'+esc(f.id)+'" data-v="'+esc(x)+'"'+off+'>'+esc(x)+'</button>'; }).join('')+'</div></div>';
+  }
+  return '<label class="fc">'+lab+'<select data-df="'+esc(f.id)+'"'+off+'><option value="">Todos</option>'+list.map(function(x){ return '<option'+(v===x?' selected':'')+'>'+esc(x)+'</option>'; }).join('')+'</select></label>';
+}
+function dfChanged(){ return DFS.some(function(f){ return (DFV[f.id]||'')!==(f.def||''); }); }
+function dfPaint(){ var fb=document.getElementById('fbar'); if(fb) fb.innerHTML=fbarHtml(); }
+function dfSet(id,v){
+  DFV[id]=v; dfApplyVars(); dfPaint();
+  Object.keys(DVB).forEach(function(k){ dvRender(k); });
+  dfReload();
+}
+document.addEventListener('change',function(e){ var t=e.target; if(t&&t.hasAttribute&&t.hasAttribute('data-df')&&t.tagName==='SELECT') dfSet(t.getAttribute('data-df'),t.value); });
+document.addEventListener('click',function(e){
+  var t=e.target.closest&&e.target.closest('[data-act="dfpill"],[data-act="dfclear"]'); if(!t||t.disabled) return;
+  if(t.getAttribute('data-act')==='dfclear'){ DFS.forEach(function(f){ DFV[f.id]=f.def||''; }); dfSet(DFS[0]&&DFS[0].id,DFV[DFS[0]&&DFS[0].id]); return; }
+  dfSet(t.getAttribute('data-df'),t.getAttribute('data-v')||'');
+});
+
 /* Ejecuci\u00F3n compartida de una Tabla Draco: si una tabla y un gr\u00E1fico (o dos gr\u00E1ficos) del informe usan la misma
    tabla con las mismas variables, la consulta se lanza UNA vez y todos usan el mismo resultado. "forzar" la repite. */
 var RUNQ={};
 function dtRunShared(ref,force,vars){
-  var key=ref+'|'+JSON.stringify(vars||{});
+  var fl=dfFiltersFor('tc',ref), key=ref+'|'+JSON.stringify(vars||{})+'|'+JSON.stringify(fl);
   if(!force&&RUNQ[key]) return RUNQ[key];
-  var p=dcall('dt.run',vars?{ref:ref,force:!!force,variables:vars}:{ref:ref,force:!!force});
+  var pl={ref:ref,force:!!force}; if(vars) pl.variables=vars; if(fl.length) pl.filters=fl;
+  var p=dcall('dt.run',pl);
   RUNQ[key]=p; p.then(null,function(){ if(RUNQ[key]===p) delete RUNQ[key]; });
   return p;
 }
@@ -1367,11 +1432,12 @@ function dcMount(el){
   if(!b.ref){ el.innerHTML=dcCard(b,null,'<p class="tu-sub">Elige la Tabla Draco en las propiedades de este bloque.</p>'); return; }
   if(!HOSTON){ el.innerHTML=dcCard(b,null,'<p class="tu-sub">Este gr\u00E1fico se calcula dentro de Draco Planning.</p>'); return; }
   var st=DCS[id];
-  if(!st||st.ref!==b.ref){ st=DCS[id]={ref:b.ref,status:'loading'}; dcLoad(id,false); }
+  var dsig=JSON.stringify([b.ref,dvVarsPayload(),dfFiltersFor('tc',b.ref)]);
+  if(!st||st.ref!==b.ref||st.sig!==dsig){ var prevR=st&&st.ref===b.ref?st.res:null; st=DCS[id]={ref:b.ref,sig:dsig,status:'loading',res:prevR}; dcLoad(id,false); }
   dcRender(id);
 }
 function dcLoad(id,force){
-  var b=DCB[id], st=DCS[id]; st.status='loading'; st.err=null;
+  var b=DCB[id], st=DCS[id]; st.status='loading'; st.err=null; st.sig=JSON.stringify([b.ref,dvVarsPayload(),dfFiltersFor('tc',b.ref)]);
   dtRunShared(b.ref,force,dvVarsPayload()).then(function(res){ if(DCS[id]!==st) return; st.status='ready'; st.res=res; dcRender(id); },function(e){ if(DCS[id]!==st) return; st.status='error'; st.err=e; dcRender(id); });
 }
 /* Rejilla de la Tabla Draco -> {xs, series:[{name, values}]} (o {error}).
@@ -1863,8 +1929,8 @@ function ctl(f){
 }
 function fbarHtml(){
   var xs=Object.keys(S.x);
-  if(!FS.length&&!SW.length&&!xs.length) return '';
-  var h='<div class="wrap fbar-in">'+FS.map(ctl).join('');
+  if(!FS.length&&!SW.length&&!xs.length&&!DFS.length) return '';
+  var h='<div class="wrap fbar-in">'+FS.map(ctl).join('')+DFS.map(dfCtl).join('')+(dfChanged()?'<button class="clear" data-act="dfclear">Quitar filtros</button>':'');
   SW.forEach(function(s){ h+='<button class="sw'+(S.sw[s.id]?' on':'')+'" role="switch" aria-checked="'+(S.sw[s.id]?'true':'false')+'" data-act="sw" data-id="'+esc(s.id)+'"><i></i><span>'+esc(s.label)+'</span></button>'; });
   xs.forEach(function(k){ h+='<button class="xtag" data-act="unx" data-dim="'+esc(k)+'">'+esc(dl(k))+': '+esc(S.x[k])+' \u2715</button>'; });
   h+='</div>';
@@ -1895,7 +1961,8 @@ function update(){
 function build(){
   var app=document.getElementById('app'), meta=SPEC.meta||{}, nav=SPEC.nav||{}, name=meta.brand||meta.title||'P\u00E1gina';
   var navH='<header class="nav" data-section="nav"><div class="wrap nav-in"><a class="logo" href="#'+esc((SPEC.sections[0]||{}).id||'')+'"><i>'+esc(name.trim().charAt(0).toUpperCase())+'</i>'+esc(name)+'</a><nav class="nav-links">'+(nav.links||[]).map(function(l){ return '<a data-nav="'+esc(l.target)+'" href="#'+esc(l.target)+'">'+esc(l.label)+'</a>'; }).join('')+'</nav>'+'<div class="nav-end">'+(SPEC.export===false?'':'<div class="xwrap"><button class="xbtn" data-act="xmenu" aria-haspopup="true">Exportar \u25BE</button><div class="xmenu" hidden><button data-act="xpdf">PDF \u00B7 16:9</button><button data-act="xpptx">PowerPoint \u00B7 .pptx</button></div></div>')+(nav.cta?'<a class="btn btn-primary" href="#'+esc(nav.cta.target)+'">'+esc(nav.cta.label)+'</a>':'')+'</div></div></header>';
-  var hasBar=FS.length||SW.length, secs='', foot='', placed=false;
+  dfInit(); dfApplyVars();
+  var hasBar=FS.length||SW.length||DFS.length, secs='', foot='', placed=false;
   SPEC.sections.forEach(function(s,i){
     if(s.type==='footer'){ foot+=sectionHtml(s,i); return; }
     secs+=sectionHtml(s,i);
@@ -2614,7 +2681,7 @@ function markSel(){
 function setEdit(on){ EDIT=!!on; applyView(); pagedInit(); document.documentElement.classList.toggle('edit-mode',EDIT); if(!EDIT) EDSEL=null; markSel(); tuMountAll(true); }
 function applySpec(ns){
   var oldData=JSON.stringify(SPEC.data||null), y=window.scrollY;
-  SPEC=ns; FS=SPEC.filters||[]; SW=SPEC.switches||[];
+  SPEC=ns; FS=SPEC.filters||[]; SW=SPEC.switches||[]; DFM={};
   if(JSON.stringify(SPEC.data||null)!==oldData){ D=SPEC.data||null; ROWS=[]; DORD={}; DLAB={}; MEAS={}; MET={}; setupData(); }
   SW.forEach(function(sw){ if(S.sw[sw.id]===undefined) S.sw[sw.id]=sw.default!==false; });
   FS.forEach(function(f){ if(S.f[f.id]===undefined) S.f[f.id]=defaultFilter(f); });
@@ -3286,6 +3353,13 @@ function validate(spec){
       if(spec.view.sections!==undefined&&['auto','screen','paged'].indexOf(spec.view.sections)<0) e.push('view.sections debe ser "auto", "screen" o "paged".');
     }
   }
+  if(spec.dracoFilters!==undefined){
+    if(!Array.isArray(spec.dracoFilters)) e.push('"dracoFilters" debe ser una lista.');
+    else spec.dracoFilters.forEach(function(f,i){ var p='dracoFilters['+i+']';
+      if(!f||!f.id) e.push(p+': falta "id".');
+      else if(f.type&&['select','pills','chips'].indexOf(f.type)<0) e.push(p+': "type" debe ser select, pills o chips.');
+      else if(!f.dim) w.push(p+': elige el cubo y el campo del filtro.'); });
+  }
   if(spec.dracoKpis!==undefined){
     if(!Array.isArray(spec.dracoKpis)) e.push('"dracoKpis" debe ser una lista.');
     else { var kn={}; spec.dracoKpis.forEach(function(k,i){ var p='dracoKpis['+i+']';
@@ -3861,6 +3935,8 @@ function edResolve(sel){
   if(!currentSpec||!sel) return null;
   if(sel.page) return {kind:'page',obj:currentSpec};
   if(sel.dkpis) return {kind:'dkpis',obj:dkList()};
+  if(sel.dfs) return {kind:'dfs',obj:dfList()};
+  if(sel.df!=null){ var fl2=dfList(); return fl2[sel.df]?{kind:'df',obj:fl2[sel.df],list:fl2,idx:sel.df}:null; }
   if(sel.dk!=null){ var dl=dkList(); return dl[sel.dk]?{kind:'dkpi',obj:dl[sel.dk],list:dl,idx:sel.dk}:null; }
   var secs=currentSpec.sections||[], m;
   if(sel.bid==null){ var s0=secs[sel.si]; return s0?{kind:'section',obj:s0,si:sel.si,list:secs,idx:sel.si}:null; }
@@ -4179,6 +4255,8 @@ function edRender0(){
   if(pn&&edPanel(r,pn)){ h=PANEL.h; t=PANEL.t; }
   else if(r.kind==='page'){ t='P\u00E1gina'; h=edPage(r.obj); }
   else if(r.kind==='dkpis'){ t='KPIs del informe'; h=dkManager(null); }
+  else if(r.kind==='dfs'){ t='Filtros'; h=dfManager(); }
+  else if(r.kind==='df'){ t='Filtro \u00B7 '+(r.obj.label||'Filtro'); h=edDF(r.obj,r.idx); }
   else if(r.kind==='dkpi'){ t='KPI \u00B7 '+(r.obj.label||r.obj.name); h=edDKpi(r.obj,r.idx); }
   else if(r.kind==='kpi'){ t='Cifra clave'; h=edKpi(r.obj)+'<div class="insp-sec">Cifra</div>'+opBar(r,'\u2190','\u2192'); }
   else if(r.kind==='section'){ t=SEC_LABEL[r.obj.type]||'Secci\u00F3n'; h=edSection(r)+'<div class="insp-sec">Esta secci\u00F3n</div>'+opBar(r,'\u2191','\u2193'); }
@@ -4988,6 +5066,12 @@ function treeRoot(){
     (sp.dracoKpis||[]).forEach(function(k,i){ kg.children.push({id:'KPIS.'+i,kind:'dkpi',ico:'draco-kpi',label:k.label||k.name,sub:'$$'+k.name+'$$',sel:{dk:i},children:[]}); });
     root.children.push(kg);
   }
+  /* Barra de filtros Draco: al final, sin colgar de ninguna secci\u00F3n */
+  if(HOSTED||(sp.dracoFilters&&sp.dracoFilters.length)){
+    var fg={id:'DFS',kind:'dfs',ico:'draco-var',label:'Filtros',sub:String((sp.dracoFilters||[]).length),sel:{dfs:true},children:[]};
+    (sp.dracoFilters||[]).forEach(function(f,i){ fg.children.push({id:'DFS.'+i,kind:'df',ico:'draco-var',label:f.label||'Filtro',sub:(f.attr||''),sel:{df:i},children:[]}); });
+    root.children.push(fg);
+  }
   return root;
 }
 function leafSuffix(){
@@ -5001,6 +5085,8 @@ function selNodeId(){
   if(edSel.pn==='row'&&edSel.rid) return edSel.rid;
   if(edSel.page) return (edSel.pn==='nav'||(edField&&edField.indexOf('meta')===0))?'nav':'page';
   if(edSel.dkpis) return 'KPIS';
+  if(edSel.dfs) return 'DFS';
+  if(edSel.df!=null) return 'DFS.'+edSel.df;
   if(edSel.dk!=null) return 'KPIS.'+edSel.dk;
   if(edSel.bid==null) return 'S'+edSel.si+leafSuffix();
   var m=/^s(\d+)bk$/.exec(edSel.bid);
@@ -5061,6 +5147,8 @@ function crumbText(){
   var r=edResolve(edSel); if(!r||!currentSpec) return '';
   if(r.kind==='page') return 'Página';
   if(r.kind==='dkpis') return 'Página › KPIs';
+  if(r.kind==='dfs') return 'Página › Filtros';
+  if(r.kind==='df') return 'Página › Filtros › '+(r.obj.label||'Filtro');
   if(r.kind==='dkpi') return 'Página › KPIs › '+(r.obj.label||r.obj.name);
   var parts=['Página'];
   var s=(r.si!=null)?currentSpec.sections[r.si]:null;
@@ -5076,7 +5164,7 @@ function crumbText(){
 function edAfterSync(){ var c=$('inspCrumb'); if(c) c.textContent=crumbText(); treeRender(); }
 function edAfterRender(){
   var c=$('inspCrumb'); if(c) c.textContent=crumbText();
-  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender(); if(typeof dtAfterRender==='function') dtAfterRender(); if(typeof dvAfterRender==='function') dvAfterRender(); if(typeof dcAfterRender==='function') dcAfterRender();
+  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender(); if(typeof dtAfterRender==='function') dtAfterRender(); if(typeof dvAfterRender==='function') dvAfterRender(); if(typeof dcAfterRender==='function') dcAfterRender(); if(typeof dfAfterRender==='function') dfAfterRender();
 }
 
 /* ---------- acciones sobre nodos ---------- */
@@ -5592,6 +5680,89 @@ $('inspBody').addEventListener('click',function(e){
 });
 
 /* =====================================================================
+   Barra de filtros Draco (currentSpec.dracoFilters). En el \u00E1rbol: grupo \u00ABFiltros\u00BB al final ({dfs:true} / {df:i}).
+   Cada filtro se vincula a VARIABLES (todas las del informe, con casillas) y/o se aplica DIRECTAMENTE a Tablas,
+   Gr\u00E1ficos y KPIs Draco (con casillas).
+   ===================================================================== */
+var DFE={cubes:null,fields:{},members:{},vars:null,varsKey:''};
+function dfList(){ if(!currentSpec) return []; currentSpec.dracoFilters=currentSpec.dracoFilters||[]; return currentSpec.dracoFilters; }
+/* Tablas y gr\u00E1ficos Draco del informe (por tabla), con su nombre y tipo */
+function dfObjects(){
+  var m={};
+  var walk=function(bl){ (bl||[]).forEach(function(b){ if(!b) return;
+    if((b.type==='dracoTable'||b.type==='dracoChart')&&b.ref){ var o=m[b.ref]||(m[b.ref]={id:b.ref,name:b.refName||b.title||b.ref,kinds:{}}); o.kinds[b.type==='dracoTable'?'Tabla':'Gr\u00E1fico']=1; }
+    if(b.tabs) b.tabs.forEach(function(t){ walk(t.blocks); }); if(b.type==='group') walk(b.blocks); }); };
+  ((currentSpec&&currentSpec.sections)||[]).forEach(function(sc){ walk(sc.blocks); });
+  return Object.keys(m).map(function(k){ return m[k]; });
+}
+function dfManager(){
+  var L=dfList(), h='<div class="insp-sec">Barra de filtros Draco</div>';
+  if(!HOSTED) return h+edNote('Los filtros Draco se configuran dentro de Draco Planning.')+L.map(function(f){ return '<p class="insp-hint"><b>'+esc(f.label||f.attr)+'</b></p>'; }).join('');
+  if(!L.length) h+='<p class="insp-hint">Filtros que aparecen bajo el men\u00FA. Cada uno da valor a variables y/o filtra directamente Tablas, Gr\u00E1ficos y KPIs Draco.</p>';
+  h+=L.map(function(f,i){ return '<div class="dk-row"><div class="dk-main"><b>'+esc(f.label||'Filtro')+'</b><code>'+esc((f.dim||'\u2014')+' \u00B7 '+(f.attr||'\u2014'))+'</code></div>'
+    +'<div class="dk-acts"><button class="mini" data-df-props="'+i+'" title="Editar">\u2699</button><button class="mini" data-df-del="'+i+'" title="Borrar el filtro">\u2715</button></div></div>'; }).join('');
+  return h+'<button class="btn small" data-df-new type="button" style="margin-top:8px">+ Nuevo filtro</button>';
+}
+function edDF(f,i){
+  var h=gText('Etiqueta','label',f.label,'Por ejemplo: Versi\u00F3n')
+    +gSel('Tipo de control','type',f.type||'select',[['select','Desplegable'],['pills','Pastillas'],['chips','Chips']]);
+  if(!HOSTED) return h+edNote('El campo y los v\u00EDnculos se configuran dentro de Draco Planning.');
+  return h+'<div id="dfBox"><p class="insp-hint">Cargando\u2026</p></div>'
+    +'<button class="btn small" data-df-del="'+i+'" type="button" style="margin-top:10px">Borrar el filtro</button>';
+}
+function dfSelObj(){ var r=edResolve(edSel); return (r&&r.kind==='df')?r.obj:null; }
+function dfAfterRender(){
+  if(!HOSTED) return; var f=dfSelObj(); if(!f||!$('dfBox')) return;
+  var key=JSON.stringify(edSel), still=function(){ return JSON.stringify(edSel)===key; };
+  var refs=dfObjects().map(function(o){ return o.id; }), rk=refs.join('|');
+  var pC=DFE.cubes?Promise.resolve(DFE.cubes):dtCall('dt.cubes').then(function(l){ DFE.cubes=l; return l; });
+  var pF=f.cube?(DFE.fields[f.cube]?Promise.resolve(DFE.fields[f.cube]):dtCall('dt.fields',{cube:f.cube}).then(function(l){ DFE.fields[f.cube]=l; return l; })):Promise.resolve([]);
+  var mk=f.cube+'|'+f.dim+'|'+f.attr;
+  var pM=(f.cube&&f.dim)?(DFE.members[mk]?Promise.resolve(DFE.members[mk]):dtCall('dt.members',{cube:f.cube,dim:f.dim,attr:f.attr}).then(function(l){ DFE.members[mk]=l; return l; },function(){ return []; })):Promise.resolve([]);
+  var pV=(DFE.vars&&DFE.varsKey===rk)?Promise.resolve(DFE.vars):(refs.length?dtCall('dt.varsFor',{refs:refs}):Promise.resolve([])).then(function(l){ DFE.vars=l; DFE.varsKey=rk; return l; });
+  Promise.all([pC,pF,pM,pV]).then(function(r){ if(still()) dfPaintBox(f,r[0],r[1],r[2],r[3]); },function(e){ if(still()) tuPaintErr('dfBox',e,function(){ DFE={cubes:null,fields:{},members:{},vars:null,varsKey:''}; edRender(); }); });
+}
+function dfPaintBox(f,cubes,fields,members,vars){
+  var el=$('dfBox'); if(!el) return;
+  var opt=function(v,l,sel){ return '<option value="'+esc(v)+'"'+(sel?' selected':'')+'>'+esc(l)+'</option>'; };
+  var h='<label class="ef"><span>Cubo</span><select data-dfcube>'+opt('','\u2014 elige un cubo \u2014',!f.cube)+(cubes||[]).map(function(c){ return opt(c.name,c.name,c.name===f.cube); }).join('')+'</select></label>';
+  if(f.cube){ var fk=f.dim?(f.dim+'|'+f.attr):''; h+='<label class="ef"><span>Campo (dimensi\u00F3n \u00B7 atributo)</span><select data-dffield>'+opt('','\u2014 elige un campo \u2014',!fk)+(fields||[]).map(function(x){ var k=x.dim+'|'+x.attr; return opt(k,x.label,k===fk); }).join('')+'</select></label>'; }
+  if(f.dim) h+='<label class="ef"><span>Valor inicial</span><select data-dfdef>'+opt('','Todos (sin filtrar)',!f.def)+(members||[]).slice(0,2000).map(function(v){ return opt(v,v,v===f.def); }).join('')+'</select></label>';
+  /* Vincular a variables: TODAS las del informe (tablas y gr\u00E1ficos + KPIs) */
+  var vm={}; (vars||[]).forEach(function(v){ vm[v.name]={name:v.name,info:(v.dim||'')+' \u00B7 '+(v.attr||''),uso:(v.tablas||[]).join(', ')}; });
+  dkList().forEach(function(k){ Object.keys(k.vars||{}).forEach(function(n){ var o=vm[n]||(vm[n]={name:n,info:'',uso:''}); o.uso=(o.uso?o.uso+', ':'')+'KPI '+(k.label||k.name); }); });
+  var vl=Object.keys(vm).sort(), sel=(f.vars||[]).map(function(x){ return String(x).toUpperCase(); });
+  h+='<div class="insp-sec">Vincular a variables</div>'+(vl.length?vl.map(function(n){ var o=vm[n]; return '<label class="df-chk"><input type="checkbox" data-dfvar="'+esc(n)+'"'+(sel.indexOf(n)>=0?' checked':'')+'><span><b>$'+esc(n)+'$</b>'+(o.info?' <i>'+esc(o.info)+'</i>':'')+(o.uso?'<br><small>'+esc(o.uso)+'</small>':'')+'</span></label>'; }).join('')
+    :'<p class="insp-hint">Ninguna Tabla, Gr\u00E1fico o KPI Draco de este informe usa variables.</p>');
+  /* Filtrar directamente: tablas, gr\u00E1ficos y KPIs */
+  var has=function(k,id){ return (f.objs||[]).some(function(o){ return o.k===k&&o.id===id; }); };
+  var objs=dfObjects(), ks=dkList();
+  h+='<div class="insp-sec">Filtrar directamente</div><p class="insp-hint">A lo marcado se le a\u00F1ade la condici\u00F3n <b>'+esc((f.attr||'campo')+' = valor elegido')+'</b> (si su cubo tiene ese campo).</p>'
+    +(objs.length||ks.length?'':'<p class="insp-hint">Este informe no tiene Tablas, Gr\u00E1ficos ni KPIs Draco.</p>')
+    +objs.map(function(o){ return '<label class="df-chk"><input type="checkbox" data-dfobj="tc" data-id="'+esc(o.id)+'"'+(has('tc',o.id)?' checked':'')+'><span>'+esc(Object.keys(o.kinds).join(' y '))+': <b>'+esc(o.name)+'</b></span></label>'; }).join('')
+    +ks.map(function(k){ return '<label class="df-chk"><input type="checkbox" data-dfobj="kpi" data-id="'+esc(k.id)+'"'+(has('kpi',k.id)?' checked':'')+'><span>KPI: <b>'+esc(k.label||k.name)+'</b></span></label>'; }).join('');
+  el.innerHTML=h;
+}
+function dfUpd(fn){ var f=dfSelObj(); if(!f) return; edPrevSel=edSel; fn(f); edSync(true); }
+$('inspBody').addEventListener('change',function(e){
+  var t=e.target;
+  if(t.hasAttribute('data-dfcube')) return dfUpd(function(f){ f.cube=t.value; f.dim=''; f.attr=''; f.def=''; edRender(); });
+  if(t.hasAttribute('data-dffield')) return dfUpd(function(f){ var p=t.value.split('|'); f.dim=p[0]||''; f.attr=p[1]||''; f.def=''; if(!f.label||f.label==='Filtro') f.label=(p[1]||'Filtro'); edRender(); });
+  if(t.hasAttribute('data-dfdef')) return dfUpd(function(f){ f.def=t.value; });
+  if(t.hasAttribute('data-dfvar')) return dfUpd(function(f){ var n=t.getAttribute('data-dfvar'); f.vars=(f.vars||[]).filter(function(x){ return String(x).toUpperCase()!==n; }); if(t.checked) f.vars.push(n); });
+  if(t.hasAttribute('data-dfobj')) return dfUpd(function(f){ var k=t.getAttribute('data-dfobj'), id=t.getAttribute('data-id'); f.objs=(f.objs||[]).filter(function(o){ return !(o.k===k&&o.id===id); }); if(t.checked) f.objs.push({k:k,id:id}); });
+});
+$('inspBody').addEventListener('click',function(e){
+  var t=e.target.closest&&e.target.closest('[data-df-new],[data-df-del],[data-df-props]'); if(!t) return; e.preventDefault();
+  var L=dfList();
+  if(t.hasAttribute('data-df-new')){ edPrevSel=edSel; L.push({id:'f'+Date.now().toString(36),label:'Filtro',cube:'',dim:'',attr:'',type:'select',def:'',vars:[],objs:[]}); edSel={df:L.length-1}; edSync(true); edRender(); if(typeof treeRender==='function') treeRender(); return; }
+  var i=+(t.getAttribute('data-df-del')||t.getAttribute('data-df-props'));
+  if(t.hasAttribute('data-df-props')){ edSel={df:i}; edRender(); if(typeof treeRender==='function') treeRender(); return; }
+  if(!L[i]||!confirm('\u00BFBorrar el filtro \u00AB'+(L[i].label||'Filtro')+'\u00BB?')) return;
+  edPrevSel=edSel; L.splice(i,1); edSel={dfs:true}; edSync(true); edRender(); if(typeof treeRender==='function') treeRender();
+});
+
+/* =====================================================================
    KPIs Draco: lista del informe (currentSpec.dracoKpis) y bloque "dracoKpi".
    Cada KPI es una Tabla Draco con una medida y filtros, creada/editada con el dise\u00F1ador en modo KPI. En el informe se
    guarda { id, name (para $$NAME$$ en los textos), label, fmt, decimals, unit }. En el \u00E1rbol cuelgan de un grupo
@@ -5894,7 +6065,7 @@ function relayPage(d){
   /* KPIs: sus piezas SQL las pone la herramienta desde su copia del informe (nunca las de la p\u00E1gina) */
   if(d&&d.op==='dt.kpis'){
     var pl=d.payload||{};
-    d={dp:d.dp,id:d.id,op:d.op,payload:{refs:pl.refs,variables:pl.variables,kpis:((currentSpec&&currentSpec.dracoKpis)||[]).map(function(k){ return {id:k.id,parts:k.parts||null,vars:k.vars||{}}; })}};
+    d={dp:d.dp,id:d.id,op:d.op,payload:{refs:pl.refs,variables:pl.variables,filters:pl.filters,kpis:((currentSpec&&currentSpec.dracoKpis)||[]).map(function(k){ return {id:k.id,parts:k.parts||null,vars:k.vars||{}}; })}};
   }
   hostPost({dpTool:1,op:'page',payload:d});
 }   /* puente futuro: la p\u00E1gina pide cosas a Draco (tablas, SQL) */
