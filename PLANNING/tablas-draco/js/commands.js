@@ -1146,6 +1146,22 @@ function loadReportDefinition(editReportGrid, reportId) {
     loadColumns(editReportGrid);
     attachDracoMeasureOptions();
     attachDracoCalcs();
+    applyDracoRuntimeFilters();
+}
+
+/**
+ * Filtros de TIEMPO DE EJECUCIÓN (barra de filtros Draco de PLANNING, «Filtrar directamente»): una lista
+ * [{ dim, attr, value }] en window.__dracoRuntimeFilters que se añade a los filtros del informe; si el informe ya
+ * filtra el mismo campo, el de la barra lo sustituye. En Excel no se usa (la lista no existe).
+ */
+function applyDracoRuntimeFilters() {
+    const list = (typeof window !== "undefined" && Array.isArray(window.__dracoRuntimeFilters)) ? window.__dracoRuntimeFilters : [];
+    list.forEach(f => {
+        if (!f || !f.dim || !f.attr || f.value === undefined || f.value === null || String(f.value) === "") return;
+        const D = String(f.dim).toUpperCase(), A = String(f.attr).toUpperCase();
+        ReportState.Filters = (ReportState.Filters || []).filter(x => !(String(x.Dimension).toUpperCase() === D && String(x.AttributeName).toUpperCase() === A));
+        ReportState.Filters.push({ Dimension: f.dim, AttributeName: f.attr, Value: JSON.stringify({ mode: "list", values: [String(f.value)] }) });
+    });
 }
 
 /* ---------------------------------------------------------------------
