@@ -752,6 +752,16 @@ botones de cinta Actualizar, Filtro y Reconocimiento. Una tabla Draco = un infor
   definición de un KPI o sus variables. Formato «Según la medida» (número / % y decimales de las Opciones de campo de
   la medida) o forzado; el factor de escala de la medida se aplica en la consulta. `$$KPI$$` también funciona en las
   tarjetas de cifras (etiqueta, valor, variación y nota).
+- **Barra de filtros Draco** (`spec.dracoFilters`, bajo el menú; en el árbol, grupo «Filtros» al final). Cada filtro:
+  etiqueta, cubo, campo (dimensión · atributo), control (desplegable, pastillas o chips) y valor inicial; y dos
+  bloques: **«Vincular a variables»** (todas las variables de las Tablas, Gráficos y KPIs del informe, con casillas: el
+  valor elegido da valor a esas `$VARIABLES$`) y **«Filtrar directamente»** (todas las Tablas, Gráficos y KPIs Draco,
+  con casillas: se les añade `campo = valor`). En tablas y gráficos el motor del addin regenera el SQL con el filtro
+  (`window.__dracoRuntimeFilters` → `applyDracoRuntimeFilters`, que sustituye un filtro propio sobre el mismo campo);
+  en los KPIs Draco Planning añade el join de la dimensión y la condición (`kpiFilterSql`), compartiendo los joins por
+  tabla de hechos para seguir leyendo cada una una vez. El campo se valida contra el modelo del cubo de cada objeto
+  (si no lo tiene, ese objeto no se filtra) y el valor siempre va escapado. «Todos» no filtra; «Quitar filtros»
+  vuelve a los valores iniciales.
 - **Subsección (`group`).** Bloque contenedor (sustituye a la antigua «Fila», que no hacía nada): título opcional,
   distribución propia (una columna o en columnas, 1-4) y sus bloques en `blocks`. Se puede anidar a cualquier nivel;
   los identificadores siguen el patrón `s{sección}b{bloque}` + tramos `t{pestaña}_{bloque}` / `g{bloque}` (`bidWalk`).

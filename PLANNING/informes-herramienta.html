@@ -1592,9 +1592,21 @@ function dcChartHtml(id){
    solo si cambia (ver dcRefit). */
 function dcRender(id){
   var el=dcEl(id); if(!el) return;
-  var cw=el.clientWidth, old=PW;
+  dcWatch(el);
+  var cw=el.clientWidth, old=PW, st=DCS[id];
+  /* oculto (secci\u00F3n de otra p\u00E1gina, pesta\u00F1a no activa...): sin ancho no se puede dibujar bien; se dibuja al verse */
+  if(!(cw>0)&&st&&st.res&&el.querySelector('.chart')){ el.removeAttribute('data-w'); return; }
   if(cw>0){ PW=Math.max(240,cw-(SLIDES?38:48)); el.setAttribute('data-w',String(cw)); }
+  else el.removeAttribute('data-w');
   try{ dcRenderIn(id); } finally { PW=old; }
+}
+/* Cada gr\u00E1fico vigila su ancho: si cambia (se muestra una secci\u00F3n paginada o una pesta\u00F1a, cambian las columnas,
+   la ventana o el panel del editor) se vuelve a dibujar con el ancho nuevo. */
+var DC_RO=null, DC_RAF=0;
+function dcWatch(el){
+  if(el.__dcw||typeof ResizeObserver==='undefined') return; el.__dcw=1;
+  if(!DC_RO) DC_RO=new ResizeObserver(function(){ if(DC_RAF) return; DC_RAF=requestAnimationFrame(function(){ DC_RAF=0; dcRefit(); }); });
+  DC_RO.observe(el);
 }
 /* tras repintar la p\u00E1gina (cambio de tama\u00F1o, pesta\u00F1as, columnas): redibuja los gr\u00E1ficos cuyo ancho ha cambiado */
 function dcRefit(){
@@ -5141,17 +5153,15 @@ function blockNode(b,id,bid,badge,meta){
   });
   return n;
 }
-/* añade a `parent` los bloques de un contenedor (sección o pestaña), agrupados en filas si es una rejilla */
+/* añade a `parent` los bloques de un contenedor (sección, subsección o pestaña), en orden */
 function contentNodes(parent,blocks,layout,cols,idPre,pre,nested,si,contSel,contTab){
   var grid=(layout==='grid'||layout==='two'), n=grid?((cols&&cols.length)?cols.length:2):1;
   var mk=function(b,i,badge){ return blockNode(b,idPre+'.B'+i,pre+i,badge,{list:blocks,idx:i,pre:pre,nested:nested,si:si}); };
   if(!grid||n<2){ blocks.forEach(function(b,i){ parent.children.push(mk(b,i,'')); }); return; }
-  rowsOf(blocks,n).forEach(function(row,ri){
-    var full=(row.length===1&&row[0].c1-row[0].c0+1>=n);
-    var rn={id:idPre+'.R'+ri,kind:'row',ico:'row',label:'Fila '+(ri+1),sub:full?'ancho completo':(row.length+(row.length===1?' columna':' columnas')),sel:Object.assign({},contSel,{pn:'row',rid:idPre+'.R'+ri}),tab:contTab,children:[],si:si,
-            meta:{list:blocks,first:row[0].i,last:row[row.length-1].i,pre:pre,nested:nested,si:si}};
-    row.forEach(function(c){ rn.children.push(mk(c.b,c.i,full?'':(c.c0===c.c1?'col '+c.c0:'cols '+c.c0+'-'+c.c1))); });
-    parent.children.push(rn);
+  /* sin nivel «Fila»: los objetos y subsecciones cuelgan directamente de su sección / subsección / pestaña;
+     la etiqueta indica las columnas que ocupa cada uno */
+  rowsOf(blocks,n).forEach(function(row){
+    row.forEach(function(c){ var w=c.c1-c.c0+1; parent.children.push(mk(c.b,c.i,w>=n?'todo el ancho':(w===1?'col '+c.c0:'cols '+c.c0+'-'+c.c1))); });
   });
 }
 function secNode(s,si){
