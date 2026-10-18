@@ -562,40 +562,13 @@ const DracoTables = {
         return { join: `LEFT JOIN ${table} ${alias} ON f.${f.fld.name} = ${alias}.${key.name}`, cond: `${alias}.${f.att.name} = ${lit}` };
     },
 
-    /**
-     * Dimensiones de referencia de una agregación de excepción: [{dim, attr}] -> { cols: [expr], joins: [sql] }.
-     * Si el atributo es la clave de la dimensión se usa la columna de la tabla de hechos (f.<DIM>); si no, se une la
-     * tabla de la dimensión (alias fijo xe_<DIM>). Lanza si alguna no está en el modelo del cubo.
-     */
-    async kpiExcDims(project, cubeName, dims) {
-        const model = await this.resolveModel(project, await this.cubeByName(project, cubeName));
-        const ok = (x) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(x || ""));
-        const sf = Provider.key() === "snowflake";
-        const cols = [], joins = [];
-        (dims || []).forEach(d => {
-            const fld = (model.fields || []).find(x => x.type === "DIMENSION" && String(x.name).toUpperCase() === String(d.dim).toUpperCase());
-            const att = fld && (fld.attributes || []).find(a => String(a.name).toUpperCase() === String(d.attr).toUpperCase());
-            if (!fld || !att) throw new Error(`usa «${d.dim} · ${d.attr}» en la agregación de excepción, que no está en el cubo «${cubeName}»`);
-            const key = (fld.attributes || []).find(a => a.isKey) || (fld.attributes || [])[0];
-            if (!ok(fld.name) || !ok(att.name) || !ok(key && key.name)) throw new Error(`tiene un nombre de campo no válido en la agregación de excepción`);
-            if (att === key) { cols.push("f." + fld.name); return; }
-            const db = fld.relProject || (sf ? SF.getDatabase() : BQ.getGcpProject());
-            const table = sf ? `${db}.${fld.relDataset}.${fld.relTable}` : `\`${db}.${fld.relDataset}.${fld.relTable}\``;
-            const alias = "xe_" + String(fld.name).replace(/[^A-Za-z0-9_]/g, "_");
-            const j = `LEFT JOIN ${table} ${alias} ON f.${fld.name} = ${alias}.${key.name}`;
-            if (joins.indexOf(j) < 0) joins.push(j);
-            cols.push(alias + "." + att.name);
-        });
-        return { cols, joins };
-    },
-
     KPI_EXC_AGGS: ["MIN", "MAX", "AVG", "SUM", "COUNT"],
 
     async kpisInline(project, kpis, variables, filtersByKpi) {
         const out = { values: {}, errors: {}, nombres: {} };
         const list = (kpis || []).filter(k => k && k.id);
         if (!list.length) return out;
-        const ck = project.PROYECTO_ID + "|inline|" + JSON.stringify(list.map(k => [k.id, k.parts, k.vars, k.exc || null])) + "|" + JSON.stringify(variables || {}) + "|" + JSON.stringify(filtersByKpi || {});
+        const ck = project.PROYECTO_ID + "|inline|" + JSON.stringify(list.map(k => [k.id, k.parts, k.vars])) + "|" + JSON.stringify(variables || {}) + "|" + JSON.stringify(filtersByKpi || {});
         const hit = this._kpiCache[ck];
         if (hit && Date.now() - hit.at < this.KPI_TTL) return hit.res;
         const over = {};
@@ -612,14 +585,11 @@ const DracoTables = {
             const extraJoins = [];
             const fl = await this.validRuntimeFilters(project, k.cubo, (filtersByKpi || {})[k.id]);
             fl.forEach(f => { const x = this.kpiFilterSql(f); if (x) { extraJoins.push(x.join); conds.push(x.cond); } });
-            // agregación de excepción (opcional): { agg: MIN|MAX|AVG|SUM|COUNT, dims: [{dim, attr}] }
-            let exc = null;
-            const ex = k.exc;
-            if (ex && this.KPI_EXC_AGGS.indexOf(String(ex.agg || "").toUpperCase()) >= 0 && Array.isArray(ex.dims) && ex.dims.length) {
-                if (!k.cubo) { out.errors[k.id] = "Para la agregación de excepción, abre el KPI en el diseñador y pulsa Guardar."; continue; }
-                try { exc = Object.assign({ agg: String(ex.agg).toUpperCase() }, await this.kpiExcDims(project, k.cubo, ex.dims)); }
-                catch (e) { out.errors[k.id] = "El KPI " + e.message + "."; continue; }
-            }
+            // Agregación de excepción: la pone el diseñador en las piezas del KPI (Opciones de campo de la medida)
+            // como { agg, cols: [columnas de referencia], joins: [JOIN que faltan] }; sin ella, nada cambia.
+            const pe = parts.exc;
+            const exc = (pe && this.KPI_EXC_AGGS.indexOf(String(pe.agg || "").toUpperCase()) >= 0 && Array.isArray(pe.cols) && pe.cols.length)
+                ? { agg: String(pe.agg).toUpperCase(), cols: pe.cols, joins: Array.isArray(pe.joins) ? pe.joins : [] } : null;
             items.push({ key: k.id, parts, conds, extraJoins, exc });
         }
         await this.runKpiItems(items, out);
