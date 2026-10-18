@@ -2492,6 +2492,16 @@ const TaskPaneApp = {
             ["MAX", "Máximo (MAX)"]
         ];
         const currentAgg = String(options.aggregation || "").toUpperCase();
+        // Agregación de excepción (ver normalizeDracoExc en commands.js): "" = ninguna
+        const EXC_AGGREGATIONS = [
+            ["", "Ninguna"],
+            ["MIN", "Mínimo (MIN)"],
+            ["MAX", "Máximo (MAX)"],
+            ["AVG", "Media (AVG)"],
+            ["SUM", "Suma (SUM)"],
+            ["COUNT", "Número de valores (COUNT)"]
+        ];
+        const currentExc = String(options.excAggregation || "").toUpperCase();
         const decimalsValue = Number.isFinite(Number(options.decimals)) ? Number(options.decimals) : 2;
 
         wrap.innerHTML = `
@@ -2526,6 +2536,22 @@ const TaskPaneApp = {
                         `<option value="${value}" ${currentAgg === value ? "selected" : ""}>${label}</option>`).join("")}
                 </select>
             </label>
+            <label>
+                Agregación de excepción
+                <select id="optExcAggregation">
+                    ${EXC_AGGREGATIONS.map(([value, label]) =>
+                        `<option value="${value}" ${currentExc === value ? "selected" : ""}>${label}</option>`).join("")}
+                </select>
+            </label>
+            <div id="optExcSection" style="display:${currentExc ? "block" : "none"};">
+                <div style="font-size:10px; color:#605e5c; margin:2px 0 6px;">
+                    Primero se agrega la medida (con la función de arriba) por cada valor de las dimensiones
+                    de referencia —por todas las demás, como siempre— y después se aplica la agregación de
+                    excepción sobre esos valores. Ej.: mínimo mensual = referencia «mes» + Mínimo.
+                </div>
+                <div style="font-size:11px; font-weight:600; margin-bottom:4px;">Dimensiones de referencia</div>
+                <div id="optExcDims" style="display:flex; flex-direction:column; gap:3px; max-height:180px; overflow-y:auto;"></div>
+            </div>
             <div class="field-options-section-title">Planificación</div>
             <label class="field-options-checkbox-row">
                 <input type="checkbox" id="optPlanificable" ${options.planificable ? "checked" : ""}>
@@ -2553,6 +2579,14 @@ const TaskPaneApp = {
             const sc = Number(wrap.querySelector("#optScale").value);
             if (sc > 1) current.scale = sc; else delete current.scale;
             current.aggregation = wrap.querySelector("#optAggregation").value;
+            // Agregación de excepción: sin función (o sin dimensiones) no se guarda nada y el SQL no cambia
+            const excAgg = wrap.querySelector("#optExcAggregation").value;
+            const excDims = [];
+            wrap.querySelectorAll("#optExcDims input[type=checkbox]:checked").forEach(cb => {
+                excDims.push({ dim: cb.getAttribute("data-dim"), attr: cb.getAttribute("data-attr") });
+            });
+            if (excAgg) { current.excAggregation = excAgg; current.excDims = excDims; }
+            else { delete current.excAggregation; delete current.excDims; }
             // Opciones retiradas del panel (ya no se usan en ningún sitio).
             delete current.decimalSeparator;
             delete current.thousandsSeparator;
@@ -2576,6 +2610,20 @@ const TaskPaneApp = {
 
         wrap.querySelectorAll("select, input").forEach(el => el.addEventListener("change", persist));
 
+        // Agregación de excepción: lista de atributos del modelo (se rellena al elegir una función)
+        const excBox = wrap.querySelector("#optExcDims");
+        excBox.addEventListener("change", persist);
+        const fillExc = async () => {
+            if (excBox.getAttribute("data-filled")) return;
+            excBox.setAttribute("data-filled", "1");
+            await this.fillExcDimsContainer(excBox, options.excDims || []);
+        };
+        wrap.querySelector("#optExcAggregation").addEventListener("change", async (e) => {
+            wrap.querySelector("#optExcSection").style.display = e.target.value ? "block" : "none";
+            if (e.target.value) await fillExc();
+        });
+        if (currentExc) await fillExc();
+
         // "Planificable" despliega/oculta la sección de personalización.
         wrap.querySelector("#optPlanificable").addEventListener("change", (e) => {
             wrap.querySelector("#optPlanificableSection").style.display = e.target.checked ? "block" : "none";
@@ -2595,6 +2643,39 @@ const TaskPaneApp = {
         }
 
         return wrap;
+    },
+
+    // Agregación de excepción: una casilla por cada atributo de las dimensiones del modelo del informe
+    async fillExcDimsContainer(container, saved) {
+        container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Cargando dimensiones…</div>";
+        try {
+            const report = (this.currentReportId && window.ReportStore) ? window.ReportStore.getReport(this.currentReportId) : null;
+            const modelName = report ? report.semanticModelName : "";
+            if (!modelName || !window.SemanticModelStore) {
+                container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Este informe no tiene modelo semántico asignado.</div>";
+                return;
+            }
+            const grid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES", modelName);
+            const values = grid && grid.values ? grid.values : [];
+            const items = [], seen = new Set();
+            for (let r = 1; r < values.length; r++) {
+                const dim = values[r] && values[r][1], attr = values[r] && values[r][2];
+                if (!dim || !attr || seen.has(dim + "|" + attr)) continue;
+                seen.add(dim + "|" + attr);
+                items.push({ dim: String(dim), attr: String(attr), label: String(values[r][7] || attr) });
+            }
+            if (!items.length) {
+                container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Este modelo no tiene dimensiones.</div>";
+                return;
+            }
+            const isOn = (it) => (saved || []).some(d => String(d.dim).toUpperCase() === it.dim.toUpperCase() && String(d.attr).toUpperCase() === it.attr.toUpperCase());
+            const esc = (t) => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+            container.innerHTML = items.map(it =>
+                `<label class="field-options-checkbox-row"><input type="checkbox" data-dim="${esc(it.dim)}" data-attr="${esc(it.attr)}" ${isOn(it) ? "checked" : ""}><span>${esc(it.dim.toLowerCase())} · ${esc(it.label)}</span></label>`).join("");
+        } catch (err) {
+            console.warn("No se pudieron cargar las dimensiones para la agregación de excepción:", err);
+            container.innerHTML = "<div style='font-size:11px; color:#a80000;'>No se pudieron cargar las dimensiones.</div>";
+        }
     },
 
     // Rellena un contenedor con una fila "Obligatoria + criterio" por cada

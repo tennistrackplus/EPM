@@ -1245,7 +1245,7 @@ function buildDracoKpiParts(relGrid, measuresGrid, atributesGrid) {
     const field = String(cellValue(measuresGrid, R, 6)).trim();
     const modelAgg = String(cellValue(measuresGrid, R, 7)).trim();
     const agg = normalizeDracoAggregation(m.Aggregation) || normalizeDracoAggregation(modelAgg) || modelAgg || "SUM";
-    return {
+    const parts = {
         measure: m.Name,
         agg,
         scale: m.Scale || 1,
@@ -1257,6 +1257,12 @@ function buildDracoKpiParts(relGrid, measuresGrid, atributesGrid) {
         conds: buildFilterConditions(atributesGrid, relGrid),
         provider: Provider.key()
     };
+    // Agregación de excepción: columnas de referencia y JOIN que faltan (ver DracoTables.kpiSql en PLANNING)
+    if (m.Exc) {
+        const ref = dracoExcRef(relGrid, m.Exc);
+        parts.exc = { agg: m.Exc.agg, cols: ref.cols, joins: ref.joins.map(j => j.trim()) };
+    }
+    return parts;
 }
 
 /**
@@ -1478,6 +1484,8 @@ function decorateDracoMeasure(m) {
     // Formato "en bruto" (para los KPIs de PLANNING: número / porcentaje y decimales)
     m.FmtKind = opts ? ((String(opts.numberFormat || "").indexOf("%") !== -1 || opts.numberFormat === "percent") ? "percent" : "number") : "";
     m.FmtDecimals = (opts && isFinite(Number(opts.decimals))) ? Number(opts.decimals) : null;
+    // Agregación de excepción (null si no tiene)
+    m.Exc = normalizeDracoExc(opts);
 }
 
 // "(expr) / factor" si hay factor de escala
@@ -1509,6 +1517,86 @@ function dracoMeasureScale(measureName) {
         if (isFinite(sc) && sc > 1) return sc;
     }
     return 1;
+}
+
+/* ---------------------------------------------------------------------
+ * AGREGACIÓN DE EXCEPCIÓN (como en BPC), en las Opciones de campo de una medida:
+ *   excAggregation: "MIN" | "MAX" | "AVG" | "SUM" | "COUNT"
+ *   excDims:        [{ dim, attr }]   dimensiones de referencia
+ * La medida se agrega primero (con su agregación normal) POR CADA VALOR de las dimensiones de referencia
+ * —y por todo lo demás como siempre— y sobre esos valores se aplica la agregación de excepción.
+ * Ej.: mínimo mensual = referencia «tiempo · mes» + MIN.
+ * Si una medida no la tiene, el SQL que se genera es EXACTAMENTE el de siempre.
+ * ------------------------------------------------------------------- */
+const DRACO_EXC_AGGS = ["MIN", "MAX", "AVG", "SUM", "COUNT"];
+
+function normalizeDracoExc(opts) {
+    if (!opts) return null;
+    const agg = String(opts.excAggregation || "").toUpperCase();
+    const dims = Array.isArray(opts.excDims) ? opts.excDims.filter(d => d && d.dim && d.attr) : [];
+    return (DRACO_EXC_AGGS.indexOf(agg) !== -1 && dims.length) ? { agg, dims: dims.map(d => ({ dim: String(d.dim), attr: String(d.attr) })) } : null;
+}
+
+/** Agregación de excepción de una medida por su NOMBRE (la de ReportState.Measures o sus Opciones de campo). */
+function dracoMeasureExc(measureName) {
+    if (!measureName) return null;
+    const up = String(measureName).toUpperCase();
+    const m = (ReportState.Measures || []).find(x => String(x.Name).toUpperCase() === up);
+    if (m && m.Exc) return m.Exc;
+    let all = {};
+    try {
+        const report = (window.ReportStore && ReportState.ReportId !== null && ReportState.ReportId !== undefined)
+            ? window.ReportStore.getReport(ReportState.ReportId) : null;
+        all = (report && report.design && report.design.fieldOptions) || {};
+    } catch (e) { all = {}; }
+    for (const zone of ["filters", "columns", "rows"]) {
+        const key = Object.keys(all).find(k => k.toUpperCase() === (zone + "|MEASURE|" + up).toUpperCase());
+        const exc = key ? normalizeDracoExc(all[key]) : null;
+        if (exc) return exc;
+    }
+    return null;
+}
+
+/** JOIN de UNA dimensión, con el mismo texto que genera buildJoins para ella. */
+function dracoJoinForDimension(relGrid, dimension) {
+    const lastRow = lastRowInColumnValues(relGrid, 1);
+    for (let R = 2; R <= lastRow; R++) {
+        if (String(cellValue(relGrid, R, 2)).trim().toUpperCase() !== String(dimension).trim().toUpperCase()) continue;
+        return CRLF
+            + cellValue(relGrid, R, 11)
+            + " JOIN "
+            + Provider.qualify(cellValue(relGrid, R, 7), cellValue(relGrid, R, 8), cellValue(relGrid, R, 9))
+            + " d" + cellValue(relGrid, R, 1) + CRLF
+            + "    ON f."
+            + cellValue(relGrid, R, 6)
+            + " = d"
+            + cellValue(relGrid, R, 1)
+            + "."
+            + cellValue(relGrid, R, 10)
+            + CRLF;
+    }
+    return "";
+}
+
+/** Columnas de las dimensiones de referencia y los JOIN que faltan (los de dimensiones que el informe no usa). */
+function dracoExcRef(relGrid, exc) {
+    const cols = [], joins = [];
+    exc.dims.forEach(d => {
+        const c = getTableAlias(relGrid, d.dim) + "." + d.attr;
+        if (cols.indexOf(c) === -1) cols.push(c);
+        if (!dimensionIsUsed(d.dim)) {
+            const j = dracoJoinForDimension(relGrid, d.dim);
+            if (j && joins.indexOf(j) === -1) joins.push(j);
+        }
+    });
+    return { cols, joins };
+}
+
+/** "expr" de una medida sin su " AS nombre" final (getMeasureSQL). */
+function dracoMeasureExpr(measuresGrid, m) {
+    const full = getMeasureSQL(measuresGrid, m.Name, m.Aggregation, m.Scale);
+    const i = full.lastIndexOf(" AS ");
+    return i === -1 ? full : full.slice(0, i);
 }
 
 function attachDracoMeasureOptions() {
@@ -1799,7 +1887,7 @@ async function readColumnDefinitions(context, editReportGrid, csvGrid) {
 // ningún sitio, se deja tal cual venga (SUM(f.) sería un SQL claramente
 // inválido, y así se detecta a simple vista en vez de sumar en silencio
 // un campo que no es).
-function buildSelectBase(relGrid, rowsDefs, colDefs, measureField, scale) {
+function buildSelectBase(relGrid, rowsDefs, colDefs, measureField, scale, excCols) {
     const dict = new Map();
 
     for (const v of rowsDefs) {
@@ -1820,6 +1908,8 @@ function buildSelectBase(relGrid, rowsDefs, colDefs, measureField, scale) {
     for (const val of dict.values()) {
         sql += "    " + val + "," + CRLF;
     }
+    // agregación de excepción: dimensiones de referencia (DRC_R_j)
+    (excCols || []).forEach((c, j) => { sql += "    " + c + " AS DRC_R_" + j + "," + CRLF; });
     sql += "    " + dracoScaled("SUM(f." + (measureField || "") + ")", scale) + " AS IMPORTE";
 
     return sql;
@@ -1931,7 +2021,7 @@ function buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs) {
     return sql;
 }
 
-function buildGroupByBase(relGrid, rowsDefs, colDefs) {
+function buildGroupByBase(relGrid, rowsDefs, colDefs, excCols) {
     const dict = new Map();
 
     for (const v of rowsDefs) {
@@ -1947,6 +2037,8 @@ function buildGroupByBase(relGrid, rowsDefs, colDefs) {
             dict.set(key, getTableAlias(relGrid, v.Dimension) + "." + v.AttributeName);
         }
     }
+
+    (excCols || []).forEach((c, j) => { if (!dict.has("DRC_R|" + j)) dict.set("DRC_R|" + j, c); });
 
     let sql = "GROUP BY" + CRLF;
     for (const val of dict.values()) {
@@ -2112,19 +2204,26 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     // así que van en AND, no dentro del propio OR.
     const filterConditions = buildFilterConditions(atributesGrid, relGrid);
 
+    // Agregación de excepción de la medida: BASE lleva también las dimensiones de referencia (DRC_R_j) y cada
+    // celda se calcula en dos pasos (suma por celda y referencia; después la excepción por celda).
+    const exc = dracoMeasureExc(measureName);
+    const excRef = exc ? dracoExcRef(relGrid, exc) : null;
+    const excCols = excRef ? excRef.cols : [];
+    const rNames = excCols.map((c, j) => "DRC_R_" + j);
+
     let sql = "";
 
     // ---- CTE BASE: se escanea la tabla de hechos UNA sola vez ----
     sql += "WITH BASE AS (" + CRLF + CRLF;
-    sql += buildSelectBase(relGrid, rowsDefs, colDefs, measureField, dracoMeasureScale(measureName)) + CRLF + CRLF;
+    sql += buildSelectBase(relGrid, rowsDefs, colDefs, measureField, dracoMeasureScale(measureName), excCols) + CRLF + CRLF;
     sql += buildFrom(measuresGrid, measureName) + CRLF + CRLF;
-    sql += buildJoins(relGrid) + CRLF + CRLF;
+    sql += buildJoins(relGrid) + (excRef ? excRef.joins.join("") : "") + CRLF + CRLF;
     sql += buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs);
     for (const cond of filterConditions) {
         sql += CRLF + "AND " + cond;
     }
     sql += CRLF + CRLF;
-    sql += buildGroupByBase(relGrid, rowsDefs, colDefs) + CRLF;
+    sql += buildGroupByBase(relGrid, rowsDefs, colDefs, excCols) + CRLF;
     sql += ")," + CRLF + CRLF;
 
     if (isFabric) {
@@ -2132,6 +2231,18 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
         // ROW_ID/COLUMN_ID candidato, y se descartan los que no cumplen.
         // Se quita la coma final del CTE BASE (no hay TAGGED).
         sql = sql.replace(/\),\r?\n\r?\n$/, ")" + CRLF + CRLF);
+        if (exc) {
+            sql += "SELECT" + CRLF + "    ROW_ID," + CRLF + "    COLUMN_ID," + CRLF + "    " + exc.agg + "(IMPORTE) AS IMPORTE" + CRLF + "FROM (" + CRLF;
+            sql += "SELECT" + CRLF + "    R.ROW_ID," + CRLF + "    C.COLUMN_ID," + CRLF;
+            rNames.forEach(n => { sql += "    B." + n + "," + CRLF; });
+            sql += "    SUM(B.IMPORTE) AS IMPORTE" + CRLF + "FROM BASE B" + CRLF;
+            sql += "CROSS APPLY " + buildIdValuesFabric(atributesGrid, rowsDefs, "ROW_ID", "R") + CRLF;
+            sql += "CROSS APPLY " + buildIdValuesFabric(atributesGrid, colDefs, "COLUMN_ID", "C") + CRLF;
+            sql += "WHERE R.ROW_ID IS NOT NULL AND C.COLUMN_ID IS NOT NULL" + CRLF;
+            sql += "GROUP BY R.ROW_ID, C.COLUMN_ID" + rNames.map(n => ", B." + n).join("") + CRLF;
+            sql += ") X" + CRLF + "GROUP BY ROW_ID, COLUMN_ID" + CRLF + "ORDER BY ROW_ID, COLUMN_ID";
+            return sql;
+        }
         sql += "SELECT" + CRLF;
         sql += "    R.ROW_ID," + CRLF;
         sql += "    C.COLUMN_ID," + CRLF;
@@ -2150,12 +2261,16 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     sql += "TAGGED AS (" + CRLF + CRLF;
     sql += "    SELECT" + CRLF;
     sql += "        IMPORTE," + CRLF + CRLF;
+    rNames.forEach(n => { sql += "        " + n + "," + CRLF; });
+    if (rNames.length) sql += CRLF;
     sql += indentBlock(rowIdsArray, "        ") + " AS ROW_IDS," + CRLF + CRLF;
     sql += indentBlock(columnIdsArray, "        ") + " AS COLUMN_IDS" + CRLF + CRLF;
     sql += "    FROM BASE" + CRLF;
     sql += ")" + CRLF + CRLF;
 
     // ---- SELECT final: cruce ROW_ID x COLUMN_ID + agregación ----
+    // (con agregación de excepción: suma por celda y dimensiones de referencia y, encima, la excepción)
+    if (exc) sql += "SELECT" + CRLF + "    ROW_ID," + CRLF + "    COLUMN_ID," + CRLF + "    " + exc.agg + "(IMPORTE) AS IMPORTE" + CRLF + "FROM (" + CRLF;
     // BigQuery usa UNNEST(array) AS alias; Snowflake no soporta esa forma
     // sobre un array literal -> se usa LATERAL FLATTEN, que devuelve el
     // valor en una columna "VALUE" (de tipo VARIANT) que hay que castear.
@@ -2163,6 +2278,7 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     if (Provider.key() === "snowflake") {
         sql += "    ROW_ID_F.VALUE::INTEGER AS ROW_ID," + CRLF;
         sql += "    COLUMN_ID_F.VALUE::INTEGER AS COLUMN_ID," + CRLF;
+        rNames.forEach(n => { sql += "    " + n + "," + CRLF; });
         sql += "    SUM(IMPORTE) AS IMPORTE" + CRLF;
         sql += "FROM TAGGED," + CRLF;
         sql += "LATERAL FLATTEN(input => ROW_IDS) AS ROW_ID_F," + CRLF;
@@ -2170,10 +2286,15 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     } else {
         sql += "    ROW_ID," + CRLF;
         sql += "    COLUMN_ID," + CRLF;
+        rNames.forEach(n => { sql += "    " + n + "," + CRLF; });
         sql += "    SUM(IMPORTE) AS IMPORTE" + CRLF;
         sql += "FROM TAGGED," + CRLF;
         sql += "UNNEST(ROW_IDS) AS ROW_ID," + CRLF;
         sql += "UNNEST(COLUMN_IDS) AS COLUMN_ID" + CRLF;
+    }
+    if (exc) {
+        sql += "GROUP BY ROW_ID, COLUMN_ID" + rNames.map(n => ", " + n).join("") + CRLF;
+        sql += ") X" + CRLF;
     }
     sql += "GROUP BY ROW_ID, COLUMN_ID" + CRLF;
     sql += "ORDER BY ROW_ID, COLUMN_ID";
@@ -2853,14 +2974,25 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     if (prune.length) where.push("(" + CRLF + "      " + prune.join(CRLF + "   OR ") + CRLF + ")");
     buildFilterConditions(atributesGrid, relGrid).forEach(c => where.push(c));
 
+    // Agregación de excepción: BASE lleva también las dimensiones de referencia de esas medidas (DRC_R_j); el
+    // AGG de siempre no las usa y cada medida con excepción se calcula aparte (AGG_E_n) y se cruza en AGG_X.
+    const excMs = measureCols.filter(m => (m.exc = dracoMeasureExc(m.name)));
+    const rCols = [], rJoins = [];
+    excMs.forEach(m => {
+        const ref = dracoExcRef(relGrid, m.exc);
+        m.rNames = ref.cols.map(c => { let j = rCols.indexOf(c); if (j === -1) { rCols.push(c); j = rCols.length - 1; } return "DRC_R_" + j; });
+        ref.joins.forEach(j => { if (rJoins.indexOf(j) === -1) rJoins.push(j); });
+    });
+    const rAll = rCols.map((c, j) => "DRC_R_" + j);
+
     let sql = "WITH BASE AS (" + CRLF + CRLF;
     sql += "SELECT" + CRLF;
-    sql += [...selectCols.values(), ...measureCols.map(m => dracoScaled("SUM(f." + m.field + ")", m.scale) + " AS " + m.alias)]
+    sql += [...selectCols.values(), ...rCols.map((c, j) => c + " AS DRC_R_" + j), ...measureCols.map(m => dracoScaled("SUM(f." + m.field + ")", m.scale) + " AS " + m.alias)]
         .map(x => "    " + x).join("," + CRLF) + CRLF + CRLF;
     sql += buildFrom(measuresGrid, measureCols.length ? measureCols[0].name : null, relGrid) + CRLF + CRLF;
-    sql += buildJoins(relGrid) + CRLF + CRLF;
+    sql += buildJoins(relGrid) + rJoins.join("") + CRLF + CRLF;
     if (where.length) sql += "WHERE" + CRLF + where.join(CRLF + "AND ") + CRLF + CRLF;
-    if (selectCols.size) sql += "GROUP BY" + CRLF + [...selectCols.values()].map(x => "    " + x).join("," + CRLF) + CRLF;
+    if (selectCols.size || rCols.length) sql += "GROUP BY" + CRLF + [...selectCols.values(), ...rCols].map(x => "    " + x).join("," + CRLF) + CRLF;
     sql += ")," + CRLF + CRLF;
 
     const mSel = measureCols.map(m => m.alias);
@@ -2870,9 +3002,10 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     // como el modo Dinámico); sin jerarquías, GROUP BY normal.
     const hierFields = fields.filter(f => f.type === "hier");
     const plainCols = fields.filter(f => f.type === "attr").map(f => dynNames[f.col]);
-    const groupBy = (lineRef, colRef) => {
+    const groupBy = (lineRef, colRef, extra) => {
+        extra = extra || [];
         if (hierFields.length === 0) {
-            return "GROUP BY " + [lineRef, ...dynNames.map(colRef)].join(", ");
+            return "GROUP BY " + [lineRef, ...dynNames.map(colRef), ...extra].join(", ");
         }
         let combos = [[]];
         hierFields.forEach(h => {
@@ -2883,15 +3016,21 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
         const sets = combos.map(c => {
             const cols = [];
             [...plainCols, ...c.flat()].forEach(n => { if (cols.indexOf(n) === -1) cols.push(n); });
-            return "(" + [lineRef, ...cols.map(colRef)].join(", ") + ")";
+            return "(" + [lineRef, ...cols.map(colRef), ...extra].join(", ") + ")";
         });
         return "GROUP BY GROUPING SETS (" + CRLF + sets.map(x => "        " + x).join("," + CRLF) + CRLF + "    )";
     };
 
+    // con excepción y jerarquías, AGG lleva el GROUPING() de cada columna dinámica para cruzar con AGG_E_n
+    const gFlags = (excMs.length && hierFields.length) ? dynNames : [];
+    const gSel = (colRef) => gFlags.map((n, i) => ", GROUPING(" + colRef(n) + ") AS DRC_G_" + i).join("");
+    let excSrc = null;      // { lineRef, colRef, mRef, from } para AGG_E_n
     if (isFabric) {
         const values = lines.map(l => "(CASE WHEN " + lineCond(l) + " THEN " + l.id + " END)");
+        excSrc = { lineRef: "L.LINE_ID", colRef: n => "B." + n, mRef: a => "B." + a,
+            from: "    FROM BASE B" + CRLF + "    CROSS APPLY (VALUES" + CRLF + values.map(v => "        " + v).join("," + CRLF) + CRLF + "    ) AS L(LINE_ID)" + CRLF + "    WHERE L.LINE_ID IS NOT NULL" + CRLF };
         sql += "AGG AS (" + CRLF
-            + "    SELECT L.LINE_ID" + dynNames.map(n => ", B." + n + " AS " + n).join("")
+            + "    SELECT L.LINE_ID" + dynNames.map(n => ", B." + n + " AS " + n).join("") + gSel(n => "B." + n)
             + measureCols.map(m => ", SUM(B." + m.alias + ") AS " + m.alias).join("") + CRLF
             + "    FROM BASE B" + CRLF
             + "    CROSS APPLY (VALUES" + CRLF + values.map(v => "        " + v).join("," + CRLF) + CRLF + "    ) AS L(LINE_ID)" + CRLF
@@ -2901,11 +3040,16 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     } else if (provider === "snowflake") {
         const items = lines.map(l => "IFF(" + lineCond(l) + ", " + l.id + ", NULL)");
         sql += "TAGGED AS (" + CRLF
-            + "    SELECT " + [...dynNames, ...mSel].map(x => x + ", ").join("")
+            + "    SELECT " + [...dynNames, ...mSel, ...rAll].map(x => x + ", ").join("")
             + "ARRAY_CONSTRUCT_COMPACT(" + CRLF + items.map(x => "        " + x).join("," + CRLF) + CRLF + "    ) AS LINE_IDS" + CRLF
             + "    FROM BASE" + CRLF + ")," + CRLF + CRLF;
+        excSrc = { lineRef: "LINE_ID", colRef: n => n, mRef: a => a,
+            from: "    FROM (" + CRLF
+                + "        SELECT L.VALUE::INTEGER AS LINE_ID" + [...dynNames, ...mSel, ...rAll].map(x => ", T." + x + " AS " + x).join("") + CRLF
+                + "        FROM TAGGED T, LATERAL FLATTEN(input => T.LINE_IDS) AS L" + CRLF
+                + "    ) X" + CRLF };
         sql += "AGG AS (" + CRLF
-            + "    SELECT LINE_ID" + dynNames.map(n => ", " + n).join("") + measureCols.map(m => ", SUM(" + m.alias + ") AS " + m.alias).join("") + CRLF
+            + "    SELECT LINE_ID" + dynNames.map(n => ", " + n).join("") + gSel(n => n) + measureCols.map(m => ", SUM(" + m.alias + ") AS " + m.alias).join("") + CRLF
             + "    FROM (" + CRLF
             + "        SELECT L.VALUE::INTEGER AS LINE_ID" + [...dynNames, ...mSel].map(x => ", T." + x + " AS " + x).join("") + CRLF
             + "        FROM TAGGED T, LATERAL FLATTEN(input => T.LINE_IDS) AS L" + CRLF
@@ -2915,16 +3059,45 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     } else {
         const structs = lines.map(l => "STRUCT(" + l.id + " AS LINE_ID, (" + lineCond(l) + ") AS COND)");
         sql += "TAGGED AS (" + CRLF
-            + "    SELECT " + [...dynNames, ...mSel].map(x => x + ", ").join("")
+            + "    SELECT " + [...dynNames, ...mSel, ...rAll].map(x => x + ", ").join("")
             + "ARRAY(" + CRLF + "        SELECT LINE_ID FROM UNNEST([" + CRLF
             + structs.map(x => "            " + x).join("," + CRLF) + CRLF
             + "        ]) WHERE COND" + CRLF + "    ) AS LINE_IDS" + CRLF
             + "    FROM BASE" + CRLF + ")," + CRLF + CRLF;
+        excSrc = { lineRef: "LINE_ID", colRef: n => n, mRef: a => a, from: "    FROM TAGGED, UNNEST(LINE_IDS) AS LINE_ID" + CRLF };
         sql += "AGG AS (" + CRLF
-            + "    SELECT LINE_ID" + dynNames.map(n => ", " + n).join("") + measureCols.map(m => ", SUM(" + m.alias + ") AS " + m.alias).join("") + CRLF
+            + "    SELECT LINE_ID" + dynNames.map(n => ", " + n).join("") + gSel(n => n) + measureCols.map(m => ", SUM(" + m.alias + ") AS " + m.alias).join("") + CRLF
             + "    FROM TAGGED, UNNEST(LINE_IDS) AS LINE_ID" + CRLF
             + "    " + groupBy("LINE_ID", n => n) + CRLF
             + ")" + CRLF + CRLF;
+    }
+
+    // --- Agregación de excepción: AGG_E_n (la medida sumada por línea, columnas dinámicas y referencia; encima, la
+    //     excepción por línea y columnas dinámicas) y AGG_X = AGG con esas medidas tomadas de su AGG_E_n.
+    let aggName = "AGG";
+    if (excMs.length) {
+        sql = sql.replace(/\)\r?\n\r?\n$/, ")," + CRLF + CRLF);
+        const S = excSrc, keyN = [...dynNames, ...gFlags.map((n, i) => "DRC_G_" + i)];
+        excMs.forEach((m, k) => {
+            sql += "AGG_E_" + (k + 1) + " AS (" + CRLF
+                + "    SELECT LINE_ID" + keyN.map(n => ", " + n).join("") + ", " + m.exc.agg + "(DRC_V) AS DRC_V" + CRLF
+                + "    FROM (" + CRLF
+                + "    SELECT " + S.lineRef + " AS LINE_ID" + dynNames.map(n => ", " + S.colRef(n) + " AS " + n).join("") + gSel(S.colRef)
+                + ", SUM(" + S.mRef(m.alias) + ") AS DRC_V" + CRLF
+                + S.from
+                + "    " + groupBy(S.lineRef, S.colRef, m.rNames.map(S.colRef)) + CRLF
+                + "    ) Q" + CRLF
+                + "    GROUP BY LINE_ID" + keyN.map(n => ", " + n).join("") + CRLF
+                + ")," + CRLF + CRLF;
+        });
+        sql += "AGG_X AS (" + CRLF
+            + "    SELECT a.LINE_ID" + dynNames.map(n => ", a." + n).join("")
+            + measureCols.map(m => { const k = excMs.indexOf(m); return k === -1 ? ", a." + m.alias : ", e" + (k + 1) + ".DRC_V AS " + m.alias; }).join("") + CRLF
+            + "    FROM AGG a" + CRLF
+            + excMs.map((m, k) => "    LEFT JOIN AGG_E_" + (k + 1) + " e" + (k + 1) + " ON a.LINE_ID = e" + (k + 1) + ".LINE_ID"
+                + keyN.map(n => " AND a." + n + " IS NOT DISTINCT FROM e" + (k + 1) + "." + n).join("") + CRLF).join("")
+            + ")" + CRLF + CRLF;
+        aggName = "AGG_X";
     }
 
     // --- Orden del eje dinámico: atributos por su valor; en jerarquías,
@@ -2948,7 +3121,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
         + "    " + rank(orderOf(fields)) + " AS DYN_ID," + CRLF
         + "    " + (plan.hasP ? rank(orderOf(fields.slice(0, measureLevelIdx))) : "1") + " AS P_ID"
         + [...dynNames, ...mSel].map(x => "," + CRLF + "    " + x).join("") + CRLF
-        + "FROM AGG" + CRLF
+        + "FROM " + aggName + CRLF
         + "ORDER BY LINE_ID, DYN_ID";
 
     return { sql, plan };
@@ -4083,10 +4256,13 @@ function buildConfigSets(relGrid) {
     // Sin campos en Filas ni Columnas (solo medidas): total general, sin
     // GROUP BY (un "GROUPING SETS ( () )" no lo admiten todos los motores).
     if (ReportState.Rows.length === 0 && ReportState.Columns.length === 0) return "";
-    const { dimensions, hierarchiesAcum, combinations } = computeGroupingSetDimensionsAndHierarchies(relGrid);
+    return groupingSetTuplesToText(configSetTuples(relGrid));
+}
 
-    const tuples = combinations.map(item => groupingSetTupleToColumnList(item, dimensions, hierarchiesAcum));
-    return groupingSetTuplesToText(tuples);
+// Combinaciones de GROUPING SETS (listas de columnas) de buildConfigSets
+function configSetTuples(relGrid) {
+    const { dimensions, hierarchiesAcum, combinations } = computeGroupingSetDimensionsAndHierarchies(relGrid);
+    return combinations.map(item => groupingSetTupleToColumnList(item, dimensions, hierarchiesAcum));
 }
 
 /**
@@ -4151,6 +4327,11 @@ function subtotalFlagName(attributeName) {
  * nivel), en vez de todas las combinaciones cruzadas posibles.
  */
 function buildConfigSetsWithSubtotals(relGrid) {
+    return groupingSetTuplesToText(configSetTuplesWithSubtotals(relGrid));
+}
+
+// Combinaciones de GROUPING SETS (listas de columnas) de buildConfigSetsWithSubtotals
+function configSetTuplesWithSubtotals(relGrid) {
     const { dimensions, hierarchiesAcum, combinations } = computeGroupingSetDimensionsAndHierarchies(relGrid);
     const baseTuples = combinations.map(item => groupingSetTupleToColumnList(item, dimensions, hierarchiesAcum));
 
@@ -4170,7 +4351,7 @@ function buildConfigSetsWithSubtotals(relGrid) {
         }
     });
 
-    return groupingSetTuplesToText([...baseTuples, ...extraTuples]);
+    return [...baseTuples, ...extraTuples];
 }
 
 /**
@@ -4380,6 +4561,76 @@ function buildFinalWhereWithSubtotals() {
  * mismas funciones de siempre (SQL identico al de antes de este cambio).
  * Si hay al menos uno, usa las variantes "WithSubtotals" de arriba.
  */
+/**
+ * REPORT_DATA del modo dinámico cuando alguna medida tiene agregación de excepción. Mismas columnas que el
+ * REPORT_DATA de siempre, así que el resto del SQL (cálculos, SELECT final) no cambia:
+ *   DRC_BASE    = la consulta de siempre + por cada columna de los GROUPING SETS su valor (DRC_K_i) y su
+ *                 GROUPING() (DRC_G_i), que identifican la fila (conjunto + valores);
+ *   DRC_EXC_n   = por cada medida con excepción: la medida agregada en cada conjunto AMPLIADO con las
+ *                 dimensiones de referencia y, encima, la agregación de excepción por (conjunto + valores);
+ *   REPORT_DATA = DRC_BASE con la columna de esas medidas tomada de su DRC_EXC_n.
+ * Una dimensión de referencia que ya está en el informe se agrupa como COALESCE(c, c): así es otro elemento de
+ * agrupación y GROUPING(c) sigue diciendo si c está en el conjunto (si no, en los subtotales no casaría).
+ */
+function buildDracoExcReportData(relGrid, measuresGrid, atributesGrid, withSubtotals) {
+    const hasDims = ReportState.Rows.length > 0 || ReportState.Columns.length > 0;
+    const tuples = hasDims ? (withSubtotals ? configSetTuplesWithSubtotals(relGrid) : configSetTuples(relGrid)) : [];
+    const keys = [];
+    tuples.forEach(t => t.forEach(c => { if (keys.indexOf(c) === -1) keys.push(c); }));
+    const keyCols = keys.map((k, i) => "    GROUPING(" + k + ") AS DRC_G_" + i + "," + CRLF + "    " + k + " AS DRC_K_" + i);
+    const keyNames = keys.map((k, i) => "DRC_G_" + i + ", DRC_K_" + i);
+    const from = buildFrom(measuresGrid, null, relGrid);
+    const joins = buildJoins(relGrid);
+    const where = buildWhere(atributesGrid, relGrid);
+
+    let sql = "WITH DRC_BASE AS (" + CRLF + CRLF;
+    sql += (withSubtotals ? buildSelectWithSubtotals(measuresGrid, relGrid) : buildSelect(measuresGrid, relGrid))
+        + (keyCols.length ? "," + CRLF + keyCols.join("," + CRLF) : "") + CRLF + CRLF;
+    sql += from + CRLF + CRLF + joins + CRLF + CRLF + where + CRLF + CRLF;
+    sql += (hasDims ? groupingSetTuplesToText(tuples) : "") + CRLF + CRLF + ")";
+
+    const excMs = ReportState.Measures.filter(m => m.Exc);
+    excMs.forEach((m, n) => {
+        const ref = dracoExcRef(relGrid, m.Exc);
+        const refExpr = ref.cols.map(c => keys.indexOf(c) !== -1 ? "COALESCE(" + c + ", " + c + ")" : c);
+        const seen = new Set(), sets = [];
+        tuples.forEach(t => { const x = t.concat(refExpr), k = x.slice().sort().join("|"); if (!seen.has(k)) { seen.add(k); sets.push(x); } });
+        sql += "," + CRLF + "DRC_EXC_" + (n + 1) + " AS (" + CRLF + CRLF
+            + "SELECT" + CRLF + (keyNames.length ? "    " + keyNames.join("," + CRLF + "    ") + "," + CRLF : "")
+            + "    " + m.Exc.agg + "(DRC_V) AS DRC_V" + CRLF
+            + "FROM (" + CRLF + CRLF
+            + "SELECT" + CRLF + (keyCols.length ? keyCols.join("," + CRLF) + "," + CRLF : "")
+            + "    " + dracoMeasureExpr(measuresGrid, m) + " AS DRC_V" + CRLF + CRLF
+            + from + CRLF + CRLF + joins + ref.joins.join("") + CRLF + CRLF + where + CRLF + CRLF
+            + (hasDims ? groupingSetTuplesToText(sets) : "GROUP BY " + refExpr.join(", ")) + CRLF + CRLF
+            + ") DRC_X" + CRLF
+            + (keyNames.length ? "GROUP BY " + keyNames.join(", ") + CRLF : "") + CRLF + ")";
+    });
+
+    const cols = [
+        ...ReportState.Columns.map(c => "b." + c.AttributeName),
+        ...ReportState.Rows.map(r => "b." + r.AttributeName),
+        ...ReportState.Measures.map(m => {
+            const n = excMs.indexOf(m);
+            return n === -1 ? "b." + m.Name : "e" + (n + 1) + ".DRC_V AS " + m.Name;
+        })
+    ];
+    if (withSubtotals) {
+        ReportState.Columns.forEach(c => cols.push("b." + subtotalFlagName(c.AttributeName)));
+        ReportState.Rows.forEach(r => cols.push("b." + subtotalFlagName(r.AttributeName)));
+    }
+    sql += "," + CRLF + "REPORT_DATA AS (" + CRLF + CRLF + "SELECT" + CRLF + cols.map(c => "    " + c).join("," + CRLF) + CRLF + "FROM DRC_BASE b";
+    excMs.forEach((m, n) => {
+        const e = "e" + (n + 1);
+        if (!keys.length) { sql += CRLF + "CROSS JOIN DRC_EXC_" + (n + 1) + " " + e; return; }
+        sql += CRLF + "LEFT JOIN DRC_EXC_" + (n + 1) + " " + e + CRLF + "    ON "
+            + keys.map((k, i) => "b.DRC_G_" + i + " = " + e + ".DRC_G_" + i + " AND b.DRC_K_" + i + " IS NOT DISTINCT FROM " + e + ".DRC_K_" + i)
+                .join(CRLF + "   AND ");
+    });
+    sql += CRLF + CRLF + ")";
+    return sql;
+}
+
 function buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop) {
     if (ReportState.Rows.length === 0 && ReportState.Columns.length === 0 && ReportState.Measures.length === 0) {
         throw new Error("Añade al menos un campo a Filas o Columnas.");
@@ -4387,6 +4638,10 @@ function buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop) {
     let sql = "";
     const withSubtotals = hasAnySubtotalMarked();
 
+    if ((ReportState.Measures || []).some(m => m.Exc)) {
+        // Alguna medida con agregación de excepción: REPORT_DATA se compone (ver buildDracoExcReportData)
+        sql += buildDracoExcReportData(relGrid, measuresGrid, atributesGrid, withSubtotals);
+    } else {
     sql += "WITH REPORT_DATA AS (" + CRLF + CRLF;
     sql += (withSubtotals ? buildSelectWithSubtotals(measuresGrid, relGrid) : buildSelect(measuresGrid, relGrid)) + CRLF + CRLF;
     sql += buildFrom(measuresGrid, null, relGrid) + CRLF + CRLF;
@@ -4394,6 +4649,7 @@ function buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop) {
     sql += buildWhere(atributesGrid, relGrid) + CRLF + CRLF;
     sql += (withSubtotals ? buildConfigSetsWithSubtotals(relGrid) : buildConfigSets(relGrid)) + CRLF + CRLF;
     sql += ")";
+    }
     // Cálculos entre miembros (si el informe tiene): CTEs encadenadas y el
     // SELECT final lee de la última en vez de REPORT_DATA.
     ReportState.CalcOrder = {};
