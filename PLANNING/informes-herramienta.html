@@ -842,12 +842,12 @@ function kpiEnsure(){
   var refs=kpiDefs().map(function(k){ return k.id; }).filter(Boolean); if(!refs.length) return;
   var vars=(typeof dvVarsPayload==='function')?dvVarsPayload():null, kf={};
   kpiDefs().forEach(function(k){ var fl=dfFiltersFor('kpi',k.id); if(fl.length) kf[k.id]=fl; });
-  var key=JSON.stringify([kpiDefs().map(function(k){ return [k.id,k.parts||null,k.vars||null,k.exc||null]; }),vars,kf]);
+  var key=JSON.stringify([kpiDefs().map(function(k){ return [k.id,k.parts||null,k.vars||null]; }),vars,kf]);
   if(KPV.key===key) return;
   /* firma de cada KPI (lo que le afecta): mientras se recalcula, los KPIs cuya firma no cambia siguen mostrando su valor
      y solo los que dependen del filtro / variable cambiado se ven como "actualizando" */
   var vu={}; Object.keys(vars||{}).forEach(function(n){ var v=vars[n]; vu[String(n).toUpperCase()]=(v&&typeof v==='object')?v.value:v; });
-  var sigs={}; kpiDefs().forEach(function(k){ var vv={}; dfKpiVars(k).forEach(function(n){ vv[n]=vu[n]; }); sigs[k.id]=JSON.stringify([k.parts||null,k.vars||null,k.exc||null,vv,kf[k.id]||null]); });
+  var sigs={}; kpiDefs().forEach(function(k){ var vv={}; dfKpiVars(k).forEach(function(n){ vv[n]=vu[n]; }); sigs[k.id]=JSON.stringify([k.parts||null,k.vars||null,vv,kf[k.id]||null]); });
   var prev=(KPV.status==='ready')?KPV:KPV.prev; if(prev) prev.prev=null;
   KPV={key:key,status:'loading',values:{},errors:{},sigs:sigs,prev:prev||null};
   var kp={refs:refs}; if(vars) kp.variables=vars; if(Object.keys(kf).length) kp.filters=kf;
@@ -1958,8 +1958,11 @@ function blockInner(b,id){
   return '';
 }
 function pAttr(fn){ PN++; P[PN]=fn; return 'data-p="'+PN+'"'; }
-function blockWrap(b,id){
-  var cls='blk'+((b.span==='full'||b.type==='kpis')?' full':(typeof b.span==='number'&&b.span>1?' sp'+b.span:''));
+/* n = columnas del contenedor (si se sabe): el ancho de un bloque nunca pasa de ah\u00ED (si no, el navegador crea
+   columnas de m\u00E1s y descuadra la fila). Con ancho igual a n ocupa la fila entera. */
+function blockWrap(b,id,n){
+  var sp=(typeof b.span==='number'&&b.span>1)?(n?Math.min(b.span,n):b.span):1;
+  var cls='blk'+((b.span==='full'||b.type==='kpis')?' full':(sp>1?' sp'+sp:''));
   var sh=b.showIf?' data-showif="'+esc(b.showIf)+'"':'';
   if(b.type==='tableUpdate'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="tableUpdate"'+dAttr(b.density)+sh+'>'+tuShell(b,id)+'</div>';
   if(b.type==='dracoTable'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoTable"'+dAttr(b.density)+sh+'>'+dtShell(b,id)+'</div>';
@@ -1970,7 +1973,7 @@ function blockWrap(b,id){
 function gridHtml(blocks,layout,cols,pre,flat){
   var single=(!layout||layout==='single'), cs=single?[1]:((cols&&cols.length>0&&cols.length<=4)?cols:[1,1]);
   var h='<div class="grid g'+cs.length+(flat?' flat':'')+'" style="--cols:'+cs.map(function(c){ return c+'fr'; }).join(' ')+'">';
-  blocks.forEach(function(b,i){ h+=blockWrap(b,pre+i); });
+  (blocks||[]).forEach(function(b,i){ h+=blockWrap(b,pre+i,cs.length); });
   return h+'</div>';
 }
 /* Subsecci\u00F3n: contenedor sin tarjeta con t\u00EDtulo opcional y su propia distribuci\u00F3n en columnas. Sus bloques
@@ -2002,7 +2005,9 @@ function sectionHtml(s,si){
   }
   if(s.type==='section'){
     var tone=s.tone||'plain', layout=s.layout==='two'?'grid':s.layout;
-    return '<section class="sec '+(tone==='alt'?'alt':tone==='dark'?'dark tone-dark':'')+'"'+attrs+'><div class="wrap">'+headHtml(s)+gridHtml(s.blocks,layout,s.layout==='two'&&!s.cols?[1,1]:s.cols,pre,false)+'</div></section>';
+    var sb=(s.blocks&&s.blocks.length)?gridHtml(s.blocks,layout,s.layout==='two'&&!s.cols?[1,1]:s.cols,pre,false)
+      :(EDIT?'<div class="subsec-empty sec-empty" data-sec-empty="'+si+'">Secci\u00F3n vac\u00EDa: arrastra aqu\u00ED un componente o a\u00F1\u00E1delo desde la paleta.</div>':'');
+    return '<section class="sec '+(tone==='alt'?'alt':tone==='dark'?'dark tone-dark':'')+'"'+attrs+'><div class="wrap">'+headHtml(s)+sb+'</div></section>';
   }
   if(s.type==='faq') return '<section class="sec"'+attrs+'><div class="wrap">'+headHtml(s)+'<div class="faq">'+s.items.map(function(it){ return '<details><summary>'+esc(it.q)+'</summary><p>'+inl(it.a)+'</p></details>'; }).join('')+'</div></div></section>';
   if(s.type==='cta') return '<section class="cta"'+attrs+'><div class="wrap"><div class="cta-box tone-dark"><h2>'+esc(s.title)+'</h2>'+(s.text?'<p>'+inl(s.text)+'</p>':'')+ctaHtml(s.ctas)+'</div></div></section>';
@@ -2281,6 +2286,7 @@ function sectionSlides(s,si){
     });
     cur=null;
   });
+  if(first) start();          /* secci\u00F3n sin bloques: diapositiva solo con su t\u00EDtulo */
 }
 function faqSlides(s,si){
   var items=s.items||[], from=0, first=true, notes=noteFor(s);
@@ -2793,6 +2799,8 @@ function dndMark(){ [].forEach.call(document.querySelectorAll('.blk[data-bid]'),
 function dndClear(){ [].forEach.call(document.querySelectorAll('.dnd-before,.dnd-after,.dnd-in,.dnd-src'),function(x){ x.classList.remove('dnd-before','dnd-after','dnd-in','dnd-src','dnd-h'); }); }
 function dndTarget(e){
   if(!DND) return null;
+  var se=e.target.closest&&e.target.closest('.sec-empty');
+  if(se) return {el:se,bid:'sec:'+se.getAttribute('data-sec-empty'),pos:'in'};
   var empty=e.target.closest&&e.target.closest('.subsec-empty');
   if(empty){ var gb=empty.closest('.blk[data-bid]'); if(gb&&gb.getAttribute('data-bid')!==DND) return {el:empty,bid:gb.getAttribute('data-bid'),pos:'in'}; }
   var el=e.target.closest&&e.target.closest('.blk[data-bid]'); if(!el) return null;
@@ -3393,17 +3401,22 @@ function viewCss(){
   ];
   var N=':not(.is-deck)', o='';
   function at(x){ return '[data-density="'+x+'"]'; }
-  function sel(scope,x,e){
+  /* Herencia: p\u00E1gina \u2192 secci\u00F3n \u2192 subsecci\u00F3n (a cualquier nivel) / pesta\u00F1a \u2192 objeto. Dentro de la secci\u00F3n, la regla de
+     un contenedor con N contenedores con espaciado por encima lleva N atributos m\u00E1s en el selector, as\u00ED que siempre
+     gana el m\u00E1s cercano (antes empataban y ganaba el orden: un objeto \u00ABNormal\u00BB en una subsecci\u00F3n \u00ABAjustada\u00BB
+     se quedaba ajustado). La subsecci\u00F3n tambi\u00E9n ajusta la separaci\u00F3n entre sus objetos (.grid). */
+  var DEPTH=5;
+  function sel(scope,x,e,d){
     if(scope==='page') return 'html'+at(x)+N+' '+e[2];
     if(scope==='sec') return e[1]?('html'+N+' section'+e[2]+at(x)):('html'+N+' section'+at(x)+' '+e[2]);
-    return 'html'+N+' section .blk'+at(x)+' '+e[2];
+    return 'html'+N+' section'+new Array(d).join(' [data-density]')+' '+at(x)+' '+e[2];
   }
   ['page','sec','blk'].forEach(function(scope){
-    E.forEach(function(e){
-      if(scope==='blk'&&e[0]!=='B') return;
-      if(scope!=='page') o+=sel(scope,'normal',e)+'{'+e[3]+'}\n';
-      o+=sel(scope,'tight',e)+','+sel(scope,'dense',e)+'{'+e[4]+'}\n';
-      if(e[5]) o+=sel(scope,'dense',e)+'{'+e[5]+'}\n';
+    for(var d=1;d<=(scope==='blk'?DEPTH:1);d++) E.forEach(function(e){
+      if(scope==='blk'&&e[0]!=='B'&&e[2]!=='.grid') return;
+      if(scope!=='page') o+=sel(scope,'normal',e,d)+'{'+e[3]+'}\n';
+      o+=sel(scope,'tight',e,d)+','+sel(scope,'dense',e,d)+'{'+e[4]+'}\n';
+      if(e[5]) o+=sel(scope,'dense',e,d)+'{'+e[5]+'}\n';
     });
   });
   o+='html[data-width="wide"]'+N+' .wrap{max-width:1560px}\nhtml[data-width="full"]'+N+' .wrap{max-width:none}\n';
@@ -3464,9 +3477,7 @@ function validate(spec){
     else { var kn={}; spec.dracoKpis.forEach(function(k,i){ var p='dracoKpis['+i+']';
       if(!k||typeof k!=='object'||!k.id) e.push(p+': falta "id" (la Tabla Draco del KPI).');
       else if(!/^[A-Z][A-Z0-9_]{0,39}$/.test(String(k.name||''))) e.push(p+': "name" debe ir en may\u00FAsculas, sin espacios ni acentos (se usa como $$NAME$$).');
-      else if(kn[k.name]) e.push(p+': el nombre '+k.name+' est\u00E1 repetido.'); else kn[k.name]=1;
-      if(k&&k.exc&&(['MIN','MAX','AVG','SUM','COUNT'].indexOf(k.exc.agg)<0||!Array.isArray(k.exc.dims))) w.push(p+': la agregaci\u00F3n de excepci\u00F3n no es v\u00E1lida y se ignora.');
-      else if(k&&k.exc&&!k.exc.dims.length) w.push(p+': la agregaci\u00F3n de excepci\u00F3n no tiene campos de referencia y se ignora.'); }); }
+      else if(kn[k.name]) e.push(p+': el nombre '+k.name+' est\u00E1 repetido.'); else kn[k.name]=1;}); }
   }
   if(!Array.isArray(spec.sections)||!spec.sections.length){ e.push('"sections" debe ser un array con al menos una sección.'); return {errors:e,warnings:w}; }
   var D=spec.data, hasData=!!D, dimSet={}, measIds=[], metSet={}, swSet={}, ids={};
@@ -3640,8 +3651,9 @@ function validate(spec){
     if(s.type==='section'){
       if(['single','two','grid',undefined].indexOf(s.layout)<0) e.push(p+': "layout" debe ser single, two o grid.');
       if(s.cols!==undefined&&!(Array.isArray(s.cols)&&s.cols.length>=1&&s.cols.length<=4&&s.cols.every(function(c){ return isNum(c)&&c>0; }))) e.push(p+': "cols" debe ser de 1 a 4 números positivos.');
-      if(!Array.isArray(s.blocks)||!s.blocks.length){ e.push(p+': "blocks" vacío.'); return; }
-      s.blocks.forEach(function(b,j){ blockCheck(b,p+'.blocks['+j+']',false); });
+      if(s.blocks!==undefined&&!Array.isArray(s.blocks)){ e.push(p+': "blocks" debe ser una lista.'); return; }
+      if(!(s.blocks||[]).length) w.push(p+': secci\u00F3n sin contenido.');
+      (s.blocks||[]).forEach(function(b,j){ blockCheck(b,p+'.blocks['+j+']',false); });
     }
   });
   var chk=function(t,p){ if(t&&!ids[t]) e.push(p+': apunta a "'+t+'", que no es el id de ninguna sección.'); };
@@ -4156,12 +4168,19 @@ function colOpts(cur){
   return o;
 }
 function isGrid(c){ return !!c&&(c.layout==='grid'||c.layout==='two'); }
-function edSpan(b,cont){
-  if(!isGrid(cont)) return '';
-  var v=(b.span==='full')?'full':(typeof b.span==='number'?String(b.span):'');
-  return gSel('Ancho de este bloque','span',v,[['','Una columna'],['2','Dos columnas'],['3','Tres columnas'],['full','Todo el ancho de la fila']]);
+/* Ancho en columnas del contenedor (secci\u00F3n / subsecci\u00F3n / pesta\u00F1a): de 1 a su n\u00FAmero de columnas */
+function contCols(c){ return isGrid(c)?((c.cols&&c.cols.length>0&&c.cols.length<=4)?c.cols.length:2):1; }
+function contName(r){ var c=r&&r.cont; return !c?'contenedor':(c===r.sec?'secci\u00F3n':(c.type==='group'?'subsecci\u00F3n':'pesta\u00F1a')); }
+function edSpan(b,r){
+  var cont=r.cont, n=contCols(cont); if(n<2) return '';
+  var v=(b.span==='full')?'full':(typeof b.span==='number'&&b.span>1?String(b.span):'');
+  var o=[['','1 columna']]; for(var k=2;k<n;k++) o.push([String(k),k+' columnas']);
+  o.push(['full','Todas ('+n+' columnas)']);
+  if(v&&v!=='full'&&+v>=n) v='full';
+  return gSel('Ancho (columnas de la '+contName(r)+')','span',v,o);
 }
-function edDensity(o,what){ return gSel('Espaciado de '+what,'density',o.density||'',[['','Como la p\u00E1gina'],['normal','Normal'],['tight','Ajustado'],['dense','Muy ajustado']]); }
+/* Espaciado: cada nivel hereda del contenedor de arriba si no tiene uno propio */
+function edDensity(o,what,from){ return gSel('Espaciado de '+what,'density',o.density||'',[['','Como '+(from||'la p\u00E1gina')],['normal','Normal'],['tight','Ajustado'],['dense','Muy ajustado']]); }
 function edLayoutBox(r){
   var c=r.cont; if(!c) return '';
   var grid=isGrid(c), h='<div class="insp-sec">Esta zona ('+(c===r.sec?'secci\u00F3n':(c.type==='group'?'subsecci\u00F3n':'pesta\u00F1a'))+')</div>';
@@ -4199,10 +4218,13 @@ function edBlock(r){
   }
   else if(b.type==='tabs') h=edNote('Elige una pesta\u00F1a en el \u00E1rbol de estructura para cambiar su distribuci\u00F3n, espaciado y notas.')+gText('T\u00EDtulo','title',b.title)
     +listBlock('Pesta\u00F1as','tabs',b.tabs,function(it,i){ return gText('Nombre','tabs.'+i+'.label',it.label); },{label:'Nueva pesta\u00F1a',blocks:[{type:'text',title:'Texto',body:'Escribe aqu\u00ED tu texto.'}]},1);
-  if(b.type==='tabs') return h+edDensity(b,'este bloque');
+  var from='la '+contName(r);
+  if(b.type==='tabs') return h+edSpan(b,r)+edDensity(b,'este bloque (solo este bloque)',from);
   /* La distribuci\u00F3n (columnas, reparto) es de la p\u00E1gina, la secci\u00F3n o la subsecci\u00F3n: no se edita desde cada bloque.
      El bloque conserva su ancho dentro de la rejilla y su propio espaciado (normal / compacto / muy ajustado). */
-  return h+(b.type==='kpis'?'':edSpan(b,r.cont))+edDensity(b,b.type==='group'?'esta subsecci\u00F3n':'este bloque');
+  return h+(b.type==='kpis'?'':edSpan(b,r))+(b.type==='group'
+    ?edDensity(b,'esta subsecci\u00F3n',from)+'<p class="insp-hint">Es el espaciado por defecto de todo lo que hay dentro.</p>'
+    :edDensity(b,'este bloque (solo este bloque)',from));
 }
 function edSection(r){
   var s=r.obj, h='';
@@ -4222,7 +4244,8 @@ function edSection(r){
   } else if(s.type==='hero'){
     h+=edNote('Para editar las cifras de la cabecera, haz clic en una de ellas.');
   }
-  h+=edDensity(s,'esta secci\u00F3n');
+  h+=edDensity(s,'esta secci\u00F3n','la p\u00E1gina');
+  if(s.type==='section') h+='<p class="insp-hint">Es el espaciado por defecto de las subsecciones y objetos de la secci\u00F3n.</p>';
   h+=gArea('Notas del orador (PowerPoint)','notes',s.notes,2);
   return h;
 }
@@ -4282,7 +4305,7 @@ function edTabPanel(r,i){
   var t=r.obj.tabs[i], g=isGrid(t), pre='tabs.'+i+'.';
   var h=gText('Nombre',pre+'label',t.label)+gSel('Distribuci\u00F3n',pre+'layout',g?'grid':'single',[['single','Una columna'],['grid','En columnas']]);
   if(g) h+=gSel('Reparto de columnas',pre+'cols',(t.cols&&t.cols.length?t.cols:[1,1]).join(','),colOpts(t.cols));
-  h+=gSel('Espaciado de esta pesta\u00F1a',pre+'density',t.density||'',[['','Como la p\u00E1gina'],['normal','Normal'],['tight','Ajustado'],['dense','Muy ajustado']]);
+  h+=gSel('Espaciado de esta pesta\u00F1a',pre+'density',t.density||'',[['','Como la secci\u00F3n'],['normal','Normal'],['tight','Ajustado'],['dense','Muy ajustado']]);
   h+=gArea('Notas del orador (PowerPoint)',pre+'notes',t.notes,2);
   return h;
 }
@@ -5265,7 +5288,7 @@ function crumbText(){
 function edAfterSync(){ var c=$('inspCrumb'); if(c) c.textContent=crumbText(); treeRender(); }
 function edAfterRender(){
   var c=$('inspCrumb'); if(c) c.textContent=crumbText();
-  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender(); if(typeof dtAfterRender==='function') dtAfterRender(); if(typeof dvAfterRender==='function') dvAfterRender(); if(typeof dcAfterRender==='function') dcAfterRender(); if(typeof dfAfterRender==='function') dfAfterRender(); if(typeof dkAfterRender==='function') dkAfterRender();
+  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender(); if(typeof dtAfterRender==='function') dtAfterRender(); if(typeof dvAfterRender==='function') dvAfterRender(); if(typeof dcAfterRender==='function') dcAfterRender(); if(typeof dfAfterRender==='function') dfAfterRender();
 }
 
 /* ---------- acciones sobre nodos ---------- */
@@ -5383,11 +5406,18 @@ function bidOf(obj){
 function edMoveBid(from,to,pos){
   if(!currentSpec||!from||!to||from===to) return;
   if(to.indexOf(from)===0&&/^[gt]/.test(to.slice(from.length))) return;          /* dentro de s\u00ED mismo */
-  var A=bidWalk(currentSpec,from), B=bidWalk(currentSpec,to); if(!A||!B) return;
-  var list, idx;
-  if(pos==='in'){ if(B.b.type!=='group') return; B.b.blocks=B.b.blocks||[]; list=B.b.blocks; idx=list.length; }
-  else { list=B.list; idx=B.idx+(pos==='after'?1:0); }
-  if(A.b.type==='tabs'&&(pos==='in'||B.deep)) { setStatus('Las pesta\u00F1as solo pueden ir directamente en una secci\u00F3n.',4000); return; }
+  var A=bidWalk(currentSpec,from); if(!A) return;
+  var list, idx, B=null;
+  var ms=/^sec:(\d+)$/.exec(to);
+  if(ms){                                                                          /* dentro de una secci\u00F3n vac\u00EDa */
+    var sc=(currentSpec.sections||[])[+ms[1]]; if(!sc||sc.type!=='section') return;
+    sc.blocks=sc.blocks||[]; list=sc.blocks; idx=list.length;
+  } else {
+    B=bidWalk(currentSpec,to); if(!B) return;
+    if(pos==='in'){ if(B.b.type!=='group') return; B.b.blocks=B.b.blocks||[]; list=B.b.blocks; idx=list.length; }
+    else { list=B.list; idx=B.idx+(pos==='after'?1:0); }
+    if(A.b.type==='tabs'&&(pos==='in'||B.deep)) { setStatus('Las pesta\u00F1as solo pueden ir directamente en una secci\u00F3n.',4000); return; }
+  }
   edPrevSel=edSel;
   var item=A.list.splice(A.idx,1)[0];
   if(list===A.list&&A.idx<idx) idx--;
@@ -5908,36 +5938,12 @@ function edDKpi(k,i){
     +gSel('Decimales','decimals',(k.decimals==null?'':String(k.decimals)),[['','Seg\u00FAn la medida'],['0','0'],['1','1'],['2','2'],['3','3']])
     +(k.parts&&k.parts.scale>1?'<p class="insp-hint">La medida tiene factor de escala: \u00F7 '+Number(k.parts.scale).toLocaleString('es-ES')+'.</p>':'')
     +gText('Unidad','unit',k.unit,'Por ejemplo: \u20AC')
-    +dkExcHtml(k,i)
+    +(k.parts&&k.parts.exc?'<p class="insp-hint">Agregaci\u00F3n de excepci\u00F3n: <b>'+esc(k.parts.exc.agg)+'</b> por '+esc((k.parts.exc.cols||[]).join(', '))+' (se cambia en las opciones de la medida, en el dise\u00F1ador).</p>':'')
     +'<div class="insp-sec">Datos</div>'
     +(HOSTED?'<button class="btn small" data-dk-edit=\"'+i+'" type="button">\uD83E\uDDE9 Editar en el dise\u00F1ador</button> ':'')
     +'<button class="btn small" data-dk-del="'+i+'" type="button">Borrar el KPI</button>'
     +(k.parts?'':'<p class="insp-hint" style="color:#C2362B">Sin terminar: \u00E1brelo en el dise\u00F1ador y pulsa Guardar.</p>')
     +'<p class="insp-hint">El KPI se guarda dentro de este informe (al guardar el informe).</p>';
-}
-/* Agregaci\u00F3n de excepci\u00F3n (como en BPC): primero se agrega la medida por las dimensiones de referencia y sobre esos
-   valores se aplica la agregaci\u00F3n de excepci\u00F3n. k.exc = { agg: 'MIN'|'MAX'|'AVG'|'SUM'|'COUNT', dims: [{dim, attr}] } */
-var DK_EXC=[['','Ninguna (agregaci\u00F3n normal)'],['MIN','M\u00EDnimo'],['MAX','M\u00E1ximo'],['AVG','Media'],['SUM','Suma'],['COUNT','N\u00FAmero de valores']];
-function dkExcHtml(k,i){
-  var a=(k.exc&&k.exc.agg)||'';
-  var h='<div class="insp-sec">Agregaci\u00F3n de excepci\u00F3n</div>'
-    +'<label class="ef"><span>Despu\u00E9s de agregar, quedarse con</span><select data-dk-exc-agg="'+i+'">'+DK_EXC.map(function(o){ return '<option value="'+o[0]+'"'+(o[0]===a?' selected':'')+'>'+esc(o[1])+'</option>'; }).join('')+'</select></label>';
-  if(!a) return h+'<p class="insp-hint">Por ejemplo, el m\u00EDnimo mensual: se suma la medida por mes (por todo lo dem\u00E1s se agrega como siempre) y se toma el m\u00EDnimo de esos meses.</p>';
-  return h+'<p class="insp-hint">Dimensiones de referencia: la medida se agrega <b>por cada valor</b> de estos campos (por todos los dem\u00E1s, como siempre) y despu\u00E9s se aplica la agregaci\u00F3n elegida sobre esos resultados.</p>'
-    +'<div id="dkExcBox" data-i="'+i+'">'+(HOSTED?'<div class="tu-state"><span class="tu-spin"></span> Cargando campos\u2026</div>':'<p class="insp-hint">Los campos se eligen dentro de Draco Planning.</p>')+'</div>';
-}
-function dkAfterRender(){
-  var el=$('dkExcBox'); if(!el||!HOSTED) return;
-  var i=+el.getAttribute('data-i'), k=dkList()[i]; if(!k) return;
-  if(!k.cubo){ el.innerHTML='<p class="insp-hint" style="color:#C2362B">Abre el KPI en el dise\u00F1ador y pulsa Guardar para poder elegir sus dimensiones.</p>'; return; }
-  var key=JSON.stringify(edSel), cube=k.cubo;
-  var pF=DFE.fields[cube]?Promise.resolve(DFE.fields[cube]):dtCall('dt.fields',{cube:cube}).then(function(l){ DFE.fields[cube]=l; return l; });
-  pF.then(function(l){
-    if(JSON.stringify(edSel)!==key||!$('dkExcBox')) return;
-    var sel=(k.exc&&k.exc.dims)||[], has=function(x){ return sel.some(function(d){ return d.dim===x.dim&&d.attr===x.attr; }); };
-    $('dkExcBox').innerHTML=(sel.length?'':'<p class="insp-hint" style="color:#8a5a00">Elige al menos un campo: sin campos de referencia el KPI se calcula sin la agregaci\u00F3n de excepci\u00F3n.</p>')
-      +'<div style="max-height:220px;overflow:auto">'+(l||[]).map(function(x){ return '<label class="df-chk"><input type="checkbox" data-dk-exc-dim="'+esc(x.dim+'|'+x.attr)+'"'+(has(x)?' checked':'')+'><span>'+esc(x.label)+'</span></label>'; }).join('')+'</div>';
-  },function(e){ if(JSON.stringify(edSel)===key) tuPaintErr('dkExcBox',e,function(){ delete DFE.fields[cube]; edRender(); }); });
 }
 /* Abre el dise\u00F1ador en modo KPI con la definici\u00F3n del KPI (si lo hay); al guardar devuelve { kpi: { nombre, cubo, def, parts, vars } } */
 function dkDesign(k,after){
@@ -5967,18 +5973,6 @@ $('inspBody').addEventListener('change',function(e){
     var all=dkList().map(function(k){ return k.id; }), cur=(b.show&&b.show.length)?b.show.slice():all.slice(), id=t.getAttribute('data-dk-show');
     cur=t.checked?(cur.indexOf(id)<0?cur.concat([id]):cur):cur.filter(function(x){ return x!==id; });
     b.show=(cur.length===all.length)?[]:all.filter(function(x){ return cur.indexOf(x)>=0; });
-    edSync(true); return;
-  }
-  if(t.hasAttribute('data-dk-exc-agg')){
-    var ke=dkList()[+t.getAttribute('data-dk-exc-agg')]; if(!ke) return; edPrevSel=edSel;
-    if(!t.value) delete ke.exc; else ke.exc={agg:t.value,dims:(ke.exc&&ke.exc.dims)||[]};
-    edSync(true); edRender(); return;
-  }
-  if(t.hasAttribute('data-dk-exc-dim')){
-    var bx=$('dkExcBox'), kd=bx&&dkList()[+bx.getAttribute('data-i')]; if(!kd||!kd.exc) return; edPrevSel=edSel;
-    var pr=t.getAttribute('data-dk-exc-dim').split('|'), d={dim:pr[0],attr:pr[1]};
-    var rest=(kd.exc.dims||[]).filter(function(x){ return !(x.dim===d.dim&&x.attr===d.attr); });
-    kd.exc.dims=t.checked?rest.concat([d]):rest;
     edSync(true); return;
   }
   if(t.hasAttribute('data-dk-name')){
@@ -6203,7 +6197,7 @@ function relayPage(d){
   /* KPIs: sus piezas SQL las pone la herramienta desde su copia del informe (nunca las de la p\u00E1gina) */
   if(d&&d.op==='dt.kpis'){
     var pl=d.payload||{};
-    d={dp:d.dp,id:d.id,op:d.op,payload:{refs:pl.refs,variables:pl.variables,filters:pl.filters,kpis:((currentSpec&&currentSpec.dracoKpis)||[]).map(function(k){ return {id:k.id,cubo:k.cubo||null,parts:k.parts||null,vars:k.vars||{},exc:k.exc||null}; })}};
+    d={dp:d.dp,id:d.id,op:d.op,payload:{refs:pl.refs,variables:pl.variables,filters:pl.filters,kpis:((currentSpec&&currentSpec.dracoKpis)||[]).map(function(k){ return {id:k.id,cubo:k.cubo||null,parts:k.parts||null,vars:k.vars||{}}; })}};
   }
   hostPost({dpTool:1,op:'page',payload:d});
 }   /* puente futuro: la p\u00E1gina pide cosas a Draco (tablas, SQL) */
