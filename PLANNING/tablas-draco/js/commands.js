@@ -1027,8 +1027,11 @@ function appendLockedFilterRangesToState(reportId) {
         if (!meta || !meta.filter) continue;
 
         const isAll = meta.reportId === null || meta.reportId === undefined;
+        // Informe vinculado: hereda (bloqueados) los filtros del botón de su principal
+        const linkMain = dracoLinkMainId(reportId);
         const appliesToThisReport = isAll
-            || (reportId !== null && reportId !== undefined && Number(meta.reportId) === Number(reportId));
+            || (reportId !== null && reportId !== undefined && Number(meta.reportId) === Number(reportId))
+            || (linkMain !== null && Number(meta.reportId) === linkMain);
         if (!appliesToThisReport) continue;
 
         // Igual que en loadFilters(): una MEDIDA en un filtro "bloqueado"
@@ -7182,7 +7185,13 @@ async function toggleDracoCollapseAtCell(context, sheetName, targetAddr, flag) {
 
     const lastJson = DracoLastJsonByReport.get(dracoStateKey(reportId));
     if (lastJson) {
+        const linkedIds = dracoLinkedOf(reportId);
+        if (linkedIds.length) await dracoClearLinkedAreas(context, linkedIds);   // antes: el principal puede crecer
         await jsonTo3Matrices(context, lastJson, reportId);
+        if (linkedIds.length) {
+            await dracoPaintLinkedChain(context, reportId, linkedIds,
+                linkedIds.map(id => DracoLastJsonByReport.get(dracoStateKey(id))));
+        }
     }
     return true;
 }
@@ -7923,6 +7932,16 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     RRows.row = Math.max(1, RRows.row); RRows.col = Math.max(1, RRows.col);
     RCols.row = Math.max(1, RCols.row); RCols.col = Math.max(1, RCols.col);
 
+    // INFORME VINCULADO (ver dracoPaintLinkedChain): se pinta pegado al principal y
+    // SIN las cabeceras del eje que comparte con él (filas a la izquierda o
+    // columnas arriba: esas solo están en el principal). Solo activo mientras se
+    // pinta un vinculado; en cualquier otro informe esto no hace nada.
+    const linkPaint = (DracoLinkPaint && Number(DracoLinkPaint.reportId) === Number(reportId)) ? DracoLinkPaint : null;
+    if (linkPaint) {
+        RRows = { row: linkPaint.row, col: Math.max(1, linkPaint.col - planFilas.totalIaux) };
+        RCols = { row: Math.max(1, linkPaint.row - planColumnas.totalIaux), col: linkPaint.col };
+    }
+
     const rowsOffRow = RRows.row - 1;
     const rowsOffCol = RRows.col - 1;
     const colsOffRow = RCols.row - 1;
@@ -8315,9 +8334,10 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         }
     }
 
-    await writeCellBlock(context, sheet, filasCells, true);
+    const skipFilasHdr = !!(linkPaint && linkPaint.axis === "rows");   // vinculado por filas: sin cabeceras de fila
+    if (!skipFilasHdr) await writeCellBlock(context, sheet, filasCells, true);
     let filasRunCount = 0;
-    if (reportProps.overwriteFormats) {
+    if (reportProps.overwriteFormats && !skipFilasHdr) {
         filasRunCount = await writeIndentAndColorRuns(context, sheet, filasCells, "col", rowsOffCol, true);
     }
     tPerf = draco_perfMark(reportId, `Escribir+formatear FILAS (${filasCells.size} celdas, ${filasRunCount} tramos, en cola)`, tPerf);
@@ -8389,9 +8409,10 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         }
     }
 
-    await writeCellBlock(context, sheet, columnasCells, true);
+    const skipColsHdr = !!(linkPaint && linkPaint.axis === "cols");    // vinculado por columnas: sin cabeceras de columna
+    if (!skipColsHdr) await writeCellBlock(context, sheet, columnasCells, true);
     let columnasRunCount = 0;
-    if (reportProps.overwriteFormats) {
+    if (reportProps.overwriteFormats && !skipColsHdr) {
         columnasRunCount = await writeIndentAndColorRuns(context, sheet, columnasCells, "row", colsOffRow, true);
     }
     tPerf = draco_perfMark(reportId, `Escribir+formatear COLUMNAS (${columnasCells.size} celdas, ${columnasRunCount} tramos, en cola)`, tPerf);
@@ -8400,7 +8421,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // valores de fila/columna de total (gateado por "Sobrescribir
     // formatos", igual que el resto de formato). ----
     if (reportProps.overwriteFormats) {
-        await applyDracoTotalHighlight(context, sheet, filasCells, columnasCells, factCells, true);
+        await applyDracoTotalHighlight(context, sheet, filasCells, columnasCells, factCells, true, linkPaint ? linkPaint.axis : null);
         tPerf = draco_perfMark(reportId, "Resaltado de totales (en cola)", tPerf);
     }
 
@@ -8447,8 +8468,8 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
 
     const namedRanges = await applyDracoNamedRanges(context, sheet, {
         RRows, RCols,
-        totalDimFilas: paintedFilasCols,
-        totalDimCols: paintedColsRows,
+        totalDimFilas: skipFilasHdr ? 0 : paintedFilasCols,   // el vinculado no registra el rango de la cabecera compartida
+        totalDimCols: skipColsHdr ? 0 : paintedColsRows,
         maxRowId: physicalMaxRowId, maxColId: physicalMaxColId,
         applyVisualFormat: reportProps.overwriteFormats,
         hasValues: realMeasureCount > 0
@@ -8526,22 +8547,25 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
  * por SQL con 'TOTAL'), y para las celdas de VALORES que caigan en una
  * fila o columna marcada como total.
  */
-async function applyDracoTotalHighlight(context, sheet, filasCells, columnasCells, factCells, deferSync) {
+async function applyDracoTotalHighlight(context, sheet, filasCells, columnasCells, factCells, deferSync, skipHeaderAxis) {
     const TOTAL_FILL = "#FFFFCC"; // RGB(255,255,204)
 
     const totalRows = new Set();
     const totalCols = new Set();
     const headerCells = [];
 
+    // skipHeaderAxis ("rows"/"cols", informes vinculados): esas cabeceras no se pintan
+    // en este informe (solo en su principal), así que no se colorean; sus filas/columnas
+    // de total de VALORES sí.
     for (const cell of filasCells.values()) {
         if (cell.isTotal) {
-            headerCells.push(cell);
+            if (skipHeaderAxis !== "rows") headerCells.push(cell);
             totalRows.add(cell.row);
         }
     }
     for (const cell of columnasCells.values()) {
         if (cell.isTotal) {
-            headerCells.push(cell);
+            if (skipHeaderAxis !== "cols") headerCells.push(cell);
             totalCols.add(cell.col);
         }
     }
@@ -9303,8 +9327,391 @@ async function actualizarInforme(event) {
  * tanto actualizar() (botón "Actualizar", un único informe: el activo)
  * como actualizarTodosCore() (recorre todos los informes).
  */
+/* =========================================================================
+ * INFORMES VINCULADOS
+ *
+ * Un informe vinculado comparte con su informe PRINCIPAL el eje de Filas
+ * (se pinta a su derecha) o el de Columnas (se pinta debajo), y hereda sus
+ * filtros del botón «Añadir filtro» y las variables. Sus filtros de diseño,
+ * sus medidas y el otro eje son propios (p. ej. el principal filtra 2025 y el
+ * vinculado 2026), y se planifica por separado, como un informe más.
+ *
+ *   design.link = { mainId, axis: "rows" | "cols" }   (en el VINCULADO)
+ *
+ * El eje compartido solo se pinta en el principal. Como las filas (o
+ * columnas) de cada informe pueden salir distintas, al refrescar se ejecutan
+ * todas las consultas del grupo, se fusionan sus combinaciones
+ * (dracoMergeLinkedResults: orden alfabético dentro de su padre) y se pinta
+ * primero el principal y después cada vinculado, pegado a lo ya pintado.
+ * Refrescar cualquiera de ellos refresca el grupo entero.
+ *
+ * De momento solo informes DINÁMICOS (sin filas ni columnas fijas).
+ * Botón: crearInformeVinculado (registrado con Office.actions.associate;
+ * basta con añadir el control en el manifest).
+ * ======================================================================= */
+let DracoLinkPaint = null; // { reportId, axis, row, col } solo mientras se pinta un vinculado (ver jsonTo3MatricesCore)
+
+function dracoLinkOf(reportId) {
+    if (!window.ReportStore || reportId === null || reportId === undefined) return null;
+    const r = window.ReportStore.getReport(reportId);
+    const l = r && r.design && r.design.link;
+    if (!l || l.mainId === undefined || l.mainId === null) return null;
+    // si el principal ya no existe (o apunta a sí mismo), deja de estar vinculado
+    if (Number(l.mainId) === Number(reportId) || !window.ReportStore.getReport(l.mainId)) return null;
+    return { mainId: Number(l.mainId), axis: l.axis === "cols" ? "cols" : "rows" };
+}
+function dracoLinkMainId(reportId) { const l = dracoLinkOf(reportId); return l ? l.mainId : null; }
+/** Vinculados de un principal, en orden de creación (= orden en que se pintan). */
+function dracoLinkedOf(mainId) {
+    if (!window.ReportStore || mainId === null || mainId === undefined) return [];
+    return window.ReportStore.listReports().map(r => r.id)
+        .filter(id => { const l = dracoLinkOf(id); return !!l && l.mainId === Number(mainId); });
+}
+/** Principal del grupo al que pertenece un informe (él mismo si es principal), o null. */
+function dracoLinkGroupMain(reportId) {
+    const m = dracoLinkMainId(reportId);
+    if (m !== null) return m;
+    return dracoLinkedOf(reportId).length ? Number(reportId) : null;
+}
+
+/** Campos del eje compartido, copiados del principal (incluidas sus opciones de campo). */
+function dracoLinkedAxisFields(main, linked, axis) {
+    const md = (main && main.design) || {}, ld = (linked && linked.design) || {};
+    const zone = axis === "cols" ? "columns" : "rows";
+    const copy = x => JSON.parse(JSON.stringify(x || []));
+    const fo = {};
+    Object.keys(ld.fieldOptions || {}).forEach(k => { if (k.indexOf(zone + "|") !== 0) fo[k] = ld.fieldOptions[k]; });
+    Object.keys(md.fieldOptions || {}).forEach(k => { if (k.indexOf(zone + "|") === 0) fo[k] = md.fieldOptions[k]; });
+    const out = { fieldOptions: fo, resultSheetName: md.resultSheetName || ld.resultSheetName || "" };
+    if (axis === "cols") { out.columns = copy(md.columns); out.expandedCols = copy(md.expandedCols); out.colsStatic = !!md.colsStatic; }
+    else { out.rows = copy(md.rows); out.expandedRows = copy(md.expandedRows); out.rowsStatic = !!md.rowsStatic; }
+    return out;
+}
+/** El vinculado sigue siempre el eje del principal (si se cambia en el principal, se cambia en él). */
+async function dracoSyncLinkedDesigns(mainId, linkedIds) {
+    const main = window.ReportStore.getReport(mainId);
+    for (const id of linkedIds) {
+        const l = dracoLinkOf(id), linked = window.ReportStore.getReport(id);
+        if (!l || !linked) continue;
+        const fields = dracoLinkedAxisFields(main, linked, l.axis);
+        const cur = {};
+        Object.keys(fields).forEach(k => { cur[k] = (linked.design || {})[k]; });
+        if (JSON.stringify(cur) !== JSON.stringify(fields)) await window.ReportStore.updateDesignFields(id, fields);
+    }
+}
+/** El vinculado usa el MISMO estado de +/- que el principal en el eje compartido (mismas filas visibles). */
+function dracoShareCollapseState(mainId, linkedId, axis) {
+    const k = axis === "cols" ? "cols" : "rows";
+    getDracoCollapseState(linkedId)[k] = getDracoCollapseState(mainId)[k];
+}
+
+/**
+ * INFORMES VINCULADOS — fusión de los resultados de un grupo (principal + vinculados)
+ * que comparten el eje de Filas ("rows") o de Columnas ("cols").
+ *
+ * parts[i] = { json, nRowDims, nColDims } (i = 0 es el principal). Cada json es el
+ * pseudo-JSON de BigQuery que devuelve executeSQL: rows[].f[].v con los campos
+ * [ROW_ID, COLUMN_ID, dims de Filas..., dims de Columnas..., medidas...].
+ *
+ * La posición de cada fila/columna en la hoja sale SOLO de ROW_ID/COLUMN_ID
+ * (DENSE_RANK sobre los campos del eje), así que fusionar = unir las combinaciones
+ * del eje compartido de todos los informes, ordenarlas y renumerarlas IGUAL en
+ * todos, y añadir a cada informe (con medidas vacías) las combinaciones que no
+ * tenga. Así el pintado de siempre las coloca en la misma fila/columna física.
+ *
+ * Orden: alfabético (natural: "2" antes que "10") dentro de su padre (el orden
+ * es por niveles, de izquierda a derecha). Se respeta lo que ya hace el SQL del
+ * principal: un nivel ordenado descendente sigue descendente, y los nodos /
+ * subtotales (null o "TOTAL") van delante o detrás según salían. Si no se puede
+ * fusionar (JSON ilegible, ejes distintos), devuelve los JSON tal cual.
+ */
+function dracoMergeLinkedResults(parts, axis) {
+    const out = parts.map(p => p.json);
+    if (!parts || parts.length < 2) return out;
+    const idIdx = axis === "cols" ? 1 : 0;
+    const from = p => (axis === "cols" ? 2 + p.nRowDims : 2);
+    const count = p => (axis === "cols" ? p.nColDims : p.nRowDims);
+    const n = count(parts[0]);
+    if (!(n > 0) || parts.some(p => count(p) !== n)) return out;
+    const parsed = parts.map(p => { try { const o = JSON.parse(p.json); return o && typeof o === "object" ? o : null; } catch (e) { return null; } });
+    if (parsed.some(o => !o)) return out;
+
+    const val = c => (c && c.v !== undefined && c.v !== null ? c.v : null);
+    const kind = v => (v === null || v === "null" ? "N" : (String(v).toUpperCase() === "TOTAL" ? "T" : ""));
+    const coll = (typeof Intl !== "undefined" && Intl.Collator) ? new Intl.Collator("es", { numeric: true, sensitivity: "base" }) : null;
+    const cmpText = (x, y) => { const a = String(x), b = String(y); const c = coll ? coll.compare(a, b) : 0; return c || (a < b ? -1 : a > b ? 1 : 0); };
+    const keyOf = (f, p) => JSON.stringify(f.slice(from(p), from(p) + n).map(val));
+
+    // Combinaciones y su ID original en cada informe
+    const tuples = new Map(); // key -> { vals, ids[] }
+    parsed.forEach((o, pi) => (o.rows || []).forEach(r => {
+        const f = r.f || [];
+        const k = keyOf(f, parts[pi]);
+        let t = tuples.get(k);
+        if (!t) { t = { vals: JSON.parse(k), ids: [] }; tuples.set(k, t); }
+        const id = Number(val(f[idIdx]));
+        if (isFinite(id) && (t.ids[pi] === undefined || id < t.ids[pi])) t.ids[pi] = id;
+    }));
+
+    // Deducir del SQL (principal primero) el sentido de cada nivel y dónde van nulos/TOTAL
+    const dirVote = new Array(n).fill(0), spVote = { N: 0, T: 0 };
+    parsed.forEach((o, pi) => {
+        const seq = [...tuples.values()].filter(t => t.ids[pi] !== undefined).sort((a, b) => a.ids[pi] - b.ids[pi]);
+        const w = pi === 0 ? 1000 : 1; // manda el principal
+        for (let i = 1; i < seq.length; i++) {
+            const a = seq[i - 1].vals, b = seq[i].vals;
+            let d = 0; while (d < n && a[d] === b[d]) d++;
+            if (d >= n) continue;
+            const ka = kind(a[d]), kb = kind(b[d]);
+            if (ka && !kb) spVote[ka] += w;          // especial delante
+            else if (kb && !ka) spVote[kb] -= w;     // especial detrás
+            else if (!ka && !kb) dirVote[d] += w * Math.sign(cmpText(b[d], a[d]));
+        }
+    });
+    const spFirst = { N: spVote.N >= 0, T: spVote.T > 0 }; // sin pistas: nodos (null) delante, "TOTAL" detrás
+    const cmp = (A, B) => {
+        for (let i = 0; i < n; i++) {
+            const x = A.vals[i], y = B.vals[i];
+            if (x === y) continue;
+            const kx = kind(x), ky = kind(y);
+            if (kx || ky) {
+                if (kx && ky) return kx === ky ? 0 : (kx === "N" ? -1 : 1);
+                return kx ? (spFirst[kx] ? -1 : 1) : (spFirst[ky] ? 1 : -1);
+            }
+            const c = cmpText(x, y);
+            if (c) return dirVote[i] < 0 ? -c : c;
+        }
+        return 0;
+    };
+    const all = [...tuples.entries()].sort((a, b) => cmp(a[1], b[1]));
+    const newId = new Map(all.map(([k], i) => [k, String(i + 1)]));
+
+    return parsed.map((o, pi) => {
+        const p = parts[pi];
+        const rows = (o.rows || []).map(r => {
+            const f = (r.f || []).slice();
+            f[idIdx] = { v: newId.get(keyOf(f, p)) };
+            return Object.assign({}, r, { f });
+        });
+        // Combinaciones que no tiene este informe: fila con medidas vacías (con la
+        // otra coordenada de su primera fila, para no inventar columnas/filas nuevas)
+        const tpl = rows[0];
+        if (tpl) {
+            const mFrom = 2 + p.nRowDims + p.nColDims;
+            for (const [k, t] of all) {
+                if (t.ids[pi] !== undefined) continue;
+                const f = tpl.f.map((c, j) => (j >= mFrom ? { v: null } : c));
+                f[idIdx] = { v: newId.get(k) };
+                t.vals.forEach((v, j) => { f[from(p) + j] = { v }; });
+                rows.push({ f });
+            }
+        }
+        // Mismo texto que executeSQL ('{"v": ...}', con espacio): el pintado (jsonTo3MatricesCore)
+        // no usa JSON.parse, recorre el texto buscando '"v":' y cuenta con ese espacio.
+        return JSON.stringify(Object.assign({}, o, { rows, totalRows: String(rows.length) })).replace(/"v":/g, '"v": ');
+    });
+}
+
+/** Borra lo pintado por los vinculados (y sus rangos con nombre) ANTES de repintar el principal,
+ *  que puede crecer y ocupar su sitio: si no, al repintarse después borrarían celdas del principal. */
+async function dracoClearLinkedAreas(context, ids) {
+    for (const id of ids) {
+        const rep = window.ReportStore ? window.ReportStore.getReport(id) : null;
+        const props = (rep && rep.reportProperties) || {};
+        await clearDracoNamedRanges(context, id, props.overwriteFormats !== false);
+        const rn = dracoRangeNames(id);
+        const items = [rn.rows, rn.cols, rn.values].map(n => context.workbook.names.getItemOrNullObject(n));
+        items.forEach(it => it.load("isNullObject"));
+        await context.sync();
+        let any = false;
+        items.forEach(it => { if (!it.isNullObject) { it.delete(); any = true; } });
+        if (any) await context.sync();
+    }
+}
+/** Rangos pintados (rows/cols/values) de unos informes, con su posición. */
+async function dracoPaintedRanges(context, ids) {
+    const items = [];
+    for (const id of ids) {
+        const rn = dracoRangeNames(id);
+        [["rows", rn.rows], ["cols", rn.cols], ["values", rn.values]].forEach(([kind, n]) =>
+            items.push({ id, kind, it: context.workbook.names.getItemOrNullObject(n) }));
+    }
+    items.forEach(x => x.it.load("isNullObject"));
+    await context.sync();
+    const live = items.filter(x => !x.it.isNullObject).map(x => {
+        const r = x.it.getRange();
+        r.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+        return Object.assign(x, { r });
+    });
+    await context.sync();
+    return live;
+}
+/** Pinta cada vinculado pegado a lo ya pintado (principal + vinculados anteriores), con una
+ *  columna (o fila) vacía de separación y alineado con el eje del principal. */
+async function dracoPaintLinkedChain(context, mainId, linkedIds, jsons) {
+    for (let i = 0; i < linkedIds.length; i++) {
+        const id = linkedIds[i], json = jsons[i], l = dracoLinkOf(id);
+        if (!json || !l) continue;
+        const live = await dracoPaintedRanges(context, [mainId, ...linkedIds.slice(0, i)]);
+        const mainOf = k => { const x = live.find(y => y.id === mainId && y.kind === k); return x ? x.r : null; };
+        let row, col;
+        if (l.axis === "rows") {
+            const base = mainOf("rows") || mainOf("values");
+            if (!base) continue;                                   // el principal no tiene filas: nada con lo que alinear
+            row = base.rowIndex + 1;
+            col = Math.max(...live.map(x => x.r.columnIndex + x.r.columnCount)) + 2;
+        } else {
+            const base = mainOf("cols") || mainOf("values");
+            if (!base) continue;
+            col = base.columnIndex + 1;
+            row = Math.max(...live.map(x => x.r.rowIndex + x.r.rowCount)) + 2;
+        }
+        dracoShareCollapseState(mainId, id, l.axis);
+        DracoLinkPaint = { reportId: id, axis: l.axis, row, col };
+        try { await jsonTo3Matrices(context, json, id); }
+        finally { DracoLinkPaint = null; }
+    }
+}
+/** SQL de un informe dinámico (lo mismo que hace actualizarInformeCore) y el tamaño de sus ejes. */
+async function dracoBuildDynamicQuery(reportId) {
+    let sql = null, nRowDims = 0, nColDims = 0;
+    await Excel.run(async (context) => {
+        const editReportGrid = await getEditReportGrid(context, reportId);
+        const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
+        const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+        const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+        loadReportDefinition(editReportGrid, reportId);
+        applyFilterMeasuresToDynamicReport();
+        const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
+        sql = (window.PowerBIQuery && window.PowerBIQuery.isActiveModel())
+            ? window.PowerBIQuery.buildDynamicQuery(ReportState, measuresGrid, atributesGrid, subtotalsOnTop)
+            : buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
+        // OJO: en ReportState, "Columns" son las Filas de la hoja y "Rows" las Columnas (herencia del VBA)
+        nRowDims = ReportState.ColumnCount;
+        nColDims = ReportState.RowCount;
+    });
+    return { sql, nRowDims, nColDims };
+}
+/** Refresca un grupo vinculado (sin indicador ni cálculo manual: eso lo pone quien llama). */
+async function dracoRefreshLinkGroup(mainId) {
+    const linkedIds = dracoLinkedOf(mainId);
+    const ids = [mainId, ...linkedIds];
+    for (const id of ids) {
+        const mode = await Excel.run(async (context) => dracoReportMode(await getEditReportGrid(context, id)));
+        if (mode !== "dynamic") {
+            const r = window.ReportStore.getReport(id);
+            throw new Error(`Los informes vinculados funcionan, de momento, solo con informes dinámicos: «${r ? r.name : id}» tiene ${mode === "fixed" ? "filas y columnas fijas" : "un eje fijo"}.`);
+        }
+    }
+    await dracoSyncLinkedDesigns(mainId, linkedIds);
+    const parts = [];
+    for (const id of ids) {
+        if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(id, "Generando SQL"));
+        const q = await dracoBuildDynamicQuery(id);
+        if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(id, "Ejecutando consulta"));
+        q.json = await executeSQL(q.sql);
+        parts.push(q);
+    }
+    const axis = linkedIds.length ? dracoLinkOf(linkedIds[0]).axis : "rows";
+    const merged = linkedIds.length ? dracoMergeLinkedResults(parts, axis) : parts.map(p => p.json);
+    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(mainId, "Pintando resultados"));
+    await Excel.run(async (context) => {
+        await dracoClearLinkedAreas(context, linkedIds);
+        await jsonTo3Matrices(context, merged[0], mainId);
+        await dracoPaintLinkedChain(context, mainId, linkedIds, merged.slice(1));
+    });
+}
+async function actualizarGrupoVinculado(mainId) {
+    await draco_beginManualCalculation();
+    await flushDracoPlanningModifiedCells();
+    if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(mainId, "Informes vinculados"));
+    await beginSuppressPlanningPaint();
+    try {
+        await dracoRefreshLinkGroup(mainId);
+    } finally {
+        await endSuppressPlanningPaint();
+        await draco_endManualCalculation();
+        if (window.BusyIndicator) await window.BusyIndicator.hide();
+    }
+}
+
+/** Crea un informe vinculado a mainId por su eje de Filas ("rows") o Columnas ("cols"). Devuelve su id. */
+async function dracoCreateLinkedReport(mainId, axis) {
+    axis = axis === "cols" ? "cols" : "rows";
+    const main = window.ReportStore.getReport(mainId);
+    if (!main) throw new Error("No se encuentra el informe principal.");
+    if (dracoLinkOf(mainId)) throw new Error("Ese informe ya es un vinculado: elige su informe principal.");
+    const prev = dracoLinkedOf(mainId);
+    if (prev.length && dracoLinkOf(prev[0]).axis !== axis) {
+        throw new Error(`Los vinculados de «${main.name}» comparten sus ${dracoLinkOf(prev[0]).axis === "cols" ? "columnas" : "filas"}: todos los de un mismo principal tienen que vincularse por el mismo eje.`);
+    }
+    const sheet = (main.design && main.design.resultSheetName) || "";
+    const rep = await window.ReportStore.createReport(main.semanticModelName || "", sheet);   // queda como informe activo
+    await window.ReportStore.updateDesignFields(rep.id, Object.assign({ link: { mainId: Number(mainId), axis } },
+        dracoLinkedAxisFields(main, rep, axis)));
+    if (window.ReportStore.renameReport) await window.ReportStore.renameReport(rep.id, `${main.name} · vinculado ${prev.length + 1}`);
+    return rep.id;
+}
+
+/**
+ * Comando de cinta "crearInformeVinculado": pide el informe principal y el eje a
+ * vincular, crea el vinculado y abre el diseñador para que se le añadan sus
+ * medidas, columnas (o filas) y filtros propios. Para activarlo basta con añadir
+ * al manifest un botón con <FunctionName>crearInformeVinculado</FunctionName>.
+ */
+let dracoLinkDialogOpen = false;
+async function crearInformeVinculado(event) {
+    if (dracoLinkDialogOpen || !window.ReportStore) { if (event) event.completed(); return; }
+    dracoLinkDialogOpen = true;
+    try {
+        const reports = window.ReportStore.listReports()
+            .filter(r => !dracoLinkOf(r.id))
+            .map(r => {
+                const linked = dracoLinkedOf(r.id);
+                return { id: r.id, name: r.name, lockedAxis: linked.length ? dracoLinkOf(linked[0]).axis : null, linkedCount: linked.length };
+            });
+        const url = new URL("linkDialog.html", window.location.href).href;
+        let createdId = null;
+        await new Promise((resolve) => {
+            Office.context.ui.displayDialogAsync(url, { height: 55, width: 35, displayInIframe: false }, (res) => {
+                if (res.status === Office.AsyncResultStatus.Failed) { console.error("Informe vinculado: displayDialogAsync:", res.error && res.error.message); resolve(); return; }
+                const dialog = res.value;
+                const reply = (o) => { try { dialog.messageChild(JSON.stringify(o)); } catch (e) { console.error(e); } };
+                const done = () => { try { dialog.close(); } catch (e) { /* ya cerrado */ } resolve(); };
+                dialog.addEventHandler(Office.EventType.DialogMessageReceived, async (arg) => {
+                    let p;
+                    try { p = JSON.parse(arg.message); } catch (e) { return; }
+                    if (p.type === "ready") { reply({ type: "init", reports, active: activeReportIdOrNull() }); return; }
+                    if (p.type === "create") {
+                        try { createdId = await dracoCreateLinkedReport(Number(p.mainId), p.axis); done(); }
+                        catch (e) { reply({ type: "error", message: (e && e.message) || String(e) }); }
+                        return;
+                    }
+                    if (p.type === "close") done();
+                });
+                dialog.addEventHandler(Office.EventType.DialogEventReceived, () => resolve());
+            });
+        });
+        if (createdId !== null) {
+            try {
+                await Office.addin.showAsTaskpane();
+                if (window.mostrarVistaEpm) window.mostrarVistaEpm("view-informes");
+            } catch (e) { console.warn("[Draco] Informe vinculado creado; no se pudo abrir el diseñador:", e); }
+        }
+    } catch (error) {
+        console.error("Error al crear el informe vinculado:", error);
+        await surfaceErrorToSheet(error);
+    } finally {
+        dracoLinkDialogOpen = false;
+        if (event) event.completed();
+    }
+}
+
 async function actualizarUnInforme(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
+    // Informes vinculados: refrescar uno refresca el grupo (primero el principal)
+    const groupMain = dracoLinkGroupMain(reportId);
+    if (groupMain !== null) return await actualizarGrupoVinculado(groupMain);
     // Tres modos (ver dracoReportMode): Fijo, Híbrido o Dinámico.
     const mode = await Excel.run(async (context) => {
         const grid = await getEditReportGrid(context, reportId);
@@ -9404,6 +9811,7 @@ async function actualizarTodosCore(concurrency) {
 
     const dynamicJobs = [];
     const fixedReports = [];
+    const linkGroups = [];   // principales con informes vinculados: se refrescan al final, como grupo
 
     // 1) Clasificar cada informe (Fijo/Dinámico, según H12/N12 de su
     //    propio grid) y, para los Dinámicos, construir ya su SQL: es
@@ -9412,6 +9820,8 @@ async function actualizarTodosCore(concurrency) {
     for (const r of reports) {
         try {
             const reportId = r.id;
+            if (dracoLinkMainId(reportId) !== null) continue;                     // vinculado: va con su principal
+            if (dracoLinkedOf(reportId).length) { linkGroups.push(reportId); continue; }
             if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Clasificando informe"));
             const mode = await Excel.run(async (context) => {
                 const grid = await getEditReportGrid(context, reportId);
@@ -9507,6 +9917,16 @@ async function actualizarTodosCore(concurrency) {
             else await actualizarInformeFixedCore(f.reportId);
         } catch (err) {
             console.error(`[Draco] Error actualizando el informe "${f.reportName}" (modo ${f.mode === "hybrid" ? "híbrido" : "fijo"}):`, err);
+        }
+    }
+
+
+    // Informes vinculados: cada principal con sus vinculados, como grupo
+    for (const mainId of linkGroups) {
+        try {
+            await dracoRefreshLinkGroup(mainId);
+        } catch (err) {
+            console.error(`[Draco] Error actualizando los informes vinculados del informe ${mainId}:`, err);
         }
     }
 
@@ -11230,6 +11650,7 @@ try {
     Office.actions.associate("copiarInforme", copiarInforme);
     Office.actions.associate("pegarInforme", pegarInforme);
     Office.actions.associate("eliminarInforme", eliminarInforme);
+    Office.actions.associate("crearInformeVinculado", crearInformeVinculado);   // botón pendiente de añadir al manifest
 } catch (e) {
     console.warn("Office.actions.associate no disponible en este contexto:", e);
 }
