@@ -971,9 +971,14 @@ function gridAxes(ticks,y,L,Rr,W,H,B,xs,xAt,R){
   xs.forEach(function(lb,i){ if(i%step===0) g+='<text x="'+xAt(i).toFixed(1)+'" y="'+(H-B+18)+'" text-anchor="middle">'+esc(lb)+'</text>'; });
   return g;
 }
+/* cifra corta para las etiquetas de los gr\u00E1ficos: 1,2 M \u00B7 850 K \u00B7 12,5 */
+function fmtLbl(v,dec){ var a=Math.abs(v); if(a>=1e6) return fmt(v/1e6,a>=1e8?0:1)+' M'; if(a>=1e4) return fmt(v/1e3,0)+' K'; return fmt(v,dec); }
 function chLine(R,bid,isBar){
-  var W=PW,H=Math.round(Math.max(CHMIN,Math.min(CHMAX,PW*0.46))),L=PW<380?40:50,Rr=12,T=14,B=30,xs=R.xs,n=xs.length;
+  var LBL=(R.c&&(R.c.labels==='all'||R.c.labels==='last'))?R.c.labels:'';
+  var W=PW,H=Math.round(Math.max(CHMIN,Math.min(CHMAX,PW*0.46))),L=PW<380?40:50,Rr=12,T=LBL?28:14,B=30,xs=R.xs,n=xs.length;
   var vis=R.series.filter(function(s){ return !hidden(bid,s.name); }), ticks=axesOf(vis,isBar);
+  var lblOn=function(s,i){ if(!LBL) return false; if(LBL==='all') return true; for(var q=s.values.length-1;q>=0;q--) if(isFinite(s.values[q])) return q===i; return false; };
+  var lblTxt=function(x,yy,txt,col,anchor,rot){ return '<text class="ch-lbl" x="'+x.toFixed(1)+'" y="'+yy.toFixed(1)+'" text-anchor="'+(anchor||'middle')+'"'+(rot?' transform="rotate(-90 '+x.toFixed(1)+' '+yy.toFixed(1)+')"':'')+(col?' style="fill:'+col+'"':'')+'>'+esc(txt)+'</text>'; };
   if(!ticks) return legendHtml(R,bid)+'<div class="empty">Sin series visibles.</div>';
   L=axisL(ticks,L);
   var lo=ticks[0], hi=ticks[ticks.length-1];
@@ -990,6 +995,15 @@ function chLine(R,bid,isBar){
       out+='<path d="'+d+'" fill="none" stroke="'+col+'" stroke-width="'+(si===0?2.6:2)+'" stroke-linecap="round" stroke-linejoin="round"'+(s.dashed?' stroke-dasharray="5 4" opacity=".85"':'')+'/>';
       s.values.forEach(function(v,i){ if(isFinite(v)) out+='<circle cx="'+xAt(i).toFixed(1)+'" cy="'+y(v).toFixed(1)+'" r="3" fill="'+col+'"><title>'+esc(s.name+' \u00B7 '+xs[i]+': '+fmt(v,R.dec)+uS(R.unit))+'</title></circle>'; });
     });
+    /* cifras: encima del punto; si dos series quedan muy juntas en el mismo punto, la de abajo lleva la cifra debajo */
+    if(LBL) xs.forEach(function(lb,i){
+      var pts=[]; R.series.forEach(function(s,si){ if(!hidden(bid,s.name)&&isFinite(s.values[i])&&lblOn(s,i)) pts.push({si:si,v:s.values[i],yy:y(s.values[i])}); });
+      pts.sort(function(a,b2){ return a.yy-b2.yy; }); var prev=-99;
+      pts.forEach(function(p){ var up=(p.yy-prev>=15)||p.yy+16>H-B, ly=up?p.yy-8:p.yy+15; if(ly<11) ly=p.yy+15; prev=up?p.yy:p.yy+15;
+        /* en los extremos, hacia dentro (si no, se sale del gr\u00E1fico o pisa el eje) */
+        var x=xAt(i), anc=(n>1&&i===n-1)?'end':((n>1&&i===0)?'start':'middle'); if(anc==='end') x+=4; else if(anc==='start') x-=4;
+        out+=lblTxt(x,ly,fmtLbl(p.v,R.dec)+(R.unit==='%'?'%':''),PAL[p.si%6],anc); });
+    });
     /* franjas invisibles por categor\u00EDa: al pasar por encima, tooltip con el valor de TODAS las series */
     var bw2=n>1?(W-L-Rr)/(n-1):(W-L-Rr);
     xs.forEach(function(lb,i){
@@ -999,16 +1013,21 @@ function chLine(R,bid,isBar){
   } else {
     var band=(W-L-Rr)/n, xb=function(i){ return L+band*i+band/2; };
     out=gridAxes(ticks,y,L,Rr,W,H,B,xs,xb,R);
-    var gw=band*0.72, nv=Math.max(1,vis.length), bw=gw/nv, k=0;
+    var gw=band*0.72, nv=Math.max(1,vis.length), bw=gw/nv, k=0, lbls='';
     R.series.forEach(function(s,si){
       if(hidden(bid,s.name)) return;
       s.values.forEach(function(v,i){
         if(!isFinite(v)) return;
         var x=L+band*i+(band-gw)/2+k*bw, yy=y(Math.max(v,0)), h=Math.abs(y(0)-y(v));
         out+='<rect x="'+x.toFixed(1)+'" y="'+yy.toFixed(1)+'" width="'+Math.max(1,bw-3).toFixed(1)+'" height="'+h.toFixed(1)+'" rx="4" fill="'+PAL[si%6]+'"><title>'+esc(s.name+' \u00B7 '+xs[i]+': '+fmt(v,R.dec)+uS(R.unit))+'</title></rect>';
+        if(lblOn(s,i)){ var tx=fmtLbl(v,R.dec)+(R.unit==='%'?'%':''), cx=x+Math.max(1,bw-3)/2, fits=tx.length*6.2<=bw+6;
+          /* si no cabe en horizontal, en vertical sobre la barra */
+          if(fits) lbls+=lblTxt(cx,v>=0?yy-5:yy+h+13,tx,'');
+          else lbls+=lblTxt(cx+3.5,v>=0?yy-5:yy+h+5,tx,'',v>=0?'start':'end',true); }
       });
       k++;
     });
+    out+=lbls;
   }
   return legendHtml(R,bid)+frame(out,W,H,'');
 }
@@ -1195,22 +1214,31 @@ function dtLoad(id,force){
 }
 function dtLum(hex){ var m=/^#?([0-9a-f]{6})$/i.exec(hex||''); if(!m) return 1; var n=parseInt(m[1],16); return (0.2126*((n>>16)&255)+0.7152*((n>>8)&255)+0.0722*(n&255))/255; }
 function dxIcon(ic){ var n=ic.k==='signs'?['Rombo rojo','Tri\u00E1ngulo \u00E1mbar','C\u00EDrculo verde'][ic.i]:['Rojo','\u00C1mbar','Verde'][ic.i]; return '<span class="dx-ic dx-ic-'+(ic.k==='signs'?'s':'t')+Math.max(0,Math.min(2,ic.i|0))+'" role="img" aria-label="'+n+'" title="'+n+'"></span>'; }
-function dtGridHtml(g){
+/* theme=true: estilo del tema (como las tablas de la p\u00E1gina): sin rellenos de color ni bordes de Excel, cabecera de
+   columnas como las de la p\u00E1gina, cifras siempre a la derecha (y su t\u00EDtulo de columna tambi\u00E9n). */
+function dtGridHtml(g,theme){
   if(!g||!g.rows||!g.cols) return '<div class="tu-state">El informe no ha devuelto datos.</div>';
   var cov={}, anc={}, i, j, k, h='<table class="dt-grid"><tbody>';
+  var isNum=function(o){ var t=(o.t!=null)?o.t:(o.v==null?'':String(o.v)); return o.v!=null&&typeof o.v==='number'||(o.t!=null&&/^[-+\u2212]?[\d.,\s]+%?$/.test(String(o.t).trim())&&/\d/.test(String(o.t)))||/^-?\d+(\.\d+)?$/.test(t); };
+  var hdrRows=0, numCol={};
+  if(theme){
+    for(i=0;i<g.rows;i++){ var dataRow=false; for(j=0;j<g.cols;j++){ var oo=g.cells[i+'_'+j]; if(oo&&!oo.bg&&isNum(oo)){ dataRow=true; numCol[j]=1; } } if(!dataRow&&!Object.keys(numCol).length) hdrRows=i+1; }
+  }
   (g.merges||[]).forEach(function(m){ anc[m.r+'_'+m.c]=m; for(var r=m.r;r<m.r+(m.rowSpan||1);r++) for(var c=m.c;c<m.c+(m.colSpan||1);c++) if(r!==m.r||c!==m.c) cov[r+'_'+c]=1; });
   for(i=0;i<g.rows;i++){
     h+='<tr>';
     for(j=0;j<g.cols;j++){
       k=i+'_'+j; if(cov[k]) continue;
       var o=g.cells[k]||{}, m=anc[k], txt=(o.t!=null)?o.t:(o.v==null?'':String(o.v)), cls=[], st=[];
-      if(o.bg) cls.push(dtLum(o.bg)<0.935?'dt-h1':'dt-h2');
+      if(theme){ if(i<hdrRows) cls.push('dt-ch'); else if(o.bg) cls.push('dt-rh'); }
+      else if(o.bg) cls.push(dtLum(o.bg)<0.935?'dt-h1':'dt-h2');
       if(o.b) cls.push('dt-b'); if(o.i) cls.push('dt-i'); if(o.u) cls.push('dt-u');
       var num=(o.t!=null)||/^-?\d+(\.\d+)?$/.test(txt), al=o.al||((num&&!o.bg)?'right':'left');
+      if(theme){ if(i<hdrRows) al=numCol[j]?'right':'left'; else if(!o.bg&&isNum(o)) al='right'; }
       st.push('text-align:'+(al==='center'?'center':(al==='right'?'right':'left')));
       if(o.ind) st.push('padding-left:'+(10+o.ind*16)+'px');
       if(o.bar){ st.push(o.bar); if(o.only) st.push('color:transparent'); }
-      if(o.bd){ if(o.bd.t) st.push('border-top:1px solid var(--line)'); if(o.bd.r) st.push('border-right:1px solid var(--line)'); if(o.bd.b) st.push('border-bottom:1px solid var(--line)'); if(o.bd.l) st.push('border-left:1px solid var(--line)'); }
+      if(o.bd&&!theme){ if(o.bd.t) st.push('border-top:1px solid var(--line)'); if(o.bd.r) st.push('border-right:1px solid var(--line)'); if(o.bd.b) st.push('border-bottom:1px solid var(--line)'); if(o.bd.l) st.push('border-left:1px solid var(--line)'); }
       var tg=/^[\u25B8\u25BE] /.test(txt); if(tg) cls.push('dt-tg');
       /* icono de formato condicional (sem\u00E1foro / se\u00F1ales): a la izquierda de la celda, como en Excel */
       var icH=o.ic?dxIcon(o.ic):'', txtH=(o.ic&&o.ic.only)?'':esc(txt);
@@ -1239,7 +1267,8 @@ function dtTableHtml(b,res,extra){
   var head=b.title?'<div class="tu-head"><h3>'+esc(tok(b.title))+'</h3>'+(res.desfasado?'<span class="dt-warn" title="El cubo cambi\u00F3 despu\u00E9s de generar el SQL de esta tabla">SQL desfasado</span>':'')+'</div>':'';
   var bar='';
   var warn=res.desfasado?'<div class="tu-msg tu-info" role="status">El modelo del cubo ha cambiado desde que se gener\u00F3 el SQL de esta tabla. \u00C1brela en el dise\u00F1ador y gu\u00E1rdala para regenerarlo.</div>':'';
-  return head+bar+(extra||'')+warn+'<div class="tu-wrap dt-wrap"'+(mh>0?' style="max-height:'+mh+'px"':'')+'>'+dtGridHtml(g)+'</div>';
+  var excel=(b.look==='excel');   /* por defecto, con el estilo del tema; \u00ABComo en el dise\u00F1ador\u00BB = colores y bordes de Excel */
+  return head+bar+(extra||'')+warn+'<div class="'+(excel?'tu-wrap ':'')+'dt-wrap'+(excel?'':' dt-theme')+'"'+(mh>0?' style="max-height:'+mh+'px"':'')+'>'+dtGridHtml(g,!excel)+'</div>';
 }
 function dtRender(id){
   var el=dtEl(id), st=DTS[id], b=DTB[id]; if(!el||!st) return;
@@ -1574,6 +1603,7 @@ function dcChartHtml(id){
   if(D.error) return dcCard(b,res,'<div class="tu-state">'+esc(D.error)+'</div>');
   var kind=b.kind||'bar', cb={type:'chart',kind:kind,title:dcTitle(b,res),subtitle:b.subtitle,insight:b.insight,unit:b.unit||''};
   if(b.decimals!==undefined&&b.decimals!==''&&b.decimals!==null) cb.decimals=parseInt(b.decimals,10);
+  if(b.labels) cb.labels=b.labels;
   if(kind==='line'||kind==='bar'){ cb.x=D.xs; cb.series=D.series; }
   else {
     var si=Math.max(0,Math.min(D.series.length-1,(parseInt(b.seriesIndex,10)||1)-1)), s=D.series[si];
@@ -1689,9 +1719,10 @@ function tuGridHtml(st){
   }).join('');
   var filt=M.fields.map(function(f){ return '<th class="tu-fh"><input type="text" class="tu-flt" data-f="'+esc(f.name)+'" placeholder="Filtrar\u2026" value="'+esc(st.filters[f.name]||'')+'"></th>'+(f.validation&&f.validation.showText?'<th class="tu-fh tu-desc"></th>':''); }).join('');
   var body=vis.map(function(r){
-    return '<tr data-r="'+r.__id+'" class="'+tuRowCls(st,r).trim()+'"><td class="tu-c0">'+(M.fixed?'':'<input type="checkbox" class="tu-chk" data-r="'+r.__id+'"'+(st.sel[r.__id]?' checked':'')+' aria-label="Seleccionar fila">')+'</td>'+M.fields.map(function(f){ return tuCell(st,r,f); }).join('')+'<td class="tu-cx">'+(M.fixed?'':'<button type="button" class="tu-x" data-tu-act="rowdel" data-r="'+r.__id+'" title="Eliminar fila" aria-label="Eliminar fila">\u2715</button>')+'</td></tr>';
+    return '<tr data-r="'+r.__id+'" class="'+tuRowCls(st,r).trim()+'">'+(st.lean?'':'<td class="tu-c0">'+(M.fixed?'':'<input type="checkbox" class="tu-chk" data-r="'+r.__id+'"'+(st.sel[r.__id]?' checked':'')+' aria-label="Seleccionar fila">')+'</td>')+M.fields.map(function(f){ return tuCell(st,r,f); }).join('')+(st.lean?'':'<td class="tu-cx">'+(M.fixed?'':'<button type="button" class="tu-x" data-tu-act="rowdel" data-r="'+r.__id+'" title="Eliminar fila" aria-label="Eliminar fila">\u2715</button>')+'</td>')+'</tr>';
   }).join('');
-  return '<table class="tu-grid"><thead><tr><th class="tu-c0">'+(M.fixed?'':'<input type="checkbox" class="tu-all"'+(allSel?' checked':'')+' aria-label="Seleccionar todas">')+'</th>'+head+'<th class="tu-cx"></th></tr><tr class="tu-frow"><th class="tu-c0"></th>'+filt+'<th class="tu-cx"></th></tr></thead><tbody>'+body+'</tbody></table>'
+  var bare=!!st.lean;
+  return '<table class="tu-grid"><thead><tr>'+(bare?'':'<th class="tu-c0">'+(M.fixed?'':'<input type="checkbox" class="tu-all"'+(allSel?' checked':'')+' aria-label="Seleccionar todas">')+'</th>')+head+(bare?'':'<th class="tu-cx"></th>')+'</tr><tr class="tu-frow">'+(bare?'':'<th class="tu-c0"></th>')+filt+(bare?'':'<th class="tu-cx"></th>')+'</tr></thead><tbody>'+body+'</tbody></table>'
     +(flt.length>vis.length?'<div class="tu-more"><button type="button" class="tu-btn" data-tu-act="more">Mostrar m\u00E1s ('+(flt.length-vis.length)+' restantes)</button></div>':'');
 }
 /* ---- tabla multidimensional: los campos de Filas y Columnas son los ejes; el Valor se edita en cada cruce ---- */
@@ -1756,14 +1787,20 @@ function tuRender(id){
   if(st.status==='loading'){ el.innerHTML=head+'<div class="tu-state"><span class="tu-spin"></span> Cargando datos\u2026</div>'; return; }
   if(st.status==='error'){ el.innerHTML=head+'<div class="tu-state tu-bad">'+esc(tuErrText(st.err))+'<div class="tu-retry"><button type="button" class="tu-btn" data-tu-act="retry">Reintentar</button></div></div>'; return; }
   var oldW=el.querySelector('.tu-wrap'), sT=oldW?oldW.scrollTop:0, sL=oldW?oldW.scrollLeft:0;
-  var flt=tuFiltered(st), nsel=Object.keys(st.sel).filter(function(k){ return st.sel[k]; }).length, tools=(b.tools!=='no'), mh=parseInt(b.maxHeight,10);
+  var flt=tuFiltered(st), nsel=Object.keys(st.sel).filter(function(k){ return st.sel[k]; }).length, tools=(b.tools!=='no'&&b.tools!=='save'), mh=parseInt(b.maxHeight,10);
+  /* "Solo Grabar": sin barra ni columnas de seleccionar / borrar; el bot\u00F3n Grabar va a la altura del t\u00EDtulo */
+  var lean=(b.tools==='save'); st.lean=lean;
+  var saveBtn='<button type="button" class="tu-btn tu-pri'+(lean?' tu-hsave':'')+'" data-tu-act="save"'+(st.busy?' disabled':'')+'>'+(st.busy?'Grabando\u2026':'Grabar')+'</button>';
+  if(lean) head=head.replace(/<\/div>$/,saveBtn+'</div>');
   var bar='<div class="tu-bar">'+(tools&&!st.meta.fixed?'<button type="button" class="tu-btn" data-tu-act="add">+ A\u00F1adir fila</button>':'')+(tools?'<button type="button" class="tu-btn" data-tu-act="exp-csv">Exportar CSV</button><button type="button" class="tu-btn" data-tu-act="exp-xlsx">Exportar Excel</button><button type="button" class="tu-btn" data-tu-act="import">Importar archivo</button>':'')
     +'<button type="button" class="tu-btn" data-tu-act="reload" title="Volver a leer la tabla">\u21BB Recargar</button>'
     +'<button type="button" class="tu-btn tu-danger" data-tu-act="delsel"'+(nsel&&!st.meta.fixed?'':' hidden')+'>\uD83D\uDDD1 Eliminar seleccionadas ('+nsel+')</button>'
-    +'<span class="tu-count">'+(st.meta.pivot?(function(){ var q=tuPvCounts(st); return q.rows+' fila(s) \u00D7 '+q.cols+' columna(s)'; })():flt.length+' de '+st.rows.length+' fila(s)')+(st.meta.fixed?' \u00B7 filas fijas':'')+'</span><span class="tu-sp"></span><button type="button" class="tu-btn tu-pri" data-tu-act="save"'+(st.busy?' disabled':'')+'>'+(st.busy?'Grabando\u2026':'Grabar')+'</button>'
+    +'<span class="tu-count">'+(st.meta.pivot?(function(){ var q=tuPvCounts(st); return q.rows+' fila(s) \u00D7 '+q.cols+' columna(s)'; })():flt.length+' de '+st.rows.length+' fila(s)')+(st.meta.fixed?' \u00B7 filas fijas':'')+'</span><span class="tu-sp"></span>'+saveBtn
     +'<input type="file" class="tu-file" accept=".csv,.xlsx,.xls" hidden></div>';
-  var msg=st.msg?'<div class="tu-msg tu-'+st.msg.kind+'" role="status">'+esc(st.msg.text)+'</div>':'';
+  /* los mensajes (grabado, sin cambios, errores...) salen como aviso flotante que se oculta solo */
+  var msg=''; if(st.msg){ tuToast(st.msg.text,st.msg.kind); st.msg=null; }
   var body=st.rows.length?(st.meta.pivot?tuPivotHtml(st):tuGridHtml(st)):'<div class="tu-state">No hay datos en esta tabla'+(tools&&!st.meta.fixed?'. Usa \u00AB+ A\u00F1adir fila\u00BB para empezar a cargar registros':'')+'.</div>';
+  if(lean) bar='';
   el.innerHTML=head+bar+msg+'<div class="tu-wrap"'+(mh>0?' style="max-height:'+mh+'px"':'')+'>'+body+'</div>';
   var nw=el.querySelector('.tu-wrap'); if(nw){ nw.scrollTop=sT; nw.scrollLeft=sL; }
 }
@@ -1794,6 +1831,17 @@ function tuCheck(st){
   return '';
 }
 function tuRowsOut(st){ return st.rows.map(function(r){ return st.meta.columns.map(function(c){ return r[c]==null?'':r[c]; }); }); }
+/* Aviso flotante (abajo a la derecha, con los colores del tema): se oculta solo; los errores duran m\u00E1s y se
+   pueden cerrar. Se apilan si llegan varios. */
+function tuToast(text,kind){
+  var box=document.getElementById('tu-toasts');
+  if(!box){ box=document.createElement('div'); box.id='tu-toasts'; box.setAttribute('aria-live','polite'); document.body.appendChild(box); }
+  var t=document.createElement('div'); t.className='tu-toast tu-t-'+(kind||'info'); t.setAttribute('role',kind==='bad'?'alert':'status');
+  t.innerHTML='<span>'+esc(text)+'</span><button type="button" aria-label="Cerrar">\u2715</button>';
+  var bye=function(){ if(t._gone) return; t._gone=1; t.classList.add('tu-t-out'); setTimeout(function(){ t.remove(); },260); };
+  t.querySelector('button').onclick=bye; box.appendChild(t);
+  setTimeout(bye,kind==='bad'?9000:3200);
+}
 function tuDialog(id,html){ tuDialogClose(); var d=document.createElement('div'); d.className='tu-modal'; d.setAttribute('data-tu-for',id); d.innerHTML='<div class="tu-mbox" role="dialog" aria-modal="true">'+html+'</div>'; document.body.appendChild(d); var f=d.querySelector('input,button.tu-pri'); if(f) try{ f.focus(); }catch(e){} }
 function tuDialogClose(){ [].forEach.call(document.querySelectorAll('.tu-modal'),function(d){ d.remove(); }); }
 function tuSave(id){
@@ -1812,9 +1860,8 @@ function tuCommit(id){
   dcall('tu.commit',{ref:b.ref,values:b.values||{},rows:tuRowsOut(st)}).then(function(p){
     st.busy=false; st.dirty=false; st.imported=false; st.nMod=0; st.nNew=0; st.nDel=0; st.dup={}; st.orig={};
     st.rows.forEach(function(r){ r.__new=false; r.__mod=false; st.orig[r.__id]=tuCopy(r,st.meta.columns); });
-    st.msg={kind:'ok',text:'Cambios grabados correctamente.'}; tuRender(id);
-    var list=function(t,a){ return a.length?'<h5>'+t+'</h5>'+a.map(function(k){ return '<div class="tu-srow">'+esc(k)+'</div>'; }).join(''):''; };
-    tuDialog(id,'<h4>Resumen de cambios</h4><p>\u2714 '+p.added+' fila(s) a\u00F1adida(s)<br>\u270E '+p.modified+' fila(s) modificada(s)<br>\uD83D\uDDD1 '+p.deleted+' fila(s) eliminada(s)</p><div class="tu-detail" hidden>'+list('A\u00F1adidas',p.addedKeys)+list('Modificadas',p.modifiedKeys)+list('Eliminadas',p.deletedKeys)+'</div><div class="tu-mact"><button type="button" class="tu-btn" data-tu-act="dlg-detail">Ver detalle</button><button type="button" class="tu-btn tu-pri" data-tu-act="dlg-close">Cerrar</button></div>');
+    var parts=[]; if(p.added) parts.push(p.added+' alta(s)'); if(p.modified) parts.push(p.modified+' modificaci\u00F3n(es)'); if(p.deleted) parts.push(p.deleted+' baja(s)');
+    st.msg={kind:'ok',text:'\u2714 Grabado'+(parts.length?': '+parts.join(' \u00B7 '):'')}; tuRender(id);
   },function(err){ st.busy=false; st.msg={kind:'bad',text:tuErrText(err)}; tuRender(id); });
 }
 function tuSearch(id,rid,field){
@@ -3061,6 +3108,9 @@ tr[data-act="cross"]{cursor:pointer}tr[data-act="cross"]:hover td{background:col
 .dt-wrap{overflow:auto}.dt-grid{border-collapse:collapse;font-size:14px;width:max-content;min-width:100%}
 .dt-grid td{padding:6px 12px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--ink);font-variant-numeric:tabular-nums}
 .dt-grid td.dt-h1{background:color-mix(in srgb,var(--brand) 9%,var(--bg));font-weight:700}
+.dt-theme .dt-grid td.dt-ch{font-size:12px;font-weight:600;color:var(--muted);border-bottom:1.5px solid var(--line);vertical-align:bottom;white-space:nowrap}
+.dt-theme .dt-grid td.dt-rh{color:var(--ink)}
+.dt-theme .dt-grid tr:last-child td{border-bottom:none}
 .dt-grid td.dt-h2{background:var(--bg);font-weight:600;color:var(--muted)}
 .dt-grid td.dt-b{font-weight:700}.dt-grid td.dt-i{font-style:italic}.dt-grid td.dt-u{text-decoration:underline}
 .dt-grid td.dt-tg{cursor:pointer;user-select:none}.dt-grid td.dt-tg:hover{background:color-mix(in srgb,var(--brand) 14%,var(--bg))}
@@ -3068,6 +3118,13 @@ tr[data-act="cross"]{cursor:pointer}tr[data-act="cross"]:hover td{background:col
 .tu-msg.tu-info{border-color:#f0d58a;background:#fff8e1;color:#6b4a00}
 /* ---- Actualizaci\u00F3n de tablas (bloque tableUpdate) ---- */
 .tu{padding:clamp(16px,2vw,24px)}
+.tu-head .tu-hsave{margin-left:auto;align-self:center}.tu-head .tu-dirty:not([hidden])+.tu-hsave{margin-left:10px}.tu-head:has(.tu-hsave){align-items:center}
+#tu-toasts{position:fixed;right:20px;bottom:20px;z-index:500;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none}
+.tu-toast{pointer-events:auto;display:flex;align-items:center;gap:12px;max-width:min(440px,90vw);padding:11px 12px 11px 16px;border-radius:var(--rb,10px);background:var(--surface);color:var(--ink);border:1px solid var(--line);border-left:4px solid var(--brand);box-shadow:0 14px 34px -14px rgba(15,23,42,.35);font:600 14px/1.4 var(--font);animation:tutin .22s ease}
+.tu-toast.tu-t-ok{border-left-color:var(--good)}.tu-toast.tu-t-bad{border-left-color:var(--bad)}
+.tu-toast button{border:none;background:none;color:var(--muted);cursor:pointer;font-size:13px;padding:2px 4px;border-radius:6px}.tu-toast button:hover{color:var(--ink)}
+.tu-toast.tu-t-out{opacity:0;transform:translateY(6px);transition:opacity .25s,transform .25s}
+@keyframes tutin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
 .tu-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:14px}.tu-head h3{margin:0}
 .tu-sub{color:var(--muted);font-size:13px}
 .tu-dirty{margin-left:auto;font-size:12.5px;font-weight:700;color:var(--brand);background:color-mix(in srgb,var(--brand) 10%,transparent);padding:3px 11px;border-radius:999px}
@@ -3082,9 +3139,10 @@ tr[data-act="cross"]{cursor:pointer}tr[data-act="cross"]:hover td{background:col
 .tu-msg.tu-ok{border-color:var(--good);background:color-mix(in srgb,var(--good) 9%,transparent)}.tu-msg.tu-bad{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 9%,transparent)}
 .tu-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px}
 .tu-grid{width:100%;border-collapse:separate;border-spacing:0;min-width:max-content}
-.tu-grid th{position:sticky;top:0;z-index:2;background:var(--bg);text-align:left;font-size:12.5px;font-weight:700;color:var(--muted);padding:10px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.tu-grid thead{position:sticky;top:0;z-index:2}.tu-pivot thead{position:static}
+.tu-grid th{background:var(--bg);text-align:left;font-size:12.5px;font-weight:700;color:var(--muted);padding:10px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 .tu-th{cursor:pointer;user-select:none}.tu-th:hover{color:var(--ink)}.tu-key{font-style:normal;color:var(--brand);font-size:9px;vertical-align:middle}
-.tu-grid .tu-frow th{top:38px;padding:5px 8px;font-weight:400;z-index:1}
+.tu-grid .tu-frow th{padding:5px 8px;font-weight:400}
 .tu-grid td{padding:3px 6px;border-bottom:1px solid var(--line);white-space:nowrap;color:var(--text)}
 .tu-grid tbody tr:last-child td{border-bottom:none}
 .tu-c0{width:34px;text-align:center}.tu-cx{width:34px;text-align:center}
@@ -3114,7 +3172,7 @@ input.tu-in[type=checkbox]{width:auto;min-width:0}
 .tu-sq{width:100%;font:inherit;font-size:14px;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:9px 12px;margin-bottom:10px}
 .tu-sres{max-height:320px;overflow:auto}.tu-sitem{padding:8px 10px;border-radius:8px;cursor:pointer;font-size:14px}.tu-sitem:hover{background:color-mix(in srgb,var(--brand) 9%,transparent)}
 .tu-srow{font-size:13.5px;padding:2px 0;color:var(--text)}
-.chart svg{width:100%;height:auto;display:block}.chart text{fill:var(--muted);font-size:11px;font-family:var(--font)}
+.chart svg{width:100%;height:auto;display:block}.chart text.ch-lbl{font-size:10.5px;font-weight:600;fill:var(--ink);paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round;pointer-events:none}.chart text{fill:var(--muted);font-size:11px;font-family:var(--font)}
 .legend{display:flex;gap:6px;flex-wrap:wrap;font-size:13px;margin-bottom:12px}
 .lg{display:inline-flex;align-items:center;gap:7px;color:var(--text);background:none;border:1px solid transparent;border-radius:8px;padding:3px 9px;font:inherit;font-size:13px;cursor:pointer}.lg:hover{border-color:var(--line)}.lg.off{opacity:.4;text-decoration:line-through}.lg i{width:10px;height:10px;border-radius:3px;display:inline-block}
 .donut{display:flex;align-items:center;gap:26px;flex-wrap:wrap}.donut svg{width:190px;flex-shrink:0}.donut ul{list-style:none;margin:0;padding:0;flex:1;min-width:170px;display:flex;flex-direction:column;gap:6px}
@@ -3409,7 +3467,18 @@ function viewCss(){
    ['B',0,'.co','padding:22px 24px','padding:14px 16px','padding:10px 12px'],
    ['B',0,'.co p','font-size:15px','font-size:14px',null],
    ['B',0,'.txt p','font-size:15.5px','font-size:14.5px',null],
-   ['B',0,'.hb-r','padding:6px 8px;font-size:14px','padding:3px 6px;font-size:13px','padding:2px 6px;font-size:13px']
+   ['B',0,'.hb-r','padding:6px 8px;font-size:14px','padding:3px 6px;font-size:13px','padding:2px 6px;font-size:13px'],
+   /* Actualizar tabla: los controles de dentro de las celdas tambi\u00E9n se compactan (si no, la lista con campos,
+      desplegables y lupa sal\u00EDa mucho m\u00E1s alta que la matriz con casillas). Normal = sus valores de siempre. */
+   ['B',0,'.tu-head','margin-bottom:14px','margin-bottom:10px','margin-bottom:6px'],
+   ['B',0,'.tu-bar','margin-bottom:12px','margin-bottom:10px','margin-bottom:6px'],
+   ['B',0,'.tu-btn','font-size:13.5px;padding:8px 14px','font-size:13px;padding:6px 12px','font-size:12.5px;padding:4px 10px'],
+   ['B',0,'.tu-in','font-size:14px;padding:7px 8px','font-size:13px;padding:3px 7px','font-size:12.5px;padding:1px 6px'],
+   ['B',0,'.tu-flt','font-size:12.5px;padding:5px 8px','font-size:12.5px;padding:4px 7px','font-size:12px;padding:1px 6px'],
+   ['B',0,'.tu-grid .tu-frow th','padding:5px 8px','padding:4px 6px','padding:2px 5px'],
+   ['B',0,'.tu-grid td.tu-ro','padding:6px 10px !important','padding:4px 8px !important','padding:2px 6px !important'],
+   ['B',0,'.tu-sbtn','font-size:14px;padding:4px','font-size:13px;padding:2px 3px','font-size:12px;padding:0 3px'],
+   ['B',0,'.tu-x','font-size:13px;padding:5px 7px','font-size:13px;padding:3px 6px','font-size:12px;padding:0 5px']
   ];
   var N=':not(.is-deck)', o='';
   function at(x){ return '[data-density="'+x+'"]'; }
@@ -4148,6 +4217,7 @@ function edChart(c){
     }
   } else if(isLitChart(c)) h+=edLitChart(c);
   else if(c.kind==='funnel') h+=edNote('Las etapas del embudo se editan en el JSON de la p\u00E1gina.');
+  if(c.kind==='line'||c.kind==='bar') h+=fSel('Mostrar las cifras','labels',c.labels||'',[['','No'],['all','En todos los puntos'],['last','Solo el \u00FAltimo de cada serie']]);
   else h+=edNote('Este gr\u00E1fico lleva sus cifras escritas a mano (sin datos): aqu\u00ED solo se editan los textos.');
   h+=fArea('Comentario bajo el gr\u00E1fico','insight',c.insight);
   if(Array.isArray(c.variants)&&c.variants.length) h+=edNote('Tiene '+c.variants.length+' vistas alternativas (botones). Se editan en el JSON.');
@@ -4489,6 +4559,7 @@ function edChange(el,structural){
     case 'limit': if(v==='') delete o.limit; else o.limit=Math.max(1,parseInt(v,10)||1); break;
     case 'share': case 'crossFilter': case 'search': if(v) o[key]=true; else delete o[key]; break;
     case 'total': if(v) delete o.total; else o.total=false; break;
+    case 'labels': if(v) o.labels=v; else delete o.labels; break;
   }
   edSync(structural); if(rebuild) edRender();
 }
@@ -5611,7 +5682,7 @@ function edTU(b){
   }
   return h+'<div class="insp-sec">Vista de actualización</div><div id="tuViewBox"><p class="insp-hint">Cargando las vistas del proyecto…</p></div><div id="tuVarsBox"></div>'
     +'<div class="insp-sec">Opciones de la tabla</div>'
-    +gSel('Añadir, importar y exportar','tools',b.tools||'',[['','Mostrar'],['no','Ocultar']])
+    +gSel('Botones','tools',b.tools||'',[['','Todos'],['no','Sin a\u00F1adir, importar ni exportar'],['save','Solo Grabar (junto al t\u00EDtulo)']])
     +gSel('Alto máximo de la tabla','maxHeight',b.maxHeight||'',[['','Según el contenido'],['320','320 px'],['480','480 px'],['640','640 px'],['800','800 px']]);
 }
 function tuPaintErr(boxId,e,retry){
@@ -5758,6 +5829,7 @@ function edDT(b){
   }
   return h+'<div class="insp-sec">Tabla Draco</div><div id="dtViewBox"><p class="insp-hint">Cargando las tablas del proyecto\u2026</p></div>'
     +'<div class="insp-sec">Opciones de la tabla</div>'
+    +gSel('Estilo','look',b.look||'',[['','Como el tema de la p\u00E1gina'],['excel','Como en el dise\u00F1ador (colores y bordes)']])
     +gSel('Alto m\u00E1ximo de la tabla','maxHeight',b.maxHeight||'',[['','Seg\u00FAn el contenido'],['320','320 px'],['480','480 px'],['640','640 px'],['800','800 px']]);
 }
 function dtAfterRender(){
@@ -6069,6 +6141,7 @@ function edDC(b){
     +'<div class="insp-sec">Formato</div>'
     +gText('Unidad','unit',b.unit,'Por ejemplo: \u20AC o %')
     +gSel('Decimales','decimals',(b.decimals===undefined||b.decimals===null)?'':String(b.decimals),[['','Autom\u00E1tico'],['0','0'],['1','1'],['2','2']])
+    +(single?'':gSel('Mostrar las cifras','labels',b.labels||'',[['','No'],['all','En todos los puntos'],['last','Solo el \u00FAltimo de cada serie']]))
     +'<div class="insp-sec">Lectura de la tabla</div>'
     +gSel('Filas de cabecera','headerRows',String(b.headerRows==null?'':b.headerRows),[['','Autom\u00E1tico'],['0','0'],['1','1'],['2','2'],['3','3']])
     +gSel('Columnas de etiquetas','labelCols',String(b.labelCols==null?'':b.labelCols),[['','Autom\u00E1tico'],['0','0'],['1','1'],['2','2'],['3','3']])
