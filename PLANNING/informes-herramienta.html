@@ -986,6 +986,13 @@ function chedApply(R,bid){
 }
 function chedNum(t){ t=String(t==null?'':t).trim().replace(/\s/g,'').replace(/\u2212/g,'-'); if(!t) return NaN; if(t.indexOf(',')>-1) t=t.replace(/\./g,'').replace(',','.'); else if(/^-?\d{1,3}(\.\d{3})+$/.test(t)) t=t.replace(/\./g,''); return Number(t); }
 function chedClose(){ var p=document.getElementById('ched-pop'); if(p) p.remove(); }
+/* Repinta SOLO el gr\u00E1fico tocado (su elemento [data-p] m\u00E1s cercano). Antes se repintaba toda la p\u00E1gina y las
+   Tablas Draco, \u00ABActualizar tabla\u00BB y Gr\u00E1ficos Draco se quedaban vac\u00EDas (se montan aparte, con datos de Draco). */
+var CHED_EL=null;
+function chedRepaint(el){
+  var p=el&&el.closest&&el.closest('[data-p]');
+  if(p&&document.body.contains(p)) paintEl(p); else update();
+}
 function chedOpen(bid,i,ev){
   var R=CHR[bid]; if(!R) return; chedClose();
   var x=R.xs[i], any=false;
@@ -995,6 +1002,7 @@ function chedOpen(bid,i,ev){
     return '<label class="ched-r"><i style="background:'+PAL[si%6]+'"></i><span>'+esc(s.name)+'</span><input type="text" inputmode="decimal" data-si="'+si+'" value="'+(isFinite(cur)?fmt(cur,R.dec):'')+'">'
       +(ed?'<small>Original: '+(isFinite(orig)?fmt(orig,R.dec):'\u2014')+'</small>':'')+'</label>';
   }).join('');
+  CHED_EL=ev.target;
   var p=document.createElement('div'); p.id='ched-pop'; p.className='ched-pop'; p.setAttribute('role','dialog'); p.setAttribute('data-b',bid); p.setAttribute('data-i',i);
   p.innerHTML='<div class="ched-h">'+esc(x)+'</div>'+rows
     +'<div class="ched-a">'+(any?'<button type="button" data-ched-act="undo">Restaurar</button>':'')+'<span class="sp"></span><button type="button" data-ched-act="cancel">Cancelar</button><button type="button" class="pri" data-ched-act="ok">Aplicar</button></div>'
@@ -1014,14 +1022,14 @@ function chedCommit(undo){
     if(undo||!isFinite(v)||v===orig) delete o[k]; else o[k]=v;
   });
   if(Object.keys(o).length) CHED[bid]=o; else delete CHED[bid];
-  chedClose(); paintAll();
+  chedClose(); chedRepaint(CHED_EL); CHED_EL=null;
 }
 document.addEventListener('click',function(e){
   var t=e.target, pop=document.getElementById('ched-pop');
   if(pop&&pop.contains(t)){ var a=t.closest('[data-ched-act]'); if(!a) return; var act=a.getAttribute('data-ched-act');
     if(act==='ok') chedCommit(false); else if(act==='undo') chedCommit(true); else chedClose(); return; }
   var rs=t.closest&&t.closest('[data-ched-reset]');
-  if(rs){ delete CHED[rs.getAttribute('data-ched-reset')]; chedClose(); paintAll(); return; }
+  if(rs){ delete CHED[rs.getAttribute('data-ched-reset')]; chedClose(); chedRepaint(rs); return; }
   if(pop) chedClose();
   var hit=t.closest&&t.closest('[data-ched]');
   if(hit&&!EDIT){ e.stopPropagation(); chedOpen(hit.getAttribute('data-ched-b'),+hit.getAttribute('data-ched'),e); }
@@ -1760,7 +1768,183 @@ document.addEventListener('click',function(e){
   var id=host.getAttribute('data-dc'); if(!DCS[id]) return;
   dcLoad(id,true); dcRender(id);
 });
-function tuMountAll(force){ [].forEach.call(document.querySelectorAll('.tu[data-tu]'),function(el){ if(force||!el.getAttribute('data-mounted')) tuMount(el); }); if(typeof dtMountAll==='function') dtMountAll(force); if(typeof dvMountAll==='function') dvMountAll(force); if(typeof dcMountAll==='function') dcMountAll(force); }
+/* ---------- Flujos de carga (bloque "flowRun") ----------
+   La pantalla de ejecuci\u00F3n de un flujo de Draco (variables + Ejecutar + Monitor), pintada con los estilos del
+   informe. Como \u00ABActualizar tabla\u00BB, la p\u00E1gina no toca la base de datos ni el storage: pide a Draco la
+   definici\u00F3n (fl.describe), lo lanza (fl.run, que valida, sube los ficheros y llama al orquestador) y consulta
+   el estado (fl.status). Estado fuera del DOM (FLS) para no perder lo tecleado si el motor repinta. */
+var FLS={}, FLB={};
+var FL_OPTS={
+  rango:[['BT','Entre'],['NB','No entre']],
+  multiple:[['EQ','Igual a'],['NE','Distinto de']],
+  cualquiera:[['EQ','Igual a'],['NE','Distinto de'],['GT','Mayor que'],['GE','Mayor o igual'],['LT','Menor que'],['LE','Menor o igual'],['BT','Entre'],['NB','No entre'],['CP','Contiene patr\u00F3n (*)'],['NP','No contiene patr\u00F3n']]
+};
+var FL_HTYPE={INTEGER:'number',FLOAT:'number',NUMERIC:'number',DATE:'date',DATETIME:'datetime-local',TIMESTAMP:'datetime-local'};
+var FL_EST={PENDIENTE:['Pendiente','pend'],EN_CURSO:['En ejecuci\u00F3n','run'],OK:['Completado','ok'],ERROR:['Error','bad']};
+function flTitle(b,st){ return b.title||(st&&st.def&&st.def.title)||b.refName||'Flujo de carga'; }
+function flNote(b){ return '<div class="card" data-block="flowRun">'+(b.title?'<h3 style="margin-bottom:10px">'+esc(tok(b.title))+'</h3>':'')+'<p class="tu-sub">'+esc('Flujo de carga'+(b.refName?' \u00AB'+b.refName+'\u00BB':'')+': se ejecuta y se sigue desde Draco Planning.')+'</p></div>'; }
+function flShell(b,id){ FLB[id]=b; return '<div class="card tu fl" data-fl="'+id+'" data-block="flowRun"></div>'; }
+function flMsg(b,text){ return '<div class="tu-head"><h3>'+esc(tok(flTitle(b)))+'</h3></div><p class="tu-sub">'+esc(text)+'</p>'; }
+function flMountAll(force){ [].forEach.call(document.querySelectorAll('.fl[data-fl]'),function(el){ if(force||!el.getAttribute('data-mounted')) flMount(el); }); }
+function flMount(el){
+  var id=el.getAttribute('data-fl'), b=FLB[id]; if(!b) return; el.setAttribute('data-mounted','1');
+  if(EDIT){ el.innerHTML=flMsg(b,'Flujo de carga'+(b.refName?' \u00AB'+b.refName+'\u00BB':'')+'. Pulsa \u00ABVista previa\u00BB para ver sus variables, ejecutarlo y seguir el monitor.'); return; }
+  if(!b.ref){ el.innerHTML=flMsg(b,'Elige el flujo de carga en las propiedades de este bloque.'); return; }
+  if(!HOSTON){ el.innerHTML=flMsg(b,'Este flujo se ejecuta y se sigue desde Draco Planning.'); return; }
+  var st=FLS[id];
+  if(!st||st.ref!==b.ref){ st=FLS[id]={ref:b.ref,status:'loading',view:b.view==='monitor'?'monitor':'screen',vals:{},sel:{},files:{},errors:[],busy:false,mon:null}; flLoad(id); }
+  flRender(id);
+  if(st.view==='monitor'&&st.status==='ready') flPoll(id,true);
+}
+function flLoad(id){
+  var st=FLS[id];
+  dcall('fl.describe',{ref:st.ref}).then(function(d){ if(FLS[id]!==st) return; st.def=d; st.status='ready'; flRender(id); if(st.view==='monitor') flPoll(id,true); },
+    function(err){ if(FLS[id]!==st) return; st.status='error'; st.err=err; flRender(id); });
+}
+function flEach(st,fn){ ((st.def&&st.def.blocks)||[]).forEach(function(bk){ if(bk.kind==='variable') fn(bk.variable); else if(bk.kind==='frame') (bk.blocks||[]).forEach(function(x){ if(x.kind==='variable') fn(x.variable); }); }); }
+function flVar(st,vid){ var f=null; flEach(st,function(v){ if(v.id===vid) f=v; }); return f; }
+function flRich(t){ return esc(t||'').replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/_(.+?)_/g,'<i>$1</i>').replace(/\n/g,'<br>'); }
+function flBad(st,vid,idx){ return (st.errors||[]).some(function(e){ return e.varId===vid&&(idx===undefined?e.scope!=='selopt':(e.scope==='selopt'&&e.idx===idx)); }); }
+/* caja de un valor: desplegable / casilla / buscador si la variable tiene lista de valores; si no, seg\u00FAn su tipo */
+function flBox(st,v,key,val){
+  var va=Object.assign({type:'NONE',allowEmpty:true,showText:false,searchHelp:'LISTBOX'},v.validation||{}), opts=(st.def.options||{})[v.id]||[];
+  var a=' data-fl-v="'+esc(v.name)+'" data-fl-k="'+key+'" data-fl-id="'+esc(v.id)+'"'+(flBad(st,v.id)?' class="fl-bad"':'');
+  if(va.type!=='NONE'&&opts.length){
+    if(va.searchHelp==='CHECKBOX'&&opts.length===2) return '<input type="checkbox" data-on="'+esc(opts[1].id)+'" data-off="'+esc(opts[0].id)+'"'+(String(val)===String(opts[1].id)?' checked':'')+a+'>';
+    if(va.searchHelp==='SEARCH'){ var dl='fldl_'+esc(v.id); return '<input type="text" list="'+dl+'" value="'+esc(val==null?'':val)+'" placeholder="Escribe para buscar\u2026"'+a+'><datalist id="'+dl+'">'+opts.map(function(o){ return '<option value="'+esc(o.id)+'">'+esc(o.desc||'')+'</option>'; }).join('')+'</datalist>'; }
+    return '<select'+a+'><option value="">'+(va.allowEmpty===false?'\u2014 selecciona \u2014':'(vac\u00EDo)')+'</option>'+opts.map(function(o){ return '<option value="'+esc(o.id)+'"'+(String(val)===String(o.id)?' selected':'')+'>'+esc(o.id)+(o.desc?' \u2014 '+esc(o.desc):'')+'</option>'; }).join('')+'</select>';
+  }
+  return '<input type="'+(FL_HTYPE[v.type]||'text')+'" value="'+esc(val==null?'':val)+'"'+a+'>';
+}
+function flField(st,v){
+  var va=Object.assign({type:'NONE',allowEmpty:true},v.validation||{}), req=va.type!=='NONE'&&va.allowEmpty===false;
+  var lab='<span class="fl-lab">'+esc(v.label||v.name)+(req?' <b class="fl-req" title="Obligatorio">*</b>':'')+'</span>';
+  var cur=st.vals[v.name];
+  if(v.selectMode==='multiple'||v.selectMode==='cualquiera'){
+    var rows=st.sel[v.id]||(st.sel[v.id]=[{sign:'I',option:'EQ',low:'',high:''}]), ops=FL_OPTS[v.selectMode]||FL_OPTS.cualquiera;
+    return '<div class="fl-f fl-f-so'+(flBad(st,v.id)?' fl-bad-f':'')+'">'+lab+'<div class="fl-so">'+rows.map(function(r,i){
+      var hi=(r.option==='BT'||r.option==='NB');
+      return '<div class="fl-so-r"><select data-fl-so="'+esc(v.id)+'" data-i="'+i+'" data-f="sign"><option value="I"'+(r.sign!=='E'?' selected':'')+'>Incl.</option><option value="E"'+(r.sign==='E'?' selected':'')+'>Excl.</option></select>'
+        +'<select data-fl-so="'+esc(v.id)+'" data-i="'+i+'" data-f="option">'+ops.map(function(o){ return '<option value="'+o[0]+'"'+(r.option===o[0]?' selected':'')+'>'+esc(o[1])+'</option>'; }).join('')+'</select>'
+        +'<input type="text" placeholder="Valor" value="'+esc(r.low||'')+'" data-fl-so="'+esc(v.id)+'" data-i="'+i+'" data-f="low"'+(flBad(st,v.id,i)?' class="fl-bad"':'')+'>'
+        +(hi?'<input type="text" placeholder="y" value="'+esc(r.high||'')+'" data-fl-so="'+esc(v.id)+'" data-i="'+i+'" data-f="high">':'')
+        +'<button type="button" class="tu-x" data-fl-act="so-del" data-v="'+esc(v.id)+'" data-i="'+i+'" title="Quitar valor" aria-label="Quitar valor">\u2715</button></div>';
+    }).join('')+'<button type="button" class="tu-btn fl-so-add" data-fl-act="so-add" data-v="'+esc(v.id)+'">+ Valor</button></div></div>';
+  }
+  if(v.type==='FILE'){ var fl=st.files[v.name]; return '<div class="fl-f">'+lab+'<label class="fl-file"><input type="file" data-fl-file="'+esc(v.name)+'"><span class="tu-btn">\uD83D\uDCCE Elegir archivo</span><span class="fl-fname">'+esc(fl?fl.name:'Ning\u00FAn archivo')+'</span></label></div>'; }
+  if(v.type==='BOOLEAN') return '<label class="fl-f fl-f-chk"><input type="checkbox" data-fl-v="'+esc(v.name)+'" data-fl-k="b"'+(cur?' checked':'')+'>'+lab+'</label>';
+  if(v.selectMode==='rango'){ var o=cur&&typeof cur==='object'?cur:{}; return '<div class="fl-f'+(flBad(st,v.id)?' fl-bad-f':'')+'">'+lab+'<div class="fl-rng">'+flBox(st,v,'low',o.low)+'<span>\u2013</span>'+flBox(st,v,'high',o.high)+'</div></div>'; }
+  return '<div class="fl-f'+(flBad(st,v.id)?' fl-bad-f':'')+'">'+lab+flBox(st,v,'v',cur)+'</div>';
+}
+function flBlocks(st,list){
+  return (list||[]).map(function(bk){
+    if(bk.kind==='text') return '<p class="fl-text">'+flRich(bk.text)+'</p>';
+    if(bk.kind==='skip') return '<div class="fl-skip"></div>';
+    if(bk.kind==='line') return '<hr class="fl-hr">';
+    if(bk.kind==='variable') return flField(st,bk.variable);
+    if(bk.kind==='frame') return '<fieldset class="fl-frame"><legend>'+esc(bk.title||'')+'</legend><div class="fl-grid">'+flBlocks(st,bk.blocks)+'</div></fieldset>';
+    return '';
+  }).join('');
+}
+function flChain(st){
+  var ch=(st.def&&st.def.chain)||[], m=st.mon||{}, steps=m.steps||{};
+  if(!ch.length) return '<div class="tu-state">Este flujo no tiene pasos.</div>';
+  return '<div class="fl-chain">'+ch.map(function(c,i){
+    var s=steps[c.id], e=(s&&s.estado)||'PENDIENTE', L=FL_EST[e]||[e,'pend'];
+    return (i?'<span class="fl-arrow" aria-hidden="true">\u2192</span>':'')+'<div class="fl-step fl-'+L[1]+'"'+(s&&s.mensaje?' title="'+esc(s.mensaje)+'"':'')+'><div class="fl-sn">'+(c.name?esc(c.name):'<i>Interfaz eliminada</i>')+'</div><div class="fl-sm"><i class="fl-dot"></i>'+esc(L[0])+(s&&typeof s.filas==='number'?' \u00B7 '+fmt(s.filas,0)+' filas':'')+'</div></div>';
+  }).join('')+'</div>';
+}
+function flMonitor(st){
+  var m=st.mon;
+  if(!m) return '<div class="tu-state"><span class="tu-spin"></span> Consultando el estado\u2026</div>';
+  if(m.err) return '<div class="tu-state">No se pudo consultar el estado: '+esc(m.err)+'</div>';
+  var h=flChain(st);
+  if(!m.run) return h+'<div class="fl-foot"><span class="tu-sub">Todav\u00EDa no se ha ejecutado este flujo.</span></div>';
+  var L=FL_EST[m.run.estado]||[m.run.estado,'pend'], ok=0, n=((st.def&&st.def.chain)||[]).length; Object.keys(m.steps||{}).forEach(function(k){ if(m.steps[k].estado==='OK') ok++; });
+  return h+'<div class="fl-foot"><span class="fl-badge fl-'+L[1]+'"><i class="fl-dot"></i>'+esc(L[0])+'</span><span class="tu-sub">'+ok+'/'+n+' pasos completados'+(m.run.inicio?' \u00B7 '+esc(m.run.inicio):'')+'</span>'
+    +'<button type="button" class="tu-btn fl-refresh" data-fl-act="refresh">\u21BB Actualizar</button></div>'
+    +(m.run.estado==='ERROR'&&m.run.mensaje?'<div class="fl-err">'+esc(m.run.mensaje)+'</div>':'');
+}
+function flRender(id){
+  var el=document.querySelector('.fl[data-fl="'+id+'"]'), st=FLS[id], b=FLB[id]; if(!el||!st) return;
+  if(st.status==='loading'){ el.innerHTML=flMsg(b,'')+'<div class="tu-state"><span class="tu-spin"></span> Cargando el flujo\u2026</div>'; return; }
+  if(st.status==='error'){ el.innerHTML=flMsg(b,(st.err&&st.err.message)||'No se pudo cargar el flujo.')+'<button type="button" class="tu-btn" data-fl-act="reload">Reintentar</button>'; return; }
+  var d=st.def, nsteps=(d.chain||[]).length, onlyMon=(b.view==='monitor');
+  var head='<div class="tu-head"><h3>'+esc(tok(flTitle(b,st)))+'</h3><span class="tu-sub">'+esc(d.name)+' \u00B7 '+nsteps+' paso'+(nsteps===1?'':'s')+'</span></div>';
+  var tabs=onlyMon?'':'<div class="fl-tabs" role="tablist"><button type="button" role="tab" data-fl-tab="screen" class="'+(st.view==='screen'?'on':'')+'">Variables</button><button type="button" role="tab" data-fl-tab="monitor" class="'+(st.view==='monitor'?'on':'')+'">Monitor</button></div>';
+  var body;
+  if(st.view==='monitor'||onlyMon) body=flMonitor(st);
+  else {
+    var banner=(st.errors&&st.errors.length)?'<div class="fl-banner"><b>Revisa estos campos antes de ejecutar:</b><ul>'+st.errors.map(function(e){ return '<li>'+esc(e.message)+'</li>'; }).join('')+'</ul></div>':'';
+    var bl=(d.blocks||[]).length?'<div class="fl-grid">'+flBlocks(st,d.blocks)+'</div>':'<div class="tu-state">Este flujo no tiene variables de pantalla: se ejecuta tal cual.</div>';
+    body=banner+bl+'<div class="fl-act"><button type="button" class="tu-btn tu-pri" data-fl-act="run"'+(st.busy?' disabled':'')+'>'+(st.busy?'<span class="tu-spin"></span> '+esc(st.busyText||'Lanzando\u2026'):'\u25B6 Ejecutar')+'</button></div>';
+  }
+  el.innerHTML=head+tabs+body;
+}
+function flPoll(id,now){
+  var st=FLS[id]; if(!st) return; clearTimeout(st.timer);
+  var go=function(){
+    var el=document.querySelector('.fl[data-fl="'+id+'"]'), b=FLB[id];
+    if(!el||FLS[id]!==st||(st.view!=='monitor'&&!(b&&b.view==='monitor'))) return;
+    dcall('fl.status',{ref:st.ref}).then(function(m){
+      if(FLS[id]!==st) return; st.mon=m; flRender(id);
+      if(m.run&&(m.run.estado==='EN_CURSO'||m.run.estado==='PENDIENTE')) st.timer=setTimeout(go,3000);
+    },function(err){ if(FLS[id]!==st) return; st.mon={err:(err&&err.message)||'error'}; flRender(id); });
+  };
+  if(now) go(); else st.timer=setTimeout(go,3000);
+}
+function flRun(id){
+  var st=FLS[id]; if(!st||st.busy||!st.def) return;
+  var vals={};
+  flEach(st,function(v){ if(v.type==='FILE'||v.selectMode==='multiple'||v.selectMode==='cualquiera') return; vals[v.name]=(v.type==='BOOLEAN')?!!st.vals[v.name]:(st.vals[v.name]==null?'':st.vals[v.name]); });
+  var files={}; Object.keys(st.files).forEach(function(k){ if(st.files[k]) files[k]=st.files[k]; });
+  st.busy=true; st.busyText=Object.keys(files).length?'Subiendo ficheros y lanzando\u2026':'Lanzando\u2026'; st.errors=[]; flRender(id);
+  dcall('fl.run',{ref:st.ref,values:vals,sel:st.sel,files:files}).then(function(r){
+    if(FLS[id]!==st) return; st.busy=false; tuToast('\u25B6 \u00AB'+(r&&r.name||st.def.name)+'\u00BB lanzado','ok');
+    st.view='monitor'; st.mon=null; flRender(id); flPoll(id,true);
+  },function(err){
+    if(FLS[id]!==st) return; st.busy=false;
+    if(err&&err.code==='INVALID'&&err.details&&err.details.errors) st.errors=err.details.errors;
+    tuToast((err&&err.message)||'No se pudo lanzar el flujo.','bad'); flRender(id);
+  });
+}
+function flUnbad(t){ if(t.classList&&t.classList.contains('fl-bad')) t.classList.remove('fl-bad'); var f=t.closest&&t.closest('.fl-bad-f'); if(f) f.classList.remove('fl-bad-f'); }
+document.addEventListener('click',function(e){
+  var box=e.target.closest&&e.target.closest('.fl[data-fl]'); if(!box||EDIT) return;
+  var id=box.getAttribute('data-fl'), st=FLS[id]; if(!st) return;
+  var tb=e.target.closest('[data-fl-tab]');
+  if(tb){ st.view=tb.getAttribute('data-fl-tab'); if(st.view==='monitor'){ st.mon=st.mon||null; flRender(id); flPoll(id,true); } else { clearTimeout(st.timer); flRender(id); } return; }
+  var a=e.target.closest('[data-fl-act]'); if(!a) return;
+  var act=a.getAttribute('data-fl-act');
+  if(act==='run') return flRun(id);
+  if(act==='refresh') return flPoll(id,true);
+  if(act==='reload'){ st.status='loading'; flRender(id); return flLoad(id); }
+  if(act==='so-add'||act==='so-del'){
+    var vid=a.getAttribute('data-v'), v=flVar(st,vid); if(!v) return; var rows=st.sel[vid]=st.sel[vid]||[];
+    if(act==='so-add') rows.push({sign:'I',option:'EQ',low:'',high:''}); else { rows.splice(+a.getAttribute('data-i'),1); if(!rows.length) rows.push({sign:'I',option:'EQ',low:'',high:''}); }
+    st.errors=[]; flRender(id);
+  }
+});
+function flInput(e,final){
+  var t=e.target, box=t.closest&&t.closest('.fl[data-fl]'); if(!box) return;
+  var st=FLS[box.getAttribute('data-fl')]; if(!st) return; flUnbad(t);
+  if(t.hasAttribute('data-fl-file')){ if(final){ st.files[t.getAttribute('data-fl-file')]=(t.files&&t.files[0])||null; var nm=t.parentNode.querySelector('.fl-fname'); if(nm) nm.textContent=(t.files&&t.files[0])?t.files[0].name:'Ning\u00FAn archivo'; } return; }
+  if(t.hasAttribute('data-fl-so')){
+    var rows=st.sel[t.getAttribute('data-fl-so')]||[], r=rows[+t.getAttribute('data-i')]; if(!r) return;
+    r[t.getAttribute('data-f')]=t.value;
+    if(final&&t.getAttribute('data-f')==='option') flRender(box.getAttribute('data-fl'));
+    return;
+  }
+  if(t.hasAttribute('data-fl-v')){
+    var n=t.getAttribute('data-fl-v'), k=t.getAttribute('data-fl-k');
+    var val=(t.type==='checkbox')?(k==='b'?t.checked:(t.checked?t.getAttribute('data-on'):t.getAttribute('data-off'))):t.value;
+    if(k==='low'||k==='high'){ var o=(st.vals[n]&&typeof st.vals[n]==='object')?st.vals[n]:{low:'',high:''}; o[k]=val; st.vals[n]=o; }
+    else st.vals[n]=val;
+  }
+}
+document.addEventListener('input',function(e){ flInput(e,false); });
+document.addEventListener('change',function(e){ flInput(e,true); });
+function tuMountAll(force){ [].forEach.call(document.querySelectorAll('.tu[data-tu]'),function(el){ if(force||!el.getAttribute('data-mounted')) tuMount(el); }); if(typeof dtMountAll==='function') dtMountAll(force); if(typeof dvMountAll==='function') dvMountAll(force); if(typeof dcMountAll==='function') dcMountAll(force); if(typeof flMountAll==='function') flMountAll(force); }
 function tuMount(el){
   var id=el.getAttribute('data-tu'), b=TUB[id]; if(!b) return; el.setAttribute('data-mounted','1');
   if(EDIT){ var n=tuVarCount(b); el.innerHTML=tuMsgCard(b,'Actualizaci\u00F3n de tablas'+(b.refName?' \u00AB'+b.refName+'\u00BB':'')+(n?' \u00B7 '+n+' variable(s) con valor':'')+'. Pulsa \u00ABVista previa\u00BB para ver y probar la tabla con datos reales.'); return; }
@@ -2105,6 +2289,7 @@ function blockInner(b,id){
       case 'tabs': return tabsHtml(b,id);
       case 'group': return groupHtml(b,id);
       case 'tableUpdate': return tuNote(b);
+      case 'flowRun': return flNote(b);
       case 'dracoTable': return dtNote(b);
       case 'dracoVar': return dvNote(b);
       case 'dracoChart': return dcNote(b);
@@ -2121,6 +2306,7 @@ function blockWrap(b,id,n){
   var cls='blk'+((b.span==='full'||b.type==='kpis')?' full':(sp>1?' sp'+sp:''));
   var sh=b.showIf?' data-showif="'+esc(b.showIf)+'"':'';
   if(b.type==='tableUpdate'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="tableUpdate"'+dAttr(b.density)+sh+'>'+tuShell(b,id)+'</div>';
+  if(b.type==='flowRun'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="flowRun"'+dAttr(b.density)+sh+'>'+flShell(b,id)+'</div>';
   if(b.type==='dracoTable'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoTable"'+dAttr(b.density)+sh+'>'+dtShell(b,id)+'</div>';
   if(b.type==='dracoChart'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoChart"'+dAttr(b.density)+sh+'>'+dcShell(b,id)+'</div>';
   if(b.type==='dracoVar'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoVar"'+dAttr(b.density)+sh+'>'+dvShell(b,id)+'</div>';
@@ -2218,7 +2404,10 @@ function update(){
 }
 function build(){
   var app=document.getElementById('app'), meta=SPEC.meta||{}, nav=SPEC.nav||{}, name=meta.brand||meta.title||'P\u00E1gina';
-  var navH='<header class="nav" data-section="nav"><div class="wrap nav-in"><a class="logo" href="#'+esc((SPEC.sections[0]||{}).id||'')+'"><i>'+esc(name.trim().charAt(0).toUpperCase())+'</i>'+esc(name)+'</a><nav class="nav-links">'+(nav.links||[]).map(function(l){ return '<a data-nav="'+esc(l.target)+'" href="#'+esc(l.target)+'">'+esc(l.label)+'</a>'; }).join('')+'</nav>'+'<div class="nav-end">'+(SPEC.export===false?'':'<div class="xwrap"><button class="xbtn" data-act="xmenu" aria-haspopup="true">Exportar \u25BE</button><div class="xmenu" hidden><button data-act="xpdf">PDF \u00B7 16:9</button><button data-act="xpptx">PowerPoint \u00B7 .pptx</button></div></div>')+(nav.cta?'<a class="btn btn-primary" href="#'+esc(nav.cta.target)+'">'+esc(nav.cta.label)+'</a>':'')+'</div></div></header>';
+  /* Fondo de la cabecera (SPEC.nav.tone): '' = como el tema; plain/alt/dark como las secciones; brand = color principal */
+  var ntone=(nav.tone==='plain'||nav.tone==='alt'||nav.tone==='dark'||nav.tone==='brand')?nav.tone:'', non=ntone==='brand'?dtOnBrand():'#fff';
+  var navCls='nav'+(ntone?' nav-t-'+ntone+((ntone==='dark'||(ntone==='brand'&&non==='#fff'))?' nav-t-on tone-dark':(ntone==='brand'?' nav-t-on':'')):'');
+  var navH='<header class="'+navCls+'"'+(ntone==='dark'||ntone==='brand'?' style="--nav-on:'+non+'"':'')+' data-section="nav"><div class="wrap nav-in"><a class="logo" href="#'+esc((SPEC.sections[0]||{}).id||'')+'"><i>'+esc(name.trim().charAt(0).toUpperCase())+'</i>'+esc(name)+'</a><nav class="nav-links">'+(nav.links||[]).map(function(l){ return '<a data-nav="'+esc(l.target)+'" href="#'+esc(l.target)+'">'+esc(l.label)+'</a>'; }).join('')+'</nav>'+'<div class="nav-end">'+(SPEC.export===false?'':'<div class="xwrap"><button class="xbtn" data-act="xmenu" aria-haspopup="true">Exportar \u25BE</button><div class="xmenu" hidden><button data-act="xpdf">PDF \u00B7 16:9</button><button data-act="xpptx">PowerPoint \u00B7 .pptx</button></div></div>')+(nav.cta?'<a class="btn btn-primary" href="#'+esc(nav.cta.target)+'">'+esc(nav.cta.label)+'</a>':'')+'</div></div></header>';
   dfInit(); dfApplyVars();
   var hasBar=FS.length||SW.length||DFS.length, secs='', foot='', placed=false;
   SPEC.sections.forEach(function(s,i){
@@ -3124,6 +3313,24 @@ a{color:inherit;text-decoration:none}.num{font-variant-numeric:tabular-nums}
 .nav-end{display:flex;align-items:center;gap:12px}.xwrap{position:relative}.xbtn{border:1px solid rgba(255,255,255,.28);background:transparent;color:rgba(255,255,255,.88);font:inherit;font-size:13.5px;font-weight:600;padding:8px 14px;border-radius:var(--rb,9px);cursor:pointer}.xbtn:hover{color:#fff;border-color:rgba(255,255,255,.55)}
 .xmenu{position:absolute;right:0;top:calc(100% + 10px);min-width:220px;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:6px;box-shadow:0 22px 44px -22px rgba(0,0,0,.5);z-index:80}.xmenu button{display:block;width:100%;text-align:left;border:none;background:none;font:inherit;font-size:14px;font-weight:500;padding:10px 12px;color:var(--ink);cursor:pointer;border-radius:0}.xmenu button:hover{background:color-mix(in srgb,var(--brand) 8%,transparent);color:var(--brand)}
 .nav-links{display:flex;gap:26px;font-size:14px;font-weight:500;color:rgba(255,255,255,.7)}.nav-links a:hover,.nav-links a.on{color:#fff}.nav .btn{padding:9px 16px;font-size:13.5px}
+/* Fondo de la cabecera elegido en el dise\u00F1o (se impone al del tema) */
+header.nav.nav-t-plain,header.nav.nav-t-alt{backdrop-filter:none;-webkit-backdrop-filter:none;border-bottom:1px solid var(--line)}
+header.nav.nav-t-plain{background:var(--bg)}header.nav.nav-t-alt{background:var(--surface)}
+header.nav.nav-t-plain .logo,header.nav.nav-t-alt .logo{color:var(--ink)}
+header.nav.nav-t-plain .nav-links,header.nav.nav-t-alt .nav-links,header.nav.nav-t-plain .nav-links a,header.nav.nav-t-alt .nav-links a{color:var(--muted)}
+header.nav.nav-t-plain .nav-links a:hover,header.nav.nav-t-alt .nav-links a:hover,header.nav.nav-t-plain .nav-links a.on,header.nav.nav-t-alt .nav-links a.on{color:var(--ink)}
+header.nav.nav-t-plain .xbtn,header.nav.nav-t-alt .xbtn{color:var(--ink);border-color:var(--line)}
+header.nav.nav-t-plain .xbtn:hover,header.nav.nav-t-alt .xbtn:hover{color:var(--brand);border-color:var(--brand)}
+header.nav.nav-t-dark{background:var(--navy);backdrop-filter:none;-webkit-backdrop-filter:none;border-bottom:none}
+header.nav.nav-t-brand{background:var(--brand);backdrop-filter:none;-webkit-backdrop-filter:none;border-bottom:none}
+header.nav.nav-t-on .logo{color:var(--nav-on)}
+header.nav.nav-t-on .nav-links,header.nav.nav-t-on .nav-links a{color:color-mix(in srgb,var(--nav-on) 74%,transparent)}
+header.nav.nav-t-on .nav-links a:hover,header.nav.nav-t-on .nav-links a.on{color:var(--nav-on)}
+header.nav.nav-t-on .xbtn{color:var(--nav-on);border-color:color-mix(in srgb,var(--nav-on) 32%,transparent)}
+header.nav.nav-t-on .xbtn:hover{color:var(--nav-on);border-color:var(--nav-on)}
+header.nav.nav-t-brand .nav-links a.on{border-bottom-color:var(--nav-on)}
+header.nav.nav-t-brand .logo i{background:var(--nav-on);color:var(--brand)}
+header.nav.nav-t-brand .btn-primary{background:var(--nav-on);color:var(--brand);border-color:var(--nav-on);box-shadow:none}
 @media(max-width:860px){.nav-links{display:none}}
 .hero{background:var(--navy);color:#fff;padding:84px 0 72px;overflow:hidden;background-image:radial-gradient(900px 480px at 78% -8%,color-mix(in srgb,var(--brand) 55%,transparent),transparent 62%),linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);background-size:auto,56px 56px,56px 56px}
 .hero-top{max-width:860px}.eyebrow{display:inline-block;font-size:12.5px;font-weight:700;color:var(--brand);margin-bottom:14px;letter-spacing:.02em}
@@ -3224,6 +3431,45 @@ tr[data-act="cross"]{cursor:pointer}tr[data-act="cross"]:hover td{background:col
 .tu-msg.tu-info{border-color:#f0d58a;background:#fff8e1;color:#6b4a00}
 /* ---- Actualizaci\u00F3n de tablas (bloque tableUpdate) ---- */
 .tu{padding:clamp(16px,2vw,24px)}
+/* Flujo de carga */
+.fl-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 16px}
+.fl-tabs button{font:inherit;font-size:13.5px;font-weight:600;color:var(--muted);background:none;border:none;border-bottom:2px solid transparent;padding:8px 12px;margin-bottom:-1px;cursor:pointer}
+.fl-tabs button:hover{color:var(--ink)}.fl-tabs button.on{color:var(--brand);border-bottom-color:var(--brand)}
+.fl-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px 18px;align-items:start}
+.fl-f{display:flex;flex-direction:column;gap:6px;min-width:0}
+.fl-lab{font-size:12.5px;font-weight:600;color:var(--muted)}.fl-req{color:var(--bad)}
+.fl-f input[type=text],.fl-f input[type=number],.fl-f input[type=date],.fl-f input[type=datetime-local],.fl-f select{font:inherit;font-size:14px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:var(--rb,9px);padding:7px 10px;width:100%;min-width:0;height:38px;box-sizing:border-box}
+.fl-f input:focus,.fl-f select:focus{outline:2px solid color-mix(in srgb,var(--brand) 45%,transparent);border-color:var(--brand)}
+.fl-f .fl-bad,.fl-f.fl-bad-f>select,.fl-f.fl-bad-f>input{border-color:var(--bad);background:color-mix(in srgb,var(--bad) 6%,var(--surface))}
+.fl-f-chk{flex-direction:row;align-items:center;gap:8px;padding-top:22px}.fl-f-chk .fl-lab{color:var(--ink);font-weight:500;font-size:14px}
+.fl-rng{display:flex;align-items:center;gap:8px}.fl-rng>span{color:var(--muted)}
+.fl-f-so{grid-column:1/-1}.fl-so{display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.fl-so-r{display:grid;grid-template-columns:90px 170px minmax(120px,220px) minmax(0,220px) auto;gap:6px;align-items:center;width:100%}
+.fl-so-r select,.fl-so-r input{font:inherit;font-size:13.5px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:var(--rb,9px);padding:6px 9px;min-width:0}
+.fl-so-r input.fl-bad{border-color:var(--bad)}
+.fl-file{display:flex;align-items:center;gap:10px;cursor:pointer}.fl-file input{position:absolute;opacity:0;width:1px;height:1px}
+.fl-fname{font-size:13px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fl-text{grid-column:1/-1;margin:0;color:var(--text);font-size:14px}.fl-skip{grid-column:1/-1;height:4px}.fl-hr{grid-column:1/-1;border:none;border-top:1px solid var(--line);margin:2px 0}
+.fl-frame{grid-column:1/-1;border:1px solid var(--line);border-radius:var(--radius,12px);padding:12px 16px 16px;margin:0}
+.fl-frame legend{font-size:13px;font-weight:700;color:var(--ink);padding:0 6px}
+.fl-act{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+.fl-banner{border:1px solid var(--bad);background:color-mix(in srgb,var(--bad) 7%,transparent);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:13.5px;color:var(--ink)}.fl-banner ul{margin:6px 0 0 18px;padding:0}
+.fl-chain{display:flex;align-items:stretch;gap:8px;flex-wrap:wrap}
+.fl-arrow{align-self:center;color:var(--muted);font-size:18px}
+.fl-step{min-width:150px;max-width:240px;border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:10px;padding:10px 12px;background:var(--surface)}
+.fl-sn{font-weight:700;font-size:13.5px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fl-sm{font-size:12.5px;color:var(--muted);margin-top:4px;display:flex;align-items:center;gap:6px}
+.fl-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);display:inline-block;flex:none}
+.fl-step.fl-ok{border-left-color:var(--good)}.fl-ok .fl-dot{background:var(--good)}
+.fl-step.fl-bad{border-left-color:var(--bad)}.fl-bad .fl-dot{background:var(--bad)}
+.fl-step.fl-run{border-left-color:var(--brand)}.fl-run .fl-dot{background:var(--brand);animation:flpulse 1.1s ease-in-out infinite}
+@keyframes flpulse{50%{opacity:.35}}
+.fl-foot{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:16px}.fl-refresh{margin-left:auto}
+.fl-badge{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px;border:1px solid var(--line);color:var(--ink)}
+.fl-badge.fl-ok{border-color:var(--good);color:var(--good)}.fl-badge.fl-bad{border-color:var(--bad);color:var(--bad)}.fl-badge.fl-run{border-color:var(--brand);color:var(--brand)}
+.fl-err{margin-top:10px;font-size:13px;color:var(--bad)}
+@media (max-width:700px){.fl-so-r{grid-template-columns:1fr 1fr}.fl-chain{flex-direction:column}.fl-arrow{transform:rotate(90deg)}}
+input[type=checkbox],input[type=radio]{accent-color:var(--brand)}
 .tu-head .tu-hsave{margin-left:auto;align-self:center}.tu-head .tu-dirty:not([hidden])+.tu-hsave{margin-left:10px}.tu-head:has(.tu-hsave){align-items:center}
 #tu-toasts{position:fixed;right:20px;bottom:20px;z-index:500;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none}
 .tu-toast{pointer-events:auto;display:flex;align-items:center;gap:12px;max-width:min(440px,90vw);padding:11px 12px 11px 16px;border-radius:var(--rb,10px);background:var(--surface);color:var(--ink);border:1px solid var(--line);border-left:4px solid var(--brand);box-shadow:0 14px 34px -14px rgba(15,23,42,.35);font:600 14px/1.4 var(--font);animation:tutin .22s ease}
@@ -3794,6 +4040,10 @@ function validate(spec){
     if(b.type==='dracoTable'){
       if(b.ref!==undefined&&typeof b.ref!=='string') e.push(p+': "ref" debe ser texto.');
       if(!b.ref) w.push(p+': elige o dise\u00F1a la tabla Draco en las propiedades del bloque.');
+    }
+    if(b.type==='flowRun'){
+      if(b.ref!==undefined&&typeof b.ref!=='string') e.push(p+': "ref" debe ser texto.');
+      if(!b.ref) w.push(p+': elige el flujo de carga en las propiedades del bloque.');
     }
     if(b.type==='tableUpdate'){
       if(b.ref!==undefined&&typeof b.ref!=='string') e.push(p+': "ref" debe ser texto.');
@@ -4407,6 +4657,7 @@ function edBlock(r){
   else if(b.type==='cards') h=listBlock('Tarjetas','items',b.items,function(it,i){ return gText('Etiqueta peque\u00F1a','items.'+i+'.tag',it.tag)+gText('T\u00EDtulo','items.'+i+'.title',it.title)+gArea('Texto','items.'+i+'.body',it.body,4); },{tag:'Etiqueta',title:'Nueva tarjeta',body:'Descripci\u00F3n.'},1);
   else if(b.type==='kpis') h=edNote('Haz clic en una cifra de la p\u00E1gina para editarla. Aqu\u00ED puedes a\u00F1adir cifras.')+listBlock('Cifras','items',b.items,function(it,i){ return '<b>'+esc(it.label||'')+'</b>'; },edKpiTpl(),1);
   else if(b.type==='tableUpdate') h=edTU(b);
+  else if(b.type==='flowRun') h=edFL(b);
   else if(b.type==='dracoTable') h=edDT(b);
   else if(b.type==='dracoVar') h=edDV(b);
   else if(b.type==='dracoChart') h=edDC(b);
@@ -4481,6 +4732,7 @@ function edPanel(r,pn){
 function edNav(sp){
   var nv=sp.nav||{}, cta=nv.cta||null, items=nv.items||[];
   var h=gText('Nombre de la marca','meta.brand',sp.meta&&sp.meta.brand);
+  h+=gSel('Fondo','nav.tone',nv.tone||'',[['','Como el tema'],['plain','Normal'],['alt','Gris suave'],['dark','Oscuro'],['brand','Color principal']]);
   h+='<label class="ef"><span>Icono</span><select disabled title="Todav\u00EDa no hace nada"><option>Por defecto</option></select></label>'+edNote('El icono todav\u00EDa no tiene efecto.');
   h+='<div class="insp-sec">Opciones de men\u00FA</div>';
   items.forEach(function(it,i){ h+='<div class="col-row">'+gText('Nombre','nav.items.'+i+'.label',it.label)+'<div class="rowbtns"><button class="btn ghost small" data-edact="navitemdel" data-i="'+i+'">Quitar</button></div></div>'; });
@@ -4554,6 +4806,7 @@ function edTemplate(type){
   var cat=di&&di.dims.filter(function(d){ return d.id!==di.month; })[0];
   switch(type){
     case 'tableUpdate': return {type:'tableUpdate',title:'',ref:'',refName:'',values:{}};
+    case 'flowRun': return {type:'flowRun',title:'',ref:'',refName:''};
     case 'dracoTable': return {type:'dracoTable',title:'',ref:'',refName:''};
     case 'dracoChart': return {type:'dracoChart',title:'',ref:'',refName:'',kind:'bar',seriesIn:'cols',rows:'all'};
     case 'group': return {type:'group',title:'',layout:'grid',cols:[1,1],blocks:[]};
@@ -5291,7 +5544,7 @@ function palTemplate(id){
     case 'footer': return {id:'',type:'footer',text:'Mi organización',links:[]};
     case 'section': case 'faq': case 'cta': return edTemplate(id);
     case 'tabs': return {type:'tabs',title:'Pestañas',tabs:[{label:'Pestaña 1',blocks:[edTemplate('text')]},{label:'Pestaña 2',blocks:[edTemplate('text')]}]};
-    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': case 'dracoTable': case 'dracoVar': case 'dracoChart': case 'group': case 'dracoKpi': return edTemplate(id);
+    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': case 'flowRun': case 'dracoTable': case 'dracoVar': case 'dracoChart': case 'group': case 'dracoKpi': return edTemplate(id);
     default: { var c=edTemplate('chart'), k=id.split(':')[1]; if(c){ if(isLitChart(c)) edConvertLit(c,k); else edConvert(c,k); } return c; }
   }
 }
@@ -5301,8 +5554,8 @@ function palRender(){
     var closed=!!sbState.groups[g.g];
     h+='<div class="pal-g"><button class="pal-gh" data-pg="'+esc(g.g)+'" aria-expanded="'+(!closed)+'"><span class="chev">'+(closed?'▸':'▾')+'</span>'+esc(g.g)+'</button>';
     if(!closed) h+='<div class="pal-grid">'+g.items.map(function(it){
-      var off=(it.id==='nav')||(it.id==='hero'&&has('hero'))||(it.id==='footer'&&has('footer'))||(it.id==='tableUpdate'&&!HOSTED)||(it.id==='dracoTable'&&!HOSTED)||(it.id==='dracoVar'&&!HOSTED)||(it.id==='dracoChart'&&!HOSTED)||(it.id==='dracoKpi'&&!HOSTED);
-      return '<button class="pal-it" data-pal="'+esc(it.id)+'" draggable="'+(off?'false':'true')+'"'+(off?' disabled':'')+' title="'+esc(it.t+(off?((it.id==='tableUpdate'||it.id==='dracoTable'||it.id==='dracoVar'||it.id==='dracoChart'||it.id==='dracoKpi')?' (solo disponible dentro de Draco Planning)':' (ya existe en la página)'):''))+'">'+ico(it.i,22)+'<span>'+esc(it.l)+'</span></button>';
+      var off=(it.id==='nav')||(it.id==='hero'&&has('hero'))||(it.id==='footer'&&has('footer'))||(it.id==='tableUpdate'&&!HOSTED)||(it.id==='flowRun'&&!HOSTED)||(it.id==='dracoTable'&&!HOSTED)||(it.id==='dracoVar'&&!HOSTED)||(it.id==='dracoChart'&&!HOSTED)||(it.id==='dracoKpi'&&!HOSTED);
+      return '<button class="pal-it" data-pal="'+esc(it.id)+'" draggable="'+(off?'false':'true')+'"'+(off?' disabled':'')+' title="'+esc(it.t+(off?((it.id==='tableUpdate'||it.id==='flowRun'||it.id==='dracoTable'||it.id==='dracoVar'||it.id==='dracoChart'||it.id==='dracoKpi')?' (solo disponible dentro de Draco Planning)':' (ya existe en la página)'):''))+'">'+ico(it.i,22)+'<span>'+esc(it.l)+'</span></button>';
     }).join('')+'</div>';
     h+='</div>';
   });
@@ -5315,7 +5568,7 @@ var BLn={kpis:'Cifras',chart:'Gráfico',table:'Tabla',text:'Texto',callout:'Avis
 var BIc={kpis:'kpis',table:'table',text:'text',callout:'callout',cards:'cards',tabs:'tabs'};
 function snip(t,n){ t=String(t==null?'':t).replace(/\s+/g,' ').trim(); return t.length>n?t.slice(0,n-1)+'…':t; }
 function chartIc(b){ return {line:'chart-line',bar:'chart-bar',hbar:'chart-hbar',donut:'chart-donut',funnel:'chart-funnel'}[b.kind]||'chart-line'; }
-function blockSub(b){ if(b.type==='dracoVar') return b.variable?('$'+b.variable+'$'):(b.title||''); if(b.type==='tableUpdate'||b.type==='dracoTable'||b.type==='dracoChart') return b.refName||b.title||''; return b.title||b.body||(b.items&&b.items[0]&&(b.items[0].title||b.items[0].label))||''; }
+function blockSub(b){ if(b.type==='dracoVar') return b.variable?('$'+b.variable+'$'):(b.title||''); if(b.type==='tableUpdate'||b.type==='flowRun'||b.type==='dracoTable'||b.type==='dracoChart') return b.refName||b.title||''; return b.title||b.body||(b.items&&b.items[0]&&(b.items[0].title||b.items[0].label))||''; }
 function rowsOf(blocks,n){
   var rows=[], cur=[], used=0;
   blocks.forEach(function(b,i){
@@ -5490,7 +5743,7 @@ function crumbText(){
 function edAfterSync(){ var c=$('inspCrumb'); if(c) c.textContent=crumbText(); treeRender(); }
 function edAfterRender(){
   var c=$('inspCrumb'); if(c) c.textContent=crumbText();
-  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender(); if(typeof dtAfterRender==='function') dtAfterRender(); if(typeof dvAfterRender==='function') dvAfterRender(); if(typeof dcAfterRender==='function') dcAfterRender(); if(typeof dfAfterRender==='function') dfAfterRender();
+  treeRender(); edFocusField(); if(typeof tuAfterRender==='function') tuAfterRender(); if(typeof flAfterRender==='function') flAfterRender(); if(typeof dtAfterRender==='function') dtAfterRender(); if(typeof dvAfterRender==='function') dvAfterRender(); if(typeof dcAfterRender==='function') dcAfterRender(); if(typeof dfAfterRender==='function') dfAfterRender();
 }
 
 /* ---------- acciones sobre nodos ---------- */
@@ -5923,6 +6176,57 @@ IC['draco-table']='<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 
   var g=PAL.filter(function(x){ return x.g==='Datos'; })[0], i=g.items.map(function(x){ return x.id; }).indexOf('tableUpdate');
   g.items.splice(i+1,0,{id:'dracoTable',l:'Tabla Draco',i:'draco-table',t:'Informe tipo tabla din\u00E1mica (el de la extensi\u00F3n de Excel) dise\u00F1ado con su propio dise\u00F1ador y consultado con su SQL ya generado. Solo disponible dentro de Draco Planning.'});
 })();
+
+/* =====================================================================
+   14. FLUJOS DE CARGA en un informe (editor)
+   Bloque "flowRun": la pantalla de un flujo de carga de Draco (variables, Ejecutar
+   y Monitor). Se define en Draco ▸ Flujos; aqu\u00ED solo se elige cu\u00E1l mostrar.
+   ===================================================================== */
+BLOCK_TYPES.push('flowRun'); BLOCK_LABEL.flowRun='Flujo de carga'; ED_OPTIONAL.view=1;
+BLn.flowRun='Flujo de carga'; BIc.flowRun='flow';
+IC['flow']='<rect x="2" y="8.5" width="6" height="7" rx="1.5"/><rect x="16" y="8.5" width="6" height="7" rx="1.5"/><path d="M8 12h7M12.5 9.5 15 12l-2.5 2.5"/>';
+(function(){
+  var g=PAL.filter(function(x){ return x.g==='Datos'; })[0], i=g.items.map(function(x){ return x.id; }).indexOf('tableUpdate');
+  g.items.splice(i+1,0,{id:'flowRun',l:'Flujo de carga',i:'flow',t:'Pantalla de un flujo de carga de Draco: sus variables, el bot\u00F3n Ejecutar y el monitor de pasos. Solo disponible dentro de Draco Planning.'});
+})();
+var FLV={list:null,listP:null};
+function flEnsureList(force){
+  if(FLV.list&&!force) return Promise.resolve(FLV.list);
+  if(FLV.listP) return FLV.listP;
+  FLV.listP=tuCall('fl.list').then(function(l){ FLV.list=l; FLV.listP=null; return l; },function(e){ FLV.listP=null; throw e; });
+  return FLV.listP;
+}
+function flSelBlock(){ var r=edResolve(edSel); return (r&&r.kind==='block'&&r.obj&&r.obj.type==='flowRun')?r.obj:null; }
+function edFL(b){
+  var h=gText('T\u00EDtulo','title',b.title,'Si lo dejas vac\u00EDo, el t\u00EDtulo de la pantalla del flujo');
+  if(!HOSTED) return h+'<div class="insp-sec">Flujo de carga</div>'+edNote('Elegir el flujo solo se puede hacer dentro de Draco Planning (generador de informes). Aqu\u00ED se conserva lo ya elegido.')+(b.ref?'<p class="insp-hint"><b>'+esc(b.refName||b.ref)+'</b></p>':'');
+  return h+'<div class="insp-sec">Flujo de carga</div><div id="flViewBox"><p class="insp-hint">Cargando los flujos del proyecto\u2026</p></div>'
+    +'<div class="insp-sec">Opciones</div>'
+    +gSel('Mostrar','view',b.view||'',[['','Variables y monitor (pesta\u00F1as)'],['monitor','Solo el monitor']])
+    +'<p class="insp-hint">Las variables, los pasos y las validaciones se definen en Draco \u25B8 Flujos de carga.</p>';
+}
+function flAfterRender(){
+  if(!HOSTED) return;
+  var b=flSelBlock(); if(!b||!$('flViewBox')) return;
+  var bid=edSel.bid, still=function(){ return edSel&&edSel.bid===bid; };
+  flEnsureList().then(function(){ if(still()) flPaintView(); },function(e){ if(still()) tuPaintErr('flViewBox',e,function(){ FLV.list=null; edRender(); }); });
+}
+function flPaintView(){
+  var b=flSelBlock(), el=$('flViewBox'); if(!b||!el) return;
+  var L=FLV.list||[], cur=L.filter(function(x){ return x.id===b.ref; })[0];
+  var opts='<option value="">\u2014 elige un flujo \u2014</option>'+L.map(function(x){ return '<option value="'+esc(x.id)+'"'+(x.id===b.ref?' selected':'')+'>'+esc(x.name)+'</option>'; }).join('');
+  if(b.ref&&!cur) opts+='<option value="'+esc(b.ref)+'" selected>'+esc((b.refName||b.ref)+' (ya no existe)')+'</option>';
+  el.innerHTML='<label class="ef"><span>Flujo</span><select data-flview>'+opts+'</select></label>'
+    +(cur?'<p class="insp-hint">'+(cur.type==='manual'?'Manual':'Autom\u00E1tico')+(cur.title&&cur.title!==cur.name?' \u00B7 pantalla \u00AB'+esc(cur.title)+'\u00BB':'')+'</p>':'')
+    +(L.length?'':'<p class="insp-hint">Este proyecto todav\u00EDa no tiene flujos de carga. Cr\u00E9alos en Draco \u25B8 Flujos de carga.</p>');
+}
+function flPickView(ref){
+  var b=flSelBlock(); if(!b) return; edPrevSel=edSel;
+  var cur=(FLV.list||[]).filter(function(x){ return x.id===ref; })[0];
+  b.ref=ref||''; b.refName=cur?cur.name:'';
+  edSync(true); edRender();
+}
+$('inspBody').addEventListener('change',function(e){ if(e.target.hasAttribute('data-flview')) flPickView(e.target.value); });
 var DTV={list:null,listP:null};
 function dtCall(op,payload){
   if(!HOSTED) return Promise.reject(hostErr('NO_HOST','Esta opci\u00F3n solo funciona dentro de Draco Planning.'));
