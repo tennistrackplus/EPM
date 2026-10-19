@@ -313,7 +313,7 @@ const VisorApp = {
         const frame = document.getElementById("viewerFrame");
         if (this.viewerReady) return this.viewerReady;
         this.viewerReady = new Promise((resolve) => { this._resolveReady = resolve; });
-        frame.src = "informes-herramienta.html?mode=viewer&v=20261021h";   // la versión evita una herramienta antigua en caché
+        frame.src = "informes-herramienta.html?mode=viewer&v=20261022a";   // la versión evita una herramienta antigua en caché
         return this.viewerReady;
     },
 
@@ -373,7 +373,9 @@ const VisorApp = {
             { dpHost: 1, op: "page-reply", id: rid, ok, data, error }, window.location.origin);
         try {
             const op = pl && pl.op;
-            reply(true, (typeof op === "string" && op.indexOf("dt.") === 0)
+            reply(true, (typeof op === "string" && op.indexOf("fl.") === 0)
+                ? await InformesFlujos.handle(this.currentProject, op, pl.payload)            // Flujos de carga
+                : (typeof op === "string" && op.indexOf("dt.") === 0)
                 ? await DracoTables.handle(this.currentProject, op, pl.payload)               // Tablas Draco
                 : await InformesDatos.handle(this.currentProject, op, pl && pl.payload));
         } catch (err) {

@@ -650,4 +650,7 @@ const FlowRun = {
     }
 };
 
-document.addEventListener("DOMContentLoaded", () => FlowRun.init());
+// Solo arranca en su propia pantalla (flow_run.html): el generador y el visor de
+// informes cargan este fichero para reutilizar la carga/ejecución de flujos
+// (js/informes-flujos.js) y allí no hay #flowRunBody.
+document.addEventListener("DOMContentLoaded", () => { if (document.getElementById("flowRunBody")) FlowRun.init(); });

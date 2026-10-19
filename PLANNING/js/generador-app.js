@@ -139,7 +139,7 @@ const GeneradorApp = {
         if (this.pendingInformeId) { qs.set("informe_id", this.pendingInformeId); this.pendingInformeId = null; }
         document.getElementById("toolEmpty").hidden = true;
         frame.hidden = false;
-        qs.set("v", "20261021h");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
+        qs.set("v", "20261022a");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
         frame.src = "informes-herramienta.html?" + qs.toString();
     },
 
@@ -181,7 +181,9 @@ const GeneradorApp = {
             { dpHost: 1, op: "page-reply", id: rid, ok, data, error }, window.location.origin);
         try {
             const op = pl && pl.op;
-            reply(true, (typeof op === "string" && op.indexOf("dt.") === 0)
+            reply(true, (typeof op === "string" && op.indexOf("fl.") === 0)
+                ? await InformesFlujos.handle(this.currentProject, op, pl.payload)            // Flujos de carga
+                : (typeof op === "string" && op.indexOf("dt.") === 0)
                 ? await DracoTables.handle(this.currentProject, op, pl.payload)               // Tablas Draco (vista previa)
                 : await InformesDatos.handle(this.currentProject, op, pl && pl.payload));
         } catch (err) {
@@ -205,6 +207,8 @@ const GeneradorApp = {
             case "delete":
                 await Informes.remove(p.id, pid);
                 return { id: p.id };
+            case "fl.list":
+                return InformesFlujos.handle(this.currentProject, op, p);     // el editor elige un flujo de carga
             case "tu.list":
             case "tu.describe":
                 return InformesDatos.handle(this.currentProject, op, p);      // el editor elige la vista de una actualización de tablas
