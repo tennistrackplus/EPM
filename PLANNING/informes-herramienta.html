@@ -854,7 +854,10 @@ function kpiEnsure(){
   dcall('dt.kpis',kp).then(function(r){ if(KPV.key!==key) return; KPV.status='ready'; KPV.values=r.values||{}; KPV.errors=r.errors||{}; update(); },
     function(e){ if(KPV.key!==key) return; KPV.status='error'; KPV.err=e; update(); });
 }
-function kpiRefresh(){ KPV.key=''; kpiEnsure(); if(KPV.status==='loading') setTimeout(paintAll,0); }   /* pinta ya el "actualizando" */
+function kpiRefresh(){ KPV.key=''; kpiEnsure(); if(KPV.status==='loading') setTimeout(update,0); }
+/* pinta ya el "actualizando" de los KPIs. update() y no paintAll(): paintAll vac\u00EDa los bloques que se montan aparte
+   (selector de variables, Tablas y Gr\u00E1ficos Draco...) y no los vuelve a montar hasta que llegan los KPIs, lo que hac\u00EDa
+   parpadear el selector y que la tabla no mostrara el velo de \u00ABActualizando\u00BB. */
 /* KPI pendiente de recalcular: su valor anterior ya no vale (le afecta lo que ha cambiado) */
 function kpiPending(k){
   if(KPV.status!=='loading'&&KPV.status!=='idle') return false;
@@ -1508,7 +1511,15 @@ document.addEventListener('change',function(e){
 var DFS=[], DFV={}, DFM={}, DFD={};
 /* el valor elegido se conserva entre repintados; si cambia el valor inicial en la definici\u00F3n, vuelve a \u00E9l */
 /* valor por defecto de un filtro; en «Campos del eje» (type "axis") es la lista de campos marcados, en JSON */
-function dfDef(f){ return f.type==='axis'?JSON.stringify(Array.isArray(f.def)?f.def:[]):(f.def||''); }
+function dfDef(f){
+  if(f.type==='axis') return JSON.stringify(Array.isArray(f.def)?f.def:[]);
+  if(f.multi) return JSON.stringify(Array.isArray(f.def)?f.def:(f.def?[f.def]:[]));
+  return f.def||'';
+}
+/* valores elegidos en un filtro de varios valores (lista; vac\u00EDa = todos) */
+function dfMultiSel(f){ var a; try{ a=JSON.parse(DFV[f.id]||'[]'); }catch(e){ a=[]; } return Array.isArray(a)?a:[]; }
+/* valor efectivo de un filtro de valores (null = sin filtrar) */
+function dfVal(f){ if(f.multi){ var a=dfMultiSel(f); return a.length?a:null; } var v=DFV[f.id]; return (v===''||v==null)?null:v; }
 function dfInit(){
   DFS=(SPEC&&SPEC.dracoFilters)||[]; var changed=false;
   DFS.forEach(function(f){ var d=dfDef(f); if(!Object.prototype.hasOwnProperty.call(DFV,f.id)||DFD[f.id]!==d){ if(DFV[f.id]!==d&&DFD[f.id]!==undefined) changed=true; DFV[f.id]=d; DFD[f.id]=d; } });
@@ -1521,13 +1532,31 @@ function dfReload(){
   if(kpiDefs().length) kpiRefresh();
 }
 function dfApplyVars(){
-  DFS.forEach(function(f){ if(f.type==='axis') return; var v=DFV[f.id]; (f.vars||[]).forEach(function(n){ n=String(n).toUpperCase(); if(v!==''&&v!=null) PVARS[n]=v; else delete PVARS[n]; }); });
+  DFS.forEach(function(f){ if(f.type==='axis'||f.multi) return; var v=DFV[f.id]; (f.vars||[]).forEach(function(n){ n=String(n).toUpperCase(); if(v!==''&&v!=null) PVARS[n]=v; else delete PVARS[n]; }); });
 }
 function dfFiltersFor(kind,id){
-  var out=[]; DFS.forEach(function(f){ var v=DFV[f.id]; if(f.type==='axis'||v===''||v==null||!f.dim||!f.attr) return;
-    if((f.objs||[]).some(function(o){ return o.k===kind&&o.id===id; })) out.push({dim:f.dim,attr:f.attr,value:v}); });
+  /* o.rep: el filtro solo se aplica a ESE informe de una tabla con informes vinculados */
+  var out=[]; DFS.forEach(function(f){ if(f.type==='axis'||!f.dim||!f.attr) return; var v=dfVal(f); if(v===null) return;
+    (f.objs||[]).forEach(function(o){ if(o.k!==kind||o.id!==id) return; var x={dim:f.dim,attr:f.attr,value:v}; if(o.rep) x.rep=o.rep; out.push(x); }); });
   return out;
 }
+var DFOPEN=null, DFMT={};
+document.addEventListener('click',function(e){
+  var t=e.target.closest&&e.target.closest('[data-act="dfm-open"],[data-act="dfm-apply"],[data-act="dfm-all"]');
+  if(!t){ if(DFOPEN&&!(e.target.closest&&e.target.closest('.dfm-pop'))){ DFOPEN=null; dfPaint(); } return; }
+  if(t.disabled) return;
+  var id=t.getAttribute('data-df'), f=DFS.filter(function(x){ return x.id===id; })[0]; if(!f) return;
+  var act=t.getAttribute('data-act');
+  if(act==='dfm-open'){ DFOPEN=(DFOPEN===id)?null:id; DFMT[id]=dfMultiSel(f).slice(); dfPaint(); return; }
+  var next=act==='dfm-all'?[]:(DFMT[id]||[]);
+  next=((DFM[id]&&DFM[id].list)||[]).filter(function(x){ return next.indexOf(x)>=0; }).concat(next.filter(function(x){ return !((DFM[id]&&DFM[id].list)||[]).some(function(y){ return y===x; }); }));
+  DFOPEN=null; dfSet(id,JSON.stringify(next));
+});
+document.addEventListener('change',function(e){
+  var t=e.target; if(!t||!t.hasAttribute||!t.hasAttribute('data-dfm-v')) return;
+  var id=t.getAttribute('data-dfm'), v=t.getAttribute('data-dfm-v'), a=(DFMT[id]||[]).filter(function(x){ return x!==v; });
+  if(t.checked) a.push(v); DFMT[id]=a;
+});
 /* Filtro «Campos del eje»: qu\u00E9 campos van en Filas (o Columnas) de una Tabla/Gr\u00E1fico Draco, en el orden configurado.
    Devuelve null si no hay ninguno vinculado a ese objeto. */
 function dfAxisSel(f){ var v; try{ v=JSON.parse(DFV[f.id]||'[]'); }catch(e){ v=[]; } return Array.isArray(v)?v:[]; }
@@ -1548,10 +1577,10 @@ function dfAxisFor(kind,id){
 var DFSEC={id:null,info:null,vars:{},vload:false,io:null};
 function dfWalk(bl,fn){ (bl||[]).forEach(function(b){ if(!b) return; fn(b); if(b.type==='group') dfWalk(b.blocks,fn); if(b.tabs) b.tabs.forEach(function(t){ dfWalk(t&&t.blocks,fn); }); }); }
 function dfKpiVars(k){ var o={}; (((k&&k.parts)||{}).conds||[]).forEach(function(c){ String(c).replace(/\$([A-Za-z][A-Za-z0-9_]*)\$/g,function(m,n){ o[n.toUpperCase()]=1; return m; }); }); return Object.keys(o); }
-function dfSecOf(s){
+function dfSecOf(s,onlyRefs){
   var tc={}, kp={}, vr={};
   dfWalk(s.blocks,function(b){
-    if((b.type==='dracoTable'||b.type==='dracoChart')&&b.ref) tc[b.ref]=1;
+    if((b.type==='dracoTable'||b.type==='dracoChart')&&b.ref&&(!onlyRefs||onlyRefs[b.ref])) tc[b.ref]=1;
     if(b.type==='dracoKpi') ((b.show&&b.show.length)?b.show:kpiDefs().map(function(k){ return k.id; })).forEach(function(id){ kp[id]=1; });
     if(b.type==='dracoVar'&&b.variable) vr[String(b.variable).toUpperCase()]=1;
   });
@@ -1582,7 +1611,20 @@ function dfSecVars(){
 function dfShown(f){
   if(EDIT||SLIDES||!DFSEC.id) return true;
   var I=dfSecInfo(); if(!I.any[f.id]) return true;
-  var x=I.by[DFSEC.id]; return !!(x&&dfHits(f,x));
+  var x=I.by[DFSEC.id]; if(!x) return false;
+  /* con pesta\u00F1as: solo cuenta lo que se ve (una tabla de otra pesta\u00F1a no hace aparecer sus filtros) */
+  var vis=dfVisRefs(DFSEC.id), sec=vis&&((SPEC&&SPEC.sections)||[]).filter(function(s){ return s&&s.id===DFSEC.id; })[0];
+  if(sec) x=dfSecOf(sec,vis);
+  return dfHits(f,x);
+}
+/* Tablas/Gr\u00E1ficos Draco que se ven ahora en una secci\u00F3n (no los de pesta\u00F1as no activas ni los ocultos); null si a\u00FAn no est\u00E1 pintada */
+function dfVisRefs(secId){
+  var el=document.getElementById(secId); if(!el) return null;
+  var shells=el.querySelectorAll('.dt[data-dt],.dc[data-dc]'); if(!shells.length) return null;
+  var refs={};
+  [].forEach.call(shells,function(n){ if(n.closest('[hidden]')||!n.getClientRects().length) return;
+    var b=n.hasAttribute('data-dt')?DTB[n.getAttribute('data-dt')]:DCB[n.getAttribute('data-dc')]; if(b&&b.ref) refs[b.ref]=1; });
+  return refs;
 }
 function dfSecSet(id){ if(!id||id===DFSEC.id) return; DFSEC.id=id; dfPaint(); }
 function dfSecSpy(){
@@ -1612,9 +1654,19 @@ function dfCtl(f){
   }
   var v=DFV[f.id]||'', lab='<span>'+esc(f.label||f.attr||'Filtro')+'</span>', M=DFM[f.id];
   if(HOSTON&&!EDIT&&!M) dfLoad(f);
-  var list=(M&&M.list)||[]; if(v&&list.indexOf(v)<0) list=[v].concat(list);
+  var list=(M&&M.list)||[]; if(v&&!f.multi&&list.indexOf(v)<0) list=[v].concat(list);
   var off=(EDIT||!HOSTON)?' disabled title="Funciona en la vista previa, dentro de Draco Planning"':'';
   var hid=dfShown(f)?'':' style="display:none"';
+  if(f.multi){
+    /* varios valores: desplegable con casillas; se aplica con \u00ABAplicar\u00BB (una sola consulta) */
+    var sel=dfMultiSel(f), open=DFOPEN===f.id, temp=open?(DFMT[f.id]||sel):sel;
+    sel.forEach(function(x){ if(list.indexOf(x)<0) list=[x].concat(list); });
+    var txt=sel.length?(sel.length===1?sel[0]:sel.length+' seleccionados'):'Todos';
+    return '<div class="fc dfm"'+hid+'>'+lab+'<div class="dfm-w"><button type="button" class="dfm-btn'+(sel.length?' on':'')+'" data-act="dfm-open" data-df="'+esc(f.id)+'" aria-expanded="'+(open?'true':'false')+'"'+off+'>'+esc(txt)+' \u25BE</button>'
+      +(open?'<div class="dfm-pop" role="listbox" aria-multiselectable="true"><div class="dfm-list">'+(list.length?list.map(function(x){ return '<label><input type="checkbox" data-dfm-v="'+esc(x)+'" data-dfm="'+esc(f.id)+'"'+(temp.indexOf(x)>=0?' checked':'')+'><span>'+esc(x)+'</span></label>'; }).join(''):'<p class="dfm-empty">'+(M&&M.status==='loading'?'Cargando\u2026':'Sin valores')+'</p>')+'</div>'
+        +'<div class="dfm-act"><button type="button" data-act="dfm-all" data-df="'+esc(f.id)+'">Todos</button><button type="button" class="pri" data-act="dfm-apply" data-df="'+esc(f.id)+'">Aplicar</button></div></div>':'')
+      +'</div></div>';
+  }
   if(f.type==='pills'||f.type==='chips'){
     var cls=f.type==='chips'?'chipb':'pill', wrapc=f.type==='chips'?'chipsb':'pills';
     return '<div class="fc"'+hid+'>'+lab+'<div class="'+wrapc+'"><button class="'+cls+(v===''?' on':'')+'" data-act="dfpill" data-df="'+esc(f.id)+'" data-v=""'+off+'>Todos</button>'
@@ -2008,7 +2060,27 @@ function btnAct(a){
   if(!a) return;
   if(a.t==='busy'){ pgBusy(a.show!==false,a.title); return; }
   if(a.t==='prop'){ if(!a.prop||a.prop==='visible') pgSetVisible(a.target,a.value!==false); return; }
-  if(a.t==='js'){ return (new Function('page',String(a.code||'')))(PAGE_API); }
+  if(a.t==='js') return btnJs(String(a.code||''));
+}
+/* Acci\u00F3n JS: la siguiente acci\u00F3n espera a que termine TODO lo que el c\u00F3digo deja programado con setTimeout
+   (tambi\u00E9n los setTimeout que se programen dentro de otro) y, si devuelve una promesa, a que se resuelva. As\u00ED
+   "setTimeout(() => { ... }, 2000);" hace esperar 2 segundos sin tener que escribir una promesa. L\u00EDmite: 2 minutos. */
+function btnJs(code){
+  var ST=window.setTimeout, CT=window.clearTimeout, pending=0, ids={}, resolve, finished=false;
+  var all=new Promise(function(r){ resolve=r; });
+  var check=function(){ if(pending<=0&&!finished){ finished=true; resolve(); } };
+  var tST=function(fn,ms){ var args=[].slice.call(arguments,2); pending++;
+    var id=ST.call(window,function(){ delete ids[id]; install();
+      try{ if(typeof fn==='function') fn.apply(window,args); else (0,eval)(String(fn)); }
+      catch(e){ console.error('[Bot\u00F3n] Error en el c\u00F3digo programado con setTimeout:',e); tuToast('Error en una acci\u00F3n del bot\u00F3n: '+((e&&e.message)||e),'bad'); }
+      finally{ uninstall(); pending--; check(); } },ms);
+    ids[id]=1; return id; };
+  var tCT=function(id){ if(ids[id]){ delete ids[id]; pending--; CT.call(window,id); check(); } else CT.call(window,id); };
+  var install=function(){ window.setTimeout=tST; window.clearTimeout=tCT; }, uninstall=function(){ window.setTimeout=ST; window.clearTimeout=CT; };
+  var res; install();
+  try{ res=(new Function('page',code))(PAGE_API); } finally{ uninstall(); }
+  var cap=new Promise(function(r){ ST.call(window,function(){ if(!finished){ console.warn('[Bot\u00F3n] La acci\u00F3n JS sigue con tareas programadas tras 2 minutos: se contin\u00FAa con la siguiente.'); } r(); },120000); });
+  return Promise.resolve(res).then(function(){ check(); return Promise.race([all,cap]); });
 }
 function btnRun(btn,it){
   var acts=(it&&it.actions)||[], i=0; btn.disabled=true;
@@ -3509,6 +3581,12 @@ tr[data-act="cross"]{cursor:pointer}tr[data-act="cross"]:hover td{background:col
 /* ---- Actualizaci\u00F3n de tablas (bloque tableUpdate) ---- */
 .tu{padding:clamp(16px,2vw,24px)}
 .blk[hidden],section[hidden]{display:none!important}
+.dfm-w{position:relative}.dfm-btn{font:inherit;font-size:13.5px;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:var(--rb,9px);padding:6px 10px;cursor:pointer;min-width:120px;text-align:left}
+.dfm-btn.on{border-color:var(--brand);color:var(--brand);font-weight:600}
+.dfm-pop{position:absolute;top:calc(100% + 4px);left:0;z-index:60;min-width:220px;max-width:340px;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 18px 40px -18px rgba(15,23,42,.4);padding:8px}
+.dfm-list{max-height:260px;overflow:auto;display:flex;flex-direction:column}.dfm-list label{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;font-size:13.5px;color:var(--ink);cursor:pointer}.dfm-list label:hover{background:var(--bg)}
+.dfm-act{display:flex;justify-content:flex-end;gap:6px;border-top:1px solid var(--line);margin-top:6px;padding-top:8px}.dfm-act button{font:inherit;font-size:13px;font-weight:600;padding:5px 10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);cursor:pointer}.dfm-act button.pri{background:var(--brand);border-color:var(--brand);color:#fff}
+.dfm-empty{margin:4px 6px;font-size:13px;color:var(--muted)}
 [data-hid]{opacity:.42;outline:1.5px dashed var(--muted);outline-offset:4px}
 .btng{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .pg-busy{position:fixed;inset:0;z-index:600;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--bg) 55%,transparent);backdrop-filter:blur(1.5px)}
@@ -6413,7 +6491,7 @@ function btPaint(){
     if(cur.t==='busy') right='<label>T\u00EDtulo<input data-bx-f="title" value="'+esc(cur.title||'')+'" placeholder="Por ejemplo: Calculando\u2026"></label>'
       +'<label>Acci\u00F3n<select data-bx-f="show">'+opt('1','Mostrar el indicador',cur.show!==false)+opt('0','Ocultar el indicador',cur.show===false)+'</select></label>';
     else if(cur.t==='js') right='<label>C\u00F3digo JavaScript<textarea data-bx-f="code" spellcheck="false" placeholder="setTimeout(() => { console.log(\'Han pasado 2 segundos\'); }, 2000);">'+esc(cur.code||'')+'</textarea></label>'
-      +'<p class="hint">Recibe <code>page</code>: <code>page.show(id)</code>, <code>page.hide(id)</code>, <code>page.busy(texto)</code>, <code>page.idle()</code>, <code>page.toast(texto)</code>, <code>page.refresh()</code>. Si devuelve una promesa, la siguiente acci\u00F3n espera a que termine (p. ej. <code>return new Promise(r =&gt; setTimeout(r, 2000));</code>).</p>';
+      +'<p class="hint">La siguiente acci\u00F3n espera a que termine: tambi\u00E9n lo programado con <code>setTimeout</code> (p. ej. <code>setTimeout(() =&gt; { \u2026 }, 2000);</code> hace esperar 2 segundos) y, si devuelve una promesa, a que se resuelva. Recibe <code>page</code>: <code>page.show(id)</code>, <code>page.hide(id)</code>, <code>page.busy(texto)</code>, <code>page.idle()</code>, <code>page.toast(texto)</code>, <code>page.refresh()</code>.</p>';
     else if(cur.t==='prop'){ var tk=cur.target?(cur.target.kind==='section'?'s:'+cur.target.id:'b:'+cur.target.uid):'';
       right='<label>Propiedad<select data-bx-f="prop">'+opt('visible','Visible',true)+'</select></label>'
         +'<label>Nuevo valor<select data-bx-f="value">'+opt('1','Visible',cur.value!==false)+opt('0','Oculto',cur.value===false)+'</select></label>'
@@ -6580,7 +6658,8 @@ function dfManager(){
 }
 function edDF(f,i){
   var h=gText('Etiqueta','label',f.label,'Por ejemplo: Versi\u00F3n')
-    +gSel('Tipo de control','type',f.type||'select',[['select','Desplegable'],['pills','Pastillas'],['chips','Chips'],['axis','Campos del eje (elige qu\u00E9 campos se ven)']]);
+    +gSel('Tipo de control','type',f.type||'select',[['select','Desplegable'],['pills','Pastillas'],['chips','Chips'],['axis','Campos del eje (elige qu\u00E9 campos se ven)']])
+    +(f.type==='axis'?'':gSel('Valores','multi',f.multi?'1':'',[['','Uno'],['1','Varios (solo filtra: no da valor a variables)']]));
   if(!HOSTED) return h+edNote('El campo y los v\u00EDnculos se configuran dentro de Draco Planning.');
   return h+'<div id="dfBox"><p class="insp-hint">Cargando\u2026</p></div>'
     +'<button class="btn small" data-df-del="'+i+'" type="button" style="margin-top:10px">Borrar el filtro</button>';
@@ -6595,7 +6674,10 @@ function dfAfterRender(){
   var mk=f.cube+'|'+f.dim+'|'+f.attr;
   var pM=(f.cube&&f.dim)?(DFE.members[mk]?Promise.resolve(DFE.members[mk]):dtCall('dt.members',{cube:f.cube,dim:f.dim,attr:f.attr}).then(function(l){ DFE.members[mk]=l; return l; },function(){ return []; })):Promise.resolve([]);
   var pV=(DFE.vars&&DFE.varsKey===rk)?Promise.resolve(DFE.vars):(refs.length?dtCall('dt.varsFor',{refs:refs}):Promise.resolve([])).then(function(l){ DFE.vars=l; DFE.varsKey=rk; return l; });
-  Promise.all([pC,pF,pM,pV]).then(function(r){ if(still()) dfPaintBox(f,r[0],r[1],r[2],r[3]); },function(e){ if(still()) tuPaintErr('dfBox',e,function(){ DFE={cubes:null,fields:{},members:{},vars:null,varsKey:''}; edRender(); }); });
+  /* informes de cada tabla (principal y vinculados): un filtro puede ir solo a uno de ellos */
+  DFE.reps=DFE.reps||{};
+  var pR=Promise.all(refs.map(function(ref){ return DFE.reps[ref]?Promise.resolve(DFE.reps[ref]):dtCall('dt.reports',{ref:ref}).then(function(l){ DFE.reps[ref]=l||[]; return l; },function(){ DFE.reps[ref]=[]; return []; }); }));
+  Promise.all([pC,pF,pM,pV,pR]).then(function(r){ if(still()) dfPaintBox(f,r[0],r[1],r[2],r[3]); },function(e){ if(still()) tuPaintErr('dfBox',e,function(){ DFE={cubes:null,fields:{},members:{},vars:null,varsKey:''}; edRender(); }); });
 }
 function dfPaintBox(f,cubes,fields,members,vars){
   var el=$('dfBox'); if(!el) return;
@@ -6604,18 +6686,24 @@ function dfPaintBox(f,cubes,fields,members,vars){
   var h='<label class="ef"><span>Cubo</span><select data-dfcube>'+opt('','\u2014 elige un cubo \u2014',!f.cube)+(cubes||[]).map(function(c){ return opt(c.name,c.name,c.name===f.cube); }).join('')+'</select></label>';
   if(f.cube){ var fk=f.dim?(f.dim+'|'+f.attr):''; h+='<label class="ef"><span>Campo (dimensi\u00F3n \u00B7 atributo)</span><select data-dffield>'+opt('','\u2014 elige un campo \u2014',!fk)+(fields||[]).map(function(x){ var k=x.dim+'|'+x.attr; return opt(k,x.label,k===fk); }).join('')+'</select></label>'; }
   if(f.dim) h+='<label class="ef"><span>Valor inicial</span><select data-dfdef>'+opt('','Todos (sin filtrar)',!f.def)+(members||[]).slice(0,2000).map(function(v){ return opt(v,v,v===f.def); }).join('')+'</select></label>';
+  if(f.multi){ h+='<div class="insp-sec">Vincular a variables</div><p class="insp-hint">Con varios valores el filtro solo filtra directamente: no da valor a variables.</p>'; }
   /* Vincular a variables: TODAS las del informe (tablas y gr\u00E1ficos + KPIs) */
   var vm={}; (vars||[]).forEach(function(v){ vm[v.name]={name:v.name,info:(v.dim||'')+' \u00B7 '+(v.attr||''),uso:(v.tablas||[]).join(', ')}; });
   dkList().forEach(function(k){ Object.keys(k.vars||{}).forEach(function(n){ var o=vm[n]||(vm[n]={name:n,info:'',uso:''}); o.uso=(o.uso?o.uso+', ':'')+'KPI '+(k.label||k.name); }); });
   var vl=Object.keys(vm).sort(), sel=(f.vars||[]).map(function(x){ return String(x).toUpperCase(); });
-  h+='<div class="insp-sec">Vincular a variables</div>'+(vl.length?vl.map(function(n){ var o=vm[n]; return '<label class="df-chk"><input type="checkbox" data-dfvar="'+esc(n)+'"'+(sel.indexOf(n)>=0?' checked':'')+'><span><b>$'+esc(n)+'$</b>'+(o.info?' <i>'+esc(o.info)+'</i>':'')+(o.uso?'<br><small>'+esc(o.uso)+'</small>':'')+'</span></label>'; }).join('')
+  if(!f.multi) h+='<div class="insp-sec">Vincular a variables</div>'+(vl.length?vl.map(function(n){ var o=vm[n]; return '<label class="df-chk"><input type="checkbox" data-dfvar="'+esc(n)+'"'+(sel.indexOf(n)>=0?' checked':'')+'><span><b>$'+esc(n)+'$</b>'+(o.info?' <i>'+esc(o.info)+'</i>':'')+(o.uso?'<br><small>'+esc(o.uso)+'</small>':'')+'</span></label>'; }).join('')
     :'<p class="insp-hint">Ninguna Tabla, Gr\u00E1fico o KPI Draco de este informe usa variables.</p>');
   /* Filtrar directamente: tablas, gr\u00E1ficos y KPIs */
-  var has=function(k,id){ return (f.objs||[]).some(function(o){ return o.k===k&&o.id===id; }); };
+  var has=function(k,id,rep){ return (f.objs||[]).some(function(o){ return o.k===k&&o.id===id&&(rep?o.rep===rep:!o.rep); }); };
+  var anyRep=function(id){ return (f.objs||[]).some(function(o){ return o.k==='tc'&&o.id===id&&o.rep; }); };
   var objs=dfObjects(), ks=dkList();
   h+='<div class="insp-sec">Filtrar directamente</div><p class="insp-hint">A lo marcado se le a\u00F1ade la condici\u00F3n <b>'+esc((f.attr||'campo')+' = valor elegido')+'</b> (si su cubo tiene ese campo).</p>'
     +(objs.length||ks.length?'':'<p class="insp-hint">Este informe no tiene Tablas, Gr\u00E1ficos ni KPIs Draco.</p>')
-    +objs.map(function(o){ return '<label class="df-chk"><input type="checkbox" data-dfobj="tc" data-id="'+esc(o.id)+'"'+(has('tc',o.id)?' checked':'')+'><span>'+esc(Object.keys(o.kinds).join(' y '))+': <b>'+esc(o.name)+'</b></span></label>'; }).join('')
+    +objs.map(function(o){ var R=(DFE.reps&&DFE.reps[o.id])||[];
+      var hh='<label class="df-chk"><input type="checkbox" data-dfobj="tc" data-id="'+esc(o.id)+'"'+(has('tc',o.id)?' checked':'')+'><span>'+esc(Object.keys(o.kinds).join(' y '))+': <b>'+esc(o.name)+'</b>'+(R.length>1?' <i>(todos sus informes)</i>':'')+'</span></label>';
+      /* tabla con informes vinculados: tambi\u00E9n se puede aplicar a uno solo */
+      if(R.length>1) hh+=R.map(function(r,ri){ return '<label class="df-chk" style="margin-left:22px"><input type="checkbox" data-dfobj="tc" data-id="'+esc(o.id)+'" data-rep="'+esc(r.id)+'"'+(has('tc',o.id,r.id)?' checked':'')+'><span>'+(r.main?'Principal':'Vinculado '+ri)+' \u00B7 '+esc(r.name)+'</span></label>'; }).join('');
+      return hh; }).join('')
     +ks.map(function(k){ return '<label class="df-chk"><input type="checkbox" data-dfobj="kpi" data-id="'+esc(k.id)+'"'+(has('kpi',k.id)?' checked':'')+'><span>KPI: <b>'+esc(k.label||k.name)+'</b></span></label>'; }).join('');
   el.innerHTML=h;
 }
@@ -6629,7 +6717,7 @@ function dfAxisBox(f,cubes,fields,opt){
   h+='<label class="ef"><span>Eje que cambia</span><select data-dfaxis-axis>'+opt('rows','Filas',f.axis!=='cols')+opt('cols','Columnas',f.axis==='cols')+'</select></label>';
   h+='<div class="insp-sec">Campos (en orden)</div>';
   h+=f.axisFields.length?f.axisFields.map(function(x,i){ var k=x.dim+'|'+x.attr, on=f.def.indexOf(k)>=0;
-    return '<div class="dk-row"><label class="df-chk" style="flex:1;margin:0" title="Marcado por defecto"><input type="checkbox" data-dfax-def="'+i+'"'+(on?' checked':'')+'><span><b>'+esc(x.label||x.attr)+'</b> <i>'+esc(x.dim)+'</i></span></label>'
+    return '<div class="dk-row"><input type="checkbox" data-dfax-def="'+i+'"'+(on?' checked':'')+' title="Marcado por defecto"><input type="text" class="dfax-lbl" style="flex:1;min-width:0;font:inherit;padding:4px 6px;margin:0 6px" data-dfax-label="'+i+'" value="'+esc(x.label||x.attr)+'" title="Texto del bot\u00F3n ('+esc(x.dim+' \u00B7 '+x.attr)+')">'
       +'<div class="dk-acts"><button class="mini" data-dfax-up="'+i+'" title="Subir"'+(i?'':' disabled')+'>\u2191</button><button class="mini" data-dfax-down="'+i+'" title="Bajar"'+(i<f.axisFields.length-1?'':' disabled')+'>\u2193</button><button class="mini" data-dfax-del="'+i+'" title="Quitar">\u2715</button></div></div>'; }).join('')
     :'<p class="insp-hint">A\u00F1ade los campos que se podr\u00E1n elegir.</p>';
   var used={}; f.axisFields.forEach(function(x){ used[x.dim+'|'+x.attr]=1; });
@@ -6642,6 +6730,7 @@ function dfAxisBox(f,cubes,fields,opt){
 $('inspBody').addEventListener('change',function(e){
   var t=e.target;
   if(t.hasAttribute('data-dfaxis-axis')) return dfUpd(function(f){ f.axis=t.value==='cols'?'cols':'rows'; });
+  if(t.hasAttribute('data-dfax-label')) return dfUpd(function(f){ var x=f.axisFields[+t.getAttribute('data-dfax-label')]; if(x) x.label=t.value.trim()||x.attr; });
   if(t.hasAttribute('data-dfax-add')){ if(!t.value) return; return dfUpd(function(f){ var p=t.value.split('|'); f.axisFields=f.axisFields||[]; f.axisFields.push({dim:p[0],attr:p[1],label:p.slice(2).join('|')||p[1]}); if(!Array.isArray(f.def)) f.def=[]; if(!f.def.length) f.def.push(p[0]+'|'+p[1]); edRender(); }); }
   if(t.hasAttribute('data-dfax-def')) return dfUpd(function(f){ var x=f.axisFields[+t.getAttribute('data-dfax-def')], k=x.dim+'|'+x.attr; if(!Array.isArray(f.def)) f.def=[];
     if(t.checked){ if(f.def.indexOf(k)<0) f.def.push(k); } else if(f.def.length>1) f.def=f.def.filter(function(y){ return y!==k; }); else { t.checked=true; }
@@ -6662,7 +6751,13 @@ $('inspBody').addEventListener('change',function(e){
   if(t.hasAttribute('data-dffield')) return dfUpd(function(f){ var p=t.value.split('|'); f.dim=p[0]||''; f.attr=p[1]||''; f.def=''; if(!f.label||f.label==='Filtro') f.label=(p[1]||'Filtro'); edRender(); });
   if(t.hasAttribute('data-dfdef')) return dfUpd(function(f){ f.def=t.value; });
   if(t.hasAttribute('data-dfvar')) return dfUpd(function(f){ var n=t.getAttribute('data-dfvar'); f.vars=(f.vars||[]).filter(function(x){ return String(x).toUpperCase()!==n; }); if(t.checked) f.vars.push(n); });
-  if(t.hasAttribute('data-dfobj')) return dfUpd(function(f){ var k=t.getAttribute('data-dfobj'), id=t.getAttribute('data-id'); f.objs=(f.objs||[]).filter(function(o){ return !(o.k===k&&o.id===id); }); if(t.checked) f.objs.push({k:k,id:id}); });
+  if(t.hasAttribute('data-dfobj')) return dfUpd(function(f){ var k=t.getAttribute('data-dfobj'), id=t.getAttribute('data-id'), rep=t.getAttribute('data-rep')||'';
+    if(rep){ /* un informe concreto: quita \u00ABtoda la tabla\u00BB */
+      f.objs=(f.objs||[]).filter(function(o){ return !(o.k===k&&o.id===id&&(!o.rep||o.rep===rep)); }); if(t.checked) f.objs.push({k:k,id:id,rep:rep});
+    } else { /* toda la tabla: quita los informes sueltos */
+      f.objs=(f.objs||[]).filter(function(o){ return !(o.k===k&&o.id===id); }); if(t.checked) f.objs.push({k:k,id:id});
+    }
+    edRender(); });
 });
 $('inspBody').addEventListener('click',function(e){
   var t=e.target.closest&&e.target.closest('[data-df-new],[data-df-del],[data-df-props]'); if(!t) return; e.preventDefault();
