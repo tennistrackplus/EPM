@@ -1160,10 +1160,15 @@ function loadReportDefinition(editReportGrid, reportId) {
 function applyDracoRuntimeFilters() {
     const list = (typeof window !== "undefined" && Array.isArray(window.__dracoRuntimeFilters)) ? window.__dracoRuntimeFilters : [];
     list.forEach(f => {
-        if (!f || !f.dim || !f.attr || f.value === undefined || f.value === null || String(f.value) === "") return;
+        if (!f || !f.dim || !f.attr || f.value === undefined || f.value === null) return;
+        // f.rep: solo para ESE informe de un grupo vinculado (sin rep: para todos los informes de la tabla)
+        if (f.rep !== undefined && f.rep !== null && f.rep !== "" && Number(f.rep) !== Number(ReportState.ReportId)) return;
+        // f.value: un valor, o una lista (filtro de varios valores)
+        const values = (Array.isArray(f.value) ? f.value : [f.value]).map(String).filter(v => v !== "");
+        if (!values.length) return;
         const D = String(f.dim).toUpperCase(), A = String(f.attr).toUpperCase();
         ReportState.Filters = (ReportState.Filters || []).filter(x => !(String(x.Dimension).toUpperCase() === D && String(x.AttributeName).toUpperCase() === A));
-        ReportState.Filters.push({ Dimension: f.dim, AttributeName: f.attr, Value: JSON.stringify({ mode: "list", values: [String(f.value)] }) });
+        ReportState.Filters.push({ Dimension: f.dim, AttributeName: f.attr, Value: JSON.stringify({ mode: "list", values }) });
     });
 }
 
@@ -3862,13 +3867,13 @@ function buildSelect(measuresGrid, relGrid) {
 
     for (const c of ReportState.Columns) {
         if (!first) sql += "," + CRLF;
-        sql += "    " + getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName;
+        sql += "    " + dracoAxisCol(relGrid, c) + (c.SqlAttr ? " AS " + c.AttributeName : "");
         first = false;
     }
 
     for (const r of ReportState.Rows) {
         if (!first) sql += "," + CRLF;
-        sql += "    " + getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName;
+        sql += "    " + dracoAxisCol(relGrid, r) + (r.SqlAttr ? " AS " + r.AttributeName : "");
         first = false;
     }
 
@@ -4208,10 +4213,10 @@ function computeGroupingSetDimensionsAndHierarchies(relGrid) {
     const dimensions = [null]; // índice 1-based, dimensions[0] sin usar
 
     for (const r of ReportState.Rows) {
-        dimensions.push(getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName);
+        dimensions.push(dracoAxisCol(relGrid, r));
     }
     for (const c of ReportState.Columns) {
-        dimensions.push(getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName);
+        dimensions.push(dracoAxisCol(relGrid, c));
     }
 
     // ---- HIERARCHIES: longitud de cada tramo de "misma JERARQUÍA real" ----
@@ -4347,8 +4352,8 @@ function configSetTuplesWithSubtotals(relGrid) {
     const { dimensions, hierarchiesAcum, combinations } = computeGroupingSetDimensionsAndHierarchies(relGrid);
     const baseTuples = combinations.map(item => groupingSetTupleToColumnList(item, dimensions, hierarchiesAcum));
 
-    const colsAxisFields = ReportState.Columns.map(c => getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName);
-    const rowsAxisFields = ReportState.Rows.map(r => getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName);
+    const colsAxisFields = ReportState.Columns.map(c => dracoAxisCol(relGrid, c));
+    const rowsAxisFields = ReportState.Rows.map(r => dracoAxisCol(relGrid, r));
 
     const extraTuples = [];
 
@@ -4469,10 +4474,10 @@ function buildSelectWithSubtotals(measuresGrid, relGrid) {
     let sql = buildSelect(measuresGrid, relGrid);
 
     for (const c of ReportState.Columns) {
-        sql += "," + CRLF + "    GROUPING(" + getTableAlias(relGrid, c.Dimension) + "." + c.AttributeName + ") AS " + subtotalFlagName(c.AttributeName);
+        sql += "," + CRLF + "    GROUPING(" + dracoAxisCol(relGrid, c) + ") AS " + subtotalFlagName(c.AttributeName);
     }
     for (const r of ReportState.Rows) {
-        sql += "," + CRLF + "    GROUPING(" + getTableAlias(relGrid, r.Dimension) + "." + r.AttributeName + ") AS " + subtotalFlagName(r.AttributeName);
+        sql += "," + CRLF + "    GROUPING(" + dracoAxisCol(relGrid, r) + ") AS " + subtotalFlagName(r.AttributeName);
     }
 
     return sql;
@@ -4643,7 +4648,34 @@ function buildDracoExcReportData(relGrid, measuresGrid, atributesGrid, withSubto
     return sql;
 }
 
+/* Columna física de un campo de los ejes: su atributo real (SqlAttr si se le ha dado otro nombre, ver dracoDedupAxisNames). */
+function dracoAxisCol(relGrid, f) {
+    return getTableAlias(relGrid, f.Dimension) + "." + (f.SqlAttr || f.AttributeName);
+}
+/**
+ * Dos campos de los ejes con el MISMO nombre de atributo (p. ej. ACCOUNT.DESCRIPTION y COMPANY.DESCRIPTION) darían
+ * dos columnas iguales en REPORT_DATA y el motor lo rechaza ("duplicate column names"). Al segundo y siguientes se les
+ * da un nombre propio (DESCRIPTION_COMPANY) que usan todas las consultas; la columna se sigue leyendo con su nombre
+ * real (SqlAttr). El pintado vuelve a cargar la definición, así que los encabezados no cambian. Sin repetidos, el SQL
+ * es exactamente el de siempre.
+ */
+function dracoDedupAxisNames() {
+    const seen = new Set();
+    [...(ReportState.Columns || []), ...(ReportState.Rows || [])].forEach(f => {
+        if (!f || !f.AttributeName || f.SqlAttr) { if (f && f.AttributeName) seen.add(String(f.AttributeName).toUpperCase()); return; }
+        const up = String(f.AttributeName).toUpperCase();
+        if (!seen.has(up)) { seen.add(up); return; }
+        const base = String(f.AttributeName) + "_" + String(f.Dimension || "").replace(/[^A-Za-z0-9_]/g, "_");
+        let alias = base, n = 2;
+        while (seen.has(alias.toUpperCase())) alias = base + "_" + (n++);
+        f.SqlAttr = f.AttributeName;
+        f.AttributeName = alias;
+        seen.add(alias.toUpperCase());
+    });
+}
+
 function buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop) {
+    dracoDedupAxisNames();
     if (ReportState.Rows.length === 0 && ReportState.Columns.length === 0 && ReportState.Measures.length === 0) {
         throw new Error("Añade al menos un campo a Filas o Columnas.");
     }
