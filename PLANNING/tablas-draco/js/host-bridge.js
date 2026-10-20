@@ -786,7 +786,9 @@
         getItem(name) {
             const stored = namedRangesStore()[name];
             if (!stored) throw new Error(`host-bridge: nombre definido "${name}" no existe.`);
-            return { load() { return this; }, name, getRange: () => makeRange(stored.r1, stored.c1, stored.r2, stored.c2, stored.sheet) };
+            const rng = () => makeRange(stored.r1, stored.c1, stored.r2, stored.c2, stored.sheet);
+            // getRangeOrNullObject: lo usa la planificación del add-in (marcar celdas editadas, validar dimensiones)
+            return { load() { return this; }, name, getRange: rng, getRangeOrNullObject: rng };
         },
         getItemOrNullObject(name) {
             const stored = namedRangesStore()[name];
@@ -795,6 +797,8 @@
                 name,
                 isNullObject: !stored,
                 getRange: () => stored ? makeRange(stored.r1, stored.c1, stored.r2, stored.c2, stored.sheet) : null,
+                getRangeOrNullObject: () => stored ? makeRange(stored.r1, stored.c1, stored.r2, stored.c2, stored.sheet)
+                    : { isNullObject: true, load() { return this; } },
                 delete: () => { delete namedRangesStore()[name]; }
             };
         },
