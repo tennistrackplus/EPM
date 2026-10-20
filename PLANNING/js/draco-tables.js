@@ -24,7 +24,7 @@ const DracoTables = {
     MAX_NAME: 120,
     MAX_DESC: 500,
     MAX_ENGINES: 6,
-    ENGINE_URL: "tablas-draco/engine.html?v=20261022c",
+    ENGINE_URL: "tablas-draco/engine.html?v=20261022e",
 
     engines: new Map(),      // "proyecto:id" -> { frame, host, stamp, chain, lastUse }
     pending: {},             // precarga: "proyecto:id" -> { pr, at }
@@ -565,9 +565,11 @@ const DracoTables = {
         const ok = (x) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(x || ""));
         if (!key || !ok(f.fld.name) || !ok(key.name) || !ok(f.att.name)) return null;
         const alias = "xf_" + String(f.fld.name).replace(/[^A-Za-z0-9_]/g, "_");
-        const num = /INT|NUMERIC|FLOAT|DECIMAL|NUMBER|DOUBLE|BIGNUMERIC/i.test(f.att.dataType || "") && /^-?\d+(\.\d+)?$/.test(f.value.trim());
-        const lit = num ? f.value.trim() : "'" + this.resolveKpiVars("'$V$'", { V: f.value }).slice(1, -1) + "'";
-        return { join: `LEFT JOIN ${table} ${alias} ON f.${f.fld.name} = ${alias}.${key.name}`, cond: `${alias}.${f.att.name} = ${lit}` };
+        const numType = /INT|NUMERIC|FLOAT|DECIMAL|NUMBER|DOUBLE|BIGNUMERIC/i.test(f.att.dataType || "");
+        const lit = (v) => (numType && /^-?\d+(\.\d+)?$/.test(String(v).trim())) ? String(v).trim() : "'" + this.resolveKpiVars("'$V$'", { V: String(v) }).slice(1, -1) + "'";
+        const vals = Array.isArray(f.value) ? f.value : [f.value];
+        const cond = vals.length === 1 ? `${alias}.${f.att.name} = ${lit(vals[0])}` : `${alias}.${f.att.name} IN (${vals.map(lit).join(", ")})`;
+        return { join: `LEFT JOIN ${table} ${alias} ON f.${f.fld.name} = ${alias}.${key.name}`, cond };
     },
 
     KPI_EXC_AGGS: ["MIN", "MAX", "AVG", "SUM", "COUNT"],
@@ -771,8 +773,24 @@ const DracoTables = {
      * existen en el modelo del cubo (el resto se ignora: ese objeto no tiene ese campo). Devuelve también el campo del
      * modelo (para construir joins de KPI).
      */
+    /** Informes de una Tabla Draco: el principal y, si los tiene, sus vinculados ({ id, name, main, axis }). */
+    async reportsOf(project, ref) {
+        if (!ref) return [];
+        let def = null;
+        try { def = JSON.parse((await this.get(project.PROYECTO_ID, ref)).DEFINICION_JSON || "{}"); } catch (e) { def = null; }
+        if (!def || !def.settings) return [];
+        const reports = JSON.parse(def.settings.epm_reports || "{}");
+        const ids = [String(def.reportId), ...((def.linked || []).map(String))];
+        return ids.filter(id => reports[id]).map((id, i) => {
+            const l = reports[id].design && reports[id].design.link;
+            return { id, name: reports[id].name || ("Informe " + id), main: i === 0, axis: l ? (l.axis === "cols" ? "cols" : "rows") : null };
+        });
+    },
+
     async validRuntimeFilters(project, cubeName, filters) {
-        const list = (filters || []).filter(f => f && f.dim && f.attr && f.value !== undefined && f.value !== null && String(f.value) !== "");
+        // f.value: un valor o una lista (filtro de varios valores); f.rep: solo un informe de un grupo vinculado
+        const vals = (f) => (Array.isArray(f.value) ? f.value : [f.value]).filter(v => v !== undefined && v !== null && String(v) !== "").map(String);
+        const list = (filters || []).filter(f => f && f.dim && f.attr && f.value !== undefined && f.value !== null && vals(f).length);
         if (!list.length || !cubeName) return [];
         let model;
         try { model = await this.resolveModel(project, await this.cubeByName(project, cubeName)); } catch (e) { return []; }
@@ -780,7 +798,10 @@ const DracoTables = {
         list.forEach(f => {
             const fld = (model.fields || []).find(x => x.type === "DIMENSION" && String(x.name).toUpperCase() === String(f.dim).toUpperCase());
             const att = fld && (fld.attributes || []).find(a => String(a.name).toUpperCase() === String(f.attr).toUpperCase());
-            if (fld && att) out.push({ dim: fld.name, attr: att.name, value: String(f.value), fld, att });
+            if (fld && att) {
+                const v = vals(f);
+                out.push({ dim: fld.name, attr: att.name, value: Array.isArray(f.value) ? v : v[0], rep: f.rep || null, fld, att });
+            }
         });
         return out;
     },
@@ -813,7 +834,7 @@ const DracoTables = {
             if (win.DracoVariables) win.DracoVariables.setOverrides(runVars);
             // Filtros de la barra aplicados directamente: el motor regenera el SQL con ellos (el guardado no los lleva)
             const rf = await this.validRuntimeFilters(project, row.CUBO, runFilters);
-            win.__dracoRuntimeFilters = rf.length ? rf.map(f => ({ dim: f.dim, attr: f.attr, value: f.value })) : null;
+            win.__dracoRuntimeFilters = rf.length ? rf.map(f => ({ dim: f.dim, attr: f.attr, value: f.value, rep: f.rep })) : null;
             // Con informes vinculados no se usa el SQL guardado: el motor genera el de cada informe del grupo
             const group = Array.isArray(def.linked) && def.linked.length > 0;
             // Filtro «Campos del eje»: cambia los campos de Filas (o Columnas) del informe en el motor y regenera su SQL
@@ -839,7 +860,8 @@ const DracoTables = {
         const d = rep.design || {};
         if (!eng.axisOrig) {
             if (!axis) return false;
-            eng.axisOrig = { expandedRows: JSON.parse(JSON.stringify(d.expandedRows || [])), expandedCols: JSON.parse(JSON.stringify(d.expandedCols || [])) };
+            eng.axisOrig = { expandedRows: JSON.parse(JSON.stringify(d.expandedRows || [])), expandedCols: JSON.parse(JSON.stringify(d.expandedCols || [])),
+                rrAddress: d.rrAddress || "", rcAddress: d.rcAddress || "" };
         }
         const orig = eng.axisOrig, fields = axis && Array.isArray(axis.fields) ? axis.fields.filter(f => f && f.dim && f.attr) : [];
         let er = orig.expandedRows, ec = orig.expandedCols;
@@ -851,8 +873,23 @@ const DracoTables = {
             if (axis.axis === "cols") ec = entries.concat(orig.expandedCols.filter(e => e && e[0] === "MEASURE"));
             else er = entries.concat(orig.expandedRows.filter(e => e && e[0] === "MEASURE"));
         }
-        if (JSON.stringify(d.expandedRows || []) !== JSON.stringify(er) || JSON.stringify(d.expandedCols || []) !== JSON.stringify(ec)) {
-            await win.ReportStore.updateDesignFields(def.reportId, { expandedRows: JSON.parse(JSON.stringify(er)), expandedCols: JSON.parse(JSON.stringify(ec)) });
+        // Con más (o menos) campos en el eje cambia el tamaño de su cabecera: la celda de inicio del otro bloque se
+        // desplaza lo mismo (en Excel lo hace el panel de diseño). Filas: los valores (rcAddress) se mueven a la
+        // derecha; Columnas: las filas (rrAddress) se mueven hacia abajo.
+        const dims = (l) => (l || []).filter(e => e && e[0] !== "MEASURE").length;
+        const shift = (addr, dc, dr) => {
+            const m = /^([A-Z]+)(\d+)$/i.exec(String(addr || "").trim());
+            if (!m || (!dc && !dr)) return addr;
+            let n = 0; for (const ch of m[1].toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
+            n = Math.max(1, n + dc);
+            let col = ""; for (let x = n; x > 0; x = Math.floor((x - 1) / 26)) col = String.fromCharCode(65 + (x - 1) % 26) + col;
+            return col + Math.max(1, Number(m[2]) + dr);
+        };
+        const rc = shift(orig.rcAddress, dims(er) - dims(orig.expandedRows), 0);
+        const rr = shift(orig.rrAddress, 0, dims(ec) - dims(orig.expandedCols));
+        if (JSON.stringify(d.expandedRows || []) !== JSON.stringify(er) || JSON.stringify(d.expandedCols || []) !== JSON.stringify(ec)
+            || (d.rcAddress || "") !== rc || (d.rrAddress || "") !== rr) {
+            await win.ReportStore.updateDesignFields(def.reportId, { expandedRows: JSON.parse(JSON.stringify(er)), expandedCols: JSON.parse(JSON.stringify(ec)), rcAddress: rc, rrAddress: rr });
         }
         return JSON.stringify(er) !== JSON.stringify(orig.expandedRows) || JSON.stringify(ec) !== JSON.stringify(orig.expandedCols);
     },
@@ -914,6 +951,7 @@ const DracoTables = {
                 case "dt.fields": return await this.fields(project, p.cube);
                 case "dt.members": return await this.members(project, p.cube, p.dim, p.attr);
                 case "dt.varsFor": return await this.varsFor(project, p.refs || []);
+                case "dt.reports": return await this.reportsOf(project, p.ref);
                 case "dt.kpis":
                     // KPIs del informe (con sus piezas, los añade la herramienta); si no vienen, el formato antiguo por id
                     return Array.isArray(p.kpis) ? await this.kpisInline(project, p.kpis, p.variables || null, p.filters || null)
