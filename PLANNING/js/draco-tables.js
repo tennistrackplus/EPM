@@ -24,7 +24,7 @@ const DracoTables = {
     MAX_NAME: 120,
     MAX_DESC: 500,
     MAX_ENGINES: 6,
-    ENGINE_URL: "tablas-draco/engine.html?v=20261022b",
+    ENGINE_URL: "tablas-draco/engine.html?v=20261022c",
 
     engines: new Map(),      // "proyecto:id" -> { frame, host, stamp, chain, lastUse }
     pending: {},             // precarga: "proyecto:id" -> { pr, at }
@@ -259,14 +259,21 @@ const DracoTables = {
      */
     async exportDefinition(win, host) {
         const settings = Object.assign({}, host.state.taskpaneSettings || {});
-        const reportId = String(win.ReportStore.getActiveReportId());
+        const activeId = String(win.ReportStore.getActiveReportId());
         const reports = JSON.parse(settings.epm_reports || "{}");
-        if (!reports[reportId]) throw this.fail("NO_REPORT", "No hay ningún informe diseñado.");
-        settings.epm_reports = JSON.stringify({ [reportId]: reports[reportId] });
+        if (!reports[activeId]) throw this.fail("NO_REPORT", "No hay ningún informe diseñado.");
+        // INFORMES VINCULADOS: la tabla es el informe PRINCIPAL y se guardan también sus vinculados (se pintan
+        // juntos, ver dracoRefreshLinkGroup en commands.js). Sin vinculados, como siempre: solo el informe activo.
+        const m = typeof win.dracoLinkGroupMain === "function" ? win.dracoLinkGroupMain(Number(activeId)) : null;
+        const reportId = (m === null || m === undefined) ? activeId : String(m);
+        const linked = (typeof win.dracoLinkedOf === "function" ? win.dracoLinkedOf(Number(reportId)) : []).map(String).filter(id => reports[id]);
+        const groupIds = [reportId, ...linked].filter(id => reports[id]);
+        settings.epm_reports = JSON.stringify(Object.fromEntries(groupIds.map(id => [id, reports[id]])));
+        settings.epm_activeReportId = Number(reportId);
         const modelName = reports[reportId].semanticModelName || "";
         const models = JSON.parse(settings.epm_semanticModels || "{}");
         const keep = {};
-        if (modelName && models[modelName]) keep[modelName] = models[modelName];
+        groupIds.forEach(id => { const mn = reports[id].semanticModelName || ""; if (mn && models[mn]) keep[mn] = models[mn]; });
         settings.epm_semanticModels = JSON.stringify(keep);
         settings.epm_activeSemanticModel = modelName;
         delete settings.epm_reportClipboard;
@@ -275,6 +282,7 @@ const DracoTables = {
         if (hidden.EDIT_REPORT) { delete hidden.EDIT_REPORT["0_23"]; delete hidden.EDIT_REPORT["0_24"]; }   // X1 e Y1
         const def = {
             v: 1, reportId, cubo: modelName, settings,
+            linked,                                   // ids de los informes vinculados (vacío si no hay)
             hiddenSheets: hidden, hiddenSheetMerges: host.state.hiddenSheetMerges || {}, namedRanges: host.state.namedRanges || {},
             // Informes Estáticos / Híbridos: las líneas del eje Estático SON el informe (celdas =EPM_VALUE /
             // =EPM_FORMULA de la hoja). Se guardan con su formato; lo pintado desde los datos no (se rehace).
@@ -806,7 +814,9 @@ const DracoTables = {
             // Filtros de la barra aplicados directamente: el motor regenera el SQL con ellos (el guardado no los lleva)
             const rf = await this.validRuntimeFilters(project, row.CUBO, runFilters);
             win.__dracoRuntimeFilters = rf.length ? rf.map(f => ({ dim: f.dim, attr: f.attr, value: f.value })) : null;
-            try { await win.DracoEngineApi.refresh(def.reportId, rf.length ? null : row.SQL_TEXT); }
+            // Con informes vinculados no se usa el SQL guardado: el motor genera el de cada informe del grupo
+            const group = Array.isArray(def.linked) && def.linked.length > 0;
+            try { await win.DracoEngineApi.refresh(def.reportId, (rf.length || group) ? null : row.SQL_TEXT); }
             finally { win.__dracoRuntimeFilters = null; }
             const variables = win.DracoVariables ? win.DracoVariables.list() : [];
             return { id, nombre: row.NOMBRE, motor: row.MOTOR || "", sqlGenerado: row.SQL_GENERADO || null, desfasado: item.desfasado, variables, grid: this.snapshot(eng.host) };

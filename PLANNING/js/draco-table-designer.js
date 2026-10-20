@@ -11,7 +11,7 @@
  * Al guardar se genera el SQL del informe y se guarda junto a su definición en TABLAS_DRACO (ver draco-tables.js).
  */
 const DracoTableDesigner = {
-    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261021a",
+    TASKPANE_URL: "tablas-draco/taskpane.html?v=20261022c",
     MAX_ROWS: 600,
     MAX_COLS: 80,
     ctx: null,
@@ -68,6 +68,9 @@ const DracoTableDesigner = {
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdRefresh" title="Refrescar el informe: vuelve a leer el diseño y las líneas del eje Estático, genera el SQL y lo ejecuta">⟳ Refrescar</button>
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdFilter" title="Añadir un filtro al informe">▽ Filtro</button>
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdRecog" title="Reconocimiento de miembros">🔎 Reconocimiento</button>
+                    ${c.kpi ? "" : `<span class="dtd-sep" aria-hidden="true"></span>
+                    <span class="dtd-linkbar" id="dtdLinkBar" hidden><span>Diseñando</span><select id="dtdLinkSel" title="Informe del grupo que estás diseñando: el principal o uno de sus vinculados"></select><button type="button" class="btn btn-secondary btn-sm" id="dtdLinkDel" title="Quitar este informe vinculado" hidden>Quitar</button></span>
+                    <button type="button" class="btn btn-secondary btn-sm" id="dtdLink" title="Añadir un informe vinculado: comparte las filas (se pinta a la derecha) o las columnas (se pinta debajo) con este informe, con sus propias medidas y filtros">🔗 Vincular informe</button>`}
                     <span class="dtd-sep" aria-hidden="true"></span>
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdMember" title="Poner miembros (EPM_VALUE) en la celda seleccionada. También con doble clic.">＋ Miembro</button>
                     <button type="button" class="btn btn-secondary btn-sm" id="dtdFormula" title="Línea calculada (EPM_FORMULA) en la celda seleccionada"><i class="dtd-fx">ƒx</i> Fórmula</button>
@@ -100,6 +103,11 @@ const DracoTableDesigner = {
         overlay.querySelector("#dtdRefresh").addEventListener("click", () => this.refreshReport());
         overlay.querySelector("#dtdVars").addEventListener("click", () => this.callCommand("abrirVariables"));
         overlay.querySelector("#dtdFilter").addEventListener("click", () => this.callCommand("abrirAnadirFiltro"));
+        if (!c.kpi) {
+            overlay.querySelector("#dtdLink").addEventListener("click", () => this.openLinkDialog());
+            overlay.querySelector("#dtdLinkSel").addEventListener("change", (e) => this.switchGroupReport(Number(e.target.value)));
+            overlay.querySelector("#dtdLinkDel").addEventListener("click", () => this.removeLinked());
+        }
         overlay.querySelector("#dtdRecog").addEventListener("click", () => this.callCommand("toggleMemberRecognition"));
         overlay.querySelector("#dtdMember").addEventListener("click", () => { const s = this.selTopLeft(); this.openMemberDialog(s.r, s.c); });
         overlay.querySelector("#dtdFormula").addEventListener("click", () => { const s = this.selTopLeft(); this.openFormulaPanel(s.r, s.c); });
@@ -193,6 +201,7 @@ const DracoTableDesigner = {
                 catch (err) { this.status("No se pudo actualizar: " + err.message, "bad"); }
             }
             c.ready = true;
+            this.refreshLinkBar();
             c.initialSig = this.signature();
             c.overlay.querySelector("#dtdSave").disabled = false;
             c.overlay.querySelector("#dtdGridWrap").querySelector(".dtd-loading") && this.scheduleRender();
@@ -903,6 +912,107 @@ const DracoTableDesigner = {
     // ---------------------------------------------------------------------
     // Guardar / cerrar
     // ---------------------------------------------------------------------
+    // ---------------------------------------------------------------------
+    // Informes vinculados (ver INFORMES VINCULADOS en ADDIN/src/js/commands.js)
+    // Una tabla Draco puede ser un PRINCIPAL con informes vinculados que comparten sus filas (a la derecha) o
+    // sus columnas (debajo). Se diseñan de uno en uno (selector «Diseñando») y se pintan y guardan juntos.
+    // ---------------------------------------------------------------------
+    groupOf() {
+        const w = this.win();
+        if (!w || !w.ReportStore || typeof w.dracoLinkGroupMain !== "function") return null;
+        const act = Number(w.ReportStore.getActiveReportId());
+        const m = w.dracoLinkGroupMain(act);
+        const mainId = (m === null || m === undefined) ? act : Number(m);
+        return { act, mainId, ids: [mainId, ...w.dracoLinkedOf(mainId)] };
+    },
+
+    refreshLinkBar() {
+        const c = this.ctx, w = this.win();
+        if (!c || c.kpi || !c.overlay.querySelector("#dtdLinkBar")) return;
+        const g = this.groupOf();
+        const bar = c.overlay.querySelector("#dtdLinkBar"), sel = c.overlay.querySelector("#dtdLinkSel");
+        if (!g || g.ids.length < 2) { bar.hidden = true; return; }
+        sel.innerHTML = g.ids.map((id, i) => {
+            const l = i ? w.dracoLinkOf(id) : null;
+            const label = i ? `Vinculado ${i} · ${l && l.axis === "cols" ? "columnas" : "filas"}` : "Principal";
+            return `<option value="${id}"${id === g.act ? " selected" : ""}>${label}</option>`;
+        }).join("");
+        bar.hidden = false;
+        c.overlay.querySelector("#dtdLinkDel").hidden = g.act === g.mainId;
+    },
+
+    async switchGroupReport(id) {
+        const w = this.win();
+        if (!w || !w.TaskPaneApp) return;
+        try {
+            if (typeof w.TaskPaneApp.saveDesignOnly === "function") await w.TaskPaneApp.saveDesignOnly();
+            await w.TaskPaneApp.onReportSelectorChange(String(id));
+        } catch (err) { UI.toast("No se pudo cambiar de informe: " + (err.message || err), "error"); }
+        this.refreshLinkBar();
+        this.scheduleRender();
+    },
+
+    openLinkDialog() {
+        const c = this.ctx, w = this.win();
+        if (!c || !c.ready || !w || typeof w.dracoCreateLinkedReport !== "function") { UI.toast("El diseñador todavía se está cargando.", "info"); return; }
+        const g = this.groupOf();
+        const lockAxis = g && g.ids.length > 1 ? w.dracoLinkOf(g.ids[1]).axis : null;
+        const old = c.overlay.querySelector(".dtd-linkdlg");
+        if (old) old.remove();
+        const box = document.createElement("div");
+        box.className = "dtd-linkdlg";
+        box.setAttribute("role", "dialog");
+        box.setAttribute("aria-label", "Vincular informe");
+        const opt = (v, t, d) => `<label class="${lockAxis && lockAxis !== v ? "off" : ""}"><input type="radio" name="dtdLinkAxis" value="${v}"${(lockAxis || "rows") === v ? " checked" : ""}${lockAxis && lockAxis !== v ? " disabled" : ""}><span><b>${t}</b><small>${d}</small></span></label>`;
+        box.innerHTML = `<h4>Vincular un informe</h4>
+            <p class="dtd-linkhint">Se crea un informe nuevo que comparte un eje con el ${g && g.ids.length > 1 ? "principal" : "de esta tabla"}. Tendrá sus propias medidas, el otro eje y sus filtros (por ejemplo, otro año); los filtros de la barra y las variables son los del principal.</p>
+            ${opt("rows", "Filas", "Mismas filas. Se pinta a la derecha, sin repetir las cabeceras de fila.")}
+            ${opt("cols", "Columnas", "Mismas columnas. Se pinta debajo, sin repetir las cabeceras de columna.")}
+            ${lockAxis ? `<p class="dtd-linkhint">Este informe ya tiene vinculados por ${lockAxis === "cols" ? "columnas" : "filas"}: el nuevo se vincula por el mismo eje.</p>` : ""}
+            <div class="dtd-linkact"><button type="button" class="btn btn-secondary btn-sm" data-act="cancel">Cancelar</button><button type="button" class="btn btn-primary btn-sm" data-act="ok">Crear vinculado</button></div>`;
+        c.overlay.querySelector(".dtd-modal").appendChild(box);
+        box.addEventListener("click", async (e) => {
+            const b = e.target.closest("[data-act]");
+            if (!b) return;
+            if (b.dataset.act === "cancel") { box.remove(); return; }
+            const axis = (box.querySelector("input[name=dtdLinkAxis]:checked") || {}).value || "rows";
+            b.disabled = true;
+            try {
+                if (typeof w.TaskPaneApp.saveDesignOnly === "function") await w.TaskPaneApp.saveDesignOnly();
+                const gg = this.groupOf();
+                const newId = await w.dracoCreateLinkedReport(gg.mainId, axis);
+                if (typeof w.TaskPaneApp.populateReportSelector === "function") await w.TaskPaneApp.populateReportSelector();
+                await w.TaskPaneApp.onReportSelectorChange(String(newId));
+                box.remove();
+                this.refreshLinkBar();
+                this.banner(`Informe vinculado creado. Añádele sus medidas y ${axis === "cols" ? "filas" : "columnas"} (y, si quieres, sus filtros) y pulsa «Refrescar»: se pinta ${axis === "cols" ? "debajo" : "a la derecha"} del principal. Cambia entre informes con «Diseñando».`, "info");
+                this.scheduleRender();
+            } catch (err) {
+                b.disabled = false;
+                UI.toast("No se pudo crear el informe vinculado: " + (err.message || err), "error");
+            }
+        });
+    },
+
+    async removeLinked() {
+        const c = this.ctx, w = this.win();
+        const g = this.groupOf();
+        if (!g || g.act === g.mainId) return;
+        if (!window.confirm("¿Quitar este informe vinculado? Se borra su diseño y deja de pintarse junto al principal.")) return;
+        try {
+            const gone = g.act;
+            await w.TaskPaneApp.onReportSelectorChange(String(g.mainId));
+            if (typeof w.dracoClearLinkedAreas === "function") {
+                await w.Excel.run(async (ctx) => { await w.dracoClearLinkedAreas(ctx, [gone]); });
+            }
+            await w.ReportStore.deleteReport(gone);
+            await w.ReportStore.setActiveReportId(g.mainId);
+            if (typeof w.TaskPaneApp.populateReportSelector === "function") await w.TaskPaneApp.populateReportSelector();
+            this.refreshLinkBar();
+            await this.refreshReport();
+        } catch (err) { UI.toast("No se pudo quitar el informe vinculado: " + (err.message || err), "error"); }
+    },
+
     async save() {
         const c = this.ctx;
         if (!c || !c.ready) return;
