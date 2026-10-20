@@ -1275,14 +1275,14 @@ function dtMount(el){
   if(!b.ref){ el.innerHTML=dtMsg(b,'Elige o crea la tabla en las propiedades de este bloque (bot\u00F3n \u00ABDise\u00F1ador del informe\u00BB).'); return; }
   if(!HOSTON){ el.innerHTML=dtMsg(b,'Esta tabla se consulta desde Draco Planning.'); return; }
   /* la firma incluye las variables y los filtros efectivos: si cambian, se recalcula al montar */
-  var sig=JSON.stringify([b.ref,dvVarsPayload(),dfFiltersFor('tc',b.ref)]), st=DTS[id];
+  var sig=JSON.stringify([b.ref,dvVarsPayload(),dfFiltersFor('tc',b.ref),dfAxisFor('tc',b.ref)]), st=DTS[id];
   if(!st||st.sig!==sig){ var prev=st&&st.res; st=DTS[id]={sig:sig,status:'loading',res:prev}; dtLoad(id); }
   dtRender(id);
 }
 function dtLoad(id,force){
   var b=DTB[id], st=DTS[id]; if(!b||!st) return; st.status='loading'; st.err=null;
   var vars=dvVarsPayload(); /* valores elegidos en los \u00ABSelector de variable\u00BB de la p\u00E1gina */
-  st.sig=JSON.stringify([b.ref,vars,dfFiltersFor('tc',b.ref)]);
+  st.sig=JSON.stringify([b.ref,vars,dfFiltersFor('tc',b.ref),dfAxisFor('tc',b.ref)]);
   dtRunShared(b.ref,force,vars).then(function(res){ if(DTS[id]!==st) return; st.status='ready'; st.res=res; dtRender(id); },function(e){ if(DTS[id]!==st) return; st.status='error'; st.err=e; dtRender(id); });
 }
 function dtLum(hex){ var m=/^#?([0-9a-f]{6})$/i.exec(hex||''); if(!m) return 1; var n=parseInt(m[1],16); return (0.2126*((n>>16)&255)+0.7152*((n>>8)&255)+0.0722*(n&255))/255; }
@@ -1507,9 +1507,11 @@ document.addEventListener('change',function(e){
      modelo de su cubo). '' (Todos) no filtra. */
 var DFS=[], DFV={}, DFM={}, DFD={};
 /* el valor elegido se conserva entre repintados; si cambia el valor inicial en la definici\u00F3n, vuelve a \u00E9l */
+/* valor por defecto de un filtro; en «Campos del eje» (type "axis") es la lista de campos marcados, en JSON */
+function dfDef(f){ return f.type==='axis'?JSON.stringify(Array.isArray(f.def)?f.def:[]):(f.def||''); }
 function dfInit(){
   DFS=(SPEC&&SPEC.dracoFilters)||[]; var changed=false;
-  DFS.forEach(function(f){ var d=f.def||''; if(!Object.prototype.hasOwnProperty.call(DFV,f.id)||DFD[f.id]!==d){ if(DFV[f.id]!==d&&DFD[f.id]!==undefined) changed=true; DFV[f.id]=d; DFD[f.id]=d; } });
+  DFS.forEach(function(f){ var d=dfDef(f); if(!Object.prototype.hasOwnProperty.call(DFV,f.id)||DFD[f.id]!==d){ if(DFV[f.id]!==d&&DFD[f.id]!==undefined) changed=true; DFV[f.id]=d; DFD[f.id]=d; } });
   /* en el editor: si cambia el valor efectivo de un filtro, los objetos Draco ya cargados se vuelven a calcular */
   if(changed) setTimeout(function(){ dfApplyVars(); dfReload(); },0);
 }
@@ -1519,11 +1521,21 @@ function dfReload(){
   if(kpiDefs().length) kpiRefresh();
 }
 function dfApplyVars(){
-  DFS.forEach(function(f){ var v=DFV[f.id]; (f.vars||[]).forEach(function(n){ n=String(n).toUpperCase(); if(v!==''&&v!=null) PVARS[n]=v; else delete PVARS[n]; }); });
+  DFS.forEach(function(f){ if(f.type==='axis') return; var v=DFV[f.id]; (f.vars||[]).forEach(function(n){ n=String(n).toUpperCase(); if(v!==''&&v!=null) PVARS[n]=v; else delete PVARS[n]; }); });
 }
 function dfFiltersFor(kind,id){
-  var out=[]; DFS.forEach(function(f){ var v=DFV[f.id]; if(v===''||v==null||!f.dim||!f.attr) return;
+  var out=[]; DFS.forEach(function(f){ var v=DFV[f.id]; if(f.type==='axis'||v===''||v==null||!f.dim||!f.attr) return;
     if((f.objs||[]).some(function(o){ return o.k===kind&&o.id===id; })) out.push({dim:f.dim,attr:f.attr,value:v}); });
+  return out;
+}
+/* Filtro «Campos del eje»: qu\u00E9 campos van en Filas (o Columnas) de una Tabla/Gr\u00E1fico Draco, en el orden configurado.
+   Devuelve null si no hay ninguno vinculado a ese objeto. */
+function dfAxisSel(f){ var v; try{ v=JSON.parse(DFV[f.id]||'[]'); }catch(e){ v=[]; } return Array.isArray(v)?v:[]; }
+function dfAxisFor(kind,id){
+  var out=null;
+  DFS.forEach(function(f){ if(out||f.type!=='axis'||!(f.objs||[]).some(function(o){ return o.k===kind&&o.id===id; })) return;
+    var sel=dfAxisSel(f), flds=(f.axisFields||[]).filter(function(x){ return sel.indexOf(x.dim+'|'+x.attr)>=0; });
+    if(flds.length) out={axis:f.axis==='cols'?'cols':'rows',fields:flds.map(function(x){ return {dim:x.dim,attr:x.attr}; })}; });
   return out;
 }
 /* ---------- Filtros por secci\u00F3n ----------
@@ -1592,6 +1604,12 @@ function dfLoad(f){
   dcall('dt.members',{cube:f.cube,dim:f.dim,attr:f.attr}).then(function(l){ DFM[f.id]={status:'ready',list:l||[]}; dfPaint(); },function(){ DFM[f.id]={status:'error',list:[]}; dfPaint(); });
 }
 function dfCtl(f){
+  if(f.type==='axis'){
+    var selA=dfAxisSel(f), offA=(EDIT||!HOSTON)?' disabled title="Funciona en la vista previa, dentro de Draco Planning"':'';
+    return '<div class="fc"'+(dfShown(f)?'':' style="display:none"')+'><span>'+esc(f.label||'Campos')+'</span><div class="chipsb">'
+      +(f.axisFields||[]).map(function(x){ var k=x.dim+'|'+x.attr, on=selA.indexOf(k)>=0;
+        return '<button class="chipb'+(on?' on':'')+'" data-act="dfaxis" data-df="'+esc(f.id)+'" data-k="'+esc(k)+'" aria-pressed="'+(on?'true':'false')+'"'+offA+'>'+(on?'✓ ':'')+esc(x.label||x.attr)+'</button>'; }).join('')+'</div></div>';
+  }
   var v=DFV[f.id]||'', lab='<span>'+esc(f.label||f.attr||'Filtro')+'</span>', M=DFM[f.id];
   if(HOSTON&&!EDIT&&!M) dfLoad(f);
   var list=(M&&M.list)||[]; if(v&&list.indexOf(v)<0) list=[v].concat(list);
@@ -1604,7 +1622,7 @@ function dfCtl(f){
   }
   return '<label class="fc"'+hid+'>'+lab+'<select data-df="'+esc(f.id)+'"'+off+'><option value="">Todos</option>'+list.map(function(x){ return '<option'+(v===x?' selected':'')+'>'+esc(x)+'</option>'; }).join('')+'</select></label>';
 }
-function dfChanged(){ return DFS.some(function(f){ return (DFV[f.id]||'')!==(f.def||''); }); }
+function dfChanged(){ return DFS.some(function(f){ return (DFV[f.id]||'')!==dfDef(f); }); }
 function dfPaint(){ var fb=document.getElementById('fbar'); if(fb) fb.innerHTML=fbarHtml(); }
 function dfSet(id,v){
   DFV[id]=v; dfApplyVars(); dfPaint();
@@ -1613,8 +1631,16 @@ function dfSet(id,v){
 }
 document.addEventListener('change',function(e){ var t=e.target; if(t&&t.hasAttribute&&t.hasAttribute('data-df')&&t.tagName==='SELECT') dfSet(t.getAttribute('data-df'),t.value); });
 document.addEventListener('click',function(e){
-  var t=e.target.closest&&e.target.closest('[data-act="dfpill"],[data-act="dfclear"]'); if(!t||t.disabled) return;
-  if(t.getAttribute('data-act')==='dfclear'){ DFS.forEach(function(f){ DFV[f.id]=f.def||''; }); dfSet(DFS[0]&&DFS[0].id,DFV[DFS[0]&&DFS[0].id]); return; }
+  var t=e.target.closest&&e.target.closest('[data-act="dfpill"],[data-act="dfclear"],[data-act="dfaxis"]'); if(!t||t.disabled) return;
+  if(t.getAttribute('data-act')==='dfclear'){ DFS.forEach(function(f){ DFV[f.id]=dfDef(f); }); dfSet(DFS[0]&&DFS[0].id,DFV[DFS[0]&&DFS[0].id]); return; }
+  if(t.getAttribute('data-act')==='dfaxis'){
+    /* marca/desmarca un campo del eje (siempre queda al menos uno), respetando el orden configurado */
+    var f=DFS.filter(function(x){ return x.id===t.getAttribute('data-df'); })[0]; if(!f) return;
+    var k=t.getAttribute('data-k'), cur=dfAxisSel(f), on=cur.indexOf(k)>=0;
+    if(on&&cur.length<=1){ tuToast('El eje tiene que tener al menos un campo.','info'); return; }
+    var next=(f.axisFields||[]).map(function(x){ return x.dim+'|'+x.attr; }).filter(function(x){ return x===k?!on:cur.indexOf(x)>=0; });
+    dfSet(f.id,JSON.stringify(next)); return;
+  }
   dfSet(t.getAttribute('data-df'),t.getAttribute('data-v')||'');
 });
 
@@ -1622,9 +1648,9 @@ document.addEventListener('click',function(e){
    tabla con las mismas variables, la consulta se lanza UNA vez y todos usan el mismo resultado. "forzar" la repite. */
 var RUNQ={};
 function dtRunShared(ref,force,vars){
-  var fl=dfFiltersFor('tc',ref), key=ref+'|'+JSON.stringify(vars||{})+'|'+JSON.stringify(fl);
+  var fl=dfFiltersFor('tc',ref), ax=dfAxisFor('tc',ref), key=ref+'|'+JSON.stringify(vars||{})+'|'+JSON.stringify(fl)+'|'+JSON.stringify(ax);
   if(!force&&RUNQ[key]) return RUNQ[key];
-  var pl={ref:ref,force:!!force}; if(vars) pl.variables=vars; if(fl.length) pl.filters=fl;
+  var pl={ref:ref,force:!!force}; if(vars) pl.variables=vars; if(fl.length) pl.filters=fl; if(ax) pl.axis=ax;
   var p=dcall('dt.run',pl);
   RUNQ[key]=p; p.then(null,function(){ if(RUNQ[key]===p) delete RUNQ[key]; });
   return p;
@@ -1647,12 +1673,12 @@ function dcMount(el){
   if(!b.ref){ el.innerHTML=dcCard(b,null,'<p class="tu-sub">Elige la Tabla Draco en las propiedades de este bloque.</p>'); return; }
   if(!HOSTON){ el.innerHTML=dcCard(b,null,'<p class="tu-sub">Este gr\u00E1fico se calcula dentro de Draco Planning.</p>'); return; }
   var st=DCS[id];
-  var dsig=JSON.stringify([b.ref,dvVarsPayload(),dfFiltersFor('tc',b.ref)]);
+  var dsig=JSON.stringify([b.ref,dvVarsPayload(),dfFiltersFor('tc',b.ref),dfAxisFor('tc',b.ref)]);
   if(!st||st.ref!==b.ref||st.sig!==dsig){ var prevR=st&&st.ref===b.ref?st.res:null; st=DCS[id]={ref:b.ref,sig:dsig,status:'loading',res:prevR}; dcLoad(id,false); }
   dcRender(id);
 }
 function dcLoad(id,force){
-  var b=DCB[id], st=DCS[id]; st.status='loading'; st.err=null; st.sig=JSON.stringify([b.ref,dvVarsPayload(),dfFiltersFor('tc',b.ref)]);
+  var b=DCB[id], st=DCS[id]; st.status='loading'; st.err=null; st.sig=JSON.stringify([b.ref,dvVarsPayload(),dfFiltersFor('tc',b.ref),dfAxisFor('tc',b.ref)]);
   dtRunShared(b.ref,force,dvVarsPayload()).then(function(res){ if(DCS[id]!==st) return; st.status='ready'; st.res=res; dcRender(id); },function(e){ if(DCS[id]!==st) return; st.status='error'; st.err=e; dcRender(id); });
 }
 /* Rejilla de la Tabla Draco -> {xs, series:[{name, values}]} (o {error}).
@@ -1944,6 +1970,55 @@ function flInput(e,final){
 }
 document.addEventListener('input',function(e){ flInput(e,false); });
 document.addEventListener('change',function(e){ flInput(e,true); });
+/* ---------- Visibilidad: propiedad «Visible al abrir» (hidden) y acci\u00F3n «Cambiar propiedad» de los botones ----------
+   VISO guarda lo que ha cambiado un bot\u00F3n (clave: uid del bloque o 's:'+id de la secci\u00F3n) y manda sobre lo guardado. En el
+   editor lo oculto se ve atenuado (para poder editarlo). */
+var VISO={};
+function visKey(o,isSec){ return isSec?('s:'+o.id):(o.uid||''); }
+function visOn(o,isSec){ var k=visKey(o,isSec); return (k&&Object.prototype.hasOwnProperty.call(VISO,k))?VISO[k]:!o.hidden; }
+function visAttr(o,isSec){ var a=(!isSec&&o&&o.uid)?' data-uid="'+esc(o.uid)+'"':''; if(!o||visOn(o,isSec)) return a; return a+(EDIT?' data-hid="1"':' hidden'); }
+function pgSetVisible(t,on){
+  if(!t) return; var k=t.kind==='section'?('s:'+t.id):t.uid; if(!k) return; VISO[k]=!!on;
+  var els=t.kind==='section'?[document.getElementById(t.id)]:[].slice.call(document.querySelectorAll('[data-uid="'+String(t.uid).replace(/"/g,'')+'"]'));
+  els.forEach(function(el){ if(!el) return; if(EDIT){ if(on) el.removeAttribute('data-hid'); else el.setAttribute('data-hid','1'); } else el.hidden=!on; });
+  if(on&&!EDIT) update();          /* lo que estaba oculto se pinta con su ancho real */
+}
+/* ---------- Grupo de botones (bloque "buttons") ----------
+   Cada bot\u00F3n ejecuta en orden sus acciones: busy (indicador de ocupado con t\u00EDtulo, mostrar/ocultar), prop (cambiar una
+   propiedad de un objeto; por ahora Visible) y js (c\u00F3digo; si devuelve una promesa, la siguiente acci\u00F3n la espera). */
+var BTNB={}, BUSY_EL=null;
+function btnGroupHtml(b,id){
+  BTNB[id]=b; var al=b.align==='center'?'center':(b.align==='right'?'flex-end':'flex-start');
+  return '<div class="btng" style="justify-content:'+al+'">'+(b.items||[]).map(function(it,i){
+    return '<button type="button" class="btn '+(it.style==='secondary'?'btn-ghost':'btn-primary')+'" data-btng="'+id+'" data-i="'+i+'">'+esc(tok(it.label||'Bot\u00F3n'))+'</button>'; }).join('')+'</div>';
+}
+function pgBusy(on,title){
+  if(!on){ if(BUSY_EL){ BUSY_EL.remove(); BUSY_EL=null; } return; }
+  if(!BUSY_EL){ BUSY_EL=document.createElement('div'); BUSY_EL.className='pg-busy'; BUSY_EL.setAttribute('role','status'); BUSY_EL.setAttribute('aria-live','polite'); document.body.appendChild(BUSY_EL); }
+  BUSY_EL.innerHTML='<div class="pg-busy-box"><span class="tu-spin"></span><span>'+esc(title||'Procesando\u2026')+'</span></div>';
+}
+/* lo que recibe el c\u00F3digo de una acci\u00F3n JS como "page" */
+var PAGE_API={
+  show:function(ref){ pgSetVisible(pgRef(ref),true); }, hide:function(ref){ pgSetVisible(pgRef(ref),false); },
+  busy:function(t){ pgBusy(true,t); }, idle:function(){ pgBusy(false); },
+  toast:function(t,kind){ tuToast(String(t),kind||'info'); }, refresh:function(){ dfReload(); }
+};
+function pgRef(ref){ if(ref&&typeof ref==='object') return ref; ref=String(ref||''); return ref.indexOf('s:')===0?{kind:'section',id:ref.slice(2)}:{kind:'block',uid:ref}; }
+function btnAct(a){
+  if(!a) return;
+  if(a.t==='busy'){ pgBusy(a.show!==false,a.title); return; }
+  if(a.t==='prop'){ if(!a.prop||a.prop==='visible') pgSetVisible(a.target,a.value!==false); return; }
+  if(a.t==='js'){ return (new Function('page',String(a.code||'')))(PAGE_API); }
+}
+function btnRun(btn,it){
+  var acts=(it&&it.actions)||[], i=0; btn.disabled=true;
+  var next=function(){ if(i>=acts.length) return Promise.resolve(); var a=acts[i++]; return Promise.resolve().then(function(){ return btnAct(a); }).then(next); };
+  return next().catch(function(e){ pgBusy(false); tuToast('Error en una acci\u00F3n del bot\u00F3n: '+((e&&e.message)||e),'bad'); }).then(function(){ btn.disabled=false; });
+}
+document.addEventListener('click',function(e){
+  var b=e.target.closest&&e.target.closest('[data-btng]'); if(!b||EDIT) return;
+  var g=BTNB[b.getAttribute('data-btng')], it=g&&g.items&&g.items[+b.getAttribute('data-i')]; if(it) btnRun(b,it);
+});
 function tuMountAll(force){ [].forEach.call(document.querySelectorAll('.tu[data-tu]'),function(el){ if(force||!el.getAttribute('data-mounted')) tuMount(el); }); if(typeof dtMountAll==='function') dtMountAll(force); if(typeof dvMountAll==='function') dvMountAll(force); if(typeof dcMountAll==='function') dcMountAll(force); if(typeof flMountAll==='function') flMountAll(force); }
 function tuMount(el){
   var id=el.getAttribute('data-tu'), b=TUB[id]; if(!b) return; el.setAttribute('data-mounted','1');
@@ -2290,6 +2365,7 @@ function blockInner(b,id){
       case 'group': return groupHtml(b,id);
       case 'tableUpdate': return tuNote(b);
       case 'flowRun': return flNote(b);
+      case 'buttons': return '';
       case 'dracoTable': return dtNote(b);
       case 'dracoVar': return dvNote(b);
       case 'dracoChart': return dcNote(b);
@@ -2304,9 +2380,10 @@ function pAttr(fn){ PN++; P[PN]=fn; return 'data-p="'+PN+'"'; }
 function blockWrap(b,id,n){
   var sp=(typeof b.span==='number'&&b.span>1)?(n?Math.min(b.span,n):b.span):1;
   var cls='blk'+((b.span==='full'||b.type==='kpis')?' full':(sp>1?' sp'+sp:''));
-  var sh=b.showIf?' data-showif="'+esc(b.showIf)+'"':'';
+  var sh=(b.showIf?' data-showif="'+esc(b.showIf)+'"':'')+visAttr(b);
   if(b.type==='tableUpdate'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="tableUpdate"'+dAttr(b.density)+sh+'>'+tuShell(b,id)+'</div>';
   if(b.type==='flowRun'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="flowRun"'+dAttr(b.density)+sh+'>'+flShell(b,id)+'</div>';
+  if(b.type==='buttons') return SLIDES?'':'<div class="'+cls+'" data-bid="'+id+'" data-btype="buttons"'+dAttr(b.density)+sh+'>'+btnGroupHtml(b,id)+'</div>';
   if(b.type==='dracoTable'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoTable"'+dAttr(b.density)+sh+'>'+dtShell(b,id)+'</div>';
   if(b.type==='dracoChart'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoChart"'+dAttr(b.density)+sh+'>'+dcShell(b,id)+'</div>';
   if(b.type==='dracoVar'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoVar"'+dAttr(b.density)+sh+'>'+dvShell(b,id)+'</div>';
@@ -2339,7 +2416,7 @@ function headHtml(s){
 }
 function dAttr(v){ return (v==='normal'||v==='tight'||v==='dense')?' data-density="'+v+'"':''; }
 function sectionHtml(s,si){
-  var attrs=' id="'+esc(s.id)+'" data-section="'+esc(s.id)+'" data-si="'+si+'"'+dAttr(s.density), pre='s'+si+'b';
+  var attrs=' id="'+esc(s.id)+'" data-section="'+esc(s.id)+'" data-si="'+si+'"'+dAttr(s.density)+visAttr(s,true), pre='s'+si+'b';
   if(s.type==='hero'){
     var t=esc(s.title), h=s.highlight?esc(s.highlight):''; if(h&&t.indexOf(h)>-1) t=t.replace(h,'<em>'+h+'</em>');
     var kp=(s.kpis&&s.kpis.length)?'<div class="blk full" data-bid="'+pre+'k" data-btype="kpis" '+pAttr(function(){ return kpisHtml(s.kpis).replace('class="kpis"','class="kpis" style="margin-top:56px"'); })+' data-block="kpis"></div>':'';
@@ -3220,7 +3297,7 @@ window.addEventListener('message',function(ev){
   if(d.dp==='host') HOST_SAVE=true;
   else if(d.dp==='edit'){ setEdit(!!d.on); }
   else if(d.dp==='draco-reply'){ dreply(d); }
-  else if(d.dp==='dracoon'){ HOSTON=true; tuMountAll(true); if(kpiDefs().length) kpiEnsure(); dfSecVars(); }
+  else if(d.dp==='dracoon'){ HOSTON=true; tuMountAll(true); if(kpiDefs().length) kpiEnsure(); dfSecVars(); dfPaint(); /* la barra se activa (estaba pintada antes de conectar) */ }
   else if(d.dp==='focus'){ EDSEL=d.sel||null; var tbn=d.tab&&document.querySelector('.tab[data-act="tab"][data-bid="'+d.tab.bid+'"][data-i="'+d.tab.i+'"]'); var needTab=!!(tbn&&!tbn.classList.contains('on')); if(needTab){ window.__noSel=true; tbn.click(); window.__noSel=false; } setTimeout(function(){ markSel(); if(d.scroll){ var fe=document.querySelector('.edit-sel'); if(fe) fe.scrollIntoView({block:'center',behavior:'instant'}); } },needTab?90:0); }
   else if(d.dp==='spec'&&d.spec&&typeof d.spec==='object'){ try{ applySpec(d.spec); }catch(err){ try{ parent.postMessage({dp:'xstatus',msg:'No se pudo redibujar: '+String(err.message).slice(0,80)},'*'); }catch(x){} } }
   else if(d.dp==='export'){ if(d.kind==='pdf') exportPdf(); else if(d.kind==='pptx') exportPptx(); }
@@ -3431,6 +3508,11 @@ tr[data-act="cross"]{cursor:pointer}tr[data-act="cross"]:hover td{background:col
 .tu-msg.tu-info{border-color:#f0d58a;background:#fff8e1;color:#6b4a00}
 /* ---- Actualizaci\u00F3n de tablas (bloque tableUpdate) ---- */
 .tu{padding:clamp(16px,2vw,24px)}
+.blk[hidden],section[hidden]{display:none!important}
+[data-hid]{opacity:.42;outline:1.5px dashed var(--muted);outline-offset:4px}
+.btng{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.pg-busy{position:fixed;inset:0;z-index:600;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--bg) 55%,transparent);backdrop-filter:blur(1.5px)}
+.pg-busy-box{display:flex;align-items:center;gap:12px;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:12px;padding:14px 20px;font:600 14px/1.4 var(--font);box-shadow:0 18px 44px -20px rgba(15,23,42,.45)}
 /* Flujo de carga */
 .fl-tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin:0 0 16px}
 .fl-tabs button{font:inherit;font-size:13.5px;font-weight:600;color:var(--muted);background:none;border:none;border-bottom:2px solid transparent;padding:8px 12px;margin-bottom:-1px;cursor:pointer}
@@ -3914,7 +3996,13 @@ function validate(spec){
     if(!Array.isArray(spec.dracoFilters)) e.push('"dracoFilters" debe ser una lista.');
     else spec.dracoFilters.forEach(function(f,i){ var p='dracoFilters['+i+']';
       if(!f||!f.id) e.push(p+': falta "id".');
-      else if(f.type&&['select','pills','chips'].indexOf(f.type)<0) e.push(p+': "type" debe ser select, pills o chips.');
+      else if(f.type&&['select','pills','chips','axis'].indexOf(f.type)<0) e.push(p+': "type" debe ser select, pills, chips o axis.');
+      else if(f.type==='axis'){
+        if(f.axisFields!==undefined&&!Array.isArray(f.axisFields)) e.push(p+': "axisFields" debe ser una lista.');
+        else if(!(f.axisFields||[]).length) w.push(p+': a\u00F1ade los campos que se podr\u00E1n elegir.');
+        else if(!Array.isArray(f.def)||!f.def.length) w.push(p+': marca al menos un campo por defecto.');
+        if(!(f.objs||[]).length) w.push(p+': el filtro de campos no se aplica a ninguna Tabla o Gr\u00E1fico Draco.');
+      }
       else if(!f.dim) w.push(p+': elige el cubo y el campo del filtro.'); });
   }
   if(spec.dracoKpis!==undefined){
@@ -4658,6 +4746,7 @@ function edBlock(r){
   else if(b.type==='kpis') h=edNote('Haz clic en una cifra de la p\u00E1gina para editarla. Aqu\u00ED puedes a\u00F1adir cifras.')+listBlock('Cifras','items',b.items,function(it,i){ return '<b>'+esc(it.label||'')+'</b>'; },edKpiTpl(),1);
   else if(b.type==='tableUpdate') h=edTU(b);
   else if(b.type==='flowRun') h=edFL(b);
+  else if(b.type==='buttons') h=edBtns(b);
   else if(b.type==='dracoTable') h=edDT(b);
   else if(b.type==='dracoVar') h=edDV(b);
   else if(b.type==='dracoChart') h=edDC(b);
@@ -4673,12 +4762,13 @@ function edBlock(r){
   else if(b.type==='tabs') h=edNote('Elige una pesta\u00F1a en el \u00E1rbol de estructura para cambiar su distribuci\u00F3n, espaciado y notas.')+gText('T\u00EDtulo','title',b.title)
     +listBlock('Pesta\u00F1as','tabs',b.tabs,function(it,i){ return gText('Nombre','tabs.'+i+'.label',it.label); },{label:'Nueva pesta\u00F1a',blocks:[{type:'text',title:'Texto',body:'Escribe aqu\u00ED tu texto.'}]},1);
   var from='la '+contName(r);
-  if(b.type==='tabs') return h+edSpan(b,r)+edDensity(b,'este bloque (solo este bloque)',from);
+  var visH=gSel('Visible al abrir','hidden',b.hidden?'1':'',[['','S\u00ED'],['1','No (lo muestra un bot\u00F3n)']]);
+  if(b.type==='tabs') return h+edSpan(b,r)+edDensity(b,'este bloque (solo este bloque)',from)+visH;
   /* La distribuci\u00F3n (columnas, reparto) es de la p\u00E1gina, la secci\u00F3n o la subsecci\u00F3n: no se edita desde cada bloque.
      El bloque conserva su ancho dentro de la rejilla y su propio espaciado (normal / compacto / muy ajustado). */
   return h+(b.type==='kpis'?'':edSpan(b,r))+(b.type==='group'
     ?edDensity(b,'esta subsecci\u00F3n',from)+'<p class="insp-hint">Es el espaciado por defecto de todo lo que hay dentro.</p>'
-    :edDensity(b,'este bloque (solo este bloque)',from));
+    :edDensity(b,'este bloque (solo este bloque)',from))+visH;
 }
 function edSection(r){
   var s=r.obj, h='';
@@ -4699,6 +4789,7 @@ function edSection(r){
     h+=edNote('Para editar las cifras de la cabecera, haz clic en una de ellas.');
   }
   h+=edDensity(s,'esta secci\u00F3n','la p\u00E1gina');
+  if(s.type==='section') h+=gSel('Visible al abrir','hidden',s.hidden?'1':'',[['','S\u00ED'],['1','No (la muestra un bot\u00F3n)']]);
   if(s.type==='section') h+='<p class="insp-hint">Es el espaciado por defecto de las subsecciones y objetos de la secci\u00F3n.</p>';
   h+=gArea('Notas del orador (PowerPoint)','notes',s.notes,2);
   return h;
@@ -4807,6 +4898,7 @@ function edTemplate(type){
   switch(type){
     case 'tableUpdate': return {type:'tableUpdate',title:'',ref:'',refName:'',values:{}};
     case 'flowRun': return {type:'flowRun',title:'',ref:'',refName:''};
+    case 'buttons': return {type:'buttons',align:'left',items:[{id:btNewId(),label:'Bot\u00F3n',style:'primary',actions:[]}]};
     case 'dracoTable': return {type:'dracoTable',title:'',ref:'',refName:''};
     case 'dracoChart': return {type:'dracoChart',title:'',ref:'',refName:'',kind:'bar',seriesIn:'cols',rows:'all'};
     case 'group': return {type:'group',title:'',layout:'grid',cols:[1,1],blocks:[]};
@@ -5544,7 +5636,7 @@ function palTemplate(id){
     case 'footer': return {id:'',type:'footer',text:'Mi organización',links:[]};
     case 'section': case 'faq': case 'cta': return edTemplate(id);
     case 'tabs': return {type:'tabs',title:'Pestañas',tabs:[{label:'Pestaña 1',blocks:[edTemplate('text')]},{label:'Pestaña 2',blocks:[edTemplate('text')]}]};
-    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': case 'flowRun': case 'dracoTable': case 'dracoVar': case 'dracoChart': case 'group': case 'dracoKpi': return edTemplate(id);
+    case 'text': case 'callout': case 'cards': case 'kpis': case 'table': case 'tableUpdate': case 'flowRun': case 'buttons': case 'dracoTable': case 'dracoVar': case 'dracoChart': case 'group': case 'dracoKpi': return edTemplate(id);
     default: { var c=edTemplate('chart'), k=id.split(':')[1]; if(c){ if(isLitChart(c)) edConvertLit(c,k); else edConvert(c,k); } return c; }
   }
 }
@@ -5568,7 +5660,8 @@ var BLn={kpis:'Cifras',chart:'Gráfico',table:'Tabla',text:'Texto',callout:'Avis
 var BIc={kpis:'kpis',table:'table',text:'text',callout:'callout',cards:'cards',tabs:'tabs'};
 function snip(t,n){ t=String(t==null?'':t).replace(/\s+/g,' ').trim(); return t.length>n?t.slice(0,n-1)+'…':t; }
 function chartIc(b){ return {line:'chart-line',bar:'chart-bar',hbar:'chart-hbar',donut:'chart-donut',funnel:'chart-funnel'}[b.kind]||'chart-line'; }
-function blockSub(b){ if(b.type==='dracoVar') return b.variable?('$'+b.variable+'$'):(b.title||''); if(b.type==='tableUpdate'||b.type==='flowRun'||b.type==='dracoTable'||b.type==='dracoChart') return b.refName||b.title||''; return b.title||b.body||(b.items&&b.items[0]&&(b.items[0].title||b.items[0].label))||''; }
+function blockSub(b){ if(b.type==='dracoVar') return b.variable?('$'+b.variable+'$'):(b.title||''); if(b.type==='buttons') return (b.items||[]).map(function(x){ return x.label; }).join(' \u00B7 ');
+  if(b.type==='tableUpdate'||b.type==='flowRun'||b.type==='dracoTable'||b.type==='dracoChart') return b.refName||b.title||''; return b.title||b.body||(b.items&&b.items[0]&&(b.items[0].title||b.items[0].label))||''; }
 function rowsOf(blocks,n){
   var rows=[], cur=[], used=0;
   blocks.forEach(function(b,i){
@@ -6227,6 +6320,143 @@ function flPickView(ref){
   edSync(true); edRender();
 }
 $('inspBody').addEventListener('change',function(e){ if(e.target.hasAttribute('data-flview')) flPickView(e.target.value); });
+
+/* =====================================================================
+   15. GRUPO DE BOTONES (bloque "buttons")
+   { type:'buttons', align:'left'|'center'|'right', items:[{ id, label, style:'primary'|'secondary', actions:[...] }] }
+   Acciones (en orden): { t:'busy', title, show } | { t:'js', code } | { t:'prop', prop:'visible', value, target }
+   target = { kind:'section', id } o { kind:'block', uid } (uid estable: se asigna al elegir el objeto).
+   ===================================================================== */
+BLOCK_TYPES.push('buttons'); BLOCK_LABEL.buttons='Grupo de botones'; BLn.buttons='Botones'; BIc.buttons='buttons';
+IC['buttons']='<rect x="2.5" y="8" width="8" height="8" rx="2"/><rect x="13.5" y="8" width="8" height="8" rx="2"/>';
+(function(){ var g=PAL.filter(function(x){ return x.g==='Acciones'; })[0];
+  if(g) g.items.push({id:'buttons',l:'Grupo de botones',i:'buttons',t:'Botones dentro de una secci\u00F3n que ejecutan acciones: mostrar/ocultar objetos, indicador de ocupado o c\u00F3digo JS.'}); })();
+var BT_TYPES=[['busy','Indicador de ocupado'],['prop','Cambiar propiedad'],['js','Ejecutar JS']];
+function btSel(){ var r=edResolve(edSel); return (r&&r.kind==='block'&&r.obj&&r.obj.type==='buttons')?r.obj:null; }
+function btNewId(){ return 'b'+Date.now().toString(36)+Math.random().toString(36).slice(2,5); }
+function edBtns(b){
+  b.items=b.items||[];
+  var h=gSel('Alineaci\u00F3n','align',b.align||'left',[['left','Izquierda'],['center','Centro'],['right','Derecha']])+'<div class="insp-sec">Botones</div>';
+  h+=b.items.map(function(it,i){ var n=(it.actions||[]).length;
+    return '<div class="bt-row"><input type="text" data-bt-label="'+i+'" value="'+esc(it.label||'')+'" placeholder="Texto del bot\u00F3n">'
+      +'<select data-bt-style="'+i+'"><option value="primary"'+(it.style!=='secondary'?' selected':'')+'>Principal</option><option value="secondary"'+(it.style==='secondary'?' selected':'')+'>Secundario</option></select>'
+      +'<div class="bt-acts"><button class="btn small" type="button" data-bt-acts="'+i+'">Acciones ('+n+')</button>'
+      +'<button class="mini" type="button" data-bt-up="'+i+'" title="Subir"'+(i?'':' disabled')+'>\u2191</button><button class="mini" type="button" data-bt-down="'+i+'" title="Bajar"'+(i<b.items.length-1?'':' disabled')+'>\u2193</button><button class="mini" type="button" data-bt-del="'+i+'" title="Quitar el bot\u00F3n">\u2715</button></div></div>'; }).join('');
+  return h+'<button class="btn small" data-bt-add type="button" style="margin-top:8px">+ Bot\u00F3n</button>'
+    +'<p class="insp-hint">Los botones solo funcionan en la vista previa y en el informe publicado.</p>';
+}
+function btUpd(fn){ var b=btSel(); if(!b) return; edPrevSel=edSel; fn(b); edSync(true); }
+$('inspBody').addEventListener('change',function(e){
+  var t=e.target;
+  if(t.hasAttribute('data-bt-label')) return btUpd(function(b){ b.items[+t.getAttribute('data-bt-label')].label=t.value; });
+  if(t.hasAttribute('data-bt-style')) return btUpd(function(b){ b.items[+t.getAttribute('data-bt-style')].style=t.value; });
+});
+$('inspBody').addEventListener('click',function(e){
+  var t=e.target.closest&&e.target.closest('[data-bt-add],[data-bt-del],[data-bt-up],[data-bt-down],[data-bt-acts]'); if(!t) return; e.preventDefault();
+  if(t.hasAttribute('data-bt-acts')) return btOpen(+t.getAttribute('data-bt-acts'));
+  btUpd(function(b){ var L=b.items, sw=function(i,j){ if(j<0||j>=L.length) return; var x=L[i]; L[i]=L[j]; L[j]=x; };
+    if(t.hasAttribute('data-bt-add')) L.push({id:btNewId(),label:'Bot\u00F3n',style:'primary',actions:[]});
+    else if(t.hasAttribute('data-bt-del')){ if(!confirm('\u00BFQuitar este bot\u00F3n y sus acciones?')) return; L.splice(+t.getAttribute('data-bt-del'),1); }
+    else if(t.hasAttribute('data-bt-up')) sw(+t.getAttribute('data-bt-up'),+t.getAttribute('data-bt-up')-1);
+    else sw(+t.getAttribute('data-bt-down'),+t.getAttribute('data-bt-down')+1);
+    edRender(); });
+});
+/* ---- Ventana «Acciones» de un bot\u00F3n ---- */
+var BTX=null;
+function btCss(){
+  if($('btCss')) return; var st=document.createElement('style'); st.id='btCss';
+  st.textContent='.bt-row{display:flex;flex-direction:column;gap:6px;padding:8px 0;border-bottom:1px solid var(--line,#e5e7eb)}.bt-row input,.bt-row select{font:inherit;padding:6px 8px;border:1px solid #cbd2dc;border-radius:7px}.bt-acts{display:flex;gap:6px;align-items:center}'
+   +'#btModal{position:fixed;inset:0;z-index:1000;background:rgba(15,23,42,.35);display:flex;align-items:center;justify-content:center}'
+   +'#btModal .bx{background:#fff;color:#1a2233;border-radius:14px;width:min(820px,94vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 30px 70px -25px rgba(15,23,42,.5);font:14px/1.4 system-ui,Segoe UI,sans-serif}'
+   +'#btModal .bh{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid #e5e7eb}#btModal .bh h3{margin:0;font-size:16px;flex:1}'
+   +'#btModal .bb{display:grid;grid-template-columns:300px 1fr;min-height:340px;overflow:hidden}'
+   +'#btModal .bl{border-right:1px solid #e5e7eb;padding:12px;display:flex;flex-direction:column;gap:8px;overflow:auto}'
+   +'#btModal ol{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}'
+   +'#btModal li{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid #e5e7eb;border-radius:9px;cursor:pointer;background:#fff}'
+   +'#btModal li.on{border-color:#1f6feb;background:#eef4ff}#btModal li.dragover{border-style:dashed;border-color:#1f6feb}'
+   +'#btModal li .g{cursor:grab;color:#94a3b8;user-select:none}#btModal li .n{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#btModal li .k{font-size:11px;color:#64748b}'
+   +'#btModal .add{display:flex;flex-wrap:wrap;gap:6px}#btModal .add button,#btModal .bf button{font:inherit;font-size:13px;padding:6px 10px;border:1px solid #cbd2dc;border-radius:8px;background:#f8fafc;cursor:pointer}'
+   +'#btModal .br{padding:14px 18px;overflow:auto;display:flex;flex-direction:column;gap:10px}#btModal .br label{display:flex;flex-direction:column;gap:5px;font-size:12.5px;font-weight:600;color:#475569}'
+   +'#btModal .br input,#btModal .br select,#btModal .br textarea{font:inherit;font-weight:400;font-size:14px;padding:7px 9px;border:1px solid #cbd2dc;border-radius:8px;color:#1a2233}'
+   +'#btModal .br textarea{font-family:ui-monospace,Consolas,monospace;font-size:13px;min-height:200px;resize:vertical}'
+   +'#btModal .hint{font-size:12px;color:#64748b;font-weight:400}#btModal .bf{display:flex;justify-content:flex-end;gap:8px;padding:12px 18px;border-top:1px solid #e5e7eb}'
+   +'#btModal .bf .pri{background:#1f6feb;border-color:#1f6feb;color:#fff}#btModal .empty{color:#64748b;font-size:13px;padding:8px 2px}';
+  document.head.appendChild(st);
+}
+function btItem(){ var b=btSel(); return (b&&BTX&&b.items&&b.items[BTX.i])||null; }
+function btOpen(i){ var b=btSel(); if(!b||!b.items[i]) return; b.items[i].actions=b.items[i].actions||[]; BTX={i:i,sel:b.items[i].actions.length?0:-1}; btCss(); btPaint(); }
+function btClose(){ var m=$('btModal'); if(m) m.remove(); BTX=null; edRender(); }
+function btSum(a){
+  if(a.t==='busy') return (a.show===false?'Ocultar':'Mostrar')+' ocupado'+(a.title&&a.show!==false?': \u00AB'+a.title+'\u00BB':'');
+  if(a.t==='js') return 'JS: '+(String(a.code||'').replace(/\s+/g,' ').trim().slice(0,40)||'(vac\u00EDo)');
+  if(a.t==='prop'){ var o=a.target?btTargetName(a.target):'(sin objeto)'; return (a.value===false?'Ocultar':'Mostrar')+' \u00B7 '+o; }
+  return a.t;
+}
+/* objetos que se pueden mostrar/ocultar: secciones y, dentro, subsecciones, pesta\u00F1as y bloques (con uid estable) */
+function btTargets(){
+  var out=[], lab=function(b){ return (BLOCK_LABEL[b.type]||b.type)+(b.title||b.refName?' \u00B7 '+(b.title||b.refName):''); };
+  var walk=function(bl,depth){ (bl||[]).forEach(function(b){ if(!b) return; if(!b.uid) b.uid='o'+Math.random().toString(36).slice(2,9);
+    out.push({v:'b:'+b.uid,l:new Array(depth+1).join('\u00A0\u00A0\u00A0')+lab(b)});
+    if(b.type==='group') walk(b.blocks,depth+1); if(b.tabs) b.tabs.forEach(function(t){ walk(t.blocks,depth+1); }); }); };
+  ((currentSpec&&currentSpec.sections)||[]).forEach(function(sc){ if(!sc||sc.type!=='section') return;
+    out.push({v:'s:'+sc.id,l:'Secci\u00F3n \u00B7 '+(sc.title||sc.id),sec:1}); walk(sc.blocks,1); });
+  return out;
+}
+function btTargetName(t){ var k=t.kind==='section'?'s:'+t.id:'b:'+t.uid, x=btTargets().filter(function(o){ return o.v===k; })[0]; return x?x.l.replace(/^\u00A0+/,''):'(objeto que ya no existe)'; }
+function btPaint(){
+  var it=btItem(); if(!it){ btClose(); return; }
+  var A=it.actions, cur=BTX.sel>=0?A[BTX.sel]:null, m=$('btModal');
+  if(!m){ m=document.createElement('div'); m.id='btModal'; m.setAttribute('role','dialog'); m.setAttribute('aria-label','Acciones del bot\u00F3n'); document.body.appendChild(m); btWire(m); }
+  var opt=function(v,l,sel){ return '<option value="'+esc(v)+'"'+(sel?' selected':'')+'>'+esc(l)+'</option>'; };
+  var right='<p class="empty">A\u00F1ade una acci\u00F3n o selecciona una de la lista.</p>';
+  if(cur){
+    if(cur.t==='busy') right='<label>T\u00EDtulo<input data-bx-f="title" value="'+esc(cur.title||'')+'" placeholder="Por ejemplo: Calculando\u2026"></label>'
+      +'<label>Acci\u00F3n<select data-bx-f="show">'+opt('1','Mostrar el indicador',cur.show!==false)+opt('0','Ocultar el indicador',cur.show===false)+'</select></label>';
+    else if(cur.t==='js') right='<label>C\u00F3digo JavaScript<textarea data-bx-f="code" spellcheck="false" placeholder="setTimeout(() => { console.log(\'Han pasado 2 segundos\'); }, 2000);">'+esc(cur.code||'')+'</textarea></label>'
+      +'<p class="hint">Recibe <code>page</code>: <code>page.show(id)</code>, <code>page.hide(id)</code>, <code>page.busy(texto)</code>, <code>page.idle()</code>, <code>page.toast(texto)</code>, <code>page.refresh()</code>. Si devuelve una promesa, la siguiente acci\u00F3n espera a que termine (p. ej. <code>return new Promise(r =&gt; setTimeout(r, 2000));</code>).</p>';
+    else if(cur.t==='prop'){ var tk=cur.target?(cur.target.kind==='section'?'s:'+cur.target.id:'b:'+cur.target.uid):'';
+      right='<label>Propiedad<select data-bx-f="prop">'+opt('visible','Visible',true)+'</select></label>'
+        +'<label>Nuevo valor<select data-bx-f="value">'+opt('1','Visible',cur.value!==false)+opt('0','Oculto',cur.value===false)+'</select></label>'
+        +'<label>Objeto<select data-bx-f="target">'+opt('','\u2014 elige un objeto \u2014',!tk)+btTargets().map(function(o){ return opt(o.v,o.l,o.v===tk); }).join('')+'</select></label>'
+        +'<p class="hint">Para que un objeto empiece oculto, pon \u00ABVisible al abrir: No\u00BB en sus propiedades.</p>'; }
+  }
+  m.innerHTML='<div class="bx"><div class="bh"><h3>Acciones de \u00AB'+esc(it.label||'Bot\u00F3n')+'\u00BB</h3></div><div class="bb"><div class="bl">'
+    +(A.length?'<ol>'+A.map(function(a,k){ var tl=(BT_TYPES.filter(function(x){ return x[0]===a.t; })[0]||['',a.t])[1];
+      return '<li draggable="true" data-k="'+k+'" class="'+(k===BTX.sel?'on':'')+'"><span class="g" title="Arrastra para ordenar">\u22EE\u22EE</span><span class="n"><span class="k">'+(k+1)+'. '+esc(tl)+'</span><br>'+esc(btSum(a))+'</span><button type="button" class="mini" data-bx-del="'+k+'" title="Quitar">\u2715</button></li>'; }).join('')+'</ol>'
+      :'<p class="empty">Este bot\u00F3n todav\u00EDa no hace nada.</p>')
+    +'<div class="add">'+BT_TYPES.map(function(x){ return '<button type="button" data-bx-add="'+x[0]+'">+ '+esc(x[1])+'</button>'; }).join('')+'</div>'
+    +'<p class="hint">Se ejecutan de arriba abajo. Arrastra para cambiar el orden.</p></div><div class="br">'+right+'</div></div>'
+    +'<div class="bf"><button type="button" class="pri" data-bx-close>Cerrar</button></div></div>';
+}
+function btSave(){ edPrevSel=edSel; edSync(true); }
+function btWire(m){
+  m.addEventListener('click',function(e){
+    if(e.target===m) return btClose();
+    var t=e.target.closest('[data-bx-add],[data-bx-del],[data-bx-close],li[data-k]'); if(!t) return;
+    var it=btItem(); if(!it) return;
+    if(t.hasAttribute('data-bx-close')) return btClose();
+    if(t.hasAttribute('data-bx-add')){ var ty=t.getAttribute('data-bx-add'); it.actions.push(ty==='busy'?{t:'busy',title:'Procesando\u2026',show:true}:(ty==='js'?{t:'js',code:''}:{t:'prop',prop:'visible',value:true,target:null})); BTX.sel=it.actions.length-1; btSave(); return btPaint(); }
+    if(t.hasAttribute('data-bx-del')){ e.stopPropagation(); var k=+t.getAttribute('data-bx-del'); it.actions.splice(k,1); BTX.sel=Math.min(BTX.sel,it.actions.length-1); btSave(); return btPaint(); }
+    BTX.sel=+t.getAttribute('data-k'); btPaint();
+  });
+  m.addEventListener('change',function(e){
+    var t=e.target, f=t.getAttribute&&t.getAttribute('data-bx-f'), it=btItem(); if(!f||!it||BTX.sel<0) return; var a=it.actions[BTX.sel];
+    if(f==='show') a.show=t.value==='1'; else if(f==='value') a.value=t.value==='1'; else if(f==='prop') a.prop=t.value;
+    else if(f==='target'){ var v=t.value; a.target=!v?null:(v.indexOf('s:')===0?{kind:'section',id:v.slice(2)}:{kind:'block',uid:v.slice(2)}); }
+    else a[f]=t.value;
+    /* se redibuja en el siguiente ciclo: si se hiciera aqu\u00ED, al quitar el campo con el foco el navegador lanzar\u00EDa
+       otro evento (blur/change) en mitad del redibujado */
+    btSave(); clearTimeout(BTX.rt); BTX.rt=setTimeout(function(){ if(BTX) btPaint(); },0);
+  });
+  m.addEventListener('keydown',function(e){ if(e.key==='Escape') btClose(); });
+  /* ordenar arrastrando */
+  m.addEventListener('dragstart',function(e){ var li=e.target.closest&&e.target.closest('li[data-k]'); if(!li) return; BTX.drag=+li.getAttribute('data-k'); e.dataTransfer.effectAllowed='move'; try{ e.dataTransfer.setData('text/plain',String(BTX.drag)); }catch(x){} });
+  m.addEventListener('dragover',function(e){ var li=e.target.closest&&e.target.closest('li[data-k]'); if(!li||BTX.drag==null) return; e.preventDefault(); [].forEach.call(m.querySelectorAll('li.dragover'),function(x){ x.classList.remove('dragover'); }); li.classList.add('dragover'); });
+  m.addEventListener('drop',function(e){ var li=e.target.closest&&e.target.closest('li[data-k]'); if(!li||BTX.drag==null) return; e.preventDefault();
+    var it=btItem(), from=BTX.drag, to=+li.getAttribute('data-k'); BTX.drag=null; if(!it||from===to) return btPaint();
+    var x=it.actions.splice(from,1)[0]; it.actions.splice(to,0,x); BTX.sel=to; btSave(); btPaint(); });
+  m.addEventListener('dragend',function(){ if(BTX) BTX.drag=null; [].forEach.call(m.querySelectorAll('li.dragover'),function(x){ x.classList.remove('dragover'); }); });
+}
 var DTV={list:null,listP:null};
 function dtCall(op,payload){
   if(!HOSTED) return Promise.reject(hostErr('NO_HOST','Esta opci\u00F3n solo funciona dentro de Draco Planning.'));
@@ -6350,7 +6580,7 @@ function dfManager(){
 }
 function edDF(f,i){
   var h=gText('Etiqueta','label',f.label,'Por ejemplo: Versi\u00F3n')
-    +gSel('Tipo de control','type',f.type||'select',[['select','Desplegable'],['pills','Pastillas'],['chips','Chips']]);
+    +gSel('Tipo de control','type',f.type||'select',[['select','Desplegable'],['pills','Pastillas'],['chips','Chips'],['axis','Campos del eje (elige qu\u00E9 campos se ven)']]);
   if(!HOSTED) return h+edNote('El campo y los v\u00EDnculos se configuran dentro de Draco Planning.');
   return h+'<div id="dfBox"><p class="insp-hint">Cargando\u2026</p></div>'
     +'<button class="btn small" data-df-del="'+i+'" type="button" style="margin-top:10px">Borrar el filtro</button>';
@@ -6370,6 +6600,7 @@ function dfAfterRender(){
 function dfPaintBox(f,cubes,fields,members,vars){
   var el=$('dfBox'); if(!el) return;
   var opt=function(v,l,sel){ return '<option value="'+esc(v)+'"'+(sel?' selected':'')+'>'+esc(l)+'</option>'; };
+  if(f.type==='axis'){ el.innerHTML=dfAxisBox(f,cubes,fields,opt); return; }
   var h='<label class="ef"><span>Cubo</span><select data-dfcube>'+opt('','\u2014 elige un cubo \u2014',!f.cube)+(cubes||[]).map(function(c){ return opt(c.name,c.name,c.name===f.cube); }).join('')+'</select></label>';
   if(f.cube){ var fk=f.dim?(f.dim+'|'+f.attr):''; h+='<label class="ef"><span>Campo (dimensi\u00F3n \u00B7 atributo)</span><select data-dffield>'+opt('','\u2014 elige un campo \u2014',!fk)+(fields||[]).map(function(x){ var k=x.dim+'|'+x.attr; return opt(k,x.label,k===fk); }).join('')+'</select></label>'; }
   if(f.dim) h+='<label class="ef"><span>Valor inicial</span><select data-dfdef>'+opt('','Todos (sin filtrar)',!f.def)+(members||[]).slice(0,2000).map(function(v){ return opt(v,v,v===f.def); }).join('')+'</select></label>';
@@ -6389,6 +6620,42 @@ function dfPaintBox(f,cubes,fields,members,vars){
   el.innerHTML=h;
 }
 function dfUpd(fn){ var f=dfSelObj(); if(!f) return; edPrevSel=edSel; fn(f); edSync(true); }
+/* ---- Filtro «Campos del eje» (type "axis"): campos ofrecidos en orden, los marcados por defecto, eje y objetos ---- */
+function dfAxisBox(f,cubes,fields,opt){
+  f.axisFields=f.axisFields||[]; if(!Array.isArray(f.def)) f.def=[];
+  var h='<p class="insp-hint">En la barra sale un bot\u00F3n por campo. Los marcados son los que van en el eje de las Tablas y Gr\u00E1ficos Draco vinculados, en este orden (las medidas no cambian).</p>'
+    +'<label class="ef"><span>Cubo</span><select data-dfcube>'+opt('','\u2014 elige un cubo \u2014',!f.cube)+(cubes||[]).map(function(c){ return opt(c.name,c.name,c.name===f.cube); }).join('')+'</select></label>';
+  if(!f.cube) return h;
+  h+='<label class="ef"><span>Eje que cambia</span><select data-dfaxis-axis>'+opt('rows','Filas',f.axis!=='cols')+opt('cols','Columnas',f.axis==='cols')+'</select></label>';
+  h+='<div class="insp-sec">Campos (en orden)</div>';
+  h+=f.axisFields.length?f.axisFields.map(function(x,i){ var k=x.dim+'|'+x.attr, on=f.def.indexOf(k)>=0;
+    return '<div class="dk-row"><label class="df-chk" style="flex:1;margin:0" title="Marcado por defecto"><input type="checkbox" data-dfax-def="'+i+'"'+(on?' checked':'')+'><span><b>'+esc(x.label||x.attr)+'</b> <i>'+esc(x.dim)+'</i></span></label>'
+      +'<div class="dk-acts"><button class="mini" data-dfax-up="'+i+'" title="Subir"'+(i?'':' disabled')+'>\u2191</button><button class="mini" data-dfax-down="'+i+'" title="Bajar"'+(i<f.axisFields.length-1?'':' disabled')+'>\u2193</button><button class="mini" data-dfax-del="'+i+'" title="Quitar">\u2715</button></div></div>'; }).join('')
+    :'<p class="insp-hint">A\u00F1ade los campos que se podr\u00E1n elegir.</p>';
+  var used={}; f.axisFields.forEach(function(x){ used[x.dim+'|'+x.attr]=1; });
+  h+='<label class="ef"><span>A\u00F1adir campo</span><select data-dfax-add>'+opt('','\u2014 elige un campo \u2014',true)+(fields||[]).filter(function(x){ return !used[x.dim+'|'+x.attr]; }).map(function(x){ return opt(x.dim+'|'+x.attr+'|'+x.label,x.label,false); }).join('')+'</select></label>';
+  h+='<p class="insp-hint">Marca los que salen por defecto (al menos uno).</p>';
+  var has=function(id){ return (f.objs||[]).some(function(o){ return o.k==='tc'&&o.id===id; }); }, objs=dfObjects();
+  h+='<div class="insp-sec">Se aplica a</div>'+(objs.length?objs.map(function(o){ return '<label class="df-chk"><input type="checkbox" data-dfobj="tc" data-id="'+esc(o.id)+'"'+(has(o.id)?' checked':'')+'><span>'+esc(Object.keys(o.kinds).join(' y '))+': <b>'+esc(o.name)+'</b></span></label>'; }).join(''):'<p class="insp-hint">Este informe no tiene Tablas ni Gr\u00E1ficos Draco.</p>');
+  return h;
+}
+$('inspBody').addEventListener('change',function(e){
+  var t=e.target;
+  if(t.hasAttribute('data-dfaxis-axis')) return dfUpd(function(f){ f.axis=t.value==='cols'?'cols':'rows'; });
+  if(t.hasAttribute('data-dfax-add')){ if(!t.value) return; return dfUpd(function(f){ var p=t.value.split('|'); f.axisFields=f.axisFields||[]; f.axisFields.push({dim:p[0],attr:p[1],label:p.slice(2).join('|')||p[1]}); if(!Array.isArray(f.def)) f.def=[]; if(!f.def.length) f.def.push(p[0]+'|'+p[1]); edRender(); }); }
+  if(t.hasAttribute('data-dfax-def')) return dfUpd(function(f){ var x=f.axisFields[+t.getAttribute('data-dfax-def')], k=x.dim+'|'+x.attr; if(!Array.isArray(f.def)) f.def=[];
+    if(t.checked){ if(f.def.indexOf(k)<0) f.def.push(k); } else if(f.def.length>1) f.def=f.def.filter(function(y){ return y!==k; }); else { t.checked=true; }
+    f.def=f.axisFields.map(function(y){ return y.dim+'|'+y.attr; }).filter(function(y){ return f.def.indexOf(y)>=0; }); });
+});
+$('inspBody').addEventListener('click',function(e){
+  var t=e.target.closest&&e.target.closest('[data-dfax-up],[data-dfax-down],[data-dfax-del]'); if(!t) return; e.preventDefault();
+  dfUpd(function(f){ var L=f.axisFields||[], a=t.getAttribute('data-dfax-up'), b=t.getAttribute('data-dfax-down'), d=t.getAttribute('data-dfax-del');
+    var sw=function(i,j){ if(j<0||j>=L.length) return; var x=L[i]; L[i]=L[j]; L[j]=x; };
+    if(a!==null) sw(+a,+a-1); else if(b!==null) sw(+b,+b+1); else if(d!==null){ var x=L.splice(+d,1)[0]; f.def=(f.def||[]).filter(function(k){ return k!==x.dim+'|'+x.attr; }); if(!f.def.length&&L.length) f.def=[L[0].dim+'|'+L[0].attr]; }
+    if(Array.isArray(f.def)) f.def=L.map(function(y){ return y.dim+'|'+y.attr; }).filter(function(y){ return f.def.indexOf(y)>=0; });
+    edRender(); });
+});
+
 $('inspBody').addEventListener('change',function(e){
   var t=e.target;
   if(t.hasAttribute('data-dfcube')) return dfUpd(function(f){ f.cube=t.value; f.dim=''; f.attr=''; f.def=''; edRender(); });
