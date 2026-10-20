@@ -106,3 +106,16 @@
 .dtd-kpival-v { font-size: 30px; font-weight: 700; color: var(--text-primary, #0f172a); font-variant-numeric: tabular-nums; word-break: break-all; padding: 12px 14px; border: 1px solid var(--border-default, #e2e8f0); border-radius: 10px; background: #fff; }
 .dtd-kpival-m { font-size: 12.5px; color: var(--text-secondary, #475569); }
 .dtd-kpival-h { font-size: 12px; color: var(--text-muted, #64748b); line-height: 1.45; margin: 6px 0 0; }
+
+/* ---- Diseñador: informes vinculados ---- */
+.dtd-linkbar{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted,#5B6577)}
+.dtd-linkbar select{font:inherit;font-size:12px;padding:3px 6px;border:1px solid var(--border-default,#CBD2DC);border-radius:6px;background:var(--surface-card,#fff);color:var(--text-primary,#1A2233)}
+.dtd-modal{position:relative}
+.dtd-linkdlg{position:absolute;top:96px;left:50%;transform:translateX(-50%);z-index:30;width:min(440px,92%);background:var(--surface-card,#fff);border:1px solid var(--border-subtle,#E3E7ED);border-radius:12px;box-shadow:0 24px 60px -24px rgba(15,23,42,.45);padding:16px 18px;display:flex;flex-direction:column;gap:10px}
+.dtd-linkdlg h4{margin:0;font-size:15px}
+.dtd-linkhint{margin:0;font-size:12px;color:var(--text-muted,#5B6577);line-height:1.45}
+.dtd-linkdlg label{display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border:1px solid var(--border-subtle,#E3E7ED);border-radius:8px;cursor:pointer}
+.dtd-linkdlg label:hover{border-color:var(--brand-primary,#1F6FEB)}.dtd-linkdlg label.off{opacity:.5;cursor:not-allowed}
+.dtd-linkdlg label b{display:block;font-size:13px}.dtd-linkdlg label small{color:var(--text-muted,#5B6577);font-size:12px}
+.dtd-linkdlg input{margin-top:2px;accent-color:var(--brand-primary,#1F6FEB)}
+.dtd-linkact{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
