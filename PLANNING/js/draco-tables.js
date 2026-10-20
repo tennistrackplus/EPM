@@ -24,7 +24,7 @@ const DracoTables = {
     MAX_NAME: 120,
     MAX_DESC: 500,
     MAX_ENGINES: 6,
-    ENGINE_URL: "tablas-draco/engine.html?v=20261022e",
+    ENGINE_URL: "tablas-draco/engine.html?v=20261023a",
 
     engines: new Map(),      // "proyecto:id" -> { frame, host, stamp, chain, lastUse }
     pending: {},             // precarga: "proyecto:id" -> { pr, at }
@@ -403,8 +403,27 @@ const DracoTables = {
     },
 
     /** Foto de lo pintado en la hoja: recorte al contenido, con el formato de cada celda. */
+    /**
+     * PLANIFICACIÓN: rangos de valores (Draco_<id>_Values) de los informes del motor marcados como «Informe de
+     * planificación» (reportProperties.planningReport). Son las celdas que se pueden editar, como en Excel.
+     */
+    planningRanges(host) {
+        const st = host.state || {};
+        let reports = {};
+        try { reports = JSON.parse((st.taskpaneSettings || {}).epm_reports || "{}"); } catch (e) { reports = {}; }
+        const out = [];
+        Object.keys(reports).forEach(id => {
+            const r = reports[id];
+            if (!r || !r.reportProperties || !r.reportProperties.planningReport) return;
+            const nr = (st.namedRanges || {})["Draco_" + String(id).padStart(3, "0") + "_Values"];
+            if (nr && (nr.sheet || "Hoja1") === "Hoja1") out.push({ r1: nr.r1, c1: nr.c1, r2: nr.r2, c2: nr.c2, reportId: id });
+        });
+        return out;
+    },
+
     snapshot(host) {
         const cells = host.state.cells || {};
+        const plan = this.planningRanges(host);
         let r1 = Infinity, c1 = Infinity, r2 = -1, c2 = -1;
         Object.keys(cells).forEach(k => {
             const o = cells[k];
@@ -412,6 +431,8 @@ const DracoTables = {
             const [r, c] = k.split("_").map(Number);
             if (r < r1) r1 = r; if (c < c1) c1 = c; if (r > r2) r2 = r; if (c > c2) c2 = c;
         });
+        // las celdas de planificación vacías también tienen que salir (se pueden rellenar)
+        plan.forEach(x => { r1 = Math.min(r1, x.r1); c1 = Math.min(c1, x.c1); r2 = Math.max(r2, x.r2); c2 = Math.max(c2, x.c2); });
         if (r2 < 0) return { r0: 0, c0: 0, rows: 0, cols: 0, cells: {}, merges: [] };
         const out = {};
         Object.keys(cells).forEach(k => {
@@ -434,9 +455,16 @@ const DracoTables = {
             }
             if (Object.keys(cell).length) out[`${r - r1}_${c - c1}`] = cell;
         });
+        // celdas editables (pl): las de los rangos de valores de los informes de planificación
+        plan.forEach(x => {
+            for (let r = x.r1; r <= x.r2; r++) for (let c = x.c1; c <= x.c2; c++) {
+                const k = `${r - r1}_${c - c1}`;
+                out[k] = Object.assign(out[k] || {}, { pl: 1 });
+            }
+        });
         const merges = (host.state.merges || []).filter(m => m.r >= r1 && m.r <= r2 && m.c >= c1 && m.c <= c2)
             .map(m => ({ r: m.r - r1, c: m.c - c1, rowSpan: m.rowSpan, colSpan: m.colSpan }));
-        return { r0: r1, c0: c1, rows: r2 - r1 + 1, cols: c2 - c1 + 1, cells: out, merges };
+        return { r0: r1, c0: c1, rows: r2 - r1 + 1, cols: c2 - c1 + 1, cells: out, merges, planning: plan.length > 0 };
     },
 
     /**
@@ -773,6 +801,77 @@ const DracoTables = {
      * existen en el modelo del cubo (el resto se ignora: ese objeto no tiene ese campo). Devuelve también el campo del
      * modelo (para construir joins de KPI).
      */
+    /** Número tecleado ("1.234,5", "1234.5", "-3") -> número, o null si no lo es. */
+    parsePlanNumber(v) {
+        if (typeof v === "number") return isFinite(v) ? v : null;
+        let t = String(v == null ? "" : v).trim().replace(/\s/g, "").replace(/\u2212/g, "-");
+        if (!t) return null;
+        const lc = t.lastIndexOf(","), ld = t.lastIndexOf(".");
+        if (lc > ld) t = t.replace(/\./g, "").replace(",", ".");
+        else if (lc >= 0 && ld > lc) t = t.replace(/,/g, "");
+        else if (ld >= 0 && /^-?\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, "");
+        const n = Number(t);
+        return isFinite(n) ? n : null;
+    },
+
+    /**
+     * PLANIFICACIÓN (como el botón «Guardar planificación» del add-in): cells = [{ r, c, v }] en coordenadas de la
+     * foto que ve la página. Se vuelve a pintar la tabla con los mismos parámetros (mismas posiciones), se comprueba
+     * que cada celda es de verdad editable (rango de valores de un informe de planificación), se escriben los valores
+     * y se dispara el mismo onChanged que en Excel (lo recoge handleDracoPlanningValueChanged del add-in). Después,
+     * la misma secuencia que guardarPlanificacion: cambios reales, dimensiones obligatorias, MERGE y vaciar el
+     * registro. Devuelve la tabla recién recalculada y { saved }.
+     */
+    async planSave(project, id, cells, opts) {
+        if (!Array.isArray(cells) || !cells.length) throw this.fail("BAD_INPUT", "No hay cambios que guardar.");
+        const first = await this.runOnce(project, id, undefined, opts);
+        const eng = this.engines.get(this.key(project.PROYECTO_ID, id));
+        if (!eng) throw this.fail("NO_ENGINE", "No se ha podido preparar la tabla para guardar. Inténtalo de nuevo.");
+        const g = first.grid;
+        const job = eng.chain.then(async () => {
+            const win = eng.frame.contentWindow;
+            if (win.PowerBIQuery && win.PowerBIQuery.isActiveModel()) {
+                throw this.fail("READ_ONLY", "Los modelos semánticos de Power BI son de solo lectura: la planificación no está disponible.");
+            }
+            const ranges = this.planningRanges(eng.host);
+            const editable = (r, c) => ranges.some(x => r >= x.r1 && r <= x.r2 && c >= x.c1 && c <= x.c2);
+            const store = eng.host.state.cells;
+            let written = false;
+            try {
+                for (const x of cells) {
+                    const r = g.r0 + Number(x.r), c = g.c0 + Number(x.c);
+                    if (!editable(r, c)) throw this.fail("NOT_PLANNING", "Una de las celdas modificadas no se puede editar (no es de un informe de planificación).");
+                    const v = this.parsePlanNumber(x.v);
+                    if (v === null && String(x.v == null ? "" : x.v).trim() !== "") throw this.fail("BAD_VALUE", `«${x.v}» no es un número válido.`);
+                    const k = `${r}_${c}`;
+                    store[k] = Object.assign({}, store[k] || {}, { v: v === null ? "" : v });
+                    written = true;
+                    await win.__fireExcelEvent("onChanged", r, c);
+                }
+                await win.filterDracoPlanningRealChanges();
+                const validation = await win.validateDracoPlanningMandatoryDimensions();
+                if (!validation.valid) {
+                    const errors = (validation.errors || []).map(e => ({ report: e.reportName, cell: e.cell, missing: e.missingDims || [] }));
+                    const err = this.fail("INVALID", "Faltan dimensiones obligatorias en " + errors.length + " celda(s): " +
+                        errors.slice(0, 3).map(e => e.missing.join(", ")).join(" · ") + ".");
+                    err.details = { errors };   // fail() solo lleva código y mensaje
+                    throw err;
+                }
+                if (!validation.rows || !validation.rows.length) return { saved: 0 };
+                const ins = await win.executeDracoPlanningInserts(validation.rows, validation.dimNames);
+                if (!ins || !ins.success) throw this.fail("SAVE_FAILED", "No se ha podido guardar: " + ((ins && ins.error) || "error desconocido"));
+                return { saved: validation.rows.length };
+            } finally {
+                // el registro de celdas modificadas se vacía siempre: la página conserva lo tecleado y lo reenvía
+                if (written) { try { await win.flushDracoPlanningModifiedCells(); } catch (e) { /* nada */ } }
+            }
+        });
+        eng.chain = job.catch(() => {});
+        const out = await job;
+        const fresh = await this.runOnce(project, id, undefined, opts);   // se ve ya lo guardado
+        return Object.assign({}, fresh, out);
+    },
+
     /** Informes de una Tabla Draco: el principal y, si los tiene, sus vinculados ({ id, name, main, axis }). */
     async reportsOf(project, ref) {
         if (!ref) return [];
@@ -873,20 +972,26 @@ const DracoTables = {
             if (axis.axis === "cols") ec = entries.concat(orig.expandedCols.filter(e => e && e[0] === "MEASURE"));
             else er = entries.concat(orig.expandedRows.filter(e => e && e[0] === "MEASURE"));
         }
-        // Con más (o menos) campos en el eje cambia el tamaño de su cabecera: la celda de inicio del otro bloque se
-        // desplaza lo mismo (en Excel lo hace el panel de diseño). Filas: los valores (rcAddress) se mueven a la
-        // derecha; Columnas: las filas (rrAddress) se mueven hacia abajo.
+        // Con más (o menos) campos en el eje cambia el tamaño de su cabecera (en Excel lo recoloca el panel de diseño).
+        // rrAddress y rcAddress son RANGOS ("B4:C4", "D2:D3"; también con $ u hoja): rr = cabeceras de fila (su ancho =
+        // columnas de cabecera), rc = cabeceras de columna (su alto = filas de cabecera).
+        //   - campos en Filas (+dc): rr se ensancha dc columnas y rc se desplaza dc columnas a la derecha;
+        //   - campos en Columnas (+dr): rc se alarga dr filas y rr baja dr filas.
         const dims = (l) => (l || []).filter(e => e && e[0] !== "MEASURE").length;
-        const shift = (addr, dc, dr) => {
-            const m = /^([A-Z]+)(\d+)$/i.exec(String(addr || "").trim());
-            if (!m || (!dc && !dr)) return addr;
-            let n = 0; for (const ch of m[1].toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
-            n = Math.max(1, n + dc);
-            let col = ""; for (let x = n; x > 0; x = Math.floor((x - 1) / 26)) col = String.fromCharCode(65 + (x - 1) % 26) + col;
-            return col + Math.max(1, Number(m[2]) + dr);
+        const colN = (L) => { let n = 0; for (const ch of L) n = n * 26 + (ch.charCodeAt(0) - 64); return n; };
+        const colL = (n) => { let t = ""; for (let x = n; x > 0; x = Math.floor((x - 1) / 26)) t = String.fromCharCode(65 + (x - 1) % 26) + t; return t; };
+        const parse = (addr) => {
+            const t = String(addr || "").replace(/^.*!/, "").replace(/\$/g, "").trim().toUpperCase();
+            const m = /^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/.exec(t);
+            if (!m) return null;
+            return { c1: colN(m[1]), r1: Number(m[2]), c2: colN(m[3] || m[1]), r2: Number(m[4] || m[2]) };
         };
-        const rc = shift(orig.rcAddress, dims(er) - dims(orig.expandedRows), 0);
-        const rr = shift(orig.rrAddress, 0, dims(ec) - dims(orig.expandedCols));
+        const fmt = (o) => colL(o.c1) + o.r1 + ":" + colL(o.c2) + o.r2;
+        const move = (addr, f) => { const o = parse(addr); if (!o) return addr; f(o); o.c1 = Math.max(1, o.c1); o.r1 = Math.max(1, o.r1);
+            o.c2 = Math.max(o.c1, o.c2); o.r2 = Math.max(o.r1, o.r2); return fmt(o); };
+        const dc = dims(er) - dims(orig.expandedRows), dr = dims(ec) - dims(orig.expandedCols);
+        const rr = (dc || dr) ? move(orig.rrAddress, o => { o.c2 += dc; o.r1 += dr; o.r2 += dr; }) : orig.rrAddress;
+        const rc = (dc || dr) ? move(orig.rcAddress, o => { o.c1 += dc; o.c2 += dc; o.r2 += dr; }) : orig.rcAddress;
         if (JSON.stringify(d.expandedRows || []) !== JSON.stringify(er) || JSON.stringify(d.expandedCols || []) !== JSON.stringify(ec)
             || (d.rcAddress || "") !== rc || (d.rrAddress || "") !== rr) {
             await win.ReportStore.updateDesignFields(def.reportId, { expandedRows: JSON.parse(JSON.stringify(er)), expandedCols: JSON.parse(JSON.stringify(ec)), rcAddress: rc, rrAddress: rr });
@@ -952,6 +1057,8 @@ const DracoTables = {
                 case "dt.members": return await this.members(project, p.cube, p.dim, p.attr);
                 case "dt.varsFor": return await this.varsFor(project, p.refs || []);
                 case "dt.reports": return await this.reportsOf(project, p.ref);
+                case "dt.planSave":   // planificación: guarda los valores tecleados en la tabla del informe
+                    return await this.planSave(project, p.ref, p.cells || [], { variables: p.variables || {}, filters: p.filters || [], axis: p.axis || null });
                 case "dt.kpis":
                     // KPIs del informe (con sus piezas, los añade la herramienta); si no vienen, el formato antiguo por id
                     return Array.isArray(p.kpis) ? await this.kpisInline(project, p.kpis, p.variables || null, p.filters || null)

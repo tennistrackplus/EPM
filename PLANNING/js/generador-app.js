@@ -139,7 +139,7 @@ const GeneradorApp = {
         if (this.pendingInformeId) { qs.set("informe_id", this.pendingInformeId); this.pendingInformeId = null; }
         document.getElementById("toolEmpty").hidden = true;
         frame.hidden = false;
-        qs.set("v", "20261022e");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
+        qs.set("v", "20261023a");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
         frame.src = "informes-herramienta.html?" + qs.toString();
     },
 
