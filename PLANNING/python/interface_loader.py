@@ -55,7 +55,10 @@ from __future__ import annotations
 
 import ast
 import fnmatch
+import decimal
 import json
+import re
+import unicodedata
 import operator
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
@@ -227,6 +230,19 @@ class BigQueryEngine:
             bigquery.WriteDisposition.WRITE_TRUNCATE if mode == "overwrite"
             else bigquery.WriteDisposition.WRITE_APPEND
         )
+        # Al añadir a una tabla que ya existe, la librería exige que el DataFrame
+        # traiga TODAS sus columnas ("bq_schema contains fields not present in
+        # dataframe"). Las que el mapeo no rellena se escriben vacías (NULL); las
+        # MEDIDAS del cubo sin mapear ya llegan aquí a 0 (fill_unmapped_measures).
+        try:
+            existing = {str(c).upper() for c in df.columns}
+            missing = [f.name for f in self.client.get_table(ref).schema if f.name.upper() not in existing]
+            if missing:
+                df = df.copy()
+                for name in missing:
+                    df[name] = None
+        except Exception:  # tabla nueva o sin permiso para leer su esquema: se deja como estaba
+            pass
         job_config = bigquery.LoadJobConfig(write_disposition=disposition, autodetect=True)
         job = self.client.load_table_from_dataframe(df, ref, job_config=job_config)
         job.result()  # espera a que termine el load job y propaga errores
@@ -540,6 +556,57 @@ def apply_mapping(df_input: pd.DataFrame, df_variables: pd.DataFrame, config: Ma
 
 
 # ============================================================
+# 4bis) MEDIDAS SIN MAPEAR = 0
+# ============================================================
+
+def to_identifier(text: Any) -> str:
+    """Mismo nombre de columna física que genera la app (BQ.toIdentifier en
+    js/bigquery.js): mayúsculas, sin acentos, lo que no sea A-Z/0-9/_ pasa a
+    "_", sin "_" en los extremos y con "N" delante si empieza por un número."""
+    t = unicodedata.normalize("NFD", str(text or "").strip().upper())
+    t = "".join(ch for ch in t if not unicodedata.combining(ch))
+    t = re.sub(r"[^A-Z0-9_]+", "_", t).strip("_")
+    return re.sub(r"^(\d)", r"N\1", t)
+
+
+def fill_unmapped_measures(engine: EngineAdapter, cubo_id: str, df: pd.DataFrame) -> pd.DataFrame:
+    """Las MEDIDAS del cubo destino que el mapeo no rellena se cargan a 0 (un
+    importe que el fichero no trae es 0, no "desconocido"). Las medidas se leen
+    de CUBOS.CAMPOS_JSON ({dimensions, measures}); las dimensiones sin mapear
+    no se tocan (quedan vacías). Si no se puede leer el cubo, no cambia nada."""
+    if not cubo_id:
+        return df
+    try:
+        rows = engine.run_control_query(
+            f"SELECT CAMPOS_JSON FROM {engine.qualify_control('CUBOS')} "
+            f"WHERE CUBO_ID = '{engine.esc(cubo_id)}'"
+        )
+        spec = json.loads((rows[0].get("CAMPOS_JSON") if rows else None) or "{}")
+    except Exception:
+        return df
+    present = {str(c).upper() for c in df.columns}
+    added = False
+    for m in spec.get("measures") or []:
+        col = to_identifier(m.get("name") if isinstance(m, dict) else m)
+        if col and col.upper() not in present:
+            if not added:
+                df = df.copy()
+                added = True
+            df[col] = _zero_for(m.get("type") if isinstance(m, dict) else None)
+            present.add(col.upper())
+    return df
+
+
+def _zero_for(tipo: Any) -> Any:
+    """Cero del tipo de la columna: NUMERIC/BIGNUMERIC (y NUMBER/DECIMAL) solo admiten
+    Decimal al cargar (Arrow rechaza 0 y 0.0); FLOAT/INT64 admiten 0 pero no Decimal."""
+    t = str(tipo or "").upper()
+    if t.startswith(("NUMERIC", "BIGNUMERIC", "DECIMAL", "BIGDECIMAL", "NUMBER")):
+        return decimal.Decimal(0)
+    return 0
+
+
+# ============================================================
 # 5) ORQUESTADOR — enlaza motor + nucleo
 # ============================================================
 
@@ -581,6 +648,7 @@ def run_interface(
         if "transformar" in ns:
             df_output = ns["transformar"](df_output)
 
+    df_output = fill_unmapped_measures(engine, config.cubo_id, df_output)
     destino = tabla_destino or config.cubo_id
     engine.write_table(df_output, destino, mode=write_mode)
     return len(df_output)

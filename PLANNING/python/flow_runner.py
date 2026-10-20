@@ -45,7 +45,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
-from interface_loader import EngineAdapter, SnowflakeEngine, apply_mapping, load_mapping_config, matches_select_options
+from interface_loader import EngineAdapter, SnowflakeEngine, apply_mapping, fill_unmapped_measures, load_mapping_config, matches_select_options
 from storage_io import LocalFsStorage, SnowflakeStageStorage, StorageAdapter, load_interface_values, read_file_to_dataframe
 
 ESTADO_PENDIENTE = "PENDIENTE"
@@ -240,6 +240,7 @@ def _run_step(engine: EngineAdapter, storage: Optional[StorageAdapter], step: Fl
         if "transformar" in ns:
             df_output = ns["transformar"](df_output)
 
+    df_output = fill_unmapped_measures(engine, config.cubo_id, df_output)   # medidas sin mapear = 0
     tabla_destino = _cubo_tabla(engine, config.cubo_id)
     engine.write_table(df_output, tabla_destino, mode="append")
     return len(df_output)
