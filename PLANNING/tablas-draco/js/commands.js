@@ -9574,7 +9574,7 @@ async function dracoPaintLinkedChain(context, mainId, linkedIds, jsons) {
 }
 /** SQL de un informe dinámico (lo mismo que hace actualizarInformeCore) y el tamaño de sus ejes. */
 async function dracoBuildDynamicQuery(reportId) {
-    let sql = null, nRowDims = 0, nColDims = 0;
+    let sql = null, nRowDims = 0, nColDims = 0, empty = false;
     await Excel.run(async (context) => {
         const editReportGrid = await getEditReportGrid(context, reportId);
         const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
@@ -9589,8 +9589,9 @@ async function dracoBuildDynamicQuery(reportId) {
         // OJO: en ReportState, "Columns" son las Filas de la hoja y "Rows" las Columnas (herencia del VBA)
         nRowDims = ReportState.ColumnCount;
         nColDims = ReportState.RowCount;
+        empty = !(ReportState.Measures && ReportState.Measures.length);
     });
-    return { sql, nRowDims, nColDims };
+    return { sql, nRowDims, nColDims, empty };
 }
 /** Refresca un grupo vinculado (sin indicador ni cálculo manual: eso lo pone quien llama). */
 async function dracoRefreshLinkGroup(mainId) {
@@ -9604,21 +9605,25 @@ async function dracoRefreshLinkGroup(mainId) {
         }
     }
     await dracoSyncLinkedDesigns(mainId, linkedIds);
-    const parts = [];
+    const parts = [], painted = [];
     for (const id of ids) {
         if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(id, "Generando SQL"));
         const q = await dracoBuildDynamicQuery(id);
+        // Un vinculado recién creado (aún sin medidas) no se consulta ni se pinta: si no, su consulta
+        // vacía haría fallar el refresco de todo el grupo, también el del principal.
+        if (id !== mainId && q.empty) continue;
         if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(id, "Ejecutando consulta"));
         q.json = await executeSQL(q.sql);
         parts.push(q);
+        if (id !== mainId) painted.push(id);
     }
     const axis = linkedIds.length ? dracoLinkOf(linkedIds[0]).axis : "rows";
-    const merged = linkedIds.length ? dracoMergeLinkedResults(parts, axis) : parts.map(p => p.json);
+    const merged = painted.length ? dracoMergeLinkedResults(parts, axis) : parts.map(p => p.json);
     if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(mainId, "Pintando resultados"));
     await Excel.run(async (context) => {
         await dracoClearLinkedAreas(context, linkedIds);
         await jsonTo3Matrices(context, merged[0], mainId);
-        await dracoPaintLinkedChain(context, mainId, linkedIds, merged.slice(1));
+        await dracoPaintLinkedChain(context, mainId, painted, merged.slice(1));
     });
 }
 async function actualizarGrupoVinculado(mainId) {
