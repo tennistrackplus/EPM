@@ -816,13 +816,45 @@ const DracoTables = {
             win.__dracoRuntimeFilters = rf.length ? rf.map(f => ({ dim: f.dim, attr: f.attr, value: f.value })) : null;
             // Con informes vinculados no se usa el SQL guardado: el motor genera el de cada informe del grupo
             const group = Array.isArray(def.linked) && def.linked.length > 0;
-            try { await win.DracoEngineApi.refresh(def.reportId, (rf.length || group) ? null : row.SQL_TEXT); }
+            // Filtro «Campos del eje»: cambia los campos de Filas (o Columnas) del informe en el motor y regenera su SQL
+            const axisChanged = await this.applyAxis(win, eng, def, opts && opts.axis);
+            try { await win.DracoEngineApi.refresh(def.reportId, (rf.length || group || axisChanged) ? null : row.SQL_TEXT); }
             finally { win.__dracoRuntimeFilters = null; }
             const variables = win.DracoVariables ? win.DracoVariables.list() : [];
             return { id, nombre: row.NOMBRE, motor: row.MOTOR || "", sqlGenerado: row.SQL_GENERADO || null, desfasado: item.desfasado, variables, grid: this.snapshot(eng.host) };
         });
         eng.chain = result.catch(() => {});
         return result;
+    },
+
+    /**
+     * Filtro «Campos del eje» de la barra: pone en el eje de Filas (axis.axis = "rows") o de Columnas ("cols") del
+     * informe SOLO los campos elegidos, en ese orden ({dim, attr}); las medidas del eje se conservan al final. Un campo
+     * que ya estaba en el diseño conserva su configuración. Se guarda el eje original la primera vez y se repone cuando
+     * ya no hay selección. Devuelve true si el eje queda distinto del guardado (hay que regenerar el SQL).
+     */
+    async applyAxis(win, eng, def, axis) {
+        const rep = win.ReportStore && win.ReportStore.getReport(def.reportId);
+        if (!rep) return false;
+        const d = rep.design || {};
+        if (!eng.axisOrig) {
+            if (!axis) return false;
+            eng.axisOrig = { expandedRows: JSON.parse(JSON.stringify(d.expandedRows || [])), expandedCols: JSON.parse(JSON.stringify(d.expandedCols || [])) };
+        }
+        const orig = eng.axisOrig, fields = axis && Array.isArray(axis.fields) ? axis.fields.filter(f => f && f.dim && f.attr) : [];
+        let er = orig.expandedRows, ec = orig.expandedCols;
+        if (fields.length) {
+            const key = (e) => String(e[0]).toUpperCase() + "|" + String(e[1]).toUpperCase();
+            const known = {};
+            orig.expandedRows.concat(orig.expandedCols).forEach(e => { if (e && e[0] !== "MEASURE") known[key(e)] = e; });
+            const entries = fields.map(f => known[key([f.dim, f.attr])] || [f.dim, f.attr, "1", "", "", ""]);
+            if (axis.axis === "cols") ec = entries.concat(orig.expandedCols.filter(e => e && e[0] === "MEASURE"));
+            else er = entries.concat(orig.expandedRows.filter(e => e && e[0] === "MEASURE"));
+        }
+        if (JSON.stringify(d.expandedRows || []) !== JSON.stringify(er) || JSON.stringify(d.expandedCols || []) !== JSON.stringify(ec)) {
+            await win.ReportStore.updateDesignFields(def.reportId, { expandedRows: JSON.parse(JSON.stringify(er)), expandedCols: JSON.parse(JSON.stringify(ec)) });
+        }
+        return JSON.stringify(er) !== JSON.stringify(orig.expandedRows) || JSON.stringify(ec) !== JSON.stringify(orig.expandedCols);
     },
 
     /** Clic en el +/- de una jerarquía: el motor repinta desde su caché, sin volver a consultar. */
@@ -872,9 +904,10 @@ const DracoTables = {
                 case "dt.list": return await this.list(project.PROYECTO_ID);
                 case "dt.run": {
                     // p.variables / p.filters (opcionales): valores de variables y filtros de la barra para ESTA ejecución
-                    const hasVars = (p.variables && Object.keys(p.variables).length) || (p.filters && p.filters.length);
+                    // p.axis (opcional): campos del eje elegidos en un filtro «Campos del eje» de la barra
+                    const hasVars = (p.variables && Object.keys(p.variables).length) || (p.filters && p.filters.length) || p.axis;
                     const pre = (p.force || hasVars) ? null : this.takePending(project, p.ref);
-                    return pre ? await pre : await this.run(project, p.ref, p.force ? "fresh" : undefined, { variables: p.variables || {}, filters: p.filters || [] });
+                    return pre ? await pre : await this.run(project, p.ref, p.force ? "fresh" : undefined, { variables: p.variables || {}, filters: p.filters || [], axis: p.axis || null });
                 }
                 case "dt.variables": return await this.variables(project, p.ref);
                 case "dt.cubes": return (await this.cubes(project.PROYECTO_ID)).map(c => ({ name: c.name }));
