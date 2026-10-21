@@ -139,7 +139,7 @@ const GeneradorApp = {
         if (this.pendingInformeId) { qs.set("informe_id", this.pendingInformeId); this.pendingInformeId = null; }
         document.getElementById("toolEmpty").hidden = true;
         frame.hidden = false;
-        qs.set("v", "20261023c");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
+        qs.set("v", "20261023d");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
         frame.src = "informes-herramienta.html?" + qs.toString();
     },
 
@@ -217,6 +217,7 @@ const GeneradorApp = {
             case "dt.varsFor":
             case "dt.reports":   // informes de una Tabla Draco (principal y vinculados), para dirigir un filtro a uno
             case "dt.createFromSpec":   // crea las Tablas Draco que trae definidas el JSON de la página (agente de IA)
+            case "dt.kpisFromSpec":     // calcula las piezas de los KPIs que trae definidos el JSON de la página
             case "dt.kpis":
             case "dt.members":
                 return DracoTables.handle(this.currentProject, op, p);      // el editor configura un «Selector de variable»

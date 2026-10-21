@@ -927,7 +927,7 @@ const DracoTables = {
             mItems.push({ dimension: "MEASURE", name: f.name, isHierarchy: false });
         });
         if (!mEntries.length) errors.push(`«${d.name || d.key}»: indica al menos una medida.`);
-        if (!rows.entries.length && !cols.entries.length) errors.push(`«${d.name || d.key}»: pon al menos un campo en filas o en columnas.`);
+        if (!d.kpiMode && !rows.entries.length && !cols.entries.length) errors.push(`«${d.name || d.key}»: pon al menos un campo en filas o en columnas.`);
         const filters = [];
         Object.keys(d.filters || {}).forEach(k => {
             const r = this.parseFieldRef(k);
@@ -981,7 +981,8 @@ const DracoTables = {
         return out;
     },
 
-    async createOneFromDesign(project, p) {
+    /** Motor temporal con el modelo del cubo y UN informe con ese diseño: fn(win, eng, rep). Se descarta al terminar. */
+    async withDesignEngine(p, fn) {
         const eng = this.createEngine(this.stateFromDefinition({}));
         try {
             await eng.ready;
@@ -991,7 +992,60 @@ const DracoTables = {
             if (win.SemanticModelStore.setActiveModelName) await win.SemanticModelStore.setActiveModelName(p.cube.name);
             const rep = await win.ReportStore.createReport(p.cube.name, "Hoja1");
             await win.ReportStore.updateDesignFields(rep.id, p.design);
-            if (win.ReportStore.renameReport) await win.ReportStore.renameReport(rep.id, p.d.name || p.d.key);
+            if (win.ReportStore.renameReport) await win.ReportStore.renameReport(rep.id, p.d.name || p.d.label || p.d.key);
+            return await fn(win, eng, rep);
+        } finally {
+            try { eng.frame.remove(); } catch (e) { /* nada */ }
+        }
+    },
+
+    /**
+     * KPIs definidos en el JSON (spec.dracoKpisNew): { key, name, label, cube, measure, filters: { "DIM.ATTR": [...] } }.
+     * Se validan contra el modelo y se calculan sus piezas con el motor (lo mismo que el diseñador en modo KPI).
+     * No se guarda nada: la página los lleva en línea (dracoKpis con cubo, def y parts). Devuelve { key: { cubo, def, parts } }.
+     */
+    async kpisFromSpec(project, kpis) {
+        if (!Array.isArray(kpis) || !kpis.length) return {};
+        const cubes = await this.cubes(project.PROYECTO_ID);
+        const errors = [], prepared = [], keys = {};
+        for (const k of kpis) {
+            const label = (k && (k.label || k.name || k.key)) || "KPI";
+            if (!k || !k.key) { errors.push("Un KPI nuevo no tiene «key»."); continue; }
+            if (keys[k.key]) { errors.push(`La clave de KPI «${k.key}» está repetida.`); continue; }
+            keys[k.key] = 1;
+            const cube = cubes.find(c => c.name.toUpperCase() === String(k.cube || "").toUpperCase());
+            if (!cube) { errors.push(`KPI «${label}»: el cubo «${k.cube}» no existe en este proyecto.`); continue; }
+            const model = await this.resolveModel(project, cube);
+            // mismo compilador que las tablas: la medida y los filtros; sin filas ni columnas
+            const comp = this.compileNewDesign(model, { key: k.key, name: "KPI " + label, cube: cube.name, kpiMode: true, measures: [k.measure], filters: k.filters || {} });
+            if (comp.errors.length) { errors.push(...comp.errors); continue; }
+            const d = comp.design;
+            const measure = d.expandedCols.find(e => e[0] === "MEASURE")[1];
+            const design = Object.assign({}, d, {
+                rows: [], columns: [], expandedRows: [], expandedCols: [], fieldOptions: {},
+                filters: [{ dimension: "MEASURE", name: measure, isHierarchy: false, realAttribute: measure, value: "" }].concat(d.filters)
+            });
+            prepared.push({ d: Object.assign({}, k, { name: label }), cube, model, design });
+        }
+        if (errors.length) {
+            const err = this.fail("INVALID", "No se ha preparado ningún KPI. " + errors.slice(0, 6).join(" ") + (errors.length > 6 ? ` (y ${errors.length - 6} más)` : ""));
+            err.details = { errors };
+            throw err;
+        }
+        const out = {};
+        for (const p of prepared) {
+            out[p.d.key] = await this.withDesignEngine(p, async (win, eng) => {
+                const parts = await win.DracoEngineApi.kpiParts();
+                if (!parts) throw this.fail("NO_KPI", `KPI «${p.d.name}»: no se han podido calcular sus piezas.`);
+                const def = await this.exportDefinition(win, eng.host);
+                return { cubo: p.cube.name, def, parts };
+            });
+        }
+        return out;
+    },
+
+    async createOneFromDesign(project, p) {
+        return this.withDesignEngine(p, async (win, eng, rep) => {
             const gen = await win.DracoEngineApi.generateSql(rep.id);
             if (!gen || !gen.sql) throw this.fail("NO_SQL", `«${p.d.name || p.d.key}»: no se ha podido generar su consulta.`);
             const definition = await this.exportDefinition(win, eng.host);
@@ -1000,9 +1054,7 @@ const DracoTables = {
                 cubo: p.cube.name, definition, sql: gen.sql, modeloFecha: p.cube.fecha || ""
             });
             return { id: res.id, name: res.nombre };
-        } finally {
-            try { eng.frame.remove(); } catch (e) { /* nada */ }
-        }
+        });
     },
 
     /** Informes de una Tabla Draco: el principal y, si los tiene, sus vinculados ({ id, name, main, axis }). */
@@ -1192,6 +1244,8 @@ const DracoTables = {
                 case "dt.reports": return await this.reportsOf(project, p.ref);
                 case "dt.createFromSpec":   // Tablas Draco definidas en el JSON de una página (p. ej. por un agente de IA)
                     return await this.createFromSpec(project, p.defs || []);
+                case "dt.kpisFromSpec":     // KPIs definidos en el JSON de una página: sus piezas SQL (no se guarda nada)
+                    return await this.kpisFromSpec(project, p.kpis || []);
                 case "dt.planSave":   // planificación: guarda los valores tecleados en la tabla del informe
                     return await this.planSave(project, p.ref, p.cells || [], { variables: p.variables || {}, filters: p.filters || [], axis: p.axis || null });
                 case "dt.kpis":
