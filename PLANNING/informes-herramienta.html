@@ -874,6 +874,8 @@ function kpiValueText(k){
   /* formato: el del KPI si se fij\u00F3 (n\u00FAmero / porcentaje); si no ("Seg\u00FAn la medida"), el de la medida */
   var P=k.parts||{}, kind=(k.fmt==='number'||k.fmt==='percent')?k.fmt:(P.fmtKind||'number');
   var d=(k.decimals===''||k.decimals==null)?((P.decimals===null||P.decimals===undefined||(k.fmt&&k.fmt!=='auto'))?undefined:parseInt(P.decimals,10)):parseInt(k.decimals,10);
+  /* escala opcional (K = miles, M = millones; la unidad la pone k.unit, p. ej. "M\u20AC") */
+  if(kind!=='percent'){ var sc=k.scale==='M'?1e6:(k.scale==='K'?1e3:1); if(sc>1){ v=v/sc; if(d===undefined) d=1; } }
   var txt=kind==='percent'?fmt(v*100,d===undefined?1:d)+'%':fmt(v,d);
   return txt+(k.unit?' '+k.unit:'');
 }
@@ -4232,9 +4234,29 @@ function validate(spec){
         if(!Array.isArray(d.measures)||!d.measures.length) e.push(p+': indica al menos una medida en "measures".');
         if(!(Array.isArray(d.rows)&&d.rows.length)&&!(Array.isArray(d.cols)&&d.cols.length)) e.push(p+': pon al menos un campo en "rows" o en "cols".');
       });
-      var used=(JSON.stringify(spec).match(/"new:[^"]+"/g)||[]).map(function(x){ return x.slice(5,-1); });
-      used.forEach(function(k){ if(!nk[k]) e.push('Se usa "new:'+k+'" pero no est\u00E1 definida en "dracoNew".'); });
     }
+  }
+  /* dracoKpisNew: KPIs que se calculan al cargar el JSON; se muestran con $$NAME$$ en cualquier texto o tarjeta */
+  var nk2={}; (Array.isArray(spec.dracoNew)?spec.dracoNew:[]).forEach(function(d){ if(d&&d.key) nk2[d.key]=1; });
+  var kpiNames={}; (Array.isArray(spec.dracoKpis)?spec.dracoKpis:[]).forEach(function(k){ if(k&&k.name) kpiNames[String(k.name).toUpperCase()]=1; });
+  if(spec.dracoKpisNew!==undefined){
+    if(!Array.isArray(spec.dracoKpisNew)) e.push('"dracoKpisNew" debe ser una lista.');
+    else spec.dracoKpisNew.forEach(function(k,i){ var p='dracoKpisNew['+i+']';
+      if(!k||typeof k!=='object'){ e.push(p+': debe ser un objeto.'); return; }
+      if(!k.key) e.push(p+': falta "key".'); else if(nk2[k.key]) e.push(p+': la clave "'+k.key+'" ya se usa en otra tabla o KPI.'); else nk2[k.key]=1;
+      if(!/^[A-Z][A-Z0-9_]{0,39}$/.test(String(k.name||''))) e.push(p+': "name" debe ir en may\u00FAsculas, sin espacios ni acentos (se usa como $$NAME$$).');
+      else if(kpiNames[k.name]) e.push(p+': el nombre '+k.name+' est\u00E1 repetido.'); else kpiNames[k.name]=1;
+      if(!k.cube) e.push(p+': falta "cube".');
+      if(!k.measure) e.push(p+': falta "measure".');
+      if(k.scale!==undefined&&['','K','M'].indexOf(k.scale)<0) e.push(p+': "scale" debe ser "K" o "M".');
+    });
+  }
+  if(spec.dracoNew!==undefined||spec.dracoKpisNew!==undefined){
+    var used=(JSON.stringify(spec).match(/"new:[^"]+"/g)||[]).map(function(x){ return x.slice(5,-1); });
+    used.forEach(function(k){ if(!nk2[k]) e.push('Se usa "new:'+k+'" pero no est\u00E1 definida en "dracoNew" ni en "dracoKpisNew".'); });
+    /* cada $$NOMBRE$$ de los textos tiene que ser un KPI (si no, se ver\u00EDa el texto tal cual) */
+    var tokens={}; (JSON.stringify(spec.sections||[]).match(/\$\$([A-Za-z][A-Za-z0-9_]*)\$\$/g)||[]).forEach(function(t){ tokens[t.slice(2,-2).toUpperCase()]=1; });
+    Object.keys(tokens).forEach(function(n){ if(!kpiNames[n]) e.push('Se usa $$'+n+'$$ pero no hay ning\u00FAn KPI con ese nombre en "dracoKpis" ni en "dracoKpisNew".'); });
   }
   if(spec.dracoFilters!==undefined){
     if(!Array.isArray(spec.dracoFilters)) e.push('"dracoFilters" debe ser una lista.');
@@ -4571,7 +4593,7 @@ function renderFromText(text){
   catch(err){ baseReport={errors:['JSON no válido: '+err.message],warnings:[]}; showReport(); return false; }
   var res=validate(spec);
   if(res.errors.length){ baseReport=res; showReport(); return false; }
-  if(Array.isArray(spec.dracoNew)&&spec.dracoNew.length){ createDracoNew(spec); return false; }
+  if((Array.isArray(spec.dracoNew)&&spec.dracoNew.length)||(Array.isArray(spec.dracoKpisNew)&&spec.dracoKpisNew.length)){ createDracoNew(spec); return false; }
   currentSpec=spec; runtimeNotes=null; slidesInfo=null; edSel=null; showEmpty(false); renderBrandReport(); closeModal('mdPaste'); closeAiPanel();
   loadPreview(); if(editOn){ edBase=JSON.stringify(currentSpec,null,2); edHist=[]; edRender(); } else if(!VIEWER&&editPref&&previewMode!=='slides'){ setEditMode(true); } layoutBars();
   baseReport={errors:[],warnings:res.warnings,sections:spec.sections.length,blocks:countBlocks(spec),filters:(spec.filters||[]).length};
@@ -4583,24 +4605,32 @@ function renderFromText(text){
 /* El JSON trae Tablas Draco por crear (dracoNew; las genera, p. ej., un agente de IA): se crean en el proyecto con el
    mismo motor que el dise\u00F1ador, se sustituyen las referencias "new:clave" por las tablas creadas y se pinta la p\u00E1gina. */
 function createDracoNew(spec){
-  var defs=spec.dracoNew;
-  if(!HOSTED){ baseReport={errors:['Este JSON define '+defs.length+' Tabla(s) Draco nuevas: solo se pueden crear abri\u00E9ndolo en el generador de Draco Planning.'],warnings:[]}; showReport(); return; }
-  var names=defs.map(function(d){ return '\u2022 '+(d.name||d.key)+' ('+d.cube+')'; }).join('\n');
-  if(!confirm('Este cuadro de mando necesita '+defs.length+' Tabla(s) Draco nuevas en el proyecto:\n\n'+names+'\n\n\u00BFLas creo y genero la p\u00E1gina?')) return;
-  baseReport={errors:[],warnings:['Creando '+defs.length+' Tabla(s) Draco\u2026 (puede tardar un poco)']}; showReport();
-  tuCall('dt.createFromSpec',{defs:defs}).then(function(map){
+  var defs=Array.isArray(spec.dracoNew)?spec.dracoNew:[], kdefs=Array.isArray(spec.dracoKpisNew)?spec.dracoKpisNew:[];
+  if(!HOSTED){ baseReport={errors:['Este JSON define '+(defs.length?defs.length+' Tabla(s) Draco':'')+(defs.length&&kdefs.length?' y ':'')+(kdefs.length?kdefs.length+' KPI(s)':'')+' nuevos: solo se pueden crear abri\u00E9ndolo en el generador de Draco Planning.'],warnings:[]}; showReport(); return; }
+  var lines=defs.map(function(d){ return '\u2022 Tabla: '+(d.name||d.key)+' ('+d.cube+')'; }).concat(kdefs.map(function(k){ return '\u2022 KPI: '+(k.label||k.name)+' ('+k.cube+' \u00B7 '+k.measure+')'; }));
+  if(!confirm('Este cuadro de mando necesita '+(defs.length?defs.length+' Tabla(s) Draco nuevas':'')+(defs.length&&kdefs.length?' y ':'')+(kdefs.length?kdefs.length+' KPI(s)':'')+':\n\n'+lines.join('\n')+'\n\n\u00BFLos creo y genero la p\u00E1gina?')) return;
+  baseReport={errors:[],warnings:['Preparando '+lines.length+' elemento(s) de Draco\u2026 (puede tardar un poco)']}; showReport();
+  var tmap={};
+  (defs.length?tuCall('dt.createFromSpec',{defs:defs}):Promise.resolve({})).then(function(map){
+    tmap=map||{};
+    return kdefs.length?tuCall('dt.kpisFromSpec',{kpis:kdefs}):{};
+  }).then(function(kmap){
+    var ids={}; Object.keys(tmap).forEach(function(k){ ids[k]=String(tmap[k].id); });
+    var newKpis=kdefs.map(function(k){ var r=(kmap||{})[k.key]||{}, id=dkUid(); ids[k.key]=id;
+      return {id:id,name:k.name,label:k.label||k.name,fmt:k.fmt||'auto',decimals:(k.decimals==null?'':String(k.decimals)),unit:k.unit||'',scale:k.scale||'',cubo:r.cubo,def:r.def,parts:r.parts,vars:{}}; });
     var txt=JSON.stringify(spec);
-    Object.keys(map||{}).forEach(function(k){ txt=txt.split('"new:'+k+'"').join(JSON.stringify(String(map[k].id))); });
-    var ns=JSON.parse(txt); delete ns.dracoNew;
-    /* nombre visible de cada tabla en los bloques que la usan */
-    var byId={}; Object.keys(map||{}).forEach(function(k){ byId[String(map[k].id)]=map[k].name; });
+    Object.keys(ids).forEach(function(k){ txt=txt.split('"new:'+k+'"').join(JSON.stringify(ids[k])); });
+    var ns=JSON.parse(txt); delete ns.dracoNew; delete ns.dracoKpisNew;
+    if(newKpis.length) ns.dracoKpis=(ns.dracoKpis||[]).concat(newKpis);
+    var byId={}; Object.keys(tmap).forEach(function(k){ byId[String(tmap[k].id)]=tmap[k].name; });
     var walk=function(bl){ (bl||[]).forEach(function(b){ if(!b) return; if(b.ref&&byId[b.ref]&&!b.refName) b.refName=byId[b.ref]; if(b.blocks) walk(b.blocks); if(b.tabs) b.tabs.forEach(function(t){ walk(t.blocks); }); }); };
     (ns.sections||[]).forEach(function(sc){ walk(sc.blocks); });
     var out=JSON.stringify(ns,null,2); $('specIn').value=out;
-    if(typeof DTV!=='undefined') DTV.list=null;                       /* el selector de tablas del editor las ver\u00E1 ya */
+    if(typeof DTV!=='undefined') DTV.list=null;
     renderFromText(out);
-  },function(err){
-    baseReport={errors:[(err&&err.message)||'No se pudieron crear las Tablas Draco.'].concat(((err&&err.details&&err.details.errors)||[]).slice(6)),warnings:[]}; showReport();
+  }).catch(function(err){
+    var made=Object.keys(tmap).length;
+    baseReport={errors:[(err&&err.message)||'No se pudieron crear los elementos de Draco.'].concat(made?['Las '+made+' Tabla(s) Draco ya creadas siguen en el proyecto: puedes usarlas o borrarlas.']:[]),warnings:[]}; showReport();
   });
 }
 window.addEventListener('message',function(ev){
