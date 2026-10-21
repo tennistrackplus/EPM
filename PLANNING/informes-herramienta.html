@@ -9,6 +9,7 @@ if(/[?&]host=draco/.test(location.search)&&window.parent!==window) document.docu
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
+body.drop-on::after{content:"Suelta aqu\00ED el fichero .draco para abrir el cuadro de mando";position:fixed;inset:12px;z-index:9999;display:flex;align-items:center;justify-content:center;border:3px dashed #2563eb;border-radius:18px;background:rgba(37,99,235,.08);color:#1d4ed8;font:600 18px/1.4 system-ui,sans-serif;pointer-events:none}
   :root{
     --bg:#F1F3F7; --panel:#FFFFFF; --panel-2:#F7F8FB; --line:#E1E5EC; --ink:#0F1B2E; --text:#38455A; --muted:#6B7686;
     --brand:#2F6FED; --brand-soft:rgba(47,111,237,0.10); --good:#16A673; --bad:#E5484D;
@@ -278,8 +279,8 @@ if(/[?&]host=draco/.test(location.search)&&window.parent!==window) document.docu
       <button class="btn ghost small" id="btnHOpen">Abrir del proyecto…</button>
       <span class="bar-sep"></span>
     </span>
-    <button class="btn ghost small" id="btnOpen" title="Abrir una página HTML exportada con esta herramienta para seguir editándola">Abrir</button>
-    <input type="file" id="fileOpen" accept=".html,.htm,text/html" hidden>
+    <button class="btn ghost small" id="btnOpen" title="Abrir un cuadro de mando (.draco, p. ej. el que genera el agente de IA) o una página HTML exportada con esta herramienta">Abrir</button>
+    <input type="file" id="fileOpen" accept=".draco,.json,.txt,.html,.htm,text/html,application/json" hidden>
     <button class="btn ghost small" id="btnBlank" title="Empezar una página vacía y construirla con el editor">Nueva en blanco</button>
     <button class="btn ghost small" id="btnExample">Cargar ejemplo</button>
     <span class="bar-sep"></span>
@@ -346,7 +347,7 @@ if(/[?&]host=draco/.test(location.search)&&window.parent!==window) document.docu
   <div class="md-h"><span>Pegar la respuesta de la IA</span><button class="ic" data-close="mdPaste" aria-label="Cerrar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
   <p class="hint" id="pasteMsg" style="margin:0 0 10px">El prompt ya está copiado. Pégalo en tu IA (ChatGPT, Claude, Gemini…) y, cuando responda, pega aquí su respuesta.</p>
   <textarea id="specIn" rows="10" spellcheck="false" placeholder="Pega aquí el JSON que te devuelva la IA"></textarea>
-  <div class="row"><button class="btn" id="btnRender">Generar página</button><button class="btn ghost" id="btnRecopy">Copiar el prompt otra vez</button><button class="btn ghost" id="btnShow">Ver prompt</button></div>
+  <div class="row"><button class="btn" id="btnRender">Generar página</button><button class="btn ghost" id="btnOpenDraco" title="Abrir el fichero .draco que genera el agente de IA (también vale arrastrarlo sobre el generador)">Abrir fichero (.draco)</button><button class="btn ghost" id="btnRecopy">Copiar el prompt otra vez</button><button class="btn ghost" id="btnShow">Ver prompt</button></div>
   <textarea id="promptOut" rows="9" readonly hidden style="margin-top:8px;"></textarea>
   <div id="report"></div>
   <details class="schemabox">
@@ -4219,6 +4220,22 @@ function validate(spec){
       if(spec.view.sections!==undefined&&['auto','screen','paged'].indexOf(spec.view.sections)<0) e.push('view.sections debe ser "auto", "screen" o "paged".');
     }
   }
+  /* dracoNew: Tablas Draco que se crean al cargar el JSON (las referencias "new:clave" apuntan a ellas) */
+  if(spec.dracoNew!==undefined){
+    if(!Array.isArray(spec.dracoNew)) e.push('"dracoNew" debe ser una lista.');
+    else {
+      var nk={};
+      spec.dracoNew.forEach(function(d,i){ var p='dracoNew['+i+']';
+        if(!d||typeof d!=='object'){ e.push(p+': debe ser un objeto.'); return; }
+        if(!d.key) e.push(p+': falta "key".'); else if(nk[d.key]) e.push(p+': la clave "'+d.key+'" est\u00E1 repetida.'); else nk[d.key]=1;
+        if(!d.cube) e.push(p+': falta "cube".');
+        if(!Array.isArray(d.measures)||!d.measures.length) e.push(p+': indica al menos una medida en "measures".');
+        if(!(Array.isArray(d.rows)&&d.rows.length)&&!(Array.isArray(d.cols)&&d.cols.length)) e.push(p+': pon al menos un campo en "rows" o en "cols".');
+      });
+      var used=(JSON.stringify(spec).match(/"new:[^"]+"/g)||[]).map(function(x){ return x.slice(5,-1); });
+      used.forEach(function(k){ if(!nk[k]) e.push('Se usa "new:'+k+'" pero no est\u00E1 definida en "dracoNew".'); });
+    }
+  }
   if(spec.dracoFilters!==undefined){
     if(!Array.isArray(spec.dracoFilters)) e.push('"dracoFilters" debe ser una lista.');
     else spec.dracoFilters.forEach(function(f,i){ var p='dracoFilters['+i+']';
@@ -4554,6 +4571,7 @@ function renderFromText(text){
   catch(err){ baseReport={errors:['JSON no válido: '+err.message],warnings:[]}; showReport(); return false; }
   var res=validate(spec);
   if(res.errors.length){ baseReport=res; showReport(); return false; }
+  if(Array.isArray(spec.dracoNew)&&spec.dracoNew.length){ createDracoNew(spec); return false; }
   currentSpec=spec; runtimeNotes=null; slidesInfo=null; edSel=null; showEmpty(false); renderBrandReport(); closeModal('mdPaste'); closeAiPanel();
   loadPreview(); if(editOn){ edBase=JSON.stringify(currentSpec,null,2); edHist=[]; edRender(); } else if(!VIEWER&&editPref&&previewMode!=='slides'){ setEditMode(true); } layoutBars();
   baseReport={errors:[],warnings:res.warnings,sections:spec.sections.length,blocks:countBlocks(spec),filters:(spec.filters||[]).length};
@@ -4561,6 +4579,29 @@ function renderFromText(text){
   $('pageInfo').textContent=(spec.meta&&spec.meta.title)||'Vista previa';
   if(!VIEWER){ try{ localStorage.setItem('gp_spec3',text); }catch(e){} }
   return true;
+}
+/* El JSON trae Tablas Draco por crear (dracoNew; las genera, p. ej., un agente de IA): se crean en el proyecto con el
+   mismo motor que el dise\u00F1ador, se sustituyen las referencias "new:clave" por las tablas creadas y se pinta la p\u00E1gina. */
+function createDracoNew(spec){
+  var defs=spec.dracoNew;
+  if(!HOSTED){ baseReport={errors:['Este JSON define '+defs.length+' Tabla(s) Draco nuevas: solo se pueden crear abri\u00E9ndolo en el generador de Draco Planning.'],warnings:[]}; showReport(); return; }
+  var names=defs.map(function(d){ return '\u2022 '+(d.name||d.key)+' ('+d.cube+')'; }).join('\n');
+  if(!confirm('Este cuadro de mando necesita '+defs.length+' Tabla(s) Draco nuevas en el proyecto:\n\n'+names+'\n\n\u00BFLas creo y genero la p\u00E1gina?')) return;
+  baseReport={errors:[],warnings:['Creando '+defs.length+' Tabla(s) Draco\u2026 (puede tardar un poco)']}; showReport();
+  tuCall('dt.createFromSpec',{defs:defs}).then(function(map){
+    var txt=JSON.stringify(spec);
+    Object.keys(map||{}).forEach(function(k){ txt=txt.split('"new:'+k+'"').join(JSON.stringify(String(map[k].id))); });
+    var ns=JSON.parse(txt); delete ns.dracoNew;
+    /* nombre visible de cada tabla en los bloques que la usan */
+    var byId={}; Object.keys(map||{}).forEach(function(k){ byId[String(map[k].id)]=map[k].name; });
+    var walk=function(bl){ (bl||[]).forEach(function(b){ if(!b) return; if(b.ref&&byId[b.ref]&&!b.refName) b.refName=byId[b.ref]; if(b.blocks) walk(b.blocks); if(b.tabs) b.tabs.forEach(function(t){ walk(t.blocks); }); }); };
+    (ns.sections||[]).forEach(function(sc){ walk(sc.blocks); });
+    var out=JSON.stringify(ns,null,2); $('specIn').value=out;
+    if(typeof DTV!=='undefined') DTV.list=null;                       /* el selector de tablas del editor las ver\u00E1 ya */
+    renderFromText(out);
+  },function(err){
+    baseReport={errors:[(err&&err.message)||'No se pudieron crear las Tablas Draco.'].concat(((err&&err.details&&err.details.errors)||[]).slice(6)),warnings:[]}; showReport();
+  });
 }
 window.addEventListener('message',function(ev){
   if(ev.source!==$('frame').contentWindow) return;
@@ -5729,19 +5770,48 @@ function loadOpened(sp){
   setStatus('P\u00E1gina abierta. Pulsa \u270E Editar para modificarla.',5000);
 }
 $('btnOpen').addEventListener('click',function(){ $('fileOpen').value=''; $('fileOpen').click(); });
-$('fileOpen').addEventListener('change',function(){
-  var f=this.files&&this.files[0]; if(!f) return;
+$('btnOpenDraco').addEventListener('click',function(){ $('fileOpen').value=''; $('fileOpen').click(); });
+/* .draco (o .json/.txt): el JSON de un cuadro de mando, p. ej. el que genera el agente de IA. Va por el mismo camino
+   que pegarlo y pulsar «Generar página» (incluida la creaci\u00F3n de las Tablas Draco que defina). */
+var pendingDraco=null;
+function isDracoFile(name){ return /\.(draco|json|txt)$/i.test(name||''); }
+function openDracoText(t,name){
+  t=String(t||'').replace(/^\uFEFF/,'');
+  $('specIn').value=t; openModal('mdPaste');
+  if(renderFromText(t)) setStatus('Cuadro de mando abierto desde \u00AB'+name+'\u00BB.',5000);
+}
+function openFile(f){
+  if(!f) return;
   if(f.size>25*1024*1024){ setStatus('El archivo es demasiado grande.',4500); return; }
+  if(!isDracoFile(f.name)&&!/\.html?$/i.test(f.name)){ setStatus('Abre un fichero .draco (o .json) o una p\u00E1gina .html exportada.',6000); return; }
   var r=new FileReader();
   r.onerror=function(){ setStatus('No se pudo leer el archivo.',4500); };
   r.onload=function(){
-    var res=specFromHtml(String(r.result)); if(res.err){ setStatus(res.err,7000); return; }
-    if(currentSpec){ pendingOpen=res.spec; $('cfMsg').textContent='Vas a abrir \u00AB'+f.name+'\u00BB. La p\u00E1gina actual se sustituir\u00E1: si quieres conservarla, exp\u00F3rtala antes.'; openModal('mdConfirm'); }
+    var txt=String(r.result);
+    if(isDracoFile(f.name)){
+      if(currentSpec){ pendingDraco={t:txt,name:f.name}; pendingOpen=null; $('cfMsg').textContent='Vas a abrir \u00AB'+f.name+'\u00BB. La p\u00E1gina actual se sustituir\u00E1: si quieres conservarla, exp\u00F3rtala antes.'; openModal('mdConfirm'); }
+      else openDracoText(txt,f.name);
+      return;
+    }
+    var res=specFromHtml(txt); if(res.err){ setStatus(res.err,7000); return; }
+    if(currentSpec){ pendingOpen=res.spec; pendingDraco=null; $('cfMsg').textContent='Vas a abrir \u00AB'+f.name+'\u00BB. La p\u00E1gina actual se sustituir\u00E1: si quieres conservarla, exp\u00F3rtala antes.'; openModal('mdConfirm'); }
     else loadOpened(res.spec);
   };
   r.readAsText(f,'utf-8');
-});
-$('cfOk').addEventListener('click',function(){ closeModal('mdConfirm'); if(pendingOpen){ var sp=pendingOpen; pendingOpen=null; loadOpened(sp); } });
+}
+$('fileOpen').addEventListener('change',function(){ openFile(this.files&&this.files[0]); });
+$('cfOk').addEventListener('click',function(){ closeModal('mdConfirm');
+  if(pendingDraco){ var d=pendingDraco; pendingDraco=null; openDracoText(d.t,d.name); return; }
+  if(pendingOpen){ var sp=pendingOpen; pendingOpen=null; loadOpened(sp); } });
+/* arrastrar un .draco (o .html) sobre el generador */
+(function(){
+  var hasFiles=function(e){ var t=e.dataTransfer&&e.dataTransfer.types; return !!t&&Array.prototype.indexOf.call(t,'Files')>=0; }, n=0;
+  document.addEventListener('dragenter',function(e){ if(!hasFiles(e)||VIEWER) return; n++; document.body.classList.add('drop-on'); });
+  document.addEventListener('dragleave',function(e){ if(!hasFiles(e)||VIEWER) return; n=Math.max(0,n-1); if(!n) document.body.classList.remove('drop-on'); });
+  document.addEventListener('dragover',function(e){ if(!hasFiles(e)||VIEWER) return; e.preventDefault(); e.dataTransfer.dropEffect='copy'; });
+  document.addEventListener('drop',function(e){ if(!hasFiles(e)||VIEWER) return; e.preventDefault(); n=0; document.body.classList.remove('drop-on');
+    var f=e.dataTransfer.files&&e.dataTransfer.files[0]; if(f) openFile(f); });
+})();
 
 $('schemaPre').textContent=SCHEMA_DOC;
 $('chips').innerHTML=QUICK_REQUESTS.map(function(q,i){ return '<button class="chip" data-i="'+i+'">'+esc(q.label)+'</button>'; }).join('');
