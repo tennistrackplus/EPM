@@ -872,6 +872,139 @@ const DracoTables = {
         return Object.assign({}, fresh, out);
     },
 
+    // ---------------------------------------------------------------------
+    // TABLAS DRACO DEFINIDAS EN EL JSON (p. ej. por un agente de IA)
+    //   spec.dracoNew = [{ key, name, description, cube, rows: [...], cols: [...], measures: [...],
+    //                      measuresIn: "cols"|"rows", filters: { "DIM.ATTR": ["v1", ...] }, subtotals: true|false }]
+    //   campo de un eje: "DIM.ATRIBUTO" o "DIM>Nombre de jerarquía" (despliegue +/-).
+    // Se valida TODO contra el modelo del cubo antes de crear nada; cada tabla se crea con el mismo motor y el
+    // mismo guardado que el diseñador. Devuelve { key: { id, name } }.
+    // ---------------------------------------------------------------------
+    parseFieldRef(ref) {
+        if (ref && typeof ref === "object") return { dim: ref.dim || ref.dimension, attr: ref.attr || ref.attribute, hier: ref.hierarchy || ref.hier };
+        const t = String(ref || "").trim();
+        const h = t.indexOf(">");
+        if (h > 0) return { dim: t.slice(0, h).trim(), hier: t.slice(h + 1).trim() };
+        const d = t.indexOf(".");
+        return d > 0 ? { dim: t.slice(0, d).trim(), attr: t.slice(d + 1).trim() } : { dim: t, attr: t };
+    },
+
+    /** Definición compacta -> campos de la definición del informe (o lista de errores). */
+    compileNewDesign(model, d) {
+        const errors = [];
+        const up = (x) => String(x || "").toUpperCase();
+        const dims = {}, meas = {};
+        (model.fields || []).forEach(f => { if (f.type === "DIMENSION") dims[up(f.name)] = f; else if (f.type === "MEASURE") meas[up(f.name)] = f; });
+        const sub = d.subtotals === true || d.subtotals === "X";
+        const fieldOptions = {};
+        const axis = (list, zone) => {
+            const entries = [], items = [];
+            (Array.isArray(list) ? list : []).forEach(ref => {
+                const r = this.parseFieldRef(ref);
+                const dim = dims[up(r.dim)];
+                if (!dim) { errors.push(`«${d.name || d.key}»: la dimensión «${r.dim}» no existe en el cubo ${d.cube}.`); return; }
+                if (r.hier) {
+                    const h = (dim.hierarchies || []).find(x => up(x.name) === up(r.hier));
+                    if (!h) { errors.push(`«${d.name || d.key}»: la dimensión ${dim.name} no tiene la jerarquía «${r.hier}».`); return; }
+                    h.levels.forEach((l, i) => entries.push([dim.name, l.attribute, i + 1, h.name, "", ""]));
+                    items.push({ dimension: dim.name, name: h.name, isHierarchy: true });
+                    return;
+                }
+                const a = (dim.attributes || []).find(x => up(x.name) === up(r.attr));
+                if (!a) { errors.push(`«${d.name || d.key}»: la dimensión ${dim.name} no tiene el atributo «${r.attr}».`); return; }
+                entries.push([dim.name, a.name, 1, "", sub ? "X" : "", ""]);
+                items.push({ dimension: dim.name, name: a.name, isHierarchy: false });
+                if (sub) fieldOptions[`${zone}|${dim.name}|${a.name}`] = { showTotals: true };
+            });
+            return { entries, items };
+        };
+        const rows = axis(d.rows, "rows"), cols = axis(d.cols || d.columns, "columns");
+        const mEntries = [], mItems = [];
+        (Array.isArray(d.measures) ? d.measures : []).forEach(m => {
+            const f = meas[up(m)];
+            if (!f) { errors.push(`«${d.name || d.key}»: la medida «${m}» no existe en el cubo ${d.cube}.`); return; }
+            mEntries.push(["MEASURE", f.name, 1, "", "", ""]);
+            mItems.push({ dimension: "MEASURE", name: f.name, isHierarchy: false });
+        });
+        if (!mEntries.length) errors.push(`«${d.name || d.key}»: indica al menos una medida.`);
+        if (!rows.entries.length && !cols.entries.length) errors.push(`«${d.name || d.key}»: pon al menos un campo en filas o en columnas.`);
+        const filters = [];
+        Object.keys(d.filters || {}).forEach(k => {
+            const r = this.parseFieldRef(k);
+            const dim = dims[up(r.dim)];
+            const a = dim && (dim.attributes || []).find(x => up(x.name) === up(r.attr));
+            if (!a) { errors.push(`«${d.name || d.key}»: el filtro «${k}» no es un campo del cubo.`); return; }
+            const vals = (Array.isArray(d.filters[k]) ? d.filters[k] : [d.filters[k]]).map(String).filter(v => v !== "");
+            if (!vals.length) return;
+            filters.push({ dimension: dim.name, name: a.name, isHierarchy: false, realAttribute: a.name, value: JSON.stringify({ mode: "list", values: vals }) });
+        });
+        const inRows = d.measuresIn === "rows";
+        const er = inRows ? rows.entries.concat(mEntries) : rows.entries, ec = inRows ? cols.entries : cols.entries.concat(mEntries);
+        const ir = inRows ? rows.items.concat(mItems) : rows.items, ic = inRows ? cols.items : cols.items.concat(mItems);
+        // celdas de inicio: cabeceras de columna desde la fila 2; las filas empiezan debajo (rangos como el diseñador)
+        const colL = (n) => { let t = ""; for (let x = n; x > 0; x = Math.floor((x - 1) / 26)) t = String.fromCharCode(65 + (x - 1) % 26) + t; return t; };
+        const nr = Math.max(1, er.length), nc = Math.max(1, ec.length);
+        const firstDataRow = 2 + nc, firstValueCol = 2 + nr;
+        return {
+            errors,
+            design: {
+                filters, rows: ir, columns: ic, expandedRows: er, expandedCols: ec, rowsStatic: false, colsStatic: false,
+                fieldOptions, resultSheetName: "Hoja1",
+                rrAddress: `B${firstDataRow}:${colL(1 + nr)}${firstDataRow}`,
+                rcAddress: `${colL(firstValueCol)}2:${colL(firstValueCol)}${1 + nc}`
+            }
+        };
+    },
+
+    async createFromSpec(project, defs) {
+        if (!Array.isArray(defs) || !defs.length) return {};
+        const cubes = await this.cubes(project.PROYECTO_ID);
+        const keys = {}, errors = [], prepared = [];
+        for (const d of defs) {
+            if (!d || !d.key) { errors.push("Una tabla nueva no tiene «key»."); continue; }
+            if (keys[d.key]) { errors.push(`La clave «${d.key}» está repetida.`); continue; }
+            keys[d.key] = 1;
+            const cube = cubes.find(c => c.name.toUpperCase() === String(d.cube || "").toUpperCase());
+            if (!cube) { errors.push(`«${d.name || d.key}»: el cubo «${d.cube}» no existe en este proyecto (hay: ${cubes.map(c => c.name).join(", ") || "ninguno"}).`); continue; }
+            const model = await this.resolveModel(project, cube);
+            const comp = this.compileNewDesign(model, Object.assign({}, d, { cube: cube.name }));
+            if (comp.errors.length) { errors.push(...comp.errors); continue; }
+            prepared.push({ d, cube, model, design: comp.design });
+        }
+        if (errors.length) {
+            const err = this.fail("INVALID", "No se ha creado ninguna tabla. " + errors.slice(0, 6).join(" ") + (errors.length > 6 ? ` (y ${errors.length - 6} más)` : ""));
+            err.details = { errors };
+            throw err;
+        }
+        const out = {};
+        for (const p of prepared) out[p.d.key] = await this.createOneFromDesign(project, p);
+        return out;
+    },
+
+    async createOneFromDesign(project, p) {
+        const eng = this.createEngine(this.stateFromDefinition({}));
+        try {
+            await eng.ready;
+            const win = eng.frame.contentWindow;
+            await win.Office.onReady();
+            await win.SemanticModelStore.saveModel(p.cube.name, p.model);
+            if (win.SemanticModelStore.setActiveModelName) await win.SemanticModelStore.setActiveModelName(p.cube.name);
+            const rep = await win.ReportStore.createReport(p.cube.name, "Hoja1");
+            await win.ReportStore.updateDesignFields(rep.id, p.design);
+            if (win.ReportStore.renameReport) await win.ReportStore.renameReport(rep.id, p.d.name || p.d.key);
+            const gen = await win.DracoEngineApi.generateSql(rep.id);
+            if (!gen || !gen.sql) throw this.fail("NO_SQL", `«${p.d.name || p.d.key}»: no se ha podido generar su consulta.`);
+            const definition = await this.exportDefinition(win, eng.host);
+            const res = await this.save({
+                id: null, projectId: project.PROYECTO_ID, nombre: p.d.name || p.d.key, descripcion: p.d.description || "Creada desde el JSON del cuadro de mando",
+                cubo: p.cube.name, definition, sql: gen.sql, modeloFecha: p.cube.fecha || ""
+            });
+            return { id: res.id, name: res.nombre };
+        } finally {
+            try { eng.frame.remove(); } catch (e) { /* nada */ }
+        }
+    },
+
     /** Informes de una Tabla Draco: el principal y, si los tiene, sus vinculados ({ id, name, main, axis }). */
     async reportsOf(project, ref) {
         if (!ref) return [];
@@ -1057,6 +1190,8 @@ const DracoTables = {
                 case "dt.members": return await this.members(project, p.cube, p.dim, p.attr);
                 case "dt.varsFor": return await this.varsFor(project, p.refs || []);
                 case "dt.reports": return await this.reportsOf(project, p.ref);
+                case "dt.createFromSpec":   // Tablas Draco definidas en el JSON de una página (p. ej. por un agente de IA)
+                    return await this.createFromSpec(project, p.defs || []);
                 case "dt.planSave":   // planificación: guarda los valores tecleados en la tabla del informe
                     return await this.planSave(project, p.ref, p.cells || [], { variables: p.variables || {}, filters: p.filters || [], axis: p.axis || null });
                 case "dt.kpis":
