@@ -37,7 +37,8 @@ const DracoTableDesigner = {
         }
         return new Promise((resolve) => {
             this.ctx = { project, ref, row, cubes, resolve, saved: null, initialSig: null, ready: false, raf: 0, sel: { r: 0, c: 0 },
-                         kpi: !!((opts && opts.kpi) || (def && def.kpi)), inlineKpi, hasDef: !!def };
+                         kpi: !!((opts && opts.kpi) || (def && def.kpi)), inlineKpi, hasDef: !!def,
+                         owner: (opts && opts.owner) || null, autoName: (opts && opts.autoName) || "" };   // tabla de un informe: nombre opcional
             this.buildModal();
             if (this.ctx.kpi) this.banner("KPI: arrastra UNA medida a «Filtros», junto con los filtros que quieras. El valor aparece a la derecha.", "info");
             if (!cubes.length) this.banner("Este proyecto no tiene cubos, y el informe se diseña sobre uno. Crea un cubo en «Cubos» y vuelve a abrir el diseñador.", "warn");
@@ -57,7 +58,7 @@ const DracoTableDesigner = {
             <div class="dtd-modal" role="dialog" aria-label="Diseñador de tabla Draco">
                 <div class="dtd-head">
                     <strong class="dtd-title">${c.kpi ? "KPI Draco · diseño" : "Tabla Draco · diseño del informe"}</strong>
-                    <input id="dtdName" class="dtd-name" type="text" maxlength="${DracoTables.MAX_NAME}" placeholder="${c.kpi ? "Nombre del KPI" : "Nombre de la tabla"}" value="${E(c.row ? c.row.NOMBRE : "")}">
+                    <input id="dtdName" class="dtd-name" type="text" maxlength="${DracoTables.MAX_NAME}" placeholder="${c.kpi ? "Nombre del KPI" : (c.owner && !c.ref ? "Nombre (opcional)" : "Nombre de la tabla")}" value="${E(c.row ? c.row.NOMBRE : "")}">
                     <input id="dtdDesc" class="dtd-desc" type="text" maxlength="${DracoTables.MAX_DESC}" placeholder="Descripción (opcional)" value="${E(c.row ? (c.row.DESCRIPCION || "") : "")}">
                     <span class="dtd-spacer"></span>
                     <span id="dtdStatus" class="dtd-status" role="status"></span>
@@ -1018,7 +1019,7 @@ const DracoTableDesigner = {
         if (!c || !c.ready) return;
         const nameEl = c.overlay.querySelector("#dtdName");
         const nombre = nameEl.value.trim();
-        if (!nombre) { UI.toast(c.kpi ? "Ponle un nombre al KPI." : "Ponle un nombre a la tabla.", "error"); nameEl.focus(); return; }
+        if (!nombre && !(c.owner && !c.ref)) { UI.toast(c.kpi ? "Ponle un nombre al KPI." : "Ponle un nombre a la tabla.", "error"); nameEl.focus(); return; }
         const btn = c.overlay.querySelector("#dtdSave");
         btn.disabled = true; btn.textContent = "Guardando…";
         try {
@@ -1053,7 +1054,8 @@ const DracoTableDesigner = {
             const res = await DracoTables.save({
                 id: c.ref, projectId: c.project.PROYECTO_ID, nombre,
                 descripcion: c.overlay.querySelector("#dtdDesc").value, cubo: report.semanticModelName,
-                definition, sql: gen.sql, modeloFecha: cube ? cube.fecha : ""
+                definition, sql: gen.sql, modeloFecha: cube ? cube.fecha : "",
+                owner: c.ref ? null : c.owner, autoName: c.autoName
             });
             c.saved = { id: res.id, nombre: res.nombre };
             UI.toast(c.kpi ? `KPI «${res.nombre}» guardado.` : `Tabla Draco «${res.nombre}» guardada.`, "success");

@@ -139,7 +139,7 @@ const GeneradorApp = {
         if (this.pendingInformeId) { qs.set("informe_id", this.pendingInformeId); this.pendingInformeId = null; }
         document.getElementById("toolEmpty").hidden = true;
         frame.hidden = false;
-        qs.set("v", "20261023d");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
+        qs.set("v", "20261023e");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
         frame.src = "informes-herramienta.html?" + qs.toString();
     },
 
@@ -202,10 +202,19 @@ const GeneradorApp = {
                 const r = await Informes.get(p.id, pid);
                 return { id: r.id, nombre: r.nombre, descripcion: r.descripcion, spec: r.spec };
             }
-            case "save":
-                return Informes.save({ id: p.id || null, projectId: pid, nombre: p.nombre, descripcion: p.descripcion, spec: p.spec });
+            case "save": {
+                const r = await Informes.save({ id: p.id || null, projectId: pid, nombre: p.nombre, descripcion: p.descripcion, spec: p.spec });
+                // Tablas Draco del informe alineadas con sus bloques (asociar las nuevas, copiar las de otro informe, borrar las que no usa)
+                const sync = await DracoTables.syncOwned(pid, r.id, p.spec, p.owner || null);
+                if (sync.spec) {       // «Guardar como»: la página apunta ya a las copias
+                    await Informes.save({ id: r.id, projectId: pid, nombre: r.nombre, descripcion: r.descripcion, spec: sync.spec });
+                    r.spec = sync.spec;
+                }
+                return r;
+            }
             case "delete":
                 await Informes.remove(p.id, pid);
+                await DracoTables.removeOwned(pid, p.id);          // sus Tablas Draco también
                 return { id: p.id };
             case "fl.list":
                 return InformesFlujos.handle(this.currentProject, op, p);     // el editor elige un flujo de carga

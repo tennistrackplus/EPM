@@ -409,6 +409,7 @@ const DracoSchema = {
                     SQL_TEXT STRING,             -- SQL ya generado al guardar: al refrescar NO se vuelve a generar
                     SQL_GENERADO TIMESTAMP,      -- cuándo se generó ese SQL
                     MODELO_FECHA STRING,         -- CUBOS.MODELO_YAML_FECHA del cubo al generar el SQL (si cambia, el SQL está desfasado)
+                    INFORME_ID STRING,           -- informe al que pertenece (se borra con él); 'PEND:...' = informe aún sin guardar; NULL = tabla compartida (antigua)
                     USUARIO STRING,
                     FECHA_CREACION TIMESTAMP,
                     FECHA_MODIFICACION TIMESTAMP

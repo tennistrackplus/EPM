@@ -48,16 +48,40 @@ const DracoTables = {
         return "'" + Provider.esc(v == null ? "" : v).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t") + "'";
     },
 
-    /** Lista sin la definición ni el SQL (pesan). `desfasado`: el cubo cambió después de generar el SQL. */
-    async list(projectId) {
+    // ---------------------------------------------------------------------
+    // PROPIEDAD: cada Tabla Draco nueva pertenece a UN informe (columna INFORME_ID). Se borra cuando ningún bloque
+    // del informe la usa (al guardarlo) y cuando se borra el informe. 'PEND:<marca>' = creada en un informe que aún
+    // no se ha guardado (se asocia al guardarlo; si nunca se guarda, se limpia a los pocos días). NULL = tabla
+    // compartida de antes de este cambio: no se borra nunca automáticamente.
+    // ---------------------------------------------------------------------
+    ownerColP: null,
+    /** Añade la columna INFORME_ID en instalaciones anteriores (una vez por sesión; inocuo si ya existe). */
+    ensureOwnerCol() {
+        if (!this.ownerColP) {
+            this.ownerColP = Informes.q(`ALTER TABLE ${this.t()} ADD COLUMN IF NOT EXISTS INFORME_ID STRING`).catch(() => {});
+        }
+        return this.ownerColP;
+    },
+
+    /**
+     * Lista sin la definición ni el SQL (pesan). `desfasado`: el cubo cambió después de generar el SQL.
+     * scope (opcional): ids de informe (y marca pendiente) cuyas tablas se incluyen, además de las compartidas
+     * (sin informe); las de OTROS informes no se ofrecen, para no mezclar tablas entre informes.
+     */
+    async list(projectId, scope) {
         await Informes.guard();
+        await this.ensureOwnerCol();
+        const sc = (Array.isArray(scope) ? scope : []).filter(Boolean);
+        const where = Array.isArray(scope)
+            ? ` AND (t.INFORME_ID IS NULL${sc.length ? ` OR t.INFORME_ID IN (${sc.map(x => `'${Provider.esc(x)}'`).join(", ")})` : ""})`
+            : "";
         const rows = await Informes.q(`
             SELECT t.TABLA_DRACO_ID, t.NOMBRE, t.DESCRIPCION, t.CUBO, t.MOTOR, t.SQL_GENERADO, t.MODELO_FECHA,
-                   t.FECHA_MODIFICACION, c.MODELO_YAML_FECHA AS CUBO_FECHA,
+                   t.FECHA_MODIFICACION, t.INFORME_ID, c.MODELO_YAML_FECHA AS CUBO_FECHA,
                    CASE WHEN t.SQL_TEXT IS NULL OR t.SQL_TEXT = '' THEN 0 ELSE 1 END AS TIENE_SQL
             FROM ${this.t()} t
             LEFT JOIN ${Provider.qualifyControl("CUBOS")} c ON c.PROYECTO_ID = t.PROYECTO_ID AND c.CUBOS = t.CUBO
-            WHERE t.PROYECTO_ID = '${Provider.esc(projectId)}'
+            WHERE t.PROYECTO_ID = '${Provider.esc(projectId)}'${where}
             ORDER BY t.NOMBRE`);
         return rows.map(r => this.toItem(r));
     },
@@ -67,7 +91,7 @@ const DracoTables = {
         const tieneSql = r.TIENE_SQL !== undefined ? (String(r.TIENE_SQL) === "1" || r.TIENE_SQL === true) : !!(r.SQL_TEXT && String(r.SQL_TEXT).trim());
         return {
             id: r.TABLA_DRACO_ID, nombre: r.NOMBRE, descripcion: r.DESCRIPCION || "", cubo: r.CUBO || "",
-            motor: r.MOTOR || "", sqlGenerado: r.SQL_GENERADO || null, tieneSql,
+            motor: r.MOTOR || "", sqlGenerado: r.SQL_GENERADO || null, tieneSql, informe: r.INFORME_ID || null,
             desfasado: !!(tieneSql && r.CUBO && String(r.CUBO_FECHA || "") !== String(r.MODELO_FECHA || ""))
         };
     },
@@ -83,11 +107,17 @@ const DracoTables = {
         return rows[0];
     },
 
-    /** Crea (sin id) o sobrescribe (con id). definition: objeto; sql: texto. Devuelve { id, nombre }. */
-    async save({ id, projectId, nombre, descripcion, cubo, definition, sql, modeloFecha }) {
+    /**
+     * Crea (sin id) o sobrescribe (con id). definition: objeto; sql: texto. Devuelve { id, nombre }.
+     * owner (solo al crear): informe al que pertenece (o 'PEND:...'). Con owner el nombre es opcional (se pone solo)
+     * y, si coincide con otro, se hace único. autoName: base del nombre automático (p. ej. el título del bloque).
+     */
+    async save({ id, projectId, nombre, descripcion, cubo, definition, sql, modeloFecha, owner, autoName }) {
         if (!projectId) throw this.fail("BAD_INPUT", "Falta el proyecto.");
         nombre = String(nombre || "").trim();
         descripcion = String(descripcion || "").trim();
+        const newId = id || Provider.newId();
+        if (!nombre && owner) nombre = `${String(autoName || cubo || "Tabla").trim().slice(0, 80)} · ${newId.slice(0, 6)}`;
         if (!nombre) throw this.fail("BAD_INPUT", "La tabla Draco necesita un nombre.");
         if (nombre.length > this.MAX_NAME) throw this.fail("BAD_INPUT", `El nombre no puede pasar de ${this.MAX_NAME} caracteres.`);
         if (descripcion.length > this.MAX_DESC) throw this.fail("BAD_INPUT", `La descripción no puede pasar de ${this.MAX_DESC} caracteres.`);
@@ -100,9 +130,13 @@ const DracoTables = {
         if (bytes(sql) > this.MAX_FIELD_BYTES) throw this.fail("TOO_BIG", `El SQL ocupa ${Math.round(bytes(sql) / 1024)} KB y el máximo es ${Math.round(this.MAX_FIELD_BYTES / 1000)} KB.`);
 
         await Informes.guard();
+        if (owner) await this.ensureOwnerCol();
         const t = this.t(), pid = Provider.esc(projectId);
         const dup = await Informes.q(`SELECT TABLA_DRACO_ID FROM ${t} WHERE PROYECTO_ID = '${pid}' AND UPPER(NOMBRE) = UPPER('${Provider.esc(nombre)}')`);
-        if (dup.some(r => r.TABLA_DRACO_ID !== id)) throw this.fail("NAME_EXISTS", "Ya existe una tabla Draco con ese nombre en este proyecto.");
+        if (dup.some(r => r.TABLA_DRACO_ID !== id)) {
+            if (!owner) throw this.fail("NAME_EXISTS", "Ya existe una tabla Draco con ese nombre en este proyecto.");
+            nombre = `${nombre.slice(0, this.MAX_NAME - 9)} · ${newId.slice(0, 6)}`;      // de un informe: se hace único
+        }
 
         let exists = false;
         if (id) exists = (await Informes.q(`SELECT TABLA_DRACO_ID FROM ${t} WHERE TABLA_DRACO_ID = '${Provider.esc(id)}' AND PROYECTO_ID = '${pid}'`)).length > 0;
@@ -117,13 +151,91 @@ const DracoTables = {
             this.dispose(projectId, id);
             return { id, nombre };
         }
-        const newId = id || Provider.newId();
         await Informes.q(`INSERT INTO ${t}
-            (TABLA_DRACO_ID, PROYECTO_ID, NOMBRE, DESCRIPCION, CUBO, MOTOR, DEFINICION_JSON, SQL_TEXT, SQL_GENERADO, MODELO_FECHA, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
+            (TABLA_DRACO_ID, PROYECTO_ID, NOMBRE, DESCRIPCION, CUBO, MOTOR, DEFINICION_JSON, SQL_TEXT, SQL_GENERADO, MODELO_FECHA, ${owner ? "INFORME_ID, " : ""}USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
             VALUES ('${Provider.esc(newId)}', '${pid}', ${this.lit(nombre)}, ${this.lit(descripcion)}, ${this.lit(cubo || "")},
                     ${this.lit(motor)}, ${this.lit(json)}, ${this.lit(sql)}, CURRENT_TIMESTAMP(), ${mf},
-                    ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`);
+                    ${owner ? `'${Provider.esc(owner)}', ` : ""}${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP())`);
         return { id: newId, nombre };
+    },
+
+    /** Ids de Tablas Draco que usa un informe: bloques Tabla/Gráfico Draco (en secciones, subsecciones y pestañas) y KPIs de tabla. */
+    refsOf(spec) {
+        const refs = new Set();
+        const walk = (bl) => (bl || []).forEach(b => {
+            if (!b) return;
+            if ((b.type === "dracoTable" || b.type === "dracoChart") && b.ref) refs.add(String(b.ref));
+            if (b.blocks) walk(b.blocks);
+            if (b.tabs) b.tabs.forEach(t => walk(t && t.blocks));
+        });
+        ((spec && spec.sections) || []).forEach(s => walk(s && s.blocks));
+        ((spec && spec.dracoKpis) || []).forEach(k => { if (k && k.id && !k.parts) refs.add(String(k.id)); });   // KPI guardado como tabla
+        return refs;
+    },
+
+    /**
+     * Al GUARDAR un informe: sus Tablas Draco quedan alineadas con sus bloques.
+     *  1) las creadas mientras el informe no estaba guardado (pending) y que usa, pasan a ser suyas;
+     *  2) las que usa pero son de OTRO informe (p. ej. «Guardar como») se copian para él y se cambian en la página;
+     *  3) las suyas que ya no usa ningún bloque se borran (y las pendientes de esta sesión que no ha usado);
+     *  4) limpieza: tablas pendientes de informes que nunca se guardaron (más de 3 días).
+     * Devuelve { spec } si ha cambiado la página (refs de las copias) y { removed }.
+     */
+    async syncOwned(projectId, informeId, spec, pending) {
+        if (!projectId || !informeId) return {};
+        await Informes.guard();
+        await this.ensureOwnerCol();
+        const t = this.t(), pid = Provider.esc(projectId), iid = Provider.esc(informeId);
+        const refs = this.refsOf(spec);
+        const inList = (ids) => ids.map(x => `'${Provider.esc(x)}'`).join(", ");
+        const out = { removed: 0 };
+        if (pending && refs.size) {
+            await Informes.q(`UPDATE ${t} SET INFORME_ID = '${iid}' WHERE PROYECTO_ID = '${pid}'
+                AND INFORME_ID = '${Provider.esc(pending)}' AND TABLA_DRACO_ID IN (${inList([...refs])})`);
+        }
+        if (refs.size) {
+            const foreign = await Informes.q(`SELECT TABLA_DRACO_ID FROM ${t} WHERE PROYECTO_ID = '${pid}'
+                AND TABLA_DRACO_ID IN (${inList([...refs])}) AND INFORME_ID IS NOT NULL AND INFORME_ID <> '${iid}'`);
+            if (foreign.length) {
+                let txt = JSON.stringify(spec);
+                for (const r of foreign) {
+                    const nid = Provider.newId();
+                    await Informes.q(`INSERT INTO ${t}
+                        (TABLA_DRACO_ID, PROYECTO_ID, NOMBRE, DESCRIPCION, CUBO, MOTOR, DEFINICION_JSON, SQL_TEXT, SQL_GENERADO, MODELO_FECHA, INFORME_ID, USUARIO, FECHA_CREACION, FECHA_MODIFICACION)
+                        SELECT '${Provider.esc(nid)}', PROYECTO_ID, CONCAT(SUBSTR(NOMBRE, 1, ${this.MAX_NAME - 9}), ' · ', '${nid.slice(0, 6)}'), DESCRIPCION, CUBO, MOTOR,
+                               DEFINICION_JSON, SQL_TEXT, SQL_GENERADO, MODELO_FECHA, '${iid}', ${Provider.currentUserExpr()}, CURRENT_TIMESTAMP(), CURRENT_TIMESTAMP()
+                        FROM ${t} WHERE TABLA_DRACO_ID = '${Provider.esc(r.TABLA_DRACO_ID)}' AND PROYECTO_ID = '${pid}'`);
+                    txt = txt.split(JSON.stringify(String(r.TABLA_DRACO_ID))).join(JSON.stringify(nid));
+                    refs.delete(String(r.TABLA_DRACO_ID)); refs.add(nid);
+                }
+                out.spec = JSON.parse(txt);
+            }
+        }
+        const owners = [informeId, pending].filter(Boolean);
+        const gone = await Informes.q(`SELECT TABLA_DRACO_ID FROM ${t} WHERE PROYECTO_ID = '${pid}'
+            AND INFORME_ID IN (${inList(owners)})${refs.size ? ` AND TABLA_DRACO_ID NOT IN (${inList([...refs])})` : ""}`);
+        if (gone.length) {
+            await Informes.q(`DELETE FROM ${t} WHERE PROYECTO_ID = '${pid}' AND TABLA_DRACO_ID IN (${inList(gone.map(r => r.TABLA_DRACO_ID))})`);
+            gone.forEach(r => this.dispose(projectId, r.TABLA_DRACO_ID));
+            out.removed = gone.length;
+        }
+        const old = Provider.key() === "snowflake" ? "DATEADD(day, -3, CURRENT_TIMESTAMP())" : "TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 3 DAY)";
+        await Informes.q(`DELETE FROM ${t} WHERE PROYECTO_ID = '${pid}' AND INFORME_ID LIKE 'PEND:%' AND FECHA_CREACION < ${old}`).catch(() => {});
+        return out;
+    },
+
+    /** Al BORRAR un informe: sus Tablas Draco también. */
+    async removeOwned(projectId, informeId) {
+        if (!projectId || !informeId) return 0;
+        await Informes.guard();
+        await this.ensureOwnerCol();
+        const t = this.t(), pid = Provider.esc(projectId);
+        const rows = await Informes.q(`SELECT TABLA_DRACO_ID FROM ${t} WHERE PROYECTO_ID = '${pid}' AND INFORME_ID = '${Provider.esc(informeId)}'`);
+        if (rows.length) {
+            await Informes.q(`DELETE FROM ${t} WHERE PROYECTO_ID = '${pid}' AND INFORME_ID = '${Provider.esc(informeId)}'`);
+            rows.forEach(r => this.dispose(projectId, r.TABLA_DRACO_ID));
+        }
+        return rows.length;
     },
 
     // ---------------------------------------------------------------------
@@ -956,7 +1068,7 @@ const DracoTables = {
         };
     },
 
-    async createFromSpec(project, defs) {
+    async createFromSpec(project, defs, owner) {
         if (!Array.isArray(defs) || !defs.length) return {};
         const cubes = await this.cubes(project.PROYECTO_ID);
         const keys = {}, errors = [], prepared = [];
@@ -977,7 +1089,7 @@ const DracoTables = {
             throw err;
         }
         const out = {};
-        for (const p of prepared) out[p.d.key] = await this.createOneFromDesign(project, p);
+        for (const p of prepared) out[p.d.key] = await this.createOneFromDesign(project, Object.assign(p, { owner }));
         return out;
     },
 
@@ -1051,7 +1163,7 @@ const DracoTables = {
             const definition = await this.exportDefinition(win, eng.host);
             const res = await this.save({
                 id: null, projectId: project.PROYECTO_ID, nombre: p.d.name || p.d.key, descripcion: p.d.description || "Creada desde el JSON del cuadro de mando",
-                cubo: p.cube.name, definition, sql: gen.sql, modeloFecha: p.cube.fecha || ""
+                cubo: p.cube.name, definition, sql: gen.sql, modeloFecha: p.cube.fecha || "", owner: p.owner || null, autoName: p.d.name || p.d.key
             });
             return { id: res.id, name: res.nombre };
         });
@@ -1228,7 +1340,7 @@ const DracoTables = {
         p = p || {};
         try {
             switch (op) {
-                case "dt.list": return await this.list(project.PROYECTO_ID);
+                case "dt.list": return await this.list(project.PROYECTO_ID, Array.isArray(p.scope) ? p.scope : undefined);
                 case "dt.run": {
                     // p.variables / p.filters (opcionales): valores de variables y filtros de la barra para ESTA ejecución
                     // p.axis (opcional): campos del eje elegidos en un filtro «Campos del eje» de la barra
@@ -1243,7 +1355,7 @@ const DracoTables = {
                 case "dt.varsFor": return await this.varsFor(project, p.refs || []);
                 case "dt.reports": return await this.reportsOf(project, p.ref);
                 case "dt.createFromSpec":   // Tablas Draco definidas en el JSON de una página (p. ej. por un agente de IA)
-                    return await this.createFromSpec(project, p.defs || []);
+                    return await this.createFromSpec(project, p.defs || [], p.owner || null);
                 case "dt.kpisFromSpec":     // KPIs definidos en el JSON de una página: sus piezas SQL (no se guarda nada)
                     return await this.kpisFromSpec(project, p.kpis || []);
                 case "dt.planSave":   // planificación: guarda los valores tecleados en la tabla del informe
@@ -1255,7 +1367,7 @@ const DracoTables = {
                 case "dt.toggle": return await this.toggle(project, p.ref, p.r, p.c);
                 case "dt.design":
                     if (!ui || typeof ui.openDesigner !== "function") throw this.fail("NOT_AVAILABLE", "El diseñador solo está disponible en el generador de informes.");
-                    return await ui.openDesigner(project, p.ref || null, { kpi: !!p.kpi, def: p.def || null, nombre: p.nombre || "" });
+                    return await ui.openDesigner(project, p.ref || null, { kpi: !!p.kpi, def: p.def || null, nombre: p.nombre || "", owner: p.owner || null, autoName: p.autoName || "" });
                 default: throw this.fail("NOT_AVAILABLE", "Esta función todavía no está disponible.");
             }
         } catch (err) {
