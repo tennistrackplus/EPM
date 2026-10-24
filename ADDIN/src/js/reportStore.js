@@ -16,7 +16,7 @@
  * vivir en una celda física:
  *   - D1 / E1: hoja y celda activas al pulsar "Editar informe" (para saber
  *     dónde estaba el usuario).
- *   - X1 / Y1: último SQL y último JSON devueltos por BigQuery/Snowflake.
+ *   - X1 / Y1: último SQL y último JSON devueltos por BigQuery.
  *   - A5 y el resto del "picker" de miembros: comunicación por doble clic
  *     con el XLAM.
  *   - B1: flag de reconocimiento de miembros.
@@ -156,7 +156,11 @@
 
     function _nextSequence() {
         const raw = Office.context.document.settings.get(RS_SEQ_KEY);
-        const next = (Number(raw) || 0) + 1;
+        // Nunca reutilizar un id existente aunque el contador falte o vaya por detrás
+        // (libros antiguos, informes pegados...): si no, createReport sobrescribiría
+        // un informe sin avisar.
+        const maxId = Object.keys(_readStoreRaw()).reduce((m, k) => Math.max(m, Number(k) || 0), 0);
+        const next = Math.max(Number(raw) || 0, maxId) + 1;
         Office.context.document.settings.set(RS_SEQ_KEY, next);
         return next;
     }
@@ -339,6 +343,21 @@
             const remaining = Object.keys(store).map(Number).sort((a, b) => a - b);
             await setActiveReportId(remaining[0] || null);
         }
+    }
+
+    /**
+     * Fija algunos campos de la definición de un informe sin pasar por el
+     * taskpane (saveDesign reconstruye la definición entera a partir del
+     * estado del panel). Lo usan los informes vinculados (commands.js:
+     * design.link y el eje que se copia del principal). Devuelve el informe.
+     */
+    async function updateDesignFields(reportId, fields) {
+        const report = getReport(reportId);
+        if (!report) return null;
+        report.design = Object.assign({}, report.design || {}, fields || {});
+        await _writeReport(reportId, report);
+        await _saveAsync();
+        return report;
     }
 
     async function renameReport(reportId, newName) {
@@ -567,6 +586,7 @@
         saveReportProperties,
         setSemanticModel,
         saveDesign,
+        updateDesignFields,
         setMemberRecognition,
         getReportGrid,
         getReportResultSheetName,

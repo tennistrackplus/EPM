@@ -140,17 +140,9 @@
         return [modelName, fact.project || "", fact.dataset || "", fact.table || ""];
     }
 
-    /** Modelo semántico de Power BI/Fabric (se consulta con DAX, no con SQL) */
-    function isPowerBiModel(model) {
-        return !!(model && model.source && model.source.type === "fabric-semantic-model");
-    }
-
     function buildRelationshipRows(modelName, fact, fields, model) {
         fact = fact || {};
         const rows = [];
-        // En los modelos de Power BI las relaciones las resuelve el propio
-        // modelo al ejecutar el DAX: no hay JOINs que construir.
-        if (isPowerBiModel(model)) return rows;
         (fields || []).forEach((f, idx) => {
             if (!f.enabled || f.type !== "DIMENSION" || !f.relTable) return;
             const keyAttr = (f.attributes || []).find(a => a.isKey);
@@ -189,12 +181,9 @@
             if (!f.enabled || f.type !== "MEASURE") return;
             rows.push([
                 idx + 1, f.name,
-                // FACT_TABLE / FACT_FIELD: en los modelos de BigQuery la medida
-                // es siempre una columna de la tabla de hechos con su mismo
-                // nombre. En los de Power BI puede estar en cualquier tabla
-                // (f.table), ser una columna con Σ (f.field) o una medida DAX
-                // (f.daxName, con aggregation "dax").
-                fact.project, fact.dataset, f.table || fact.table, f.field || f.daxName || f.name,
+                // FACT_TABLE / FACT_FIELD: la medida es una columna de la tabla
+                // de hechos (por defecto con su mismo nombre).
+                fact.project, fact.dataset, f.table || fact.table, f.field || f.name,
                 f.aggregation, f.format, modelName
             ]);
         });
@@ -298,7 +287,18 @@
         return { values: [header, ...rows], startRow: 0, startCol: 0 };
     }
 
+    /**
+     * ¿Es un modelo generado por Draco Planning? Lo marca la línea
+     * "# draco: planning" del .lkml que genera Planning (ver
+     * js/lkmlImport.js), que se guarda como `dracoPlanning: true`.
+     */
+    function isDracoPlanningModel(modelName) {
+        const m = modelName ? getModel(modelName) : null;
+        return !!(m && m.dracoPlanning === true);
+    }
+
     window.SemanticModelStore = {
+        isDracoPlanningModel,
         getAllModels,
         listModelNames,
         getModel,
@@ -316,3 +316,59 @@
     };
 
 })();
+
+
+/**
+ * ============================================================
+ * DracoPlanningGate — cuándo se permite la PLANIFICACIÓN
+ * ============================================================
+ *  1) El token de Google debe permitir escribir en BigQuery (si solo se
+ *     concedió lectura, la planificación no se muestra).
+ *  2) El informe debe usar un modelo de Draco Planning (marca
+ *     "# draco: planning" en su .lkml). Dentro de Draco Planning (Tablas
+ *     Draco) todos los modelos lo son, así que allí no se comprueba.
+ * Esto es una regla funcional y de usabilidad: la seguridad real la pone
+ * IAM al escribir en BigQuery.
+ */
+window.DracoPlanningGate = {
+    _inPlanningHost() {
+        if (window.DracoEngineApi) return true;
+        try {
+            return window.parent !== window && !!(window.parent && window.parent.DracoConfig && window.parent.Provider);
+        } catch (e) {
+            return false;   // padre de otro origen (p. ej. Excel en el navegador)
+        }
+    },
+
+    canWrite() {
+        return !(window.BQ && typeof BQ.canWriteBigQuery === "function") || BQ.canWriteBigQuery();
+    },
+
+    /** { ok, reason } para un modelo concreto. */
+    check(modelName) {
+        if (!this.canWrite()) {
+            return { ok: false, reason: "La conexión solo tiene permiso de lectura en BigQuery: la planificación no está disponible." };
+        }
+        if (this._inPlanningHost()) return { ok: true, reason: "" };
+        if (!modelName) {
+            return { ok: false, reason: "El informe no tiene modelo semántico." };
+        }
+        if (!(window.SemanticModelStore && SemanticModelStore.isDracoPlanningModel(modelName))) {
+            return { ok: false, reason: `«${modelName}» no es un modelo de Draco Planning: la planificación solo está disponible sobre modelos generados por Draco Planning.` };
+        }
+        return { ok: true, reason: "" };
+    },
+
+    /** Activa o desactiva el botón "Guardar" del grupo Planificación de la cinta. */
+    async syncRibbon() {
+        try {
+            if (typeof Office !== "undefined" && Office.ribbon && Office.ribbon.requestUpdate) {
+                await Office.ribbon.requestUpdate({
+                    tabs: [{ id: "DracoTab", groups: [{ id: "PlanifGroup", controls: [{ id: "PlanifGuardarButton", enabled: this.canWrite() }] }] }]
+                });
+            }
+        } catch (e) {
+            console.warn("[Draco] No se pudo actualizar el botón de planificación de la cinta:", e);
+        }
+    }
+};

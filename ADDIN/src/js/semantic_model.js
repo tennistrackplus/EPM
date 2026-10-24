@@ -285,7 +285,13 @@ function openDataPreviewDialog(project, dataset, table) {
             if (asyncResult.status === Office.AsyncResultStatus.Failed) {
                 console.error("Error al abrir la vista previa de datos:", asyncResult.error);
                 showToast("No se ha podido abrir la vista previa: " + asyncResult.error.message, "error");
+                return;
             }
+            // El diálogo pide aquí el token de la sesión (BQ.requestSessionFromOpener).
+            const dialog = asyncResult.value;
+            dialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+                if (window.BQ) BQ.handleDialogMessage(dialog, arg.message);
+            });
 
         }
     );
@@ -340,7 +346,13 @@ function previewCurrentHierarchy() {
             if (asyncResult.status === Office.AsyncResultStatus.Failed) {
                 console.error("Error al abrir la vista previa de la jerarquía:", asyncResult.error);
                 showToast("No se ha podido abrir la vista previa: " + asyncResult.error.message, "error");
+                return;
             }
+            // El diálogo pide aquí el token de la sesión (BQ.requestSessionFromOpener).
+            const dialog = asyncResult.value;
+            dialog.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+                if (window.BQ) BQ.handleDialogMessage(dialog, arg.message);
+            });
 
         }
     );
@@ -523,15 +535,6 @@ async function loadModel(modelName)
 
     const model = window.SemanticModelStore.getModel(modelName);
 
-    // Los modelos importados de Power BI/Fabric se editan en Power BI: aquí
-    // no hay tabla de hechos que explorar (y el proveedor SQL no la
-    // encontraría). Para cambiarlo, edítalo en Power BI y vuelve a importarlo.
-    if (model && model.source && model.source.type === "fabric-semantic-model") {
-        setFactCardVisible(false);
-        showToast(`"${modelName}" es un modelo de Power BI: edítalo en Power BI y vuelve a importarlo desde "Abrir modelo semántico".`, "error", 7000);
-        return;
-    }
-
     if (model && model.fact) {
 
         document.getElementById("factProject").value=model.fact.project || "";
@@ -637,7 +640,7 @@ async function loadProjectsTree(container, autoProject = null, autoDataset = nul
                 const header = document.createElement("div");
                 header.className = "tree-header";
                 // SEGURIDAD: projectId viene de la API del proveedor
-                // (BigQuery/Snowflake); aunque suele tener un charset
+                // (BigQuery); aunque suele tener un charset
                 // restringido, se construye con textContent por defensa
                 // en profundidad en vez de innerHTML.
                 const toggleSpan1 = document.createElement("span");
@@ -1585,10 +1588,16 @@ async function generateSemanticModelInExcel() {
 
     try {
 
-        await window.SemanticModelStore.saveModel(currentModel, {
-            fact: fact,
-            fields: fieldsState
-        });
+        // La marca de Draco Planning se conserva solo si la tabla de hechos
+        // sigue siendo la misma que generó Planning.
+        const previous = window.SemanticModelStore.getModel(currentModel);
+        const sameFact = !!(previous && previous.fact
+            && previous.fact.project === fact.project
+            && previous.fact.dataset === fact.dataset
+            && previous.fact.table === fact.table);
+        const toSave = { fact: fact, fields: fieldsState };
+        if (previous && previous.dracoPlanning === true && sameFact) toSave.dracoPlanning = true;
+        await window.SemanticModelStore.saveModel(currentModel, toSave);
 
         await window.SemanticModelStore.setActiveModelName(currentModel);
 

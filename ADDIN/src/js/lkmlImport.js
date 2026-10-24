@@ -234,10 +234,16 @@
             throw new Error("No se ha podido reconocer ninguna tabla de hechos, dimensión o medida en el fichero.");
         }
 
-        return {
+        const result = {
             fact: fact,
             fields: [...dimensionFields, ...measures]
         };
+        // Marca de los .lkml generados por Draco Planning (ver
+        // PLANNING/js/lkml-export.js): habilita la planificación sobre el modelo.
+        if (/^[ \t]*#[ \t]*draco[ \t]*:[ \t]*planning[ \t]*$/im.test(content)) {
+            result.dracoPlanning = true;
+        }
+        return result;
 
     }
 

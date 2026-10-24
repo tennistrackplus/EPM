@@ -136,7 +136,7 @@
          *   '...$X$...'  (dentro de un literal de texto) -> el valor escapado para ese literal
          *   $X$          (fuera de comillas, p. ej. tipo numérico) -> el número, o un literal de texto
          * Lanza un error claro si una variable usada no existe.
-         * provider: "bigquery" | "snowflake" | "fabric" (cómo se escapa la comilla).
+         * provider: "bigquery" (otro valor: escapa la comilla duplicándola, SQL estándar).
          */
         resolveSql(sql, provider) {
             if (typeof sql !== "string" || sql.indexOf("$") === -1) return sql;

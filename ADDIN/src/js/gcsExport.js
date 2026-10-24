@@ -4,7 +4,7 @@
  * ============================================================
  * Sube el .xlsx activo (tal cual está guardado en disco/OneDrive) a un
  * bucket de Google Cloud Storage, reutilizando el token OAuth de Google
- * ya guardado por login.js/BQ ("bigquery_access_token"). Para que la
+ * de la sesión (BQ.getToken()). Para que la
  * subida funcione, ese token debe incluir el scope
  * "https://www.googleapis.com/auth/devstorage.read_write"
  * (añadido en config.js); si el usuario conectó BigQuery ANTES de este

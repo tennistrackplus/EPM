@@ -8,9 +8,9 @@
  * guardarlo en AppData) y sobrevive a cerrar/abrir Excel.
  *
  * IMPORTANTE: aquí solo se guarda la CONFIGURACIÓN de cada conexión
- * (nombre visible, proveedor, proyecto de facturación, cuenta de
- * Snowflake, etc.). Los tokens de acceso (OAuth) siguen gestionándose
- * por separado en BQ / SF, como ya hacía el add-in: son credenciales
+ * (nombre visible, proveedor, proyecto de facturación, repositorio,
+ * etc.). Los tokens de acceso (OAuth) siguen gestionándose por
+ * separado en BQ, como ya hacía el add-in: son credenciales
  * de sesión, no datos de la conexión en sí, y su expiración es
  * independiente de si la conexión sigue "guardada" en el menú.
  */
@@ -19,17 +19,12 @@ const Connections = {
     ACTIVE_KEY: "epm_active_connection_id",
 
     PROVIDER_LABELS: {
-        bigquery: "BigQuery",
-        amazon: "Amazon",
-        fabric: "Microsoft Fabric",
-        snowflake: "Snowflake",
-        datasphere: "SAP Datasphere",
-        s4cds: "CDS de S4"
+        bigquery: "BigQuery"
     },
 
-    // Proveedores con flujo de conexión implementado hoy; el resto se
-    // puede guardar como perfil pero mostrará "próximamente" al conectar.
-    IMPLEMENTED_PROVIDERS: ["bigquery", "snowflake", "fabric"],
+    // Proveedores con flujo de conexión implementado. Una conexión guardada
+    // con otro proveedor (versiones anteriores) muestra "no disponible".
+    IMPLEMENTED_PROVIDERS: ["bigquery"],
 
     labelFor(providerKey) {
         return this.PROVIDER_LABELS[providerKey] || providerKey;

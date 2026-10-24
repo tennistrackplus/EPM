@@ -3,10 +3,14 @@
  * EPM ADD-IN — CLIENTE BIGQUERY (REST API)
  * ============================================================
  * Envuelve las llamadas a la API REST de BigQuery usando el token
- * OAuth guardado en localStorage por login.js. Mantiene las mismas
- * claves de localStorage ("bigquery_access_token", etc.) que ya
- * usaba el add-in, para no romper commands.js / semantic_model.js
- * mientras se migran (fase posterior).
+ * OAuth obtenido por login.js.
+ *
+ * SEGURIDAD: el token se guarda SOLO en sessionStorage (no en
+ * localStorage): no se persiste en disco y desaparece al cerrar el
+ * panel/Excel. Toda lectura del token pasa por BQ.getToken(). Los
+ * diálogos (ventanas aparte) lo piden a quien los abrió por la
+ * mensajería del Dialog API (requestSessionFromOpener /
+ * handleDialogMessage): nunca viaja por la URL.
  */
 const BQ = {
     BASE: "https://bigquery.googleapis.com/bigquery/v2",
@@ -14,7 +18,7 @@ const BQ = {
     // ---------------------------------------------------------
     // Configuración de la conexión activa (proyecto de facturación
     // opcional y repositorio de modelos semánticos, al estilo
-    // Power BI / LookML). Se guardan junto con el resto de config
+    // LookML). Se guardan junto con el resto de config
     // en Connections, pero se exponen aquí para el resto del código
     // que ya habla con BQ directamente.
     // ---------------------------------------------------------
@@ -105,7 +109,7 @@ const BQ = {
             const msg = JSON.parse(rawMessage);
             if (msg && msg.type === this.TOKEN_REQUEST_MESSAGE_TYPE) {
                 const token = this.getToken();
-                const expires = localStorage.getItem("bigquery_token_expires");
+                const expires = this._store().getItem(this.EXPIRES_KEY);
                 dialog.messageChild(JSON.stringify({
                     type: this.TOKEN_RESPONSE_MESSAGE_TYPE,
                     token: token || null,
@@ -148,8 +152,7 @@ const BQ = {
                         if (msg && msg.type === this.TOKEN_RESPONSE_MESSAGE_TYPE) {
                             clearTimeout(timer);
                             if (msg.token && msg.expires) {
-                                localStorage.setItem("bigquery_access_token", msg.token);
-                                localStorage.setItem("bigquery_token_expires", msg.expires);
+                                this.setToken(msg.token, msg.expires);
                             }
                             finish(true);
                         }
@@ -184,15 +187,56 @@ const BQ = {
     // innecesario (y es lo que embebía el token en el archivo) y se ha
     // eliminado: setToken/getToken/logout usan únicamente localStorage.
     // ---------------------------------------------------------
-    setToken(token, expiresAt) {
-        localStorage.setItem("bigquery_access_token", token);
-        localStorage.setItem("bigquery_token_expires", String(expiresAt));
+    TOKEN_KEY: "bigquery_access_token",
+    EXPIRES_KEY: "bigquery_token_expires",
+
+    _store() {
+        return window.sessionStorage;
+    },
+
+    /** Borra el token que versiones anteriores dejaban en localStorage. */
+    purgeLegacyToken() {
+        try {
+            localStorage.removeItem(this.TOKEN_KEY);
+            localStorage.removeItem(this.EXPIRES_KEY);
+        } catch (e) { /* sin acceso a localStorage */ }
+    },
+
+    SCOPES_KEY: "bigquery_token_scopes",
+
+    /** Scopes concedidos por Google en el último login (null si se desconocen). */
+    getGrantedScopes() {
+        const raw = this._store().getItem(this.SCOPES_KEY);
+        return raw ? raw.split(/\s+/).filter(Boolean) : null;
+    },
+
+    /**
+     * ¿El token permite ESCRIBIR en BigQuery? false si solo se concedió
+     * bigquery.readonly (p. ej. el usuario desmarcó el permiso de escritura
+     * en la pantalla de consentimiento, o el servicio de autenticación del
+     * cliente solo admite lectura). Si no se conocen los scopes, true: la
+     * seguridad real la pone IAM al escribir.
+     */
+    canWriteBigQuery() {
+        const scopes = this.getGrantedScopes();
+        if (!scopes) return true;
+        return scopes.includes("https://www.googleapis.com/auth/bigquery")
+            || scopes.includes("https://www.googleapis.com/auth/cloud-platform");
+    },
+
+    setToken(token, expiresAt, scope) {
+        this._store().setItem(this.TOKEN_KEY, token);
+        this._store().setItem(this.EXPIRES_KEY, String(expiresAt));
+        if (scope) this._store().setItem(this.SCOPES_KEY, String(scope));
     },
 
     getToken() {
-        const token = localStorage.getItem("bigquery_access_token");
-        const expires = localStorage.getItem("bigquery_token_expires");
-        if (!token || !expires || Date.now() >= parseInt(expires, 10)) return null;
+        const token = this._store().getItem(this.TOKEN_KEY);
+        const expires = this._store().getItem(this.EXPIRES_KEY);
+        if (!token || !expires || Date.now() >= parseInt(expires, 10)) {
+            if (token) this.logout();   // caducado: no se deja en memoria
+            return null;
+        }
         return token;
     },
 
@@ -226,8 +270,23 @@ const BQ = {
     // event.origin al recibir mensajes).
 
     logout() {
-        localStorage.removeItem("bigquery_access_token");
-        localStorage.removeItem("bigquery_token_expires");
+        this._store().removeItem(this.TOKEN_KEY);
+        this._store().removeItem(this.EXPIRES_KEY);
+        this._store().removeItem(this.SCOPES_KEY);
+    },
+
+    /**
+     * Proyecto en el que se lanza el job de consulta (jobs.query). Orden:
+     * el indicado por quien llama, el de facturación de la conexión y, si
+     * no hay ninguno, el proyecto de la primera tabla `p.d.t` del SQL.
+     */
+    jobProjectFor(sql, preferred) {
+        if (preferred) return preferred;
+        const billing = this.getBillingProject();
+        if (billing) return billing;
+        const m = /`([a-z][a-z0-9-]{4,61}[a-z0-9])\.[A-Za-z0-9_]+\.[^`]+`/.exec(String(sql || ""));
+        if (m) return m[1];
+        throw new Error("No se puede determinar el proyecto de GCP para lanzar la consulta: indica un proyecto de facturación en la conexión.");
     },
 
     async request(path, options = {}) {
@@ -300,7 +359,7 @@ const BQ = {
         });
     },
 
-    /** Igual que query(), pero devuelve {fields:[{name}], rows:[{col: valor}]} ya normalizado (mismo formato que SF.runQuerySql) */
+    /** Igual que query(), pero devuelve {fields:[{name}], rows:[{col: valor}]} ya normalizado */
     async runQuerySql(projectId, sql) {
         const result = await this.query(projectId, sql);
         const fields = (result.schema && result.schema.fields) || [];
@@ -332,3 +391,6 @@ const BQ = {
 // así que todos esos "window.BQ ? ... : ''" evaluaban siempre a falso, sin
 // dar ningún error visible — el origen real de "Conéctate primero".
 window.BQ = BQ;
+
+// Limpieza de tokens que versiones anteriores guardaban en localStorage.
+BQ.purgeLegacyToken();

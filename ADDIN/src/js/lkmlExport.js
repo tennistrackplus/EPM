@@ -60,6 +60,7 @@
 
         lines.push(`# Modelo semántico: ${modelName}`);
         lines.push("# Generado automáticamente desde el diseñador de modelos semánticos.");
+        if (model && model.dracoPlanning === true) lines.push("# draco: planning");
         lines.push("");
 
         /* ---------------- VIEW: tabla de hechos + measures ---------------- */

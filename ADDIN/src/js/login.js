@@ -1,19 +1,14 @@
 /**
  * Lógica del Task Pane de Conexiones.
  *
- * Nuevo flujo (menú de conexiones, como Power BI / Looker):
+ * Nuevo flujo (menú de conexiones, como Looker):
  *  - Vista "Lista": conexiones ya guardadas (Connections). Un clic
  *    reutiliza sus parámetros y conecta sin volver a preguntarlos.
- *  - Vista "Crear": nombre + selector de origen de datos + campos
- *    propios de cada proveedor (BigQuery: proyecto de facturación y
- *    repositorio de modelos semánticos; Snowflake: cuenta/warehouse/
- *    base de datos/rol). Al guardar, se crea la conexión y se lanza
- *    el login del proveedor correspondiente.
+ *  - Vista "Crear": nombre + origen de datos + campos de BigQuery
+ *    (proyecto de facturación y repositorio de modelos semánticos).
+ *    Al guardar, se crea la conexión y se lanza el login.
  *
- * Soporta BigQuery (OAuth implícito), Snowflake (OAuth PKCE) y
- * Microsoft Fabric (Entra ID OAuth PKCE; Lakehouse y Warehouse) a
- * través de la capa Provider; el resto del add-in solo necesita
- * saber cuál está activo (Provider.key()).
+ * Proveedor soportado: BigQuery, a través de la capa Provider.
  */
 const LoginApp = {
     view: "list",              // "list" | "create"
@@ -23,15 +18,12 @@ const LoginApp = {
     pendingConnectionId: null, // conexión para la que se está esperando respuesta OAuth
 
     PROVIDER_ICONS: {
-        bigquery: "https://www.vectorlogo.zone/logos/google_bigquery/google_bigquery-icon.svg",
-        snowflake: "https://app.eu.peliqan.io/img/db/snowflake.svg",
-        amazon: "https://www.vectorlogo.zone/logos/amazon_aws/amazon_aws-icon.svg",
-        fabric: "https://community.fabric.microsoft.com/html/assets/fabric-expo-icon.svg",
-        datasphere: "https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg",
-        s4cds: "https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg"
+        bigquery: "assets/datasource-db.svg"
     },
 
     init() {
+        // Modo backend: reanuda la renovación automática del token si hay sesión.
+        GoogleAuth.resume().finally(() => this.renderList());
         this.bindStaticEvents();
         this.renderList();
         this.setupBrowserMessageListener();
@@ -79,6 +71,8 @@ const LoginApp = {
         document.getElementById("btnSaveConnection").addEventListener("click", () => {
             this.saveConnection();
         });
+
+        document.getElementById("bqAuthMode").addEventListener("change", () => this.toggleAuthModeFields());
 
         // Selector de origen de datos dentro de la vista "crear"
         document.querySelectorAll("#viewCreate .connector-card").forEach(card => {
@@ -168,14 +162,6 @@ const LoginApp = {
         if (conn.provider === "bigquery") {
             return cfg.billingProjectId ? `${label} · Facturación: ${cfg.billingProjectId}` : label;
         }
-        if (conn.provider === "snowflake") {
-            return cfg.account ? `${label} · ${cfg.account}` : label;
-        }
-        if (conn.provider === "fabric") {
-            const host = cfg.server ? cfg.server.split(".")[0] : "";
-            const item = cfg.defaultItem ? ` · ${cfg.defaultItem}` : "";
-            return host ? `${label} · ${host}${item}` : label;
-        }
         return label;
     },
 
@@ -227,11 +213,12 @@ const LoginApp = {
         this.pendingConnectionId = conn.id;
         try {
             if (conn.provider === "bigquery") {
-                this.startBigQueryAuth();
-            } else if (conn.provider === "snowflake") {
-                await this.startSnowflakeAuth();
-            } else if (conn.provider === "fabric") {
-                await this.startFabricAuth();
+                const cfgError = GoogleAuth.validateConfig(conn.config);
+                if (cfgError) {
+                    this.showAlert(cfgError + " Edita la conexión (✎).", true);
+                    return;
+                }
+                this.startBigQueryAuth(conn);
             }
         } catch (err) {
             console.error("Error al conectar:", err);
@@ -244,37 +231,17 @@ const LoginApp = {
         const conn = Connections.getById(id);
         if (!conn) return;
 
-        if (conn.provider === "snowflake") {
-            SF.logout();
-        } else if (conn.provider === "fabric") {
-            FB.logout();
-        } else {
-            BQ.logout();
-        }
+        GoogleAuth.logout();
         this.showAlert(`Sesión cerrada para ${this.getProviderDisplayName(conn.provider)}.`);
         this.renderList();
     },
 
-    /** Carga en BQ/SF los parámetros guardados de una conexión (sin tocar los tokens de sesión) */
+    /** Carga en BQ los parámetros guardados de una conexión (sin tocar los tokens de sesión) */
     applyConnectionConfig(conn) {
         const cfg = conn.config || {};
         if (conn.provider === "bigquery") {
             BQ.setBillingProject(cfg.billingProjectId || "");
             BQ.setSemanticRepo(cfg.semanticRepo || { type: "", url: "" });
-        } else if (conn.provider === "snowflake") {
-            SF.setAccount(cfg.account || "");
-            SF.setWarehouse(cfg.warehouse || "");
-            SF.setDatabase(cfg.database || DracoConfig.snowflakeDatabase);
-            SF.setRole(cfg.role || "");
-        } else if (conn.provider === "fabric") {
-            // Si cambia el workspace o el tenant, la sesión anterior no sirve
-            const changed = FB.getServer() !== FB.normalizeServer(cfg.server || "")
-                || FB.getTenant() !== String(cfg.tenant || "").trim();
-            FB.setServer(cfg.server || "");
-            FB.setDefaultItem(cfg.defaultItem || "");
-            FB.setTenant(cfg.tenant || "");
-            FB.setGatewayOverride(cfg.gatewayUrl || "");
-            if (changed) FB.logout();
         }
     },
 
@@ -291,14 +258,9 @@ const LoginApp = {
         document.getElementById("bqRepoUrl").value = "";
         document.getElementById("bqRepoBranch").value = "";
         document.getElementById("bqRepoToken").value = "";
-        document.getElementById("sfAccount").value = "";
-        document.getElementById("sfWarehouse").value = "";
-        document.getElementById("sfDatabase").value = "";
-        document.getElementById("sfRole").value = "";
-        document.getElementById("fbServer").value = "";
-        document.getElementById("fbDefaultItem").value = "";
-        document.getElementById("fbTenant").value = "";
-        document.getElementById("fbGatewayUrl").value = "";
+        document.getElementById("bqAuthMode").value = "token";
+        document.getElementById("bqOAuthClientId").value = "";
+        document.getElementById("bqAuthBrokerUrl").value = "";
         document.querySelectorAll("#viewCreate .connector-card").forEach(c => c.classList.remove("selected"));
 
         const title = document.getElementById("createTitle");
@@ -318,16 +280,10 @@ const LoginApp = {
                 document.getElementById("bqRepoUrl").value = (cfg.semanticRepo && cfg.semanticRepo.url) || "";
                 document.getElementById("bqRepoBranch").value = (cfg.semanticRepo && cfg.semanticRepo.branch) || "";
                 document.getElementById("bqRepoToken").value = (cfg.semanticRepo && cfg.semanticRepo.token) || "";
-            } else if (conn.provider === "snowflake") {
-                document.getElementById("sfAccount").value = cfg.account || "";
-                document.getElementById("sfWarehouse").value = cfg.warehouse || "";
-                document.getElementById("sfDatabase").value = cfg.database || "";
-                document.getElementById("sfRole").value = cfg.role || "";
-            } else if (conn.provider === "fabric") {
-                document.getElementById("fbServer").value = cfg.server || "";
-                document.getElementById("fbDefaultItem").value = cfg.defaultItem || "";
-                document.getElementById("fbTenant").value = cfg.tenant || "";
-                document.getElementById("fbGatewayUrl").value = cfg.gatewayUrl || "";
+                const auth = GoogleAuth.normalizeConfig(cfg);
+                document.getElementById("bqAuthMode").value = auth.authMode;
+                document.getElementById("bqOAuthClientId").value = auth.oauthClientId;
+                document.getElementById("bqAuthBrokerUrl").value = auth.authBrokerUrl;
             }
 
             const card = document.querySelector(`#viewCreate .connector-card[data-provider="${conn.provider}"]`);
@@ -341,10 +297,15 @@ const LoginApp = {
         this.switchView("create");
     },
 
+    toggleAuthModeFields() {
+        const backend = document.getElementById("bqAuthMode").value === "backend";
+        document.getElementById("bqAuthTokenFields").style.display = backend ? "none" : "";
+        document.getElementById("bqAuthBackendFields").style.display = backend ? "" : "none";
+    },
+
     toggleProviderPanels() {
         document.getElementById("bigqueryConfigPanel").classList.toggle("visible", this.selectedProvider === "bigquery");
-        document.getElementById("snowflakeConfigPanel").classList.toggle("visible", this.selectedProvider === "snowflake");
-        document.getElementById("fabricConfigPanel").classList.toggle("visible", this.selectedProvider === "fabric");
+        this.toggleAuthModeFields();
     },
 
     updateSaveButton() {
@@ -363,6 +324,9 @@ const LoginApp = {
     collectConfigFromForm() {
         if (this.selectedProvider === "bigquery") {
             return {
+                authMode: document.getElementById("bqAuthMode").value,
+                oauthClientId: document.getElementById("bqOAuthClientId").value.trim(),
+                authBrokerUrl: document.getElementById("bqAuthBrokerUrl").value.trim().replace(/\/+$/, ""),
                 billingProjectId: document.getElementById("bqBillingProject").value.trim(),
                 semanticRepo: {
                     type: document.getElementById("bqRepoType").value,
@@ -372,41 +336,11 @@ const LoginApp = {
                 }
             };
         }
-        if (this.selectedProvider === "snowflake") {
-            return {
-                account: document.getElementById("sfAccount").value.trim(),
-                warehouse: document.getElementById("sfWarehouse").value.trim(),
-                database: document.getElementById("sfDatabase").value.trim() || DracoConfig.snowflakeDatabase,
-                role: document.getElementById("sfRole").value.trim()
-            };
-        }
-        if (this.selectedProvider === "fabric") {
-            return {
-                server: FB.normalizeServer(document.getElementById("fbServer").value),
-                defaultItem: document.getElementById("fbDefaultItem").value.trim(),
-                tenant: document.getElementById("fbTenant").value.trim(),
-                gatewayUrl: document.getElementById("fbGatewayUrl").value.trim().replace(/\/+$/, "")
-            };
-        }
         return {};
     },
 
     validateConfig(provider, config) {
-        if (provider === "snowflake") {
-            if (!config.account || !config.warehouse) {
-                return "Indica al menos la cuenta y el warehouse de Snowflake.";
-            }
-        }
-        if (provider === "fabric") {
-            // El SQL endpoint es opcional: solo hace falta para consultar
-            // Lakehouse/Warehouse por SQL, no para abrir modelos semánticos.
-            if (config.server && !FB.isValidServer(config.server)) {
-                return "El SQL endpoint debe terminar en .datawarehouse.fabric.microsoft.com (o déjalo vacío).";
-            }
-            if (config.gatewayUrl && !/^https:\/\/[^\s/]+/i.test(config.gatewayUrl)) {
-                return "La URL del gateway propio debe empezar por https://";
-            }
-        }
+        if (provider === "bigquery") return GoogleAuth.validateConfig(config);
         return null;
     },
 
@@ -445,11 +379,7 @@ const LoginApp = {
         this.pendingConnectionId = conn.id;
         try {
             if (conn.provider === "bigquery") {
-                this.startBigQueryAuth();
-            } else if (conn.provider === "snowflake") {
-                await this.startSnowflakeAuth();
-            } else if (conn.provider === "fabric") {
-                await this.startFabricAuth();
+                this.startBigQueryAuth(conn);
             }
         } catch (err) {
             console.error("Error al iniciar la conexión:", err);
@@ -489,8 +419,8 @@ const LoginApp = {
         }
     },
 
-    /** Inicia el flujo OAuth 2.0 (implícito) para BigQuery */
-    startBigQueryAuth() {
+    /** Inicia sesión con Google según el modo de la conexión (ver js/google-auth.js) */
+    startBigQueryAuth(conn) {
         if (window.location.protocol === "file:") {
             console.error("No se puede ejecutar desde file://. Debes usar un servidor web local (ej. Live Server o http://localhost).");
             this.showAlert("Error: no se puede ejecutar desde un archivo local (file://). Usa Live Server o un servidor HTTP.", true);
@@ -498,25 +428,7 @@ const LoginApp = {
         }
 
         const redirectUri = new URL("auth-callback.html", window.location.href).href;
-        const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
-            `client_id=${encodeURIComponent(DracoConfig.googleClientId)}` +
-            `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-            "&response_type=token" +
-            `&scope=${encodeURIComponent(DracoConfig.googleScopes)}` +
-            "&prompt=consent";
-
-        this.openAuthWindow(authUrl);
-    },
-
-    /** Inicia el flujo OAuth 2.0 (Authorization Code + PKCE) para Snowflake, usando lo ya guardado en SF */
-    async startSnowflakeAuth() {
-        const authUrl = await SF.buildAuthUrl();
-        this.openAuthWindow(authUrl);
-    },
-
-    /** Inicia el flujo OAuth 2.0 (Authorization Code + PKCE) contra Microsoft Entra ID para Fabric */
-    async startFabricAuth() {
-        const authUrl = await FB.buildAuthUrl();
+        const authUrl = GoogleAuth.buildLoginUrl((conn && conn.config) || {}, redirectUri);
         this.openAuthWindow(authUrl);
     },
 
@@ -527,8 +439,7 @@ const LoginApp = {
         window.addEventListener("message", (event) => {
             // SEGURIDAD: se comprueba el origen antes de procesar el
             // mensaje (antes se aceptaba cualquier origen). auth-callback.html
-            // y auth-callback-snowflake.html ahora responden con
-            // window.location.origin en vez de "*", así que aquí debe
+            // responde con window.location.origin en vez de "*", así que aquí debe
             // coincidir con el propio origen de este add-in.
             if (event.origin !== window.location.origin) return;
             if (typeof event.data === "string") {
@@ -552,56 +463,25 @@ const LoginApp = {
             const response = JSON.parse(messageString);
 
             if (response.provider === "bigquery") {
-                if (response.status === "success") {
-                    // BQ.setToken guarda el token solo en localStorage. Con
-                    // Shared Runtime (ver manifest), commands.js corre en el
-                    // mismo proceso que este panel, así que ya comparte este
-                    // mismo localStorage sin necesitar ningún respaldo extra.
-                    const expiresAt = Date.now() + (parseInt(response.expiresIn, 10) * 1000);
-                    if (window.BQ && typeof BQ.setToken === "function") {
-                        BQ.setToken(response.token, expiresAt);
-                    } else {
-                        localStorage.setItem("bigquery_access_token", response.token);
-                        localStorage.setItem("bigquery_token_expires", expiresAt);
-                    }
+                // GoogleAuth comprueba el `state` y guarda el token (sessionStorage).
+                // Con Shared Runtime (ver manifest), commands.js corre en el
+                // mismo proceso que este panel y lo comparte.
+                if (GoogleAuth.acceptResponse(response)) {
                     Provider.setKey("bigquery");
-                    this.showAlert("¡Conexión con Google BigQuery establecida con éxito!");
+                    if (typeof TaskPaneApp !== "undefined" && typeof TaskPaneApp.applyPlanningGateUI === "function") {
+                        TaskPaneApp.applyPlanningGateUI();
+                    } else if (window.DracoPlanningGate) {
+                        DracoPlanningGate.syncRibbon();
+                    }
+                    if (window.DracoPlanningGate && !DracoPlanningGate.canWrite()) {
+                        this.showAlert("Conectado a BigQuery con permiso de solo lectura: la planificación no estará disponible.");
+                    } else {
+                        this.showAlert("¡Conexión con Google BigQuery establecida con éxito!");
+                    }
                     this.switchView("list");
                 } else {
                     console.error("Error en autenticación:", response.error);
                     this.showAlert("Error de autenticación: " + (response.error || "Desconocido"), true);
-                }
-            } else if (response.provider === "snowflake") {
-                if (response.status === "success" && response.code) {
-                    await SF.handleAuthCode(response.code, response.state);
-                    Provider.setKey("snowflake");
-                    this.showAlert("¡Conexión con Snowflake establecida con éxito!");
-                    this.switchView("list");
-                } else {
-                    console.error("Error en autenticación:", response.error);
-                    this.showAlert("Error de autenticación con Snowflake: " + (response.error || "Desconocido"), true);
-                }
-            } else if (response.provider === "fabric") {
-                if (response.status === "success" && response.code) {
-                    await FB.handleAuthCode(response.code, response.state);
-                    Provider.setKey("fabric");
-                    const who = FB.getAccountName();
-                    if (FB.isValidServer(FB.getServer()) && FB.isGatewayConfigured()) {
-                        // Prueba real contra el SQL endpoint: valida token, gateway y permisos
-                        try {
-                            const items = await FB.listItems();
-                            this.showAlert(`¡Conectado a Microsoft Fabric${who ? " como " + who : ""}! ${items.length} lakehouse/warehouse visibles en el workspace.`);
-                        } catch (testErr) {
-                            console.error("[Fabric] Login correcto pero falló la consulta de prueba:", testErr);
-                            this.showAlert("Sesión iniciada, pero no se pudo consultar el workspace por SQL: " + testErr.message, true);
-                        }
-                    } else {
-                        this.showAlert(`¡Conectado a Microsoft Fabric${who ? " como " + who : ""}! Ya puedes abrir sus modelos semánticos.`);
-                    }
-                    this.switchView("list");
-                } else {
-                    console.error("Error en autenticación:", response.error);
-                    this.showAlert("Error de autenticación con Microsoft Fabric: " + (response.error || "Desconocido"), true);
                 }
             }
         } catch (err) {

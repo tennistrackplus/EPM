@@ -98,4 +98,16 @@ async function runDataPreview() {
     }
 }
 
-document.addEventListener("DOMContentLoaded", runDataPreview);
+// SEGURIDAD: el diálogo no comparte la sesión (sessionStorage) con el panel
+// que lo abrió: la pide por la mensajería del Dialog API antes de consultar.
+async function bootDataPreview() {
+    if (typeof Office !== "undefined" && Office.onReady) {
+        try { await Office.onReady(); } catch (e) { /* fuera de Office */ }
+    }
+    if (window.BQ && !BQ.isConnected()) {
+        await BQ.requestSessionFromOpener();
+    }
+    await runDataPreview();
+}
+
+document.addEventListener("DOMContentLoaded", bootDataPreview);
