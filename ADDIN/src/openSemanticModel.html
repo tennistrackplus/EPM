@@ -17,7 +17,7 @@
 
         <div class="dialog-header">
             <h3>Abrir modelo semántico</h3>
-            <span class="dialog-subtitle">Importa un modelo desde un repositorio, un fichero local (.lkml) o Microsoft Fabric</span>
+            <span class="dialog-subtitle">Importa un modelo desde un repositorio o un fichero local (.lkml)</span>
         </div>
 
         <div class="dialog-body">
@@ -28,7 +28,6 @@
             <div class="lkml-tabs">
                 <div class="lkml-tab active" id="lkmlTabServer" data-tab="server">Servidor</div>
                 <div class="lkml-tab" id="lkmlTabLocal" data-tab="local">Local</div>
-                <div class="lkml-tab" id="lkmlTabFabric" data-tab="fabric">Microsoft Fabric</div>
             </div>
 
             <!-- PESTAÑA SERVIDOR: repositorio Git (GitHub/GitLab) de la conexión -->
@@ -46,19 +45,6 @@
 
                 <div class="lkml-server-list" id="lkmlServerList">
                     <span class="lkml-empty-hint">Selecciona una conexión para explorar los ficheros .lkml del repositorio.</span>
-                </div>
-            </div>
-
-            <!-- PESTAÑA FABRIC: modelos semánticos de Power BI / Fabric -->
-            <div class="lkml-tab-panel" id="lkmlPanelFabric">
-                <span class="lkml-empty-hint" id="fabricSessionInfo" style="display:block; margin-bottom:8px;"></span>
-                <label class="lkml-field-label" for="fabricWorkspaceSelect">Workspace</label>
-                <select class="lkml-select" id="fabricWorkspaceSelect">
-                    <option value="">— Cargando workspaces… —</option>
-                </select>
-                <label class="lkml-field-label">Modelo semántico</label>
-                <div class="lkml-server-list is-empty" id="fabricModelList">
-                    <span class="lkml-empty-hint">Selecciona un workspace para ver sus modelos semánticos.</span>
                 </div>
             </div>
 
@@ -84,12 +70,10 @@
 
     </div>
 
-    <script src="js/config.js?v=2"></script>
-    <script src="js/connections.js"></script>
-    <script src="js/fabric.js?v=2"></script>
-    <script src="js/fabricSemanticModel.js?v=2"></script>
+    <script src="js/config.js?v=20261022t"></script>
+    <script src="js/connections.js?v=20261022t"></script>
     <script src="js/gitRepo.js"></script>
     <script src="js/lkmlImport.js"></script>
-    <script src="js/openSemanticModelDialog.js"></script>
+    <script src="js/openSemanticModelDialog.js?v=20261022t"></script>
 </body>
 </html>

@@ -532,7 +532,7 @@
                             <div class="connector-card" data-provider="bigquery">
                                 <div class="connector-info">
                                     <div class="connector-icon">
-                                        <img src="https://www.vectorlogo.zone/logos/google_bigquery/google_bigquery-icon.svg" alt="BigQuery">
+                                        <img src="assets/datasource-db.svg" alt="BigQuery">
                                     </div>
                                     <div class="connector-details">
                                         <h3>BigQuery</h3>
@@ -542,6 +542,20 @@
                             </div>
                             <!-- Campos específicos de BigQuery (acordeón bajo la propia opción) -->
                             <div class="provider-config-panel" id="bigqueryConfigPanel">
+                                <label for="bqAuthMode" style="margin-top:10px;">Autenticación con Google</label>
+                                <select id="bqAuthMode">
+                                    <option value="token">OAuth del cliente (token en el navegador)</option>
+                                    <option value="backend">Servicio de autenticación del cliente (recomendado)</option>
+                                </select>
+                                <div id="bqAuthTokenFields">
+                                    <input type="text" id="bqOAuthClientId" style="margin-top:6px;" placeholder="OAuth Client ID (xxxx.apps.googleusercontent.com)" autocomplete="off">
+                                    <span class="hint">Client ID de tipo "Aplicación web" creado en el proyecto de Google Cloud del cliente. La sesión dura 1 hora.</span>
+                                </div>
+                                <div id="bqAuthBackendFields" style="display:none;">
+                                    <input type="text" id="bqAuthBrokerUrl" style="margin-top:6px;" placeholder="https://draco-auth-xxxx.run.app" autocomplete="off">
+                                    <span class="hint">URL del servicio de autenticación desplegado por el cliente (AUTH-BROKER). El secreto de OAuth no sale de ese servicio y la sesión se renueva sola.</span>
+                                </div>
+
                                 <label for="bqBillingProject">Id. del proyecto de facturación (opcional)</label>
                                 <input type="text" id="bqBillingProject" placeholder="Ejemplo: MyBillingProject">
                                 <span class="hint">Si se deja vacío, se factura sobre el proyecto de los datos consultados.</span>
@@ -563,109 +577,6 @@
                             </div>
                         </div>
 
-                        <!-- Snowflake -->
-                        <div class="connector-item">
-                            <div class="connector-card" data-provider="snowflake">
-                                <div class="connector-info">
-                                    <div class="connector-icon">
-                                        <img src="https://app.eu.peliqan.io/img/db/snowflake.svg" alt="Snowflake">
-                                    </div>
-                                    <div class="connector-details">
-                                        <h3>Snowflake</h3>
-                                        <span>Cloud Data Platform</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <!-- Campos específicos de Snowflake (acordeón bajo la propia opción) -->
-                            <div class="provider-config-panel" id="snowflakeConfigPanel">
-                                <label for="sfAccount">Identificador de cuenta Snowflake</label>
-                                <input type="text" id="sfAccount" placeholder="ej. xy12345.eu-west-1 u orgname-accountname">
-                                <label for="sfWarehouse" style="margin-top:10px;">Warehouse</label>
-                                <input type="text" id="sfWarehouse" placeholder="ej. COMPUTE_WH">
-                                <label for="sfDatabase" style="margin-top:10px;">Base de datos</label>
-                                <input type="text" id="sfDatabase" placeholder="DRACO">
-                                <label for="sfRole" style="margin-top:10px;">Rol (opcional)</label>
-                                <input type="text" id="sfRole" placeholder="ej. SYSADMIN">
-                            </div>
-                        </div>
-
-                        <!-- Amazon -->
-                        <div class="connector-item">
-                        <div class="connector-card" data-provider="amazon">
-                            <div class="connector-info">
-                                <div class="connector-icon">
-                                    <img src="https://www.vectorlogo.zone/logos/amazon_aws/amazon_aws-icon.svg" alt="AWS">
-                                </div>
-                                <div class="connector-details">
-                                    <h3>Amazon</h3>
-                                    <span>AWS Redshift / S3</span>
-                                </div>
-                            </div>
-                            <span class="tag-soon">Próximamente</span>
-                        </div>
-                        </div>
-                        <!-- Microsoft Fabric -->
-                        <div class="connector-item">
-                            <div class="connector-card" data-provider="fabric">
-                                <div class="connector-info">
-                                    <div class="connector-icon">
-                                        <img src="https://community.fabric.microsoft.com/html/assets/fabric-expo-icon.svg" alt="Microsoft Fabric">
-                                    </div>
-                                    <div class="connector-details">
-                                        <h3>Microsoft Fabric</h3>
-                                        <span>Lakehouse / Warehouse (OneLake)</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <!-- Campos específicos de Fabric (acordeón bajo la propia opción) -->
-                            <div class="provider-config-panel" id="fabricConfigPanel">
-                                <label for="fbServer">SQL endpoint del workspace (opcional)</label>
-                                <input type="text" id="fbServer" placeholder="xxxx.datawarehouse.fabric.microsoft.com">
-                                <span class="hint">En Fabric: abre un Lakehouse (su punto de conexión SQL) o un Warehouse → Configuración → Cadena de conexión SQL. Es la misma para todos los items del workspace; puedes pegar la cadena completa. Solo hace falta para consultar Lakehouse/Warehouse por SQL; para abrir modelos semánticos puedes dejarlo vacío.</span>
-                                <label for="fbDefaultItem" style="margin-top:10px;">Lakehouse / Warehouse por defecto (opcional)</label>
-                                <input type="text" id="fbDefaultItem" placeholder="ej. Draco_LH">
-                                <span class="hint">Solo como contexto inicial de la conexión. En el modelo semántico eliges el item de cada tabla, así que puedes mezclar Lakehouses y Warehouses del mismo workspace.</span>
-                                <label for="fbGatewayUrl" style="margin-top:10px;">URL de gateway propia (opcional)</label>
-                                <input type="text" id="fbGatewayUrl" placeholder="https://gateway.miempresa.com">
-                                <span class="hint">Solo si tu equipo de IT ha desplegado su propio gateway de Draco. Déjalo vacío para usar el gateway de Draco.</span>
-                                <label for="fbTenant" style="margin-top:10px;">Tenant de Microsoft Entra ID (opcional)</label>
-                                <input type="text" id="fbTenant" placeholder="ej. contoso.onmicrosoft.com o Id. de inquilino">
-                                <span class="hint">Déjalo vacío para iniciar sesión con cualquier cuenta de trabajo.</span>
-                            </div>
-                        </div>
-
-                        <!-- SAP Datasphere -->
-                        <div class="connector-item">
-                        <div class="connector-card" data-provider="datasphere">
-                            <div class="connector-info">
-                                <div class="connector-icon">
-                                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg" alt="SAP Datasphere">
-                                </div>
-                                <div class="connector-details">
-                                    <h3>SAP Datasphere</h3>
-                                    <span>SAP Business Warehouse</span>
-                                </div>
-                            </div>
-                            <span class="tag-soon">Próximamente</span>
-                        </div>
-                        </div>
-
-                        <!-- CDS de S4 -->
-                        <div class="connector-item">
-                        <div class="connector-card" data-provider="s4cds">
-                            <div class="connector-info">
-                                <div class="connector-icon">
-                                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg" alt="SAP S/4HANA CDS">
-                                </div>
-                                <div class="connector-details">
-                                    <h3>CDS de S4</h3>
-                                    <span>SAP S/4HANA CDS Views</span>
-                                </div>
-                            </div>
-                            <span class="tag-soon">Próximamente</span>
-                        </div>
-                        </div>
-
                     </div>
                 </div>
 
@@ -678,13 +589,12 @@
         </div>
     </div>
 
-    <script src="js/config.js"></script>
-    <script src="js/connections.js"></script>
-    <script src="js/bigquery.js"></script>
-    <script src="js/gcsExport.js"></script>
-    <script src="js/snowflake.js"></script>
-    <script src="js/fabric.js"></script>
-    <script src="js/provider.js"></script>
-    <script src="js/login.js"></script>
+    <script src="js/config.js?v=20261022t"></script>
+    <script src="js/connections.js?v=20261022t"></script>
+    <script src="js/bigquery.js?v=20261022t"></script>
+    <script src="js/google-auth.js?v=20261022t"></script>
+    <script src="js/gcsExport.js?v=20261022t"></script>
+    <script src="js/provider.js?v=20261022t"></script>
+    <script src="js/login.js?v=20261022t"></script>
 </body>
 </html>

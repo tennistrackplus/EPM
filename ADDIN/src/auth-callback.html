@@ -89,6 +89,12 @@
             const accessToken = params.get("access_token");
             const expiresIn = params.get("expires_in");
             const error = params.get("error");
+            const state = params.get("state");
+            const session = params.get("session");   // solo modo backend (servicio de autenticación)
+            const scope = params.get("scope");       // permisos concedidos (lectura/escritura)
+
+            // Se borra el fragmento de la URL para que el token no quede en el historial.
+            try { history.replaceState(null, "", window.location.pathname); } catch (e) { /* noop */ }
 
             let payload = null;
 
@@ -97,13 +103,17 @@
                     status: "success",
                     provider: "bigquery",
                     token: accessToken,
-                    expiresIn: expiresIn
+                    expiresIn: expiresIn,
+                    state: state,
+                    session: session,
+                    scope: scope
                 });
             } else if (error) {
                 payload = JSON.stringify({
                     status: "error",
                     provider: "bigquery",
-                    error: error
+                    error: error,
+                    state: state
                 });
             }
 

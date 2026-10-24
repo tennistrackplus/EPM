@@ -6,7 +6,7 @@
     xsi:type="TaskPaneApp">
 
   <Id>b7e1a4d2-3c9f-4a2e-9b1a-1234567890ab</Id>
-  <Version>1.0.0.0</Version>
+  <Version>1.0.0.2</Version>
   <ProviderName>Draco BI</ProviderName>
   <DefaultLocale>es-ES</DefaultLocale>
 
@@ -22,7 +22,6 @@
     <AppDomain>https://tennistrackplus.github.io</AppDomain>
     <AppDomain>https://accounts.google.com</AppDomain>
     <AppDomain>https://oauth2.googleapis.com</AppDomain>
-	<AppDomain>https://HLRAFRV-RM53388.snowflakecomputing.com</AppDomain>
   </AppDomains>
 
   <Hosts>
@@ -30,7 +29,7 @@
   </Hosts>
 
   <DefaultSettings>
-    <SourceLocation DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/src/login.html"/>
+    <SourceLocation DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/src/taskpane.html"/>
   </DefaultSettings>
 
   <Permissions>ReadWriteDocument</Permissions>
@@ -43,15 +42,41 @@
       <bt:Sets DefaultMinVersion="1.1">
         <bt:Set Name="AddinCommands" MinVersion="1.1"/>
         <bt:Set Name="ContextMenuApi" MinVersion="1.1"/>
+        <bt:Set Name="SharedRuntime" MinVersion="1.1"/>
       </bt:Sets>
     </Requirements>
 
     <Hosts>
       <Host xsi:type="Workbook">
 
+        <!-- Shared runtime: taskpane.html (el panel principal, "Editar
+             informes") pasa a ser también el proceso que ejecuta TODOS
+             los botones ExecuteFunction del ribbon (antes cada clic
+             levantaba su propia copia de commands.html, un proceso JS
+             aparte con sus propias variables — de ahí el candado cruzado
+             de EDIT_REPORT!Z1 y el bug de los 2 pickers). Con esto, el
+             panel y el ribbon comparten UN SOLO proceso/memoria: ya no
+             hace falta sincronizar nada entre "runtimes" porque solo hay
+             uno. resid="TaskpaneUrl" tiene que coincidir exactamente con
+             el bt:Url usado más abajo en el FunctionFile y en el
+             ShowTaskpane de "Editar informes" — si no coinciden, el
+             runtime compartido no carga. -->
+        <Runtimes>
+          <Runtime resid="TaskpaneUrl" lifetime="long"/>
+        </Runtimes>
+
         <DesktopFormFactor>
 
-          <FunctionFile resid="CommandsUrl"/>
+          <!-- Antes apuntaba a CommandsUrl (commands.html, el runtime
+               "corto" clásico). Ahora apunta a la MISMA página que el
+               Runtime de arriba (TaskpaneUrl / taskpane.html): en hosts
+               que sí soportan Shared Runtime, Office ignora esto y usa
+               directamente el Runtime; en hosts antiguos sin soporte
+               (que de todas formas no cargarán el add-in, por el
+               Requirement SharedRuntime de arriba) queda como fallback
+               documentado por Microsoft, sin dejar una URL huérfana a
+               commands.html. -->
+          <FunctionFile resid="TaskpaneUrl"/>
 
           <ExtensionPoint xsi:type="PrimaryCommandSurface">
 
@@ -85,9 +110,16 @@
                     <bt:Image size="80" resid="Conexion80"/>
                   </Icon>
 
-                  <Action xsi:type="ShowTaskpane">
-                    <TaskpaneId>ConexionPane</TaskpaneId>
-                    <SourceLocation resid="LoginUrl"/>
+                  <!-- ExecuteFunction (no ShowTaskpane): con Shared Runtime
+                       solo puede existir UN task pane en todo el manifest.
+                       login.html está fusionado dentro de taskpane.html
+                       como la sección oculta #view-conexion (ver
+                       mostrarVistaConexion en commands.js) — el diálogo
+                       independiente que se probó primero no funcionaba
+                       porque login.js abre su propio diálogo hijo para el
+                       OAuth, y Office.js no permite diálogo-dentro-de-diálogo. -->
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>mostrarVistaConexion</FunctionName>
                   </Action>
 
                 </Control>
@@ -125,9 +157,12 @@
                     <bt:Image size="80" resid="ModeloCrear80"/>
                   </Icon>
 
-                  <Action xsi:type="ShowTaskpane">
-                    <TaskpaneId>ModeloPane</TaskpaneId>
-                    <SourceLocation resid="ModeloUrl"/>
+                  <!-- ExecuteFunction (no ShowTaskpane): igual que
+                       ConexionButton más arriba — semantic_model.html está
+                       fusionado dentro de taskpane.html como la sección
+                       oculta #view-modelo (ver mostrarVistaEditarModelo). -->
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>mostrarVistaEditarModelo</FunctionName>
                   </Action>
 
                 </Control>
@@ -219,9 +254,14 @@
                     <bt:Image size="80" resid="InformeCrear80"/>
                   </Icon>
 
-                  <Action xsi:type="ShowTaskpane">
-                    <TaskpaneId>Taskpane</TaskpaneId>
-                    <SourceLocation resid="TaskpaneUrl"/>
+                  <!-- ExecuteFunction, no ShowTaskpane: con Shared Runtime
+                       ningún <Action> del Host con <Runtimes> debe llevar
+                       <TaskpaneId> (ver mostrarVistaInformes en
+                       commands.js). El panel ya está cargado en segundo
+                       plano (Runtime lifetime="long"); esto solo lo hace
+                       visible y selecciona la vista "Editar informes". -->
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>mostrarVistaInformes</FunctionName>
                   </Action>
 
                 </Control>
@@ -361,7 +401,7 @@
                   </Icon>
 
                   <Action xsi:type="ExecuteFunction">
-                    <FunctionName>comingSoon</FunctionName>
+                    <FunctionName>copiarInforme</FunctionName>
                   </Action>
 
                 </Control>
@@ -385,7 +425,7 @@
                   </Icon>
 
                   <Action xsi:type="ExecuteFunction">
-                    <FunctionName>comingSoon</FunctionName>
+                    <FunctionName>pegarInforme</FunctionName>
                   </Action>
 
                 </Control>
@@ -409,7 +449,51 @@
                   </Icon>
 
                   <Action xsi:type="ExecuteFunction">
-                    <FunctionName>comingSoon</FunctionName>
+                    <FunctionName>eliminarInforme</FunctionName>
+                  </Action>
+
+                </Control>
+
+              </Group>
+
+
+              <!-- ===================================================== -->
+              <!-- GRUPO: PLANIFICACIÓN -->
+              <!-- ===================================================== -->
+
+              <Group id="PlanifGroup">
+
+                <Label resid="PlanifGroupLabel"/>
+
+                <Icon>
+                  <bt:Image size="16" resid="PlanifGroup16"/>
+                  <bt:Image size="32" resid="PlanifGroup32"/>
+                  <bt:Image size="80" resid="PlanifGroup80"/>
+                </Icon>
+
+
+                <!-- GUARDAR: genera (y, tras revisarlo, ejecuta) el INSERT
+                     con los cambios marcados en un informe de
+                     planificación — ver guardarPlanificacion() en
+                     commands.js. -->
+
+                <Control xsi:type="Button" id="PlanifGuardarButton">
+
+                  <Label resid="PlanifGuardarButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="PlanifGuardarButtonLabel"/>
+                    <Description resid="PlanifGuardarButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="PlanifGuardar16"/>
+                    <bt:Image size="32" resid="PlanifGuardar32"/>
+                    <bt:Image size="80" resid="PlanifGuardar80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>guardarPlanificacion</FunctionName>
                   </Action>
 
                 </Control>
@@ -793,6 +877,24 @@
                   DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-informe-eliminar-80.png"/>
 
 
+        <!-- PLANIFICACIÓN (reutiliza el icono de "Guardar" del modelo
+             semántico: mismo estilo, sin necesidad de assets nuevos) -->
+
+        <bt:Image id="PlanifGroup16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-guardar-16.png"/>
+        <bt:Image id="PlanifGroup32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-guardar-32.png"/>
+        <bt:Image id="PlanifGroup80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-guardar-80.png"/>
+
+        <bt:Image id="PlanifGuardar16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-guardar-16.png"/>
+        <bt:Image id="PlanifGuardar32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-guardar-32.png"/>
+        <bt:Image id="PlanifGuardar80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-modelo-guardar-80.png"/>
+
+
         <!-- CLOUD STORAGE -->
 
         <bt:Image id="CloudGroup16"
@@ -894,12 +996,12 @@
         <bt:String id="ConexionButtonLabel" DefaultValue="Conexión"/>
 
         <bt:String id="ModeloGroupLabel" DefaultValue="Modelo semántico"/>
-        <bt:String id="ModeloCrearButtonLabel" DefaultValue="Crear modelo semántico"/>
+        <bt:String id="ModeloCrearButtonLabel" DefaultValue="Editar modelos semántico"/>
         <bt:String id="ModeloAbrirButtonLabel" DefaultValue="Abrir modelo semántico"/>
         <bt:String id="ModeloGuardarButtonLabel" DefaultValue="Guardar modelo semántico"/>
 
         <bt:String id="EdicionGroupLabel" DefaultValue="Edición"/>
-        <bt:String id="CrearInformeButtonLabel" DefaultValue="Crear informe"/>
+        <bt:String id="CrearInformeButtonLabel" DefaultValue="Editar informes"/>
         <bt:String id="ActualizarInformeButtonLabel" DefaultValue="Actualizar informe"/>
 
         <bt:String id="ReconMiembrosLabel" DefaultValue="Reconoc. de miembros"/>
@@ -910,6 +1012,9 @@
         <bt:String id="CopiarInformeButtonLabel" DefaultValue="Copiar informe"/>
         <bt:String id="PegarInformeButtonLabel" DefaultValue="Pegar informe"/>
         <bt:String id="EliminarInformeButtonLabel" DefaultValue="Eliminar informe"/>
+
+        <bt:String id="PlanifGroupLabel" DefaultValue="Planificación"/>
+        <bt:String id="PlanifGuardarButtonLabel" DefaultValue="Guardar"/>
 
         <bt:String id="CloudGroupLabel" DefaultValue="Cloud Storage"/>
         <bt:String id="AbrirBucketButtonLabel" DefaultValue="Abrir bucket"/>
@@ -968,15 +1073,19 @@
 
         <bt:String
           id="CopiarInformeButtonTooltip"
-          DefaultValue="Copiar informe (próximamente)"/>
+          DefaultValue="Copia el diseño y las propiedades del informe activo, para pegarlos en otro"/>
 
         <bt:String
           id="PegarInformeButtonTooltip"
-          DefaultValue="Pegar informe (próximamente)"/>
+          DefaultValue="Crea un informe nuevo en la celda seleccionada con el diseño y las propiedades copiadas"/>
 
         <bt:String
           id="EliminarInformeButtonTooltip"
-          DefaultValue="Eliminar informe (próximamente)"/>
+          DefaultValue="Elimina el informe activo (te preguntará si también quieres borrar su contenido en la hoja)"/>
+
+        <bt:String
+          id="PlanifGuardarButtonTooltip"
+          DefaultValue="Genera el INSERT con los cambios marcados en un informe de planificación (celdas resaltadas en cian) y, tras revisarlo en EDIT_REPORT!V4, lo ejecuta"/>
 
         <bt:String
           id="GuardarBucketButtonTooltip"
