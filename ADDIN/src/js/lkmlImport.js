@@ -139,11 +139,16 @@
             let lm;
 
             while ((lm = lvlRe.exec(m[2])) !== null) {
-                levels.push({ attribute: lm[1].trim() });
+                // "ATRIBUTO" o, en "ID y texto", "ATRIBUTO | texto: ATRIBUTO_TEXTO"
+                const parts = lm[1].split(/\s*\|\s*texto:\s*/);
+                const lvl = { attribute: parts[0].trim() };
+                if (parts[1] && parts[1].trim()) lvl.textAttribute = parts[1].trim();
+                levels.push(lvl);
             }
 
             if (levels.length > 0) {
-                hierarchies.push({ name: name, levels: levels });
+                const idText = levels.every(l => !!l.textAttribute);
+                hierarchies.push({ name: name, displayMode: idText ? "ID_TEXT" : "ID", levels: levels });
             }
 
         }
@@ -216,6 +221,7 @@
                 const attributes = parseAttributes(v.body);
                 const hierarchies = parseHierarchies(v.body);
                 const join = joins[v.name];
+                const textM = v.body.match(/#\s*texto de la clave:\s*(\S+)\s*\(mostrar:\s*(ID_TEXT|ID)\)/);
 
                 return {
                     enabled: true,
@@ -225,7 +231,9 @@
                     relDataset: relTable.dataset,
                     relTable: relTable.table,
                     attributes: attributes,
-                    hierarchies: hierarchies
+                    hierarchies: hierarchies,
+                    textAttribute: textM ? textM[1] : "",
+                    displayMode: textM ? textM[2] : "ID"
                 };
 
             });

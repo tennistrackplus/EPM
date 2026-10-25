@@ -409,6 +409,19 @@ function hidePane(event) {
 const CRLF = "\r\n";
 
 /**
+ * "Mostrar ID y texto" en una JERARQUÍA (ver ReportStore._expandAxis): la
+ * jerarquía de textos se añade tras la de IDs con este sufijo en el NOMBRE de
+ * jerarquía (columna K/Q de EDIT_REPORT). Sus niveles comparten grupo de
+ * GROUPING SETS con los niveles de ID (no son niveles nuevos) y no cuentan
+ * como profundidad al contraer/expandir.
+ */
+const DRACO_HIER_TEXT_SUFFIX = "~TXT";
+function dracoIsHierTextName(name) {
+    const n = String(name || "");
+    return n.length > DRACO_HIER_TEXT_SUFFIX.length && n.endsWith(DRACO_HIER_TEXT_SUFFIX);
+}
+
+/**
  * Estado global del informe (equivalente a las variables Public del módulo VBA)
  */
 const ReportState = {
@@ -755,6 +768,12 @@ function mergeEditReportGrid(physicalGrid, designGrid) {
 async function getEditReportGrid(context, reportIdOverride) {
     const physicalGrid = await getValuesGrid(context, "EDIT_REPORT");
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
+    // Mantiene al día las columnas de "ID y texto" (y las jerarquías) con el
+    // modelo semántico actual aunque el informe no se haya vuelto a guardar.
+    if (window.ReportStore && reportId && window.ReportStore.refreshExpansion) {
+        try { await window.ReportStore.refreshExpansion(reportId); }
+        catch (e) { console.warn("[Draco] No se pudo actualizar la expansión del diseño:", e); }
+    }
     const designGrid = (window.ReportStore && reportId)
         ? window.ReportStore.getReportGrid(reportId)
         : { values: [], startRow: 0, startCol: 0 };
@@ -993,6 +1012,9 @@ function loadRows(editReportGrid) {
                 Dimension: dim,
                 AttributeName: String(cellValue(editReportGrid, R, 15)).trim(),
                 Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
+                // Columna Q: nombre de jerarquía; con sufijo "~TXT" es la
+                // jerarquía de TEXTOS de un "ID y texto" (ver DRACO_HIER_TEXT_SUFFIX).
+                IsTextCompanion: dracoIsHierTextName(cellValue(editReportGrid, R, 17)),
                 // Columna R de EDIT_REPORT: "X" = generar subtotal para este
                 // campo (ver buildConfigSetsWithSubtotals). No se usa en
                 // absoluto si NINGÚN campo del informe tiene esta marca.
@@ -1036,6 +1058,8 @@ function loadColumns(editReportGrid) {
                 Dimension: dim,
                 AttributeName: String(cellValue(editReportGrid, R, 9)).trim(),
                 Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
+                // Columna K: nombre de jerarquía (ver loadRows / DRACO_HIER_TEXT_SUFFIX).
+                IsTextCompanion: dracoIsHierTextName(cellValue(editReportGrid, R, 11)),
                 // Columna L de EDIT_REPORT: "X" = generar subtotal para este
                 // campo (ver buildConfigSetsWithSubtotals).
                 Subtotal: String(cellValue(editReportGrid, R, 12)).trim().toUpperCase() === "X"
@@ -2705,6 +2729,14 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
         if (f.type === "attr") f.col = colIdx(f.dim, f.attr);
         if (f.type === "hier") f.levels.forEach(l => { l.col = colIdx(f.dim, l.attr); });
     });
+    // "ID y texto" en una jerarquía: la jerarquía de textos (sufijo ~TXT) se
+    // cuelga de la de IDs (hostField) y comparte su profundidad/agrupación.
+    fields.forEach(f => {
+        if (f.type !== "hier" || !dracoIsHierTextName(f.name)) return;
+        const hostName = f.name.slice(0, f.name.length - DRACO_HIER_TEXT_SUFFIX.length).toUpperCase();
+        const host = fields.find(h => h.type === "hier" && h !== f && h.dim.toUpperCase() === f.dim.toUpperCase() && h.name.toUpperCase() === hostName);
+        if (host) f.hostField = host;
+    });
     const measureLevelIdx = fields.findIndex(f => f.type === "measure");
     const dynZone = dynamicIsColumns ? "columns" : "rows";
     const dynMeasures = ReportState.Measures.filter(m => m.Zone === dynZone).map(m => m.Name);
@@ -2786,7 +2818,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     // GROUP BY de AGG: con jerarquías en el eje dinámico, GROUPING SETS con
     // una combinación por profundidad de cada jerarquía (nodos + hojas,
     // como el modo Dinámico); sin jerarquías, GROUP BY normal.
-    const hierFields = fields.filter(f => f.type === "hier");
+    const hierFields = fields.filter(f => f.type === "hier" && !f.hostField);
     const plainCols = fields.filter(f => f.type === "attr").map(f => dynNames[f.col]);
     const groupBy = (lineRef, colRef, extra) => {
         extra = extra || [];
@@ -2796,7 +2828,13 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
         let combos = [[]];
         hierFields.forEach(h => {
             const next = [];
-            combos.forEach(c => { for (let d = 1; d <= h.levels.length; d++) next.push([...c, h.levels.slice(0, d).map(l => dynNames[l.col])]); });
+            const texts = fields.filter(t => t.hostField === h);
+            combos.forEach(c => {
+                for (let d = 1; d <= h.levels.length; d++) {
+                    next.push([...c, h.levels.slice(0, d).map(l => dynNames[l.col]),
+                        ...texts.map(t => t.levels.slice(0, d).map(l => dynNames[l.col]))]);
+                }
+            });
             combos = next;
         });
         const sets = combos.map(c => {
@@ -2863,7 +2901,8 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
         const parts = [];
         flds.forEach(f => {
             if (f.type === "attr") parts.push(dynNames[f.col]);
-            if (f.type === "hier") f.levels.forEach((l, i) => {
+            // La jerarquía de textos ("ID y texto") no ordena: va por sus IDs.
+            if (f.type === "hier" && !f.hostField) f.levels.forEach((l, i) => {
                 if (i > 0) parts.push(nullFirst(dynNames[l.col]));
                 parts.push(dynNames[l.col]);
             });
@@ -3016,11 +3055,15 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
                     const v = t.mem.attrs[fld.col];
                     if (!isNull(v)) f = buildEpmValueFormula(fld.dim, fld.attr, v);
                 } else {
+                    // Jerarquía de textos ("ID y texto"): misma profundidad que la de IDs
+                    // (un texto NULL no la acorta), el valor es el texto de ese nivel.
+                    const depthFld = fld.hostField || fld;
                     let depth = 0;
-                    while (depth < fld.levels.length && !isNull(t.mem.attrs[fld.levels[depth].col])) depth++;
+                    while (depth < depthFld.levels.length && !isNull(t.mem.attrs[depthFld.levels[depth].col])) depth++;
                     if (depth > 0) {
-                        const lv = fld.levels[depth - 1];
-                        f = buildEpmValueFormula(fld.dim, lv.attr, t.mem.attrs[lv.col]);
+                        const lv = fld.levels[Math.min(depth, fld.levels.length) - 1];
+                        const v = t.mem.attrs[lv.col];
+                        if (!fld.hostField || !isNull(v)) f = buildEpmValueFormula(fld.dim, lv.attr, v);
                         indent = depth - 1;
                     }
                 }
@@ -3947,14 +3990,45 @@ function generateHierarchyCombinations(hierarchies) {
  * combinando niveles de jerarquía de Filas y Columnas.
  */
 function computeGroupingSetDimensionsAndHierarchies(relGrid) {
+    // ---- Campos "lógicos" de cada eje ----
+    // Los niveles de la jerarquía de TEXTOS de un "ID y texto" (IsTextCompanion)
+    // no son niveles nuevos: cada uno se agrupa SIEMPRE junto al nivel de ID
+    // de su misma dimensión y NIVEL (si no, el "odómetro" generaría
+    // combinaciones de ID de un nivel con texto de otro). Se cuelgan de ese
+    // campo ("extra") y se emiten juntos en cada conjunto de agrupación.
+    function logicalFields(fields) {
+        const out = [];
+        for (const f of fields) {
+            if (f.IsTextCompanion) {
+                let host = null;
+                for (let k = out.length - 1; k >= 0; k--) {
+                    if (out[k].f.Dimension === f.Dimension && Number(out[k].f.Hierarchy) === Number(f.Hierarchy)) {
+                        host = out[k];
+                        break;
+                    }
+                }
+                if (host) {
+                    host.extra.push(f);
+                    continue;
+                }
+                // sin nivel de ID al que pegarse: se trata como un campo normal
+            }
+            out.push({ f, extra: [] });
+        }
+        return out;
+    }
+
+    const logicalRows = logicalFields(ReportState.Rows);
+    const logicalCols = logicalFields(ReportState.Columns);
+
     // ---- DIMENSIONS: Filas primero, luego Columnas ----
+    // Cada posición es la columna del campo o, si lleva texto pegado, un
+    // array [columna, columnaTexto] (ver groupingSetTupleToColumnList).
     const dimensions = [null]; // índice 1-based, dimensions[0] sin usar
 
-    for (const r of ReportState.Rows) {
-        dimensions.push(dracoAxisCol(relGrid, r));
-    }
-    for (const c of ReportState.Columns) {
-        dimensions.push(dracoAxisCol(relGrid, c));
+    for (const l of [...logicalRows, ...logicalCols]) {
+        const cols = [dracoAxisCol(relGrid, l.f), ...l.extra.map(e => dracoAxisCol(relGrid, e))];
+        dimensions.push(cols.length === 1 ? cols[0] : cols);
     }
 
     // ---- HIERARCHIES: longitud de cada tramo de "misma JERARQUÍA real" ----
@@ -3972,11 +4046,12 @@ function computeGroupingSetDimensionsAndHierarchies(relGrid) {
     // NIVEL=1 seguidos (aunque sean de la misma dimensión) rompen el tramo
     // y se tratan como dos tramos de longitud 1 -igual que si fueran de
     // dimensiones distintas-, sin generar ningún subtotal automático.
-    function pushHierarchyRunLengths(fields, out) {
+    function pushHierarchyRunLengths(logical, out) {
         let lastDim = "";
         let lastLevel = 0;
         let contador = 0;
-        for (const f of fields) {
+        for (const l of logical) {
+            const f = l.f;
             const nivel = Number(f.Hierarchy) || 0;
             if (contador > 0 && f.Dimension === lastDim && nivel === lastLevel + 1) {
                 contador++;
@@ -3991,8 +4066,8 @@ function computeGroupingSetDimensionsAndHierarchies(relGrid) {
     }
 
     const hierarchies = [];
-    pushHierarchyRunLengths(ReportState.Rows, hierarchies);
-    pushHierarchyRunLengths(ReportState.Columns, hierarchies);
+    pushHierarchyRunLengths(logicalRows, hierarchies);
+    pushHierarchyRunLengths(logicalCols, hierarchies);
 
     // ---- HIERARCHIES ACUM ----
     const hierarchiesAcum = [];
@@ -4031,11 +4106,10 @@ function groupingSetTupleToColumnList(item, dimensions, hierarchiesAcum) {
     for (let i = 0; i < item.length; i++) {
         for (let j = 1; j <= item[i]; j++) {
             if (item[i] > 0) {
-                if (i === 0) {
-                    cols.push(dimensions[j]);
-                } else {
-                    cols.push(dimensions[j + hierarchiesAcum[i - 1]]);
-                }
+                const dimEntry = i === 0 ? dimensions[j] : dimensions[j + hierarchiesAcum[i - 1]];
+                // Un campo con texto pegado ("ID y texto") aporta sus dos columnas.
+                if (Array.isArray(dimEntry)) cols.push(...dimEntry);
+                else cols.push(dimEntry);
             }
             // item[i] === 0 no ocurre nunca en el flujo normal (generateHierarchyCombinations
             // nunca baja de 1): se deja sin aportar columnas, en vez del literal "[TOTAL]"
@@ -4775,10 +4849,16 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
     // mismo interruptor (subtotalsOnTop); ahora son independientes.
     const hierarchyNodesOnTop = opts.hierarchyNodesOnTop !== false;
 
+    // Posiciones (1..count) de la jerarquía de TEXTOS de un "ID y texto": no
+    // son niveles (su valor puede ser NULL de verdad si el miembro no tiene
+    // descripción), así que no cuentan para la profundidad del nodo.
+    const companion = opts.companion || [];
+
     const items = [];
     for (const V of dict.values()) {
         let deepest = 0;
         for (let i = 1; i <= count; i++) {
+            if (companion[i]) continue;
             if (String(V[i]).toLowerCase().indexOf("null") === 0) break;
             deepest = i;
         }
@@ -4806,7 +4886,7 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
         let i = 1;
         while (i <= count) {
             let j = i;
-            while (j < count && Number(flags[j + 1]) === Number(flags[j]) + 1) j++;
+            while (j < count && Number(flags[j + 1]) === Number(flags[j]) + 1 && !!companion[j + 1] === !!companion[j]) j++;
             const len = j - i + 1;
             for (let k = i; k <= j; k++) tramoLen[k] = len;
             i = j + 1;
@@ -5297,7 +5377,9 @@ async function resolveDracoFieldForAxisLevel(context, reportId, axis, level, ind
     // plana de un único nivel — así que aquí se usa el nombre de la
     // Jerarquía en vez del Attr del nivel concreto. Attr (NIVEL1/NIVEL2)
     // solo se usa para la fórmula EPM_VALUE final, no para buscar.
-    const searchAttr = field.jerarquia || field.attr;
+    // La jerarquía de TEXTOS de un "ID y texto" (sufijo ~TXT) no existe en el
+    // modelo: se busca por el atributo de texto del nivel.
+    const searchAttr = (field.jerarquia && !dracoIsHierTextName(field.jerarquia)) ? field.jerarquia : field.attr;
 
     return { axis, level, dim: field.dim, attr: searchAttr };
 }
@@ -7423,7 +7505,9 @@ function buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol, jerCol) 
             // mismo nombre (p.ej. "H_CUENTA"), a diferencia de `attr`
             // (NIVEL1/NIVEL2...), que sí cambia por nivel. Cadena vacía para
             // campos que no son jerarquía, o si no se pide esta columna.
-            jerarquia: jerCol ? String(cellValue(editReportGrid, R, jerCol)).trim() : ""
+            jerarquia: jerCol ? String(cellValue(editReportGrid, R, jerCol)).trim() : "",
+            // Jerarquía de TEXTOS de un "ID y texto" (ver DRACO_HIER_TEXT_SUFFIX)
+            isTextCompanion: jerCol ? dracoIsHierTextName(cellValue(editReportGrid, R, jerCol)) : false
         });
         R++;
     }
@@ -7465,6 +7549,7 @@ function computeAxisPaintPlan(levels) {
     const flagsReal = [];
     const fieldsReal = [];
     const iauxReal = [];
+    const companionReal = []; // companionReal[i] = true si la posición i es de la jerarquía de textos
     const flag1OrdinalToIaux = [];
     // Una entrada por medida, TODAS compartiendo el mismo iAux (una única
     // fila/columna física "extra" para el grupo de medidas del eje, no una
@@ -7495,11 +7580,12 @@ function computeAxisPaintPlan(levels) {
             flag1OrdinalToIaux[ordinal] = iAux;
         }
         flagsReal[dimIdx] = flag;
+        companionReal[dimIdx] = !!level.isTextCompanion;
         fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr };
         iauxReal[dimIdx] = iAux;
     }
 
-    return { flagsReal, fieldsReal, iauxReal, flag1OrdinalToIaux, measureLevels, totalIaux: iAux, dimCount: dimIdx };
+    return { flagsReal, companionReal, fieldsReal, iauxReal, flag1OrdinalToIaux, measureLevels, totalIaux: iAux, dimCount: dimIdx };
 }
 
 /**
@@ -7668,8 +7754,8 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // el eje físico completo una vez (con las filas MEASURE incluidas) y
     // se deriva de ahí tanto la correspondencia {dim, attr, NIVEL} de cada
     // dimensión real como la columna/fila física de cada etiqueta MEASURE.
-    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10);      // H/I/J
-    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16); // N/O/P
+    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10, 11);      // H/I/J (+K: jerarquía)
+    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16, 17); // N/O/P (+Q: jerarquía)
 
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
@@ -7837,8 +7923,8 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         }
     }
 
-    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, dracoCollapseState.rows.collapsed, flagsFilas, { subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
-    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, dracoCollapseState.cols.collapsed, flagsColumnas, { subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
+    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, dracoCollapseState.rows.collapsed, flagsFilas, { companion: planFilas.companionReal, subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
+    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, dracoCollapseState.cols.collapsed, flagsColumnas, { companion: planColumnas.companionReal, subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
 
     console.log("jsonTo3Matrices diagnóstico:", {
         totalCampos, filas,

@@ -160,6 +160,27 @@ function initEvents() {
 
     document.getElementById("btnAddHierarchy").addEventListener("click", () => openHierarchyEditor(null));
 
+    document.getElementById("dimTextAttribute").addEventListener("change", (e) => {
+        const field = fieldsState[currentConfigFieldIndex];
+        if (!field) return;
+        field.textAttribute = e.target.value;
+        if (!field.textAttribute) field.displayMode = "ID";
+        refreshDimDisplayControls();
+    });
+
+    document.getElementById("dimDisplayMode").addEventListener("change", (e) => {
+        const field = fieldsState[currentConfigFieldIndex];
+        if (!field) return;
+        field.displayMode = (e.target.value === "ID_TEXT" && field.textAttribute) ? "ID_TEXT" : "ID";
+        refreshDimDisplayControls();
+    });
+
+    document.getElementById("hierarchyDisplayMode").addEventListener("change", (e) => {
+        if (!hierEditState) return;
+        hierEditState.displayMode = e.target.value === "ID_TEXT" ? "ID_TEXT" : "ID";
+        renderHierarchyEditor();
+    });
+
     document.getElementById("btnCloseHierarchyModal").addEventListener("click", closeHierarchyEditor);
 
     document.getElementById("btnCancelHierarchyModal").addEventListener("click", closeHierarchyEditor);
@@ -879,7 +900,10 @@ async function fetchFactFields(isModelLoad = false) {
                     relDataset: (saved && saved.relDataset) || "",
                     relTable: (saved && saved.relTable) || "",
                     attributes: (saved && saved.attributes) || [],
-                    hierarchies: (saved && saved.hierarchies) || []
+                    hierarchies: (saved && saved.hierarchies) || [],
+                    // "Mostrar ID / ID y texto" de la clave (ver ReportStore._expandAxis)
+                    textAttribute: (saved && saved.textAttribute) || "",
+                    displayMode: (saved && saved.displayMode) || "ID"
                 };
             });
 
@@ -1066,7 +1090,13 @@ async function fetchDimensionAttributes(forceRefetch = false) {
             if (field.hierarchies && field.hierarchies.length > 0) {
                 const validNames = new Set(field.attributes.map(a => a.name));
                 field.hierarchies = field.hierarchies
-                    .map(h => ({ name: h.name, levels: h.levels.filter(l => validNames.has(l.attribute)) }))
+                    .map(h => ({
+                        name: h.name,
+                        displayMode: h.displayMode || "ID",
+                        levels: h.levels
+                            .filter(l => validNames.has(l.attribute))
+                            .map(l => ({ attribute: l.attribute, textAttribute: validNames.has(l.textAttribute) ? l.textAttribute : "" }))
+                    }))
                     .filter(h => h.levels.length > 0);
             }
 
@@ -1138,6 +1168,56 @@ function renderAttributesTable(attributes) {
 
     });
 
+    refreshDimDisplayControls();
+
+}
+
+/* ---------------------------------------------------------------------
+ * "Visualización en informes" de la dimensión: atributo de texto
+ * (descripción) de la clave y modo ID / ID y texto. Solo se pueden elegir
+ * como texto atributos HABILITADOS de tipo texto que no sean la clave.
+ * ------------------------------------------------------------------- */
+function isTextAttributeType(attr) {
+    return /STRING|VARCHAR|CHAR|TEXT/i.test(String((attr && attr.dataType) || ""));
+}
+
+function textAttributeCandidates(field, excludeNames) {
+    const exclude = new Set((excludeNames || []).map(n => String(n)));
+    return (field.attributes || []).filter(a => a.enabled && !a.isKey && isTextAttributeType(a) && !exclude.has(a.name));
+}
+
+function refreshDimDisplayControls() {
+
+    const field = fieldsState[currentConfigFieldIndex];
+    const sel = document.getElementById("dimTextAttribute");
+    const modeSel = document.getElementById("dimDisplayMode");
+
+    if (!field || !sel || !modeSel) return;
+
+    const candidates = textAttributeCandidates(field);
+
+    // Si el texto elegido ya no es válido (deshabilitado, ahora es la clave...) se quita.
+    if (field.textAttribute && !candidates.some(a => a.name === field.textAttribute)) {
+        field.textAttribute = "";
+    }
+    if (!field.textAttribute) field.displayMode = "ID";
+
+    sel.innerHTML = "";
+    const none = document.createElement("option");
+    none.value = "";
+    none.textContent = "(sin texto)";
+    sel.appendChild(none);
+    candidates.forEach(a => {
+        const opt = document.createElement("option");
+        opt.value = a.name;
+        opt.textContent = a.alias && a.alias !== a.name ? `${a.alias} (${a.name})` : a.name;
+        sel.appendChild(opt);
+    });
+    sel.value = field.textAttribute || "";
+
+    modeSel.value = field.displayMode === "ID_TEXT" ? "ID_TEXT" : "ID";
+    modeSel.disabled = !field.textAttribute;
+
 }
 
 
@@ -1148,8 +1228,12 @@ function updateAttrKey(selectedIdx) {
     fieldsState[currentConfigFieldIndex].attributes.forEach((attr, idx) => {
         attr.isKey = (idx === selectedIdx);
     });
+    refreshDimDisplayControls();
 }
-function updateAttrEnabled(idx, val) { fieldsState[currentConfigFieldIndex].attributes[idx].enabled = val; }
+function updateAttrEnabled(idx, val) {
+    fieldsState[currentConfigFieldIndex].attributes[idx].enabled = val;
+    refreshDimDisplayControls();
+}
 
 function saveDimModal() {
     if (currentConfigFieldIndex !== null) {
@@ -1206,7 +1290,7 @@ function renderHierarchiesList() {
         nameDiv.textContent = hier.name;
         const summaryDiv = document.createElement("div");
         summaryDiv.className = "hierarchy-levels-summary";
-        summaryDiv.textContent = levelNames || "(sin niveles)";
+        summaryDiv.textContent = (levelNames || "(sin niveles)") + (hier.displayMode === "ID_TEXT" ? "  ·  ID y texto" : "");
         infoDiv.appendChild(nameDiv);
         infoDiv.appendChild(summaryDiv);
 
@@ -1264,18 +1348,20 @@ function openHierarchyEditor(index = null) {
     editingHierarchyIndex = index;
 
     if (index === null) {
-        hierEditState = { name: "", levels: [] };
+        hierEditState = { name: "", displayMode: "ID", levels: [] };
         document.getElementById("hierarchyModalTitle").textContent = "Nueva jerarquía";
     } else {
         const existing = field.hierarchies[index];
         hierEditState = {
             name: existing.name,
-            levels: existing.levels.map(l => ({ attribute: l.attribute }))
+            displayMode: existing.displayMode === "ID_TEXT" ? "ID_TEXT" : "ID",
+            levels: existing.levels.map(l => ({ attribute: l.attribute, textAttribute: l.textAttribute || "" }))
         };
         document.getElementById("hierarchyModalTitle").textContent = "Editar jerarquía";
     }
 
     document.getElementById("hierarchyNameInput").value = hierEditState.name;
+    document.getElementById("hierarchyDisplayMode").value = hierEditState.displayMode;
 
     renderHierarchyEditor();
 
@@ -1372,6 +1458,33 @@ function renderHierarchyEditor() {
             removeBtn.textContent = "\u2715"; // ✕
             removeBtn.addEventListener("click", (e) => { e.stopPropagation(); removeHierarchyLevel(idx); });
             chip.appendChild(nameSpan2);
+
+            // "ID y texto": atributo de texto de este nivel (no puede ser otro
+            // nivel de la jerarquía ni el texto de otro nivel).
+            if (hierEditState.displayMode === "ID_TEXT") {
+                const taken = hierEditState.levels
+                    .filter((l, j) => j !== idx).map(l => l.textAttribute).filter(Boolean)
+                    .concat(hierEditState.levels.map(l => l.attribute));
+                const textSel = document.createElement("select");
+                textSel.className = "hierarchy-level-text-select";
+                textSel.title = "Atributo de texto de este nivel";
+                textSel.draggable = false;
+                const noneOpt = document.createElement("option");
+                noneOpt.value = "";
+                noneOpt.textContent = "(texto…)";
+                textSel.appendChild(noneOpt);
+                textAttributeCandidates(field, taken).forEach(a => {
+                    const o = document.createElement("option");
+                    o.value = a.name;
+                    o.textContent = a.alias || a.name;
+                    textSel.appendChild(o);
+                });
+                textSel.value = lvl.textAttribute || "";
+                ["click", "mousedown"].forEach(ev => textSel.addEventListener(ev, (e) => e.stopPropagation()));
+                textSel.addEventListener("change", () => { lvl.textAttribute = textSel.value; renderHierarchyEditor(); });
+                chip.appendChild(textSel);
+            }
+
             chip.appendChild(removeBtn);
 
             chip.addEventListener("dragstart", (e) => {
@@ -1462,9 +1575,9 @@ function addLevelFromPool(attrName, atIndex = null) {
     if (hierEditState.levels.some(l => l.attribute === attrName)) return;
 
     if (atIndex === null || atIndex < 0 || atIndex > hierEditState.levels.length) {
-        hierEditState.levels.push({ attribute: attrName });
+        hierEditState.levels.push({ attribute: attrName, textAttribute: "" });
     } else {
-        hierEditState.levels.splice(atIndex, 0, { attribute: attrName });
+        hierEditState.levels.splice(atIndex, 0, { attribute: attrName, textAttribute: "" });
     }
 
     renderHierarchyEditor();
@@ -1516,6 +1629,15 @@ function saveHierarchyEditor() {
         return;
     }
 
+    if (hierEditState.displayMode === "ID_TEXT") {
+        const missing = hierEditState.levels.find(l => !l.textAttribute);
+        if (missing) {
+            const a = (field.attributes || []).find(x => x.name === missing.attribute);
+            showToast(`Elige el atributo de texto del nivel "${a ? (a.alias || a.name) : missing.attribute}" (o muestra la jerarquía solo con ID).`, "error");
+            return;
+        }
+    }
+
     if (!field.hierarchies) field.hierarchies = [];
 
     const duplicate = field.hierarchies.some((h, idx) =>
@@ -1527,9 +1649,13 @@ function saveHierarchyEditor() {
         return;
     }
 
+    const isIdText = hierEditState.displayMode === "ID_TEXT";
     const hierObj = {
         name: name,
-        levels: hierEditState.levels.map(l => ({ attribute: l.attribute }))
+        displayMode: isIdText ? "ID_TEXT" : "ID",
+        levels: hierEditState.levels.map(l => (isIdText
+            ? { attribute: l.attribute, textAttribute: l.textAttribute }
+            : { attribute: l.attribute }))
     };
 
     if (editingHierarchyIndex === null) {
