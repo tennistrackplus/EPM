@@ -431,7 +431,10 @@
      * "Mostrar ID y texto": el MODELO define el atributo de texto (dimensión:
      *   field.textAttribute, marcado con "Texto" junto a "Key"; jerarquía:
      *   levels[i].textAttribute) y el INFORME elige el modo por campo
-     *   (fieldOptions["zona|dim|campo"].displayMode = "ID" | "ID_TEXT").
+     *   (fieldOptions["zona|dim|campo"].displayMode = "ID" | "ID_TEXT" | "TEXT").
+     *   "TEXT" = mismo SQL que "ID_TEXT" (se agrupa por ID y texto) pero la
+     *   columna de ID NO se pinta: sus entradas llevan "HIDE" en la columna de
+     *   orden (M/S de EDIT_REPORT), que commands.js lee como oculta.
      *   - Dimensión: al colocar en Filas/Columnas el atributo CLAVE de la
      *     dimensión, con "ID_TEXT" se añade justo detrás el atributo de texto: es EXACTAMENTE
      *     igual que si el usuario hubiese arrastrado los dos campos (dos
@@ -519,10 +522,11 @@
         };
 
         // ¿Ya está el atributo `name` de `dimension` como campo suelto en esta zona?
-        const wantsIdText = (dimension, name) => {
+        const displayModeOf = (dimension, name) => {
             const opts = (fieldOptions || {})[`${zoneId}|${dimension}|${name}`] || {};
-            return opts.displayMode === "ID_TEXT";
+            return opts.displayMode === "ID_TEXT" || opts.displayMode === "TEXT" ? opts.displayMode : "ID";
         };
+        const wantsIdText = (dimension, name) => displayModeOf(dimension, name) !== "ID";
 
         const hasFlat = (dimension, name) => list.some(it => !it.isHierarchy
             && _up(it.dimension) === _up(dimension) && _up(it.name) === _up(name));
@@ -533,6 +537,7 @@
                 const visibleLevels = visibleLevelsFor(item.dimension, item.name);
                 const lastRow = lastRowInColumnValues(hierGrid, 4);
                 const niveles = [];
+                const hostStart = out.length;
                 for (let R = 2; R <= lastRow; R++) {
                     if (String(cellValue(hierGrid, R, 4)).toUpperCase() === item.dimension.toUpperCase()
                         && String(cellValue(hierGrid, R, 2)).toUpperCase() === item.name.toUpperCase()) {
@@ -555,15 +560,24 @@
                     niveles.forEach(n => {
                         out.push([item.dimension, texts[n], n, item.name + TEXT_SUFFIX, "", ""]);
                     });
+                    // "Solo texto": los niveles de ID se consultan pero no se pintan.
+                    if (displayModeOf(item.dimension, item.name) === "TEXT") {
+                        for (let k = hostStart; k < hostStart + niveles.length; k++) out[k][5] = "HIDE";
+                    }
                 }
             } else {
                 const [subtotal, order] = subtotalAndOrder(item.dimension, item.name);
-                out.push([item.dimension, item.name, 1, "", subtotal, order]);
+                const idRow = [item.dimension, item.name, 1, "", subtotal, order];
+                out.push(idRow);
                 // "ID y texto": el atributo de texto va justo detrás de la clave.
                 if (!item.isHierarchy && wantsIdText(item.dimension, item.name)) {
                     const txt = _flatTextAttribute(_dimensionField(model, item.dimension), item.name);
                     if (txt && !hasFlat(item.dimension, txt)) {
                         out.push([item.dimension, txt, 1, "", "", ""]);
+                        // "Solo texto": el ID se consulta (agrupa) pero no se pinta.
+                        if (displayModeOf(item.dimension, item.name) === "TEXT") {
+                            idRow[5] = order ? order + "|HIDE" : "HIDE";
+                        }
                     }
                 }
             }
@@ -599,7 +613,31 @@
     function _expansionContext(report) {
         const { model, name } = _modelForReport(report);
         // Mismo modelo para la jerarquía y para los textos (antes: siempre el "activo").
-        return window.SemanticModelStore.getModelGrid("MODEL_HIER", name).then(hierGrid => ({ hierGrid, model }));
+        return { hierGrid: window.SemanticModelStore.getModelGridSync("MODEL_HIER", name), model };
+    }
+
+    /**
+     * Nº de columnas/filas FÍSICAS extra que aportan los "ID y texto" de una
+     * zona ("rows" | "columns") del diseño (list = campos de la zona): el
+     * taskpane lo usa para ensanchar/alargar el rango del eje y que el texto
+     * no se solape con el otro eje.
+     */
+    function countTextColumns(reportId, zoneId, list, fieldOptions) {
+        const report = getReport(reportId);
+        if (!report) return 0;
+        const ctx = _expansionContext(report);
+        if (!ctx.model) return 0;
+        const stripped = {};
+        Object.keys(fieldOptions || {}).forEach(k => {
+            const o = Object.assign({}, fieldOptions[k]);
+            delete o.displayMode;
+            stripped[k] = o;
+        });
+        // columnas físicas = entradas de nivel 1 que se pintan (las "HIDE" no)
+        const physical = rows => rows.filter(r => Number(r[2]) === 1 && String(r[5] || "").indexOf("HIDE") === -1).length;
+        const withText = physical(_expandAxis(list || [], zoneId, fieldOptions, ctx));
+        const without = physical(_expandAxis(list || [], zoneId, stripped, ctx));
+        return Math.max(0, withText - without);
     }
 
     /**
@@ -748,6 +786,7 @@
         saveDesign,
         refreshExpansion,
         getDisplayTextInfo,
+        countTextColumns,
         TEXT_SUFFIX,
         updateDesignFields,
         setMemberRecognition,

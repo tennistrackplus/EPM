@@ -416,6 +416,10 @@ const CRLF = "\r\n";
  * como profundidad al contraer/expandir.
  */
 const DRACO_HIER_TEXT_SUFFIX = "~TXT";
+// Columna de orden de EDIT_REPORT (M/S) con la marca "HIDE": "Solo texto".
+function dracoIsHiddenMarker(v) {
+    return String(v === null || v === undefined ? "" : v).toUpperCase().indexOf("HIDE") !== -1;
+}
 function dracoIsHierTextName(name) {
     const n = String(name || "");
     return n.length > DRACO_HIER_TEXT_SUFFIX.length && n.endsWith(DRACO_HIER_TEXT_SUFFIX);
@@ -1001,7 +1005,10 @@ function loadRows(editReportGrid) {
         } else {
             ReportState.RowCount++;
 
-            if (Number(cellValue(editReportGrid, R, 16)) === 1) {
+            // "Solo texto": el ID (orden = "HIDE", col. S) se consulta pero no se pinta,
+            // así que no ocupa columna física.
+            const hiddenRow = dracoIsHiddenMarker(cellValue(editReportGrid, R, 19));
+            if (Number(cellValue(editReportGrid, R, 16)) === 1 && !hiddenRow) {
                 ReportState.AttrRowCount++;
             }
 
@@ -1015,6 +1022,7 @@ function loadRows(editReportGrid) {
                 // Columna Q: nombre de jerarquía; con sufijo "~TXT" es la
                 // jerarquía de TEXTOS de un "ID y texto" (ver DRACO_HIER_TEXT_SUFFIX).
                 IsTextCompanion: dracoIsHierTextName(cellValue(editReportGrid, R, 17)),
+                Hidden: hiddenRow,
                 // Columna R de EDIT_REPORT: "X" = generar subtotal para este
                 // campo (ver buildConfigSetsWithSubtotals). No se usa en
                 // absoluto si NINGÚN campo del informe tiene esta marca.
@@ -1045,7 +1053,8 @@ function loadColumns(editReportGrid) {
                 Zone: "rows"
             });
         } else {
-            if (Number(cellValue(editReportGrid, R, 10)) === 1) {
+            const hiddenCol = dracoIsHiddenMarker(cellValue(editReportGrid, R, 13)); // columna M
+            if (Number(cellValue(editReportGrid, R, 10)) === 1 && !hiddenCol) {
                 ReportState.AttrColumnCount++;
             }
 
@@ -1060,6 +1069,7 @@ function loadColumns(editReportGrid) {
                 Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
                 // Columna K: nombre de jerarquía (ver loadRows / DRACO_HIER_TEXT_SUFFIX).
                 IsTextCompanion: dracoIsHierTextName(cellValue(editReportGrid, R, 11)),
+                Hidden: hiddenCol,
                 // Columna L de EDIT_REPORT: "X" = generar subtotal para este
                 // campo (ver buildConfigSetsWithSubtotals).
                 Subtotal: String(cellValue(editReportGrid, R, 12)).trim().toUpperCase() === "X"
@@ -2667,6 +2677,7 @@ function readDracoAxisFields(editReportGrid, isColumnsAxis) {
         const attr = String(cellValue(editReportGrid, R, dimCol + 1)).trim();
         const nivel = Number(cellValue(editReportGrid, R, dimCol + 2)) || 1;
         const hier = String(cellValue(editReportGrid, R, dimCol + 3)).trim();
+        const hidden = dracoIsHiddenMarker(cellValue(editReportGrid, R, dimCol + 5));
         const last = fields[fields.length - 1];
         if (dim.toUpperCase() === "MEASURE") {
             if (!fields.some(f => f.type === "measure")) fields.push({ type: "measure" });
@@ -2674,10 +2685,13 @@ function readDracoAxisFields(editReportGrid, isColumnsAxis) {
             if (last && last.type === "hier" && last.name.toUpperCase() === hier.toUpperCase() && last.dim.toUpperCase() === dim.toUpperCase()) {
                 last.levels.push({ attr, nivel });
             } else {
-                fields.push({ type: "hier", dim, name: hier, levels: [{ attr, nivel }] });
+                fields.push({ type: "hier", dim, name: hier, levels: [{ attr, nivel }], hidden });
             }
         } else if (!fields.some(f => f.type === "attr" && f.dim.toUpperCase() === dim.toUpperCase() && f.attr.toUpperCase() === attr.toUpperCase())) {
-            fields.push({ type: "attr", dim, attr });
+            // "Solo texto": el texto sustituye al ID oculto que lo precede
+            const idPartner = (last && last.type === "attr" && last.hidden && !hidden
+                && last.dim.toUpperCase() === dim.toUpperCase()) ? last : null;
+            fields.push({ type: "attr", dim, attr, hidden, idPartner });
         }
         R++;
     }
@@ -3004,7 +3018,9 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
     }
     if (members.size === 0 && nDyn === 0 && !plan.dynMeasures.length) tuples.push({ dyn: 1, mIdx: -1, mem: { attrs: [] } });
     const tupleIndex = new Map(tuples.map((t, j) => [t.dyn + "_" + t.mIdx, j]));
-    const headerDepth = plan.fields.length;
+    // "Solo texto": los campos ocultos (ID) se consultan pero no se pintan en la cabecera.
+    const paintFields = plan.fields.filter(f => !f.hidden);
+    const headerDepth = paintFields.length;
     const valCell = (lineId, j) => plan.dynamicIsColumns ? { r: lineId, c: anchor.col + j } : { r: anchor.row + j, c: lineId };
     const firstDyn = plan.dynamicIsColumns ? anchor.col : anchor.row;
     const nTuples = tuples.length;
@@ -3046,14 +3062,19 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
         for (let r = 0; r < rowsN; r++) grid.push(new Array(colsN).fill(""));
         const isNull = (v) => v === undefined || isDracoNullLiteral(v);
         tuples.forEach((t, j) => {
-            plan.fields.forEach((fld, k) => {
+            paintFields.forEach((fld, k) => {
                 let f = "", indent = 0;
                 if (fld.type === "measure") {
                     const mName = t.mIdx >= 0 ? plan.dynMeasures[t.mIdx] : "";
                     if (mName) f = buildEpmValueFormula("MEASURE", mName, "", mName);
                 } else if (fld.type === "attr") {
                     const v = t.mem.attrs[fld.col];
-                    if (!isNull(v)) f = buildEpmValueFormula(fld.dim, fld.attr, v);
+                    if (!isNull(v)) {
+                        // Solo texto: atributo y valor del ID, descripción = texto
+                        f = fld.idPartner
+                            ? buildEpmValueFormula(fld.dim, fld.idPartner.attr, t.mem.attrs[fld.idPartner.col], v)
+                            : buildEpmValueFormula(fld.dim, fld.attr, v);
+                    }
                 } else {
                     // Jerarquía de textos ("ID y texto"): misma profundidad que la de IDs
                     // (un texto NULL no la acorta), el valor es el texto de ese nivel.
@@ -3063,7 +3084,12 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
                     if (depth > 0) {
                         const lv = fld.levels[Math.min(depth, fld.levels.length) - 1];
                         const v = t.mem.attrs[lv.col];
-                        if (!fld.hostField || !isNull(v)) f = buildEpmValueFormula(fld.dim, lv.attr, v);
+                        if (!fld.hostField || !isNull(v)) {
+                            const hl = (fld.hostField && fld.hostField.hidden) ? fld.hostField.levels[Math.min(depth, fld.hostField.levels.length) - 1] : null;
+                            f = hl
+                                ? buildEpmValueFormula(fld.dim, hl.attr, t.mem.attrs[hl.col], v)
+                                : buildEpmValueFormula(fld.dim, lv.attr, v);
+                        }
                         indent = depth - 1;
                     }
                 }
@@ -5065,6 +5091,7 @@ function buildAxisFieldLevelsTable(editReportGrid, axis) {
             columns[measureIaux].maxFlag = 1;
             continue;
         }
+        if (lvl.hidden) continue; // "Solo texto": el ID no tiene columna
         const flag = lvl.flag || 1;
         if (flag === 1 || !current) {
             iAux++;
@@ -5123,6 +5150,27 @@ async function readIndentLevelsForRange(context, range) {
     }
 }
 
+
+/**
+ * "Solo texto": las celdas de texto de un eje con IDs ocultos NO se pueden
+ * convertir in situ entre texto y EPM_VALUE (el ID no está en la hoja), así
+ * que se repinta desde el último resultado. Requiere el diseño ya guardado
+ * con el nuevo Estático/Dinámico. Devuelve true si el eje tiene IDs ocultos
+ * (se haya repintado o no, porque aún no hubiese resultado).
+ */
+async function repaintAxisIfHiddenIds(axis) {
+    const reportId = activeReportIdOrNull();
+    let hasHidden = false;
+    await Excel.run(async (context) => {
+        const editReportGrid = await getEditReportGrid(context);
+        const [dimCol, attrCol, hierCol] = axis === "rows" ? [8, 9, 10] : [14, 15, 16];
+        hasHidden = buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol).some(l => l.hidden);
+        if (!hasHidden) return;
+        const lastJson = DracoLastJsonByReport.get(dracoStateKey(reportId));
+        if (lastJson) await jsonTo3Matrices(context, lastJson, reportId);
+    });
+    return hasHidden;
+}
 
 async function convertAxisStaticFormulas(axis, makeStatic) {
     const reportId = activeReportIdOrNull();
@@ -7507,7 +7555,9 @@ function buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol, jerCol) 
             // campos que no son jerarquía, o si no se pide esta columna.
             jerarquia: jerCol ? String(cellValue(editReportGrid, R, jerCol)).trim() : "",
             // Jerarquía de TEXTOS de un "ID y texto" (ver DRACO_HIER_TEXT_SUFFIX)
-            isTextCompanion: jerCol ? dracoIsHierTextName(cellValue(editReportGrid, R, jerCol)) : false
+            isTextCompanion: jerCol ? dracoIsHierTextName(cellValue(editReportGrid, R, jerCol)) : false,
+            // "Solo texto": columna de ID que se consulta pero no se pinta
+            hidden: dracoIsHiddenMarker(cellValue(editReportGrid, R, hierCol + 3))
         });
         R++;
     }
@@ -7551,6 +7601,14 @@ function computeAxisPaintPlan(levels) {
     const iauxReal = [];
     const companionReal = []; // companionReal[i] = true si la posición i es de la jerarquía de textos
     const flag1OrdinalToIaux = [];
+    // Ordinales de nivel 1 ocultos ("Solo texto") pendientes de apuntar a la
+    // columna del texto que los sustituye (la siguiente que se pinte).
+    let pendingHiddenOrdinals = [];
+    // "Solo texto" + eje Estático: la fórmula EPM_VALUE de la columna de TEXTO
+    // lleva el ID (atributo y valor) y el texto solo como descripción;
+    // idPartnerReal[i] = posición del ID oculto al que sustituye el texto i.
+    const idPartnerReal = [];
+    const hiddenDims = []; // { idx, dim, flag, claimed }
     // Una entrada por medida, TODAS compartiendo el mismo iAux (una única
     // fila/columna física "extra" para el grupo de medidas del eje, no una
     // por medida): measureLevels[k].ordinal (0..N-1) es la posición de esa
@@ -7574,18 +7632,50 @@ function computeAxisPaintPlan(levels) {
         }
         dimIdx++;
         const flag = level.flag;
+        if (level.hidden) {
+            hiddenDims.push({ idx: dimIdx, dim: level.dim, flag: level.flag, claimed: false });
+            // Solo se consulta: sin columna física (iauxReal = null => no se pinta).
+            // Su +/- (si es nodo de jerarquía) se pinta en la columna del texto.
+            if (flag === 1) {
+                ordinal++;
+                pendingHiddenOrdinals.push(ordinal);
+            }
+            flagsReal[dimIdx] = flag;
+            companionReal[dimIdx] = !!level.isTextCompanion;
+            fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr };
+            iauxReal[dimIdx] = null;
+            continue;
+        }
         if (flag === 1) {
             iAux++;
             ordinal++;
             flag1OrdinalToIaux[ordinal] = iAux;
+            pendingHiddenOrdinals.forEach(o => { flag1OrdinalToIaux[o] = iAux; });
+            pendingHiddenOrdinals = [];
         }
         flagsReal[dimIdx] = flag;
         companionReal[dimIdx] = !!level.isTextCompanion;
         fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr };
         iauxReal[dimIdx] = iAux;
+
+        // ¿Es el texto que sustituye a un ID oculto?
+        let partner = null;
+        if (level.isTextCompanion) {
+            for (let k = hiddenDims.length - 1; k >= 0; k--) {
+                const h = hiddenDims[k];
+                if (!h.claimed && h.dim === level.dim && h.flag === flag) { partner = h; break; }
+            }
+        } else {
+            const prev = hiddenDims[hiddenDims.length - 1];
+            if (prev && !prev.claimed && prev.idx === dimIdx - 1 && prev.dim === level.dim) partner = prev;
+        }
+        if (partner) {
+            partner.claimed = true;
+            idPartnerReal[dimIdx] = partner.idx;
+        }
     }
 
-    return { flagsReal, companionReal, fieldsReal, iauxReal, flag1OrdinalToIaux, measureLevels, totalIaux: iAux, dimCount: dimIdx };
+    return { flagsReal, companionReal, idPartnerReal, fieldsReal, iauxReal, flag1OrdinalToIaux, measureLevels, totalIaux: iAux, dimCount: dimIdx };
 }
 
 /**
@@ -8122,14 +8212,17 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         for (let i = 1; i <= totalDimFilas; i++) {
             const flag = flagsFilas[i];
             const iAux = planFilas.iauxReal[i];
+            if (iAux === null) continue; // "Solo texto": el ID no se pinta
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
                 const text = coerceCellLiteral(V[i]);
                 // Eje Estático: se escribe como fórmula EPM_VALUE editable
                 // (mismo formato que lee el flujo Fijo), no como texto plano.
+                const pI = planFilas.idPartnerReal[i];
                 const cellVal = rowsStatic
-                    ? buildEpmValueFormula(fieldsFilas[i].dim, fieldsFilas[i].attr, text)
+                    ? (pI ? buildEpmValueFormula(fieldsFilas[pI].dim, fieldsFilas[pI].attr, coerceCellLiteral(V[pI]), text)
+                          : buildEpmValueFormula(fieldsFilas[i].dim, fieldsFilas[i].attr, text))
                     : text;
                 // Sobrescribe si ya había una entrada (mismo comportamiento que
                 // el bucle secuencial original: el último nivel no-nulo gana).
@@ -8146,7 +8239,9 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
                     // Valor canónico (antes de Excel) para el writeback —
                     // ver DracoAxisCrossValues. Mismas coordenadas físicas
                     // que la celda que se acaba de pintar.
-                    axisCrossValues.set(row + "_" + col, { dim: fieldsFilas[i].dim, attr: fieldsFilas[i].attr, value: text });
+                    axisCrossValues.set(row + "_" + col, pI
+                        ? { dim: fieldsFilas[pI].dim, attr: fieldsFilas[pI].attr, value: coerceCellLiteral(V[pI]) }
+                        : { dim: fieldsFilas[i].dim, attr: fieldsFilas[i].attr, value: text });
                 }
             }
         }
@@ -8212,12 +8307,15 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         for (let i = 1; i <= totalDimCols; i++) {
             const flag = flagsColumnas[i];
             const iAux = planColumnas.iauxReal[i];
+            if (iAux === null) continue; // "Solo texto": el ID no se pinta
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
                 const text = coerceCellLiteral(V[i]);
+                const pI = planColumnas.idPartnerReal[i];
                 const cellVal = colsStatic
-                    ? buildEpmValueFormula(fieldsColumnas[i].dim, fieldsColumnas[i].attr, text)
+                    ? (pI ? buildEpmValueFormula(fieldsColumnas[pI].dim, fieldsColumnas[pI].attr, coerceCellLiteral(V[pI]), text)
+                          : buildEpmValueFormula(fieldsColumnas[i].dim, fieldsColumnas[i].attr, text))
                     : text;
                 // Ver comentario equivalente en el bloque de FILAS: text puede
                 // ser un Number (dimensión INTEGER) y no tiene .trim().
@@ -8229,7 +8327,9 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
                     // Valor canónico (antes de Excel) para el writeback —
                     // ver DracoAxisCrossValues. Mismas coordenadas físicas
                     // que la celda que se acaba de pintar.
-                    axisCrossValues.set(row + "_" + col, { dim: fieldsColumnas[i].dim, attr: fieldsColumnas[i].attr, value: text });
+                    axisCrossValues.set(row + "_" + col, pI
+                        ? { dim: fieldsColumnas[pI].dim, attr: fieldsColumnas[pI].attr, value: coerceCellLiteral(V[pI]) }
+                        : { dim: fieldsColumnas[i].dim, attr: fieldsColumnas[i].attr, value: text });
                 }
             }
         }
@@ -9806,7 +9906,7 @@ async function actualizarTodos(event) {
 window.ReportActions = {
     actualizar, actualizarInforme, actualizarInformeFixed, actualizarTodos,
     toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
-    convertAxisStaticFormulas, ensureDracoHandlersRegistered,
+    convertAxisStaticFormulas, repaintAxisIfHiddenIds, ensureDracoHandlersRegistered,
     // "Añadir filtro" (rango con nombre sobre una celda cualquiera del libro)
     dracoFilterRangeName,
     resolveDracoFilterRangeAddress, openDracoFilterRangePicker,
