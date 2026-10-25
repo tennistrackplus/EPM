@@ -2342,7 +2342,7 @@ const TaskPaneApp = {
         const defaults = isMeasure
             // aggregation "" = la del modelo semántico (no se sobrescribe).
             ? { numberFormat: "number", decimals: 2, aggregation: "" }
-            : { showTotals: false, sortOrder: "none", expandToLevel: null, visibleLevels: null };
+            : { showTotals: false, sortOrder: "none", expandToLevel: null, visibleLevels: null, displayMode: "ID" };
         return Object.assign({}, defaults, this.state.fieldOptions[key] || {});
     },
 
@@ -2396,6 +2396,49 @@ const TaskPaneApp = {
         }
     },
 
+    /**
+     * "Mostrar como: Solo ID / ID y texto" del campo (clave de dimensión o
+     * jerarquía). El atributo de texto se define en el modelo semántico; aquí
+     * solo se elige el modo. Devuelve null si el campo no admite el modo.
+     */
+    buildDisplayModeBlock(zoneId, entry, options) {
+        if (!window.ReportStore || !window.ReportStore.getDisplayTextInfo) return null;
+        const info = window.ReportStore.getDisplayTextInfo(this.currentReportId, entry.dimension, entry.name, !!entry.isHierarchy);
+        if (!info.applicable) return null;
+
+        const label = document.createElement("label");
+        label.className = "field-options-field-block";
+        const span = document.createElement("span");
+        span.className = "field-options-field-label";
+        span.textContent = "Mostrar como";
+        const select = document.createElement("select");
+        select.id = "optDisplayMode";
+        [["ID", "Solo ID"], ["ID_TEXT", "ID y texto"]].forEach(([v, t]) => {
+            const o = document.createElement("option");
+            o.value = v;
+            o.textContent = t;
+            select.appendChild(o);
+        });
+        select.value = (options.displayMode === "ID_TEXT" && info.available) ? "ID_TEXT" : "ID";
+        select.disabled = !info.available;
+        if (!info.available) select.title = info.reason;
+        select.addEventListener("change", () => {
+            const current = this.getFieldOptions(zoneId, entry);
+            current.displayMode = select.value;
+            this.setFieldOptions(zoneId, entry, current);
+            this.scheduleAutoUpdate();
+        });
+        label.appendChild(span);
+        label.appendChild(select);
+        if (!info.available) {
+            const hint = document.createElement("div");
+            hint.className = "field-options-empty";
+            hint.textContent = info.reason;
+            label.appendChild(hint);
+        }
+        return label;
+    },
+
     buildDimensionOptionsForm(zoneId, entry, options) {
         const wrap = document.createElement("div");
         wrap.className = "field-options-group";
@@ -2432,6 +2475,9 @@ const TaskPaneApp = {
         wrap.querySelector("#optShowTotals").addEventListener("change", persist);
         wrap.querySelector("#optSortOrder").addEventListener("change", persist);
 
+        const displayBlock = this.buildDisplayModeBlock(zoneId, entry, options);
+        if (displayBlock) wrap.appendChild(displayBlock);
+
         return wrap;
     },
 
@@ -2445,6 +2491,9 @@ const TaskPaneApp = {
             container.appendChild(empty);
             return;
         }
+
+        const displayBlock = this.buildDisplayModeBlock(zoneId, entry, options);
+        if (displayBlock) container.appendChild(displayBlock);
 
         const expandLabel = document.createElement("label");
         expandLabel.className = "field-options-field-block";

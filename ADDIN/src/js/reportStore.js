@@ -428,13 +428,15 @@
      * ------------------------------------------------------------- */
 
     /* ---------------------------------------------------------------
-     * "Mostrar ID y texto" (modelo semántico, ver semantic_model.js):
-     *   - Dimensión: field.displayMode ("ID" | "ID_TEXT") + field.textAttribute.
-     *     Al colocar en Filas/Columnas el atributo CLAVE de la dimensión, con
-     *     "ID_TEXT" se añade justo detrás el atributo de texto: es EXACTAMENTE
+     * "Mostrar ID y texto": el MODELO define el atributo de texto (dimensión:
+     *   field.textAttribute, marcado con "Texto" junto a "Key"; jerarquía:
+     *   levels[i].textAttribute) y el INFORME elige el modo por campo
+     *   (fieldOptions["zona|dim|campo"].displayMode = "ID" | "ID_TEXT").
+     *   - Dimensión: al colocar en Filas/Columnas el atributo CLAVE de la
+     *     dimensión, con "ID_TEXT" se añade justo detrás el atributo de texto: es EXACTAMENTE
      *     igual que si el usuario hubiese arrastrado los dos campos (dos
      *     columnas), así que el motor no necesita saber nada de esto.
-     *   - Jerarquía: hier.displayMode + levels[i].textAttribute. Con "ID_TEXT"
+     *   - Jerarquía: levels[i].textAttribute de cada nivel. Con "ID_TEXT"
      *     se añade, tras los niveles de ID, una SEGUNDA jerarquía con los
      *     atributos de texto de cada nivel (misma sangría/nodos, otra
      *     columna). Va marcada con el sufijo TEXT_SUFFIX en el nombre de
@@ -464,7 +466,7 @@
     // Atributo de texto a añadir tras el atributo `attrName` de la dimensión
     // (solo si es su clave y la dimensión está en "ID y texto"); null si no aplica.
     function _flatTextAttribute(field, attrName) {
-        if (!field || field.displayMode !== "ID_TEXT" || !field.textAttribute) return null;
+        if (!field || !field.textAttribute) return null;
         const attrs = field.attributes || [];
         const key = attrs.find(a => a.isKey && a.enabled !== false);
         if (!key || _up(key.name) !== _up(attrName)) return null;
@@ -478,7 +480,7 @@
     function _hierarchyTextAttributes(field, hierName, visibleLevels) {
         if (!field) return null;
         const hier = (field.hierarchies || []).find(h => _up(h.name) === _up(hierName));
-        if (!hier || hier.displayMode !== "ID_TEXT") return null;
+        if (!hier) return null;
 
         const attrs = field.attributes || [];
         const levelAttrs = new Set((hier.levels || []).map(l => _up(l.attribute)));
@@ -517,6 +519,11 @@
         };
 
         // ¿Ya está el atributo `name` de `dimension` como campo suelto en esta zona?
+        const wantsIdText = (dimension, name) => {
+            const opts = (fieldOptions || {})[`${zoneId}|${dimension}|${name}`] || {};
+            return opts.displayMode === "ID_TEXT";
+        };
+
         const hasFlat = (dimension, name) => list.some(it => !it.isHierarchy
             && _up(it.dimension) === _up(dimension) && _up(it.name) === _up(name));
 
@@ -542,7 +549,8 @@
                     }
                 }
                 // "ID y texto": segunda jerarquía con los textos de cada nivel.
-                const texts = _hierarchyTextAttributes(_dimensionField(model, item.dimension), item.name, visibleLevels);
+                const texts = wantsIdText(item.dimension, item.name)
+                    ? _hierarchyTextAttributes(_dimensionField(model, item.dimension), item.name, visibleLevels) : null;
                 if (texts && niveles.every(n => texts[n])) {
                     niveles.forEach(n => {
                         out.push([item.dimension, texts[n], n, item.name + TEXT_SUFFIX, "", ""]);
@@ -552,7 +560,7 @@
                 const [subtotal, order] = subtotalAndOrder(item.dimension, item.name);
                 out.push([item.dimension, item.name, 1, "", subtotal, order]);
                 // "ID y texto": el atributo de texto va justo detrás de la clave.
-                if (!item.isHierarchy) {
+                if (!item.isHierarchy && wantsIdText(item.dimension, item.name)) {
                     const txt = _flatTextAttribute(_dimensionField(model, item.dimension), item.name);
                     if (txt && !hasFlat(item.dimension, txt)) {
                         out.push([item.dimension, txt, 1, "", "", ""]);
@@ -561,6 +569,31 @@
             }
         });
         return out;
+    }
+
+    /**
+     * ¿Se puede ofrecer "ID y texto" para este campo del informe? (lo usa el
+     * panel "Opciones de campo"). Devuelve
+     *   { applicable, available, reason }
+     * applicable: el campo admite el modo (clave de la dimensión o jerarquía);
+     * available : además el modelo tiene el/los atributo(s) de texto marcados.
+     */
+    function getDisplayTextInfo(reportId, dimension, name, isHierarchy) {
+        const report = getReport(reportId);
+        const field = _dimensionField(_modelForReport(report).model, dimension);
+        if (!field) return { applicable: false, available: false, reason: "" };
+
+        if (isHierarchy) {
+            const hier = (field.hierarchies || []).find(h => _up(h.name) === _up(name));
+            if (!hier) return { applicable: false, available: false, reason: "" };
+            const ok = !!_hierarchyTextAttributes(field, name, null);
+            return { applicable: true, available: ok, reason: ok ? "" : "Define el atributo de texto de todos los niveles de la jerarquía en el modelo semántico." };
+        }
+
+        const key = (field.attributes || []).find(a => a.isKey && a.enabled !== false);
+        if (!key || _up(key.name) !== _up(name)) return { applicable: false, available: false, reason: "" };
+        const ok = !!_flatTextAttribute(field, name);
+        return { applicable: true, available: ok, reason: ok ? "" : "Marca un atributo como \"Texto\" en la dimensión del modelo semántico." };
     }
 
     function _expansionContext(report) {
@@ -714,6 +747,7 @@
         setSemanticModel,
         saveDesign,
         refreshExpansion,
+        getDisplayTextInfo,
         TEXT_SUFFIX,
         updateDesignFields,
         setMemberRecognition,
