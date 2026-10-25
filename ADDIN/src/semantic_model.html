@@ -577,6 +577,20 @@
             user-select: none;
         }
 
+        .display-hint {
+            margin-top: 3px;
+            font-size: 10px;
+            color: #64748b;
+            line-height: 1.35;
+        }
+
+        .hierarchy-level-text-select {
+            flex: 0 0 auto;
+            width: 110px;
+            padding: 2px 4px;
+            font-size: 10px;
+        }
+
         .hierarchy-attr-chip {
             background: #ffffff;
             border: 1px solid #cbd5e1;
@@ -865,6 +879,20 @@
                 <div id="attributesList" class="fields-list">
                     <!-- Se rellena dinámicamente -->
                 </div>
+
+                <h4 style="margin-top:15px;">Visualización en informes</h4>
+                <div class="form-group">
+                    <label for="dimTextAttribute">Atributo de texto (descripción)</label>
+                    <select id="dimTextAttribute"></select>
+                </div>
+                <div class="form-group">
+                    <label for="dimDisplayMode">Mostrar la clave como</label>
+                    <select id="dimDisplayMode">
+                        <option value="ID">Solo ID</option>
+                        <option value="ID_TEXT">ID y texto</option>
+                    </select>
+                    <div class="display-hint">Con "ID y texto", al usar la clave en Filas o Columnas se muestran dos columnas: el ID y su texto (igual que arrastrar los dos atributos).</div>
+                </div>
             </div>
 
             <div id="hierarchiesContainer" style="margin-top:15px;">
@@ -897,6 +925,15 @@
                 <input type="text" id="hierarchyNameInput" placeholder="Ej. Geografía" />
             </div>
 
+            <div class="form-group">
+                <label for="hierarchyDisplayMode">Mostrar niveles como</label>
+                <select id="hierarchyDisplayMode">
+                    <option value="ID">Solo ID</option>
+                    <option value="ID_TEXT">ID y texto</option>
+                </select>
+                <div class="display-hint">Con "ID y texto", elige el atributo de texto de cada nivel: el informe mostrará dos columnas (ID y texto), con los mismos nodos y sangrías.</div>
+            </div>
+
             <h4 style="margin-top:12px;">Niveles (arrastra los atributos de izquierda a derecha)</h4>
 
             <div class="hierarchy-editor">
@@ -917,12 +954,12 @@
         </div>
     </div>
 
-    <script src="js/config.js?v=20261022t"></script>
-    <script src="js/bigquery.js?v=20261022t"></script>
-    <script src="js/provider.js?v=20261022t"></script>
-    <script src="js/semanticModelStore.js?v=20261022t"></script>
+    <script src="js/config.js?v=20261025a"></script>
+    <script src="js/bigquery.js?v=20261025a"></script>
+    <script src="js/provider.js?v=20261025a"></script>
+    <script src="js/semanticModelStore.js?v=20261025a"></script>
     <script src="js/lkmlSaveBridge.js"></script>
     <script src="js/lkmlOpenBridge.js"></script>
-    <script src="js/semantic_model.js?v=20261022t"></script>
+    <script src="js/semantic_model.js?v=20261025a"></script>
 </body>
 </html>
