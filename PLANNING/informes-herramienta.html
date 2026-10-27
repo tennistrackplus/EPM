@@ -855,6 +855,22 @@ function dlt(id,o){
    Todos se calculan con UNA petici\u00F3n (dt.kpis: una consulta con agregaci\u00F3n condicional, ver DracoTables.kpis) y se
    vuelven a pedir cuando cambia un \u00ABSelector de variable\u00BB. Mientras llegan, "\u2026"; si un KPI falla, "\u2014". */
 var KPV={key:'',status:'idle',values:{},errors:{}};
+/* INSTANT\u00C1NEA de los datos de Draco (SPEC.__draco): la llevan las exportaciones (PDF, PowerPoint, HTML) para mostrar los datos
+   que se ve\u00EDan sin estar conectadas a Draco. grids: resultado de cada Tabla Draco (por su ref); kpi: valores y tendencias. */
+var DSNAP=SPEC.__draco||null;
+if(DSNAP&&DSNAP.kpi){ KPV={key:'snap',status:'ready',values:DSNAP.kpi.values||{},errors:DSNAP.kpi.errors||{},trends:DSNAP.kpi.trends||{}}; }
+function kpiLive(){ return HOSTON||!!(DSNAP&&DSNAP.kpi); }
+function dracoSnapshot(){
+  var g={};
+  Object.keys(DTB).forEach(function(id){ var b=DTB[id], st=DTS[id]; if(b&&b.ref&&st&&st.res&&st.res.grid) g[b.ref]=st.res; });
+  Object.keys(DCB).forEach(function(id){ var b=DCB[id], st=DCS[id]; if(b&&b.ref&&st&&st.res&&st.res.grid&&!g[b.ref]) g[b.ref]=st.res; });
+  if(DSNAP&&DSNAP.grids) Object.keys(DSNAP.grids).forEach(function(r){ if(!g[r]) g[r]=DSNAP.grids[r]; });
+  var k=(KPV.status==='ready')?{values:KPV.values||{},errors:KPV.errors||{},trends:KPV.trends||{}}:(KPV.prev?{values:KPV.prev.values||{},errors:{},trends:KPV.prev.trends||{}}:(DSNAP&&DSNAP.kpi)||null);
+  return {grids:g,kpi:k,at:new Date().toISOString()};
+}
+window.__dracoSnapshot=dracoSnapshot;
+/* resultado de la instant\u00E1nea para pintar (sin la barra de planificaci\u00F3n: es una foto) */
+function snapRes(ref){ var r=DSNAP&&ref&&DSNAP.grids&&DSNAP.grids[ref]; if(!r) return null; var c=JSON.parse(JSON.stringify(r)); if(c.grid) c.grid.planning=false; return c; }
 function kpiDefs(){ return (typeof SPEC!=='undefined'&&SPEC&&SPEC.dracoKpis)||[]; }
 function kpiByName(n){ n=String(n).toUpperCase(); return kpiDefs().filter(function(k){ return String(k.name).toUpperCase()===n; })[0]; }
 function kpiEnsure(){
@@ -934,7 +950,7 @@ function kpiPending(k){
   var p=KPV.prev; return !(p&&p.sigs&&KPV.sigs&&p.sigs[k.id]===KPV.sigs[k.id]&&Object.prototype.hasOwnProperty.call(p.values,k.id));
 }
 function kpiValueText(k){
-  if(EDIT||!HOSTON) return '\u00AB'+(k.label||k.name)+'\u00BB';
+  if(EDIT||!kpiLive()) return '\u00AB'+(k.label||k.name)+'\u00BB';
   kpiEnsure();
   if(kpiPending(k)) return '\u2026';
   var v=kpiNum(k);
@@ -954,7 +970,7 @@ function kpiErr(k){
 function tok(s){
   s=String(s==null?'':s).replace(/\$\$([A-Za-z][A-Za-z0-9_]*)(?::(VSPPTO|VSAA))?\$\$/gi,function(m,n,sf){ var k=kpiByName(n); if(!k) return m;
     if(!sf) return kpiValueText(k);
-    if(EDIT||!HOSTON) return '\u00AB\u0394 '+(k.label||k.name)+'\u00BB';
+    if(EDIT||!kpiLive()) return '\u00AB\u0394 '+(k.label||k.name)+'\u00BB';
     var c=kpiCmp(k,String(sf).toUpperCase()==='VSPPTO'?k.vsPpto:k.vsLy); return c?kpiCmpText(c,''):'\u2014'; });
   return String(s==null?'':s).replace(/\{([a-z0-9_]+)(?:@([A-Za-z0-9_]+)=([^:}]+))?(?::(delta|prev|share|abs))?\}/g,function(m,id,dim,val,suf){
     if(!MET[id]) return m;
@@ -1348,7 +1364,7 @@ function dkHtml(b){
   return head+kpisHtml(items.map(function(k){ var er=kpiErr(k); var val=kpiValueText(k), pend=kpiPending(k)&&!EDIT&&HOSTON;
     /* comparaciones (presupuesto, a\u00F1o anterior) con sem\u00E1foro y minigr\u00E1fico de tendencia */
     var ex='';
-    if(!EDIT&&HOSTON&&!pend&&!er){
+    if(!EDIT&&kpiLive()&&!pend&&!er){
       [[k.vsPpto,'vs presupuesto'],[k.vsLy,'vs a\u00F1o anterior']].forEach(function(x){ var c=kpiCmp(k,x[0]); if(c) ex+='<div class="dk-cmp"><i class="dk-dot dk-'+c.st+'" aria-hidden="true"></i><span class="d-'+(c.st==='bad'?'bad':(c.st==='good'?'good':'flat'))+'">'+(c.pct>0?'\u25B2 ':(c.pct<0?'\u25BC ':''))+esc(kpiCmpText(c,x[1]))+'</span></div>'; });
       if(k.trend||k.calc) ex+=kpiSpark(kpiTrend(k));
     } else if(EDIT&&(k.vsPpto||k.vsLy||k.trend)) ex='<div class="dk-cmp"><span class="d-flat">'+(k.vsPpto?'\u0394 vs presupuesto ':'')+(k.vsLy?'\u0394 vs a\u00F1o anterior ':'')+(k.trend?'\u00B7 tendencia':'')+'</span></div>';
@@ -1472,7 +1488,7 @@ function dtMount(el){
   var id=el.getAttribute('data-dt'), b=DTB[id]; if(!b) return; el.setAttribute('data-mounted','1');
   if(EDIT){ el.innerHTML=dtMsg(b,'Tabla Draco'+(b.refName?' \u00AB'+b.refName+'\u00BB':'')+'. Pulsa \u00ABVista previa\u00BB para ver los datos.'); return; }
   if(!b.ref){ el.innerHTML=dtMsg(b,'Elige o crea la tabla en las propiedades de este bloque (bot\u00F3n \u00ABDise\u00F1ador del informe\u00BB).'); return; }
-  if(!HOSTON){ el.innerHTML=dtMsg(b,'Esta tabla se consulta desde Draco Planning.'); return; }
+  if(!HOSTON){ var sr=snapRes(b.ref); if(sr){ DTS[id]={sig:'snap',status:'ready',res:sr}; dtRender(id); return; } el.innerHTML=dtMsg(b,'Esta tabla se consulta desde Draco Planning.'); return; }
   /* la firma incluye las variables y los filtros efectivos: si cambian, se recalcula al montar */
   var sig=JSON.stringify([b.ref,dvVarsPayload(),dfFiltersFor('tc',b.ref),dfAxisFor('tc',b.ref)]), st=DTS[id];
   if(!st||st.sig!==sig){ var prev=st&&st.res; st=DTS[id]={sig:sig,status:'loading',res:prev}; dtLoad(id); }
@@ -2031,7 +2047,7 @@ function dcMount(el){
   var id=el.getAttribute('data-dc'), b=DCB[id]; if(!b) return; el.setAttribute('data-mounted','1');
   if(EDIT){ el.innerHTML=dcCard(b,null,'<p class="tu-sub">'+esc(b.ref?'Gr\u00E1fico de \u00AB'+(b.refName||b.ref)+'\u00BB. Pulsa \u00ABVista previa\u00BB para verlo con datos.':'Elige la Tabla Draco en las propiedades de este bloque.')+'</p>'); return; }
   if(!b.ref){ el.innerHTML=dcCard(b,null,'<p class="tu-sub">Elige la Tabla Draco en las propiedades de este bloque.</p>'); return; }
-  if(!HOSTON){ el.innerHTML=dcCard(b,null,'<p class="tu-sub">Este gr\u00E1fico se calcula dentro de Draco Planning.</p>'); return; }
+  if(!HOSTON){ var sr2=snapRes(b.ref); if(sr2){ DCS[id]={ref:b.ref,sig:'snap',status:'ready',res:sr2}; dcRender(id); return; } el.innerHTML=dcCard(b,null,'<p class="tu-sub">Este gr\u00E1fico se calcula dentro de Draco Planning.</p>'); return; }
   var st=DCS[id];
   var dsig=JSON.stringify([b.ref,dvVarsPayload(),dfFiltersFor('tc',b.ref),dfAxisFor('tc',b.ref)]);
   if(!st||st.ref!==b.ref||st.sig!==dsig){ var prevR=st&&st.ref===b.ref?st.res:null; st=DCS[id]={ref:b.ref,sig:dsig,status:'loading',res:prevR}; dcLoad(id,false); }
@@ -2812,8 +2828,16 @@ function blockWrap(b,id,n){
   if(b.type==='tableUpdate'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="tableUpdate"'+dAttr(b.density)+sh+'>'+tuShell(b,id)+'</div>';
   if(b.type==='flowRun'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="flowRun"'+dAttr(b.density)+sh+'>'+flShell(b,id)+'</div>';
   if(b.type==='buttons') return SLIDES?'':'<div class="'+cls+'" data-bid="'+id+'" data-btype="buttons"'+dAttr(b.density)+sh+'>'+btnGroupHtml(b,id)+'</div>';
-  if(b.type==='dracoTable'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoTable"'+dAttr(b.density)+sh+'>'+dtShell(b,id)+'</div>';
-  if(b.type==='dracoChart'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoChart"'+dAttr(b.density)+sh+'>'+dcShell(b,id)+'</div>';
+  /* exportando diapositivas sin instant\u00E1nea de datos: la caja de siempre (m\u00E1s abajo) */
+  if((b.type==='dracoTable'||b.type==='dracoChart')&&!(SLIDES&&SPEC.__export&&!snapRes(b.ref))){
+    var isT=b.type==='dracoTable', wrap=function(inner){ return '<div class="'+cls+'" data-bid="'+id+'" data-btype="'+b.type+'"'+dAttr(b.density)+sh+'>'+inner+'</div>'; };
+    var srs=SLIDES?snapRes(b.ref):null;
+    if(srs){
+      if(isT) return wrap('<div class="card tu dt" data-block="dracoTable">'+dtTableHtml(b,srs,'',null)+'</div>');
+      DCB[id]=b; DCS[id]={ref:b.ref,sig:'snap',status:'ready',res:srs}; return wrap(dcChartHtml(id));
+    }
+    return wrap(isT?dtShell(b,id):dcShell(b,id));
+  }
   if(b.type==='dracoVar'&&!SLIDES) return '<div class="'+cls+'" data-bid="'+id+'" data-btype="dracoVar"'+dAttr(b.density)+sh+'>'+dvShell(b,id)+'</div>';
   return '<div class="'+cls+'" data-bid="'+id+'" data-btype="'+esc(b.type)+'"'+dAttr(b.density)+sh+' '+pAttr(function(){ return blockInner(b,id); })+'></div>';
 }
@@ -3209,6 +3233,7 @@ function docHtml(spec,withLib){
 function runSlides(kind){
   return new Promise(function(resolve,reject){
     var spec=JSON.parse(JSON.stringify(SPEC)); spec.__mode='slides'; spec.__state=snapshotState(); if(kind==='pptx'||kind==='pdf') spec.__export=kind;
+    spec.__draco=dracoSnapshot();          /* los datos de Draco que se est\u00E1n viendo (la exportaci\u00F3n no est\u00E1 conectada a Draco) */
     var fr=document.createElement('iframe'); fr.setAttribute('aria-hidden','true'); fr.setAttribute('title','Diapositivas');
     fr.style.cssText='position:fixed;left:-20000px;top:0;width:1280px;height:720px;border:0;opacity:0;pointer-events:none';
     var done=false, info=null, t=setTimeout(function(){ finish(reject,new Error('La exportaci\u00F3n tard\u00F3 demasiado.')); },90000);
@@ -4440,7 +4465,7 @@ function viewCss(){
 function pageCss(T){ return rootCss(T)+baseCss()+'\n'+variantCss(T)+'\n'+slideCss()+'\n'+editCss()+'\n'+viewCss(); }
 
 function libTag(opts,spec){
-  if((opts&&opts.mode==='slides')||spec.export===false) return '';
+  if(spec.export===false) return '';       /* tambi\u00E9n en modo diapositivas: desde esa vista tambi\u00E9n se exporta a PowerPoint */
   var el=document.getElementById('pptx-lib-src'); if(!el) return '';
   return '<script type="text/plain" id="lib-pptx">/* PptxGenJS 3.12.0 (MIT) \u00A9 Brent Ely, https://github.com/gitbrent/PptxGenJS */\n'+el.textContent+'</'+'script>\n';
 }
@@ -6066,7 +6091,7 @@ function specFromHtml(html){
   if(!m) return {err:'Este archivo no es una p\u00E1gina de esta herramienta (no lleva su especificaci\u00F3n). Solo se pueden abrir p\u00E1ginas exportadas con ella.'};
   var sp; try{ sp=JSON.parse(m[1]); }catch(e){ return {err:'La especificaci\u00F3n guardada en el archivo est\u00E1 da\u00F1ada y no se puede leer.'}; }
   if(!sp||typeof sp!=='object'||!Array.isArray(sp.sections)) return {err:'El archivo no contiene una p\u00E1gina v\u00E1lida.'};
-  delete sp.__mode; delete sp.__state; delete sp.__export;
+  delete sp.__mode; delete sp.__state; delete sp.__export; delete sp.__draco;
   return {spec:sp};
 }
 var pendingOpen=null;
@@ -6137,9 +6162,13 @@ $('btnExample').addEventListener('click',function(){ if(typeof hostDetach==='fun
 $('btnExport').addEventListener('click',function(){
   if(!currentHtml){ setStatus('Genera una página primero.',2500); return; }
   setStatus('Preparando…');
+  /* con los datos de Draco que se ven en la vista previa (la p\u00E1gina exportada no est\u00E1 conectada a Draco) */
+  var html=currentHtml;
+  try{ var fw=$('frame').contentWindow, snap=fw&&fw.__dracoSnapshot&&fw.__dracoSnapshot();
+    if(snap&&(Object.keys(snap.grids||{}).length||snap.kpi)){ var sp2=JSON.parse(JSON.stringify(currentSpec)); sp2.__draco=snap; html=buildPage(sp2,currentTheme()); } }catch(e){}
   getDownloads().then(function(d){
-    if(!d){ plainDownload(currentHtml); return; }
-    d.save({filename:'pagina.html',data:new Blob([currentHtml],{type:'text/html'})}).then(function(){ setStatus('Guardado.',2500); }).catch(function(err){ if(err&&err.code==='declined'){ setStatus(''); } else plainDownload(currentHtml); });
+    if(!d){ plainDownload(html); return; }
+    d.save({filename:'pagina.html',data:new Blob([html],{type:'text/html'})}).then(function(){ setStatus('Guardado.',2500); }).catch(function(err){ if(err&&err.code==='declined'){ setStatus(''); } else plainDownload(html); });
   });
 });
 $('devices').addEventListener('click',function(e){
