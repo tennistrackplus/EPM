@@ -11,8 +11,7 @@
  *       // DIMENSION:
  *       relProject, relDataset, relTable,      // tabla de la dimensión (o la propia fact si está vacío)
  *       attributes: [{ name, alias, dataType, isKey, enabled }],
- *       hierarchies: [{ name, levels: [{ attribute, textAttribute }] }],
- *       textAttribute,                         // atributo de texto de la clave
+ *       hierarchies: [{ name, levels: [{ attribute }] }],
  *       // MEASURE:
  *       aggregation, format
  *   }]
@@ -125,20 +124,12 @@
                 lines.push("");
             }
 
-            // "Mostrar ID y texto" de la clave (comentario; se recupera al importar).
-            if (dim.textAttribute) {
-                lines.push(`  # texto de la clave: ${dim.textAttribute}`);
-                lines.push("");
-            }
-
-            // Jerarquías: se documentan como comentario con el orden de niveles
-            // (con su atributo de texto, si lo tiene).
+            // Jerarquías: se documentan como comentario con el orden de niveles.
             (dim.hierarchies || []).forEach(hier => {
                 if (!hier.levels || hier.levels.length === 0) return;
                 lines.push(`  # Jerarquía "${hier.name}":`);
                 hier.levels.forEach((lvl, i) => {
-                    const txt = lvl.textAttribute ? ` | texto: ${lvl.textAttribute}` : "";
-                    lines.push(`  #   ${i + 1}. ${lvl.attribute}${txt}`);
+                    lines.push(`  #   ${i + 1}. ${lvl.attribute}`);
                 });
                 lines.push("");
             });

@@ -409,23 +409,6 @@ function hidePane(event) {
 const CRLF = "\r\n";
 
 /**
- * "Mostrar ID y texto" en una JERARQUÍA (ver ReportStore._expandAxis): la
- * jerarquía de textos se añade tras la de IDs con este sufijo en el NOMBRE de
- * jerarquía (columna K/Q de EDIT_REPORT). Sus niveles comparten grupo de
- * GROUPING SETS con los niveles de ID (no son niveles nuevos) y no cuentan
- * como profundidad al contraer/expandir.
- */
-const DRACO_HIER_TEXT_SUFFIX = "~TXT";
-// Columna de orden de EDIT_REPORT (M/S) con la marca "HIDE": "Solo texto".
-function dracoIsHiddenMarker(v) {
-    return String(v === null || v === undefined ? "" : v).toUpperCase().indexOf("HIDE") !== -1;
-}
-function dracoIsHierTextName(name) {
-    const n = String(name || "");
-    return n.length > DRACO_HIER_TEXT_SUFFIX.length && n.endsWith(DRACO_HIER_TEXT_SUFFIX);
-}
-
-/**
  * Estado global del informe (equivalente a las variables Public del módulo VBA)
  */
 const ReportState = {
@@ -511,7 +494,7 @@ async function endDracoPerfLog() {
             editReportSheet.load("isNullObject");
             await context.sync();
             if (editReportSheet.isNullObject) return;
-            editReportSheet.getRange("Z1").values = [[text]];
+            editReportSheet.getRange("Z1").values = [[draco_debugCell(text)]];
             await context.sync();
         });
     } catch (e) {
@@ -772,12 +755,6 @@ function mergeEditReportGrid(physicalGrid, designGrid) {
 async function getEditReportGrid(context, reportIdOverride) {
     const physicalGrid = await getValuesGrid(context, "EDIT_REPORT");
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
-    // Mantiene al día las columnas de "ID y texto" (y las jerarquías) con el
-    // modelo semántico actual aunque el informe no se haya vuelto a guardar.
-    if (window.ReportStore && reportId && window.ReportStore.refreshExpansion) {
-        try { await window.ReportStore.refreshExpansion(reportId); }
-        catch (e) { console.warn("[Draco] No se pudo actualizar la expansión del diseño:", e); }
-    }
     const designGrid = (window.ReportStore && reportId)
         ? window.ReportStore.getReportGrid(reportId)
         : { values: [], startRow: 0, startCol: 0 };
@@ -1005,10 +982,7 @@ function loadRows(editReportGrid) {
         } else {
             ReportState.RowCount++;
 
-            // "Solo texto": el ID (orden = "HIDE", col. S) se consulta pero no se pinta,
-            // así que no ocupa columna física.
-            const hiddenRow = dracoIsHiddenMarker(cellValue(editReportGrid, R, 19));
-            if (Number(cellValue(editReportGrid, R, 16)) === 1 && !hiddenRow) {
+            if (Number(cellValue(editReportGrid, R, 16)) === 1) {
                 ReportState.AttrRowCount++;
             }
 
@@ -1019,10 +993,6 @@ function loadRows(editReportGrid) {
                 Dimension: dim,
                 AttributeName: String(cellValue(editReportGrid, R, 15)).trim(),
                 Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
-                // Columna Q: nombre de jerarquía; con sufijo "~TXT" es la
-                // jerarquía de TEXTOS de un "ID y texto" (ver DRACO_HIER_TEXT_SUFFIX).
-                IsTextCompanion: dracoIsHierTextName(cellValue(editReportGrid, R, 17)),
-                Hidden: hiddenRow,
                 // Columna R de EDIT_REPORT: "X" = generar subtotal para este
                 // campo (ver buildConfigSetsWithSubtotals). No se usa en
                 // absoluto si NINGÚN campo del informe tiene esta marca.
@@ -1053,8 +1023,7 @@ function loadColumns(editReportGrid) {
                 Zone: "rows"
             });
         } else {
-            const hiddenCol = dracoIsHiddenMarker(cellValue(editReportGrid, R, 13)); // columna M
-            if (Number(cellValue(editReportGrid, R, 10)) === 1 && !hiddenCol) {
+            if (Number(cellValue(editReportGrid, R, 10)) === 1) {
                 ReportState.AttrColumnCount++;
             }
 
@@ -1067,9 +1036,6 @@ function loadColumns(editReportGrid) {
                 Dimension: dim,
                 AttributeName: String(cellValue(editReportGrid, R, 9)).trim(),
                 Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
-                // Columna K: nombre de jerarquía (ver loadRows / DRACO_HIER_TEXT_SUFFIX).
-                IsTextCompanion: dracoIsHierTextName(cellValue(editReportGrid, R, 11)),
-                Hidden: hiddenCol,
                 // Columna L de EDIT_REPORT: "X" = generar subtotal para este
                 // campo (ver buildConfigSetsWithSubtotals).
                 Subtotal: String(cellValue(editReportGrid, R, 12)).trim().toUpperCase() === "X"
@@ -2301,13 +2267,38 @@ function isDracoNullLiteral(text) {
     return t === "null" || t === "undefined";
 }
 
+/**
+ * SEGURIDAD (auditoría F-15): las celdas de depuración de EDIT_REPORT
+ * (W1 y Z1 de planificación, X1 con la SQL, Y1 con el JSON de resultados)
+ * quedaban guardadas DENTRO del .xlsx y viajaban al compartir el libro.
+ * Ahora solo se rellenan si DracoConfig.debugWorkbookCells = true; si no,
+ * se escriben vacías (así además se borra lo que dejaron versiones anteriores).
+ */
+function draco_debugCell(value) {
+    const on = typeof DracoConfig !== "undefined" && DracoConfig.debugWorkbookCells === true;
+    return on ? value : "";
+}
+
 function coerceCellLiteral(text) {
     if (isDracoNullLiteral(text)) return "";
     text = String(text);
     if (text.trim() !== "" && !isNaN(text)) {
         return Number(text);
     }
-    return text;
+    return draco_neutralizeFormula(text);
+}
+
+/**
+ * SEGURIDAD (auditoría F-02, inyección de fórmulas): un texto que viene de
+ * BigQuery y empieza por = + - @, tabulador o retorno se escribe con un
+ * apóstrofo delante para que Excel lo trate como TEXTO y no lo ejecute como
+ * fórmula (p. ej. =HYPERLINK(...) o =WEBSERVICE(...) metidos en un dato).
+ * Solo afecta a los DATOS pintados; las fórmulas propias de Draco
+ * (EPM_VALUE, EPM_FORMULA) se escriben por otras rutas y no pasan por aquí.
+ */
+function draco_neutralizeFormula(text) {
+    if (typeof text !== "string" || text === "") return text;
+    return /^[=+\-@\t\r]/.test(text) ? "'" + text : text;
 }
 
 // reportId -> Map("fila_columna" -> valor), con el valor que jsonPaintValues
@@ -2487,13 +2478,13 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     // de resultados: se escriben en EDIT_REPORT!X1 (SQL) e Y1 (JSON).
     await Excel.run(async (context) => {
         const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-        editReportSheet.getRange("X1").values = [[typeof sql === "string" ? sql : sql.text]];
+        editReportSheet.getRange("X1").values = [[draco_debugCell(typeof sql === "string" ? sql : sql.text)]];
 
         const EXCEL_CELL_CHAR_LIMIT = 32000; // límite real de Excel: 32767
         const jsonForCell = json.length > EXCEL_CELL_CHAR_LIMIT
             ? json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
             : json;
-        editReportSheet.getRange("Y1").values = [[jsonForCell]];
+        editReportSheet.getRange("Y1").values = [[draco_debugCell(jsonForCell)]];
 
         await context.sync();
     });
@@ -2550,7 +2541,7 @@ async function surfaceErrorToSheet(error) {
     try {
         await Excel.run(async (context) => {
             const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-            editReportSheet.getRange("X1").values = [["ERROR: " + (error && error.message ? error.message : String(error))]];
+            editReportSheet.getRange("X1").values = [[draco_debugCell("ERROR: " + (error && error.message ? error.message : String(error)))]];
             await context.sync();
         });
     } catch (e2) {
@@ -2677,7 +2668,6 @@ function readDracoAxisFields(editReportGrid, isColumnsAxis) {
         const attr = String(cellValue(editReportGrid, R, dimCol + 1)).trim();
         const nivel = Number(cellValue(editReportGrid, R, dimCol + 2)) || 1;
         const hier = String(cellValue(editReportGrid, R, dimCol + 3)).trim();
-        const hidden = dracoIsHiddenMarker(cellValue(editReportGrid, R, dimCol + 5));
         const last = fields[fields.length - 1];
         if (dim.toUpperCase() === "MEASURE") {
             if (!fields.some(f => f.type === "measure")) fields.push({ type: "measure" });
@@ -2685,13 +2675,10 @@ function readDracoAxisFields(editReportGrid, isColumnsAxis) {
             if (last && last.type === "hier" && last.name.toUpperCase() === hier.toUpperCase() && last.dim.toUpperCase() === dim.toUpperCase()) {
                 last.levels.push({ attr, nivel });
             } else {
-                fields.push({ type: "hier", dim, name: hier, levels: [{ attr, nivel }], hidden });
+                fields.push({ type: "hier", dim, name: hier, levels: [{ attr, nivel }] });
             }
         } else if (!fields.some(f => f.type === "attr" && f.dim.toUpperCase() === dim.toUpperCase() && f.attr.toUpperCase() === attr.toUpperCase())) {
-            // "Solo texto": el texto sustituye al ID oculto que lo precede
-            const idPartner = (last && last.type === "attr" && last.hidden && !hidden
-                && last.dim.toUpperCase() === dim.toUpperCase()) ? last : null;
-            fields.push({ type: "attr", dim, attr, hidden, idPartner });
+            fields.push({ type: "attr", dim, attr });
         }
         R++;
     }
@@ -2742,14 +2729,6 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     fields.forEach(f => {
         if (f.type === "attr") f.col = colIdx(f.dim, f.attr);
         if (f.type === "hier") f.levels.forEach(l => { l.col = colIdx(f.dim, l.attr); });
-    });
-    // "ID y texto" en una jerarquía: la jerarquía de textos (sufijo ~TXT) se
-    // cuelga de la de IDs (hostField) y comparte su profundidad/agrupación.
-    fields.forEach(f => {
-        if (f.type !== "hier" || !dracoIsHierTextName(f.name)) return;
-        const hostName = f.name.slice(0, f.name.length - DRACO_HIER_TEXT_SUFFIX.length).toUpperCase();
-        const host = fields.find(h => h.type === "hier" && h !== f && h.dim.toUpperCase() === f.dim.toUpperCase() && h.name.toUpperCase() === hostName);
-        if (host) f.hostField = host;
     });
     const measureLevelIdx = fields.findIndex(f => f.type === "measure");
     const dynZone = dynamicIsColumns ? "columns" : "rows";
@@ -2832,7 +2811,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     // GROUP BY de AGG: con jerarquías en el eje dinámico, GROUPING SETS con
     // una combinación por profundidad de cada jerarquía (nodos + hojas,
     // como el modo Dinámico); sin jerarquías, GROUP BY normal.
-    const hierFields = fields.filter(f => f.type === "hier" && !f.hostField);
+    const hierFields = fields.filter(f => f.type === "hier");
     const plainCols = fields.filter(f => f.type === "attr").map(f => dynNames[f.col]);
     const groupBy = (lineRef, colRef, extra) => {
         extra = extra || [];
@@ -2842,13 +2821,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
         let combos = [[]];
         hierFields.forEach(h => {
             const next = [];
-            const texts = fields.filter(t => t.hostField === h);
-            combos.forEach(c => {
-                for (let d = 1; d <= h.levels.length; d++) {
-                    next.push([...c, h.levels.slice(0, d).map(l => dynNames[l.col]),
-                        ...texts.map(t => t.levels.slice(0, d).map(l => dynNames[l.col]))]);
-                }
-            });
+            combos.forEach(c => { for (let d = 1; d <= h.levels.length; d++) next.push([...c, h.levels.slice(0, d).map(l => dynNames[l.col])]); });
             combos = next;
         });
         const sets = combos.map(c => {
@@ -2915,8 +2888,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
         const parts = [];
         flds.forEach(f => {
             if (f.type === "attr") parts.push(dynNames[f.col]);
-            // La jerarquía de textos ("ID y texto") no ordena: va por sus IDs.
-            if (f.type === "hier" && !f.hostField) f.levels.forEach((l, i) => {
+            if (f.type === "hier") f.levels.forEach((l, i) => {
                 if (i > 0) parts.push(nullFirst(dynNames[l.col]));
                 parts.push(dynNames[l.col]);
             });
@@ -3018,9 +2990,7 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
     }
     if (members.size === 0 && nDyn === 0 && !plan.dynMeasures.length) tuples.push({ dyn: 1, mIdx: -1, mem: { attrs: [] } });
     const tupleIndex = new Map(tuples.map((t, j) => [t.dyn + "_" + t.mIdx, j]));
-    // "Solo texto": los campos ocultos (ID) se consultan pero no se pintan en la cabecera.
-    const paintFields = plan.fields.filter(f => !f.hidden);
-    const headerDepth = paintFields.length;
+    const headerDepth = plan.fields.length;
     const valCell = (lineId, j) => plan.dynamicIsColumns ? { r: lineId, c: anchor.col + j } : { r: anchor.row + j, c: lineId };
     const firstDyn = plan.dynamicIsColumns ? anchor.col : anchor.row;
     const nTuples = tuples.length;
@@ -3062,34 +3032,20 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
         for (let r = 0; r < rowsN; r++) grid.push(new Array(colsN).fill(""));
         const isNull = (v) => v === undefined || isDracoNullLiteral(v);
         tuples.forEach((t, j) => {
-            paintFields.forEach((fld, k) => {
+            plan.fields.forEach((fld, k) => {
                 let f = "", indent = 0;
                 if (fld.type === "measure") {
                     const mName = t.mIdx >= 0 ? plan.dynMeasures[t.mIdx] : "";
                     if (mName) f = buildEpmValueFormula("MEASURE", mName, "", mName);
                 } else if (fld.type === "attr") {
                     const v = t.mem.attrs[fld.col];
-                    if (!isNull(v)) {
-                        // Solo texto: atributo y valor del ID, descripción = texto
-                        f = fld.idPartner
-                            ? buildEpmValueFormula(fld.dim, fld.idPartner.attr, t.mem.attrs[fld.idPartner.col], v)
-                            : buildEpmValueFormula(fld.dim, fld.attr, v);
-                    }
+                    if (!isNull(v)) f = buildEpmValueFormula(fld.dim, fld.attr, v);
                 } else {
-                    // Jerarquía de textos ("ID y texto"): misma profundidad que la de IDs
-                    // (un texto NULL no la acorta), el valor es el texto de ese nivel.
-                    const depthFld = fld.hostField || fld;
                     let depth = 0;
-                    while (depth < depthFld.levels.length && !isNull(t.mem.attrs[depthFld.levels[depth].col])) depth++;
+                    while (depth < fld.levels.length && !isNull(t.mem.attrs[fld.levels[depth].col])) depth++;
                     if (depth > 0) {
-                        const lv = fld.levels[Math.min(depth, fld.levels.length) - 1];
-                        const v = t.mem.attrs[lv.col];
-                        if (!fld.hostField || !isNull(v)) {
-                            const hl = (fld.hostField && fld.hostField.hidden) ? fld.hostField.levels[Math.min(depth, fld.hostField.levels.length) - 1] : null;
-                            f = hl
-                                ? buildEpmValueFormula(fld.dim, hl.attr, t.mem.attrs[hl.col], v)
-                                : buildEpmValueFormula(fld.dim, lv.attr, v);
-                        }
+                        const lv = fld.levels[depth - 1];
+                        f = buildEpmValueFormula(fld.dim, lv.attr, t.mem.attrs[lv.col]);
                         indent = depth - 1;
                     }
                 }
@@ -3582,9 +3538,9 @@ async function actualizarInformeHybridCore(reportIdOverride) {
 
         await Excel.run(async (context) => {
             const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-            editReportSheet.getRange("X1").values = [[built.sql || "(Híbrido: el eje Estático no tiene ninguna línea EPM_VALUE todavía)"]];
+            editReportSheet.getRange("X1").values = [[draco_debugCell(built.sql || "(Híbrido: el eje Estático no tiene ninguna línea EPM_VALUE todavía)")]];
             const LIMIT = 32000;
-            editReportSheet.getRange("Y1").values = [[json.length > LIMIT ? json.substring(0, LIMIT) + " ...(truncado)" : json]];
+            editReportSheet.getRange("Y1").values = [[draco_debugCell(json.length > LIMIT ? json.substring(0, LIMIT) + " ...(truncado)" : json)]];
             await context.sync();
         });
 
@@ -4016,45 +3972,14 @@ function generateHierarchyCombinations(hierarchies) {
  * combinando niveles de jerarquía de Filas y Columnas.
  */
 function computeGroupingSetDimensionsAndHierarchies(relGrid) {
-    // ---- Campos "lógicos" de cada eje ----
-    // Los niveles de la jerarquía de TEXTOS de un "ID y texto" (IsTextCompanion)
-    // no son niveles nuevos: cada uno se agrupa SIEMPRE junto al nivel de ID
-    // de su misma dimensión y NIVEL (si no, el "odómetro" generaría
-    // combinaciones de ID de un nivel con texto de otro). Se cuelgan de ese
-    // campo ("extra") y se emiten juntos en cada conjunto de agrupación.
-    function logicalFields(fields) {
-        const out = [];
-        for (const f of fields) {
-            if (f.IsTextCompanion) {
-                let host = null;
-                for (let k = out.length - 1; k >= 0; k--) {
-                    if (out[k].f.Dimension === f.Dimension && Number(out[k].f.Hierarchy) === Number(f.Hierarchy)) {
-                        host = out[k];
-                        break;
-                    }
-                }
-                if (host) {
-                    host.extra.push(f);
-                    continue;
-                }
-                // sin nivel de ID al que pegarse: se trata como un campo normal
-            }
-            out.push({ f, extra: [] });
-        }
-        return out;
-    }
-
-    const logicalRows = logicalFields(ReportState.Rows);
-    const logicalCols = logicalFields(ReportState.Columns);
-
     // ---- DIMENSIONS: Filas primero, luego Columnas ----
-    // Cada posición es la columna del campo o, si lleva texto pegado, un
-    // array [columna, columnaTexto] (ver groupingSetTupleToColumnList).
     const dimensions = [null]; // índice 1-based, dimensions[0] sin usar
 
-    for (const l of [...logicalRows, ...logicalCols]) {
-        const cols = [dracoAxisCol(relGrid, l.f), ...l.extra.map(e => dracoAxisCol(relGrid, e))];
-        dimensions.push(cols.length === 1 ? cols[0] : cols);
+    for (const r of ReportState.Rows) {
+        dimensions.push(dracoAxisCol(relGrid, r));
+    }
+    for (const c of ReportState.Columns) {
+        dimensions.push(dracoAxisCol(relGrid, c));
     }
 
     // ---- HIERARCHIES: longitud de cada tramo de "misma JERARQUÍA real" ----
@@ -4072,12 +3997,11 @@ function computeGroupingSetDimensionsAndHierarchies(relGrid) {
     // NIVEL=1 seguidos (aunque sean de la misma dimensión) rompen el tramo
     // y se tratan como dos tramos de longitud 1 -igual que si fueran de
     // dimensiones distintas-, sin generar ningún subtotal automático.
-    function pushHierarchyRunLengths(logical, out) {
+    function pushHierarchyRunLengths(fields, out) {
         let lastDim = "";
         let lastLevel = 0;
         let contador = 0;
-        for (const l of logical) {
-            const f = l.f;
+        for (const f of fields) {
             const nivel = Number(f.Hierarchy) || 0;
             if (contador > 0 && f.Dimension === lastDim && nivel === lastLevel + 1) {
                 contador++;
@@ -4092,8 +4016,8 @@ function computeGroupingSetDimensionsAndHierarchies(relGrid) {
     }
 
     const hierarchies = [];
-    pushHierarchyRunLengths(logicalRows, hierarchies);
-    pushHierarchyRunLengths(logicalCols, hierarchies);
+    pushHierarchyRunLengths(ReportState.Rows, hierarchies);
+    pushHierarchyRunLengths(ReportState.Columns, hierarchies);
 
     // ---- HIERARCHIES ACUM ----
     const hierarchiesAcum = [];
@@ -4132,10 +4056,11 @@ function groupingSetTupleToColumnList(item, dimensions, hierarchiesAcum) {
     for (let i = 0; i < item.length; i++) {
         for (let j = 1; j <= item[i]; j++) {
             if (item[i] > 0) {
-                const dimEntry = i === 0 ? dimensions[j] : dimensions[j + hierarchiesAcum[i - 1]];
-                // Un campo con texto pegado ("ID y texto") aporta sus dos columnas.
-                if (Array.isArray(dimEntry)) cols.push(...dimEntry);
-                else cols.push(dimEntry);
+                if (i === 0) {
+                    cols.push(dimensions[j]);
+                } else {
+                    cols.push(dimensions[j + hierarchiesAcum[i - 1]]);
+                }
             }
             // item[i] === 0 no ocurre nunca en el flujo normal (generateHierarchyCombinations
             // nunca baja de 1): se deja sin aportar columnas, en vez del literal "[TOTAL]"
@@ -4875,16 +4800,10 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
     // mismo interruptor (subtotalsOnTop); ahora son independientes.
     const hierarchyNodesOnTop = opts.hierarchyNodesOnTop !== false;
 
-    // Posiciones (1..count) de la jerarquía de TEXTOS de un "ID y texto": no
-    // son niveles (su valor puede ser NULL de verdad si el miembro no tiene
-    // descripción), así que no cuentan para la profundidad del nodo.
-    const companion = opts.companion || [];
-
     const items = [];
     for (const V of dict.values()) {
         let deepest = 0;
         for (let i = 1; i <= count; i++) {
-            if (companion[i]) continue;
             if (String(V[i]).toLowerCase().indexOf("null") === 0) break;
             deepest = i;
         }
@@ -4912,7 +4831,7 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
         let i = 1;
         while (i <= count) {
             let j = i;
-            while (j < count && Number(flags[j + 1]) === Number(flags[j]) + 1 && !!companion[j + 1] === !!companion[j]) j++;
+            while (j < count && Number(flags[j + 1]) === Number(flags[j]) + 1) j++;
             const len = j - i + 1;
             for (let k = i; k <= j; k++) tramoLen[k] = len;
             i = j + 1;
@@ -5091,7 +5010,6 @@ function buildAxisFieldLevelsTable(editReportGrid, axis) {
             columns[measureIaux].maxFlag = 1;
             continue;
         }
-        if (lvl.hidden) continue; // "Solo texto": el ID no tiene columna
         const flag = lvl.flag || 1;
         if (flag === 1 || !current) {
             iAux++;
@@ -5150,27 +5068,6 @@ async function readIndentLevelsForRange(context, range) {
     }
 }
 
-
-/**
- * "Solo texto": las celdas de texto de un eje con IDs ocultos NO se pueden
- * convertir in situ entre texto y EPM_VALUE (el ID no está en la hoja), así
- * que se repinta desde el último resultado. Requiere el diseño ya guardado
- * con el nuevo Estático/Dinámico. Devuelve true si el eje tiene IDs ocultos
- * (se haya repintado o no, porque aún no hubiese resultado).
- */
-async function repaintAxisIfHiddenIds(axis) {
-    const reportId = activeReportIdOrNull();
-    let hasHidden = false;
-    await Excel.run(async (context) => {
-        const editReportGrid = await getEditReportGrid(context);
-        const [dimCol, attrCol, hierCol] = axis === "rows" ? [8, 9, 10] : [14, 15, 16];
-        hasHidden = buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol).some(l => l.hidden);
-        if (!hasHidden) return;
-        const lastJson = DracoLastJsonByReport.get(dracoStateKey(reportId));
-        if (lastJson) await jsonTo3Matrices(context, lastJson, reportId);
-    });
-    return hasHidden;
-}
 
 async function convertAxisStaticFormulas(axis, makeStatic) {
     const reportId = activeReportIdOrNull();
@@ -5425,9 +5322,7 @@ async function resolveDracoFieldForAxisLevel(context, reportId, axis, level, ind
     // plana de un único nivel — así que aquí se usa el nombre de la
     // Jerarquía en vez del Attr del nivel concreto. Attr (NIVEL1/NIVEL2)
     // solo se usa para la fórmula EPM_VALUE final, no para buscar.
-    // La jerarquía de TEXTOS de un "ID y texto" (sufijo ~TXT) no existe en el
-    // modelo: se busca por el atributo de texto del nivel.
-    const searchAttr = (field.jerarquia && !dracoIsHierTextName(field.jerarquia)) ? field.jerarquia : field.attr;
+    const searchAttr = field.jerarquia || field.attr;
 
     return { axis, level, dim: field.dim, attr: searchAttr };
 }
@@ -6248,7 +6143,7 @@ async function writeDracoPlanningDebug(msg) {
             editReportSheet.load("isNullObject");
             await context.sync();
             if (editReportSheet.isNullObject) return;
-            editReportSheet.getRange("W1").values = [[new Date().toLocaleTimeString() + " | " + msg]];
+            editReportSheet.getRange("W1").values = [[draco_debugCell(new Date().toLocaleTimeString() + " | " + msg)]];
             await context.sync();
         });
     } catch (e) {
@@ -7553,11 +7448,7 @@ function buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol, jerCol) 
             // mismo nombre (p.ej. "H_CUENTA"), a diferencia de `attr`
             // (NIVEL1/NIVEL2...), que sí cambia por nivel. Cadena vacía para
             // campos que no son jerarquía, o si no se pide esta columna.
-            jerarquia: jerCol ? String(cellValue(editReportGrid, R, jerCol)).trim() : "",
-            // Jerarquía de TEXTOS de un "ID y texto" (ver DRACO_HIER_TEXT_SUFFIX)
-            isTextCompanion: jerCol ? dracoIsHierTextName(cellValue(editReportGrid, R, jerCol)) : false,
-            // "Solo texto": columna de ID que se consulta pero no se pinta
-            hidden: dracoIsHiddenMarker(cellValue(editReportGrid, R, hierCol + 3))
+            jerarquia: jerCol ? String(cellValue(editReportGrid, R, jerCol)).trim() : ""
         });
         R++;
     }
@@ -7599,16 +7490,7 @@ function computeAxisPaintPlan(levels) {
     const flagsReal = [];
     const fieldsReal = [];
     const iauxReal = [];
-    const companionReal = []; // companionReal[i] = true si la posición i es de la jerarquía de textos
     const flag1OrdinalToIaux = [];
-    // Ordinales de nivel 1 ocultos ("Solo texto") pendientes de apuntar a la
-    // columna del texto que los sustituye (la siguiente que se pinte).
-    let pendingHiddenOrdinals = [];
-    // "Solo texto" + eje Estático: la fórmula EPM_VALUE de la columna de TEXTO
-    // lleva el ID (atributo y valor) y el texto solo como descripción;
-    // idPartnerReal[i] = posición del ID oculto al que sustituye el texto i.
-    const idPartnerReal = [];
-    const hiddenDims = []; // { idx, dim, flag, claimed }
     // Una entrada por medida, TODAS compartiendo el mismo iAux (una única
     // fila/columna física "extra" para el grupo de medidas del eje, no una
     // por medida): measureLevels[k].ordinal (0..N-1) es la posición de esa
@@ -7632,50 +7514,17 @@ function computeAxisPaintPlan(levels) {
         }
         dimIdx++;
         const flag = level.flag;
-        if (level.hidden) {
-            hiddenDims.push({ idx: dimIdx, dim: level.dim, flag: level.flag, claimed: false });
-            // Solo se consulta: sin columna física (iauxReal = null => no se pinta).
-            // Su +/- (si es nodo de jerarquía) se pinta en la columna del texto.
-            if (flag === 1) {
-                ordinal++;
-                pendingHiddenOrdinals.push(ordinal);
-            }
-            flagsReal[dimIdx] = flag;
-            companionReal[dimIdx] = !!level.isTextCompanion;
-            fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr };
-            iauxReal[dimIdx] = null;
-            continue;
-        }
         if (flag === 1) {
             iAux++;
             ordinal++;
             flag1OrdinalToIaux[ordinal] = iAux;
-            pendingHiddenOrdinals.forEach(o => { flag1OrdinalToIaux[o] = iAux; });
-            pendingHiddenOrdinals = [];
         }
         flagsReal[dimIdx] = flag;
-        companionReal[dimIdx] = !!level.isTextCompanion;
         fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr };
         iauxReal[dimIdx] = iAux;
-
-        // ¿Es el texto que sustituye a un ID oculto?
-        let partner = null;
-        if (level.isTextCompanion) {
-            for (let k = hiddenDims.length - 1; k >= 0; k--) {
-                const h = hiddenDims[k];
-                if (!h.claimed && h.dim === level.dim && h.flag === flag) { partner = h; break; }
-            }
-        } else {
-            const prev = hiddenDims[hiddenDims.length - 1];
-            if (prev && !prev.claimed && prev.idx === dimIdx - 1 && prev.dim === level.dim) partner = prev;
-        }
-        if (partner) {
-            partner.claimed = true;
-            idPartnerReal[dimIdx] = partner.idx;
-        }
     }
 
-    return { flagsReal, companionReal, idPartnerReal, fieldsReal, iauxReal, flag1OrdinalToIaux, measureLevels, totalIaux: iAux, dimCount: dimIdx };
+    return { flagsReal, fieldsReal, iauxReal, flag1OrdinalToIaux, measureLevels, totalIaux: iAux, dimCount: dimIdx };
 }
 
 /**
@@ -7844,8 +7693,8 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // el eje físico completo una vez (con las filas MEASURE incluidas) y
     // se deriva de ahí tanto la correspondencia {dim, attr, NIVEL} de cada
     // dimensión real como la columna/fila física de cada etiqueta MEASURE.
-    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10, 11);      // H/I/J (+K: jerarquía)
-    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16, 17); // N/O/P (+Q: jerarquía)
+    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10);      // H/I/J
+    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16); // N/O/P
 
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
@@ -8013,8 +7862,8 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         }
     }
 
-    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, dracoCollapseState.rows.collapsed, flagsFilas, { companion: planFilas.companionReal, subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
-    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, dracoCollapseState.cols.collapsed, flagsColumnas, { companion: planColumnas.companionReal, subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
+    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, dracoCollapseState.rows.collapsed, flagsFilas, { subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
+    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, dracoCollapseState.cols.collapsed, flagsColumnas, { subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
 
     console.log("jsonTo3Matrices diagnóstico:", {
         totalCampos, filas,
@@ -8212,17 +8061,14 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         for (let i = 1; i <= totalDimFilas; i++) {
             const flag = flagsFilas[i];
             const iAux = planFilas.iauxReal[i];
-            if (iAux === null) continue; // "Solo texto": el ID no se pinta
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
                 const text = coerceCellLiteral(V[i]);
                 // Eje Estático: se escribe como fórmula EPM_VALUE editable
                 // (mismo formato que lee el flujo Fijo), no como texto plano.
-                const pI = planFilas.idPartnerReal[i];
                 const cellVal = rowsStatic
-                    ? (pI ? buildEpmValueFormula(fieldsFilas[pI].dim, fieldsFilas[pI].attr, coerceCellLiteral(V[pI]), text)
-                          : buildEpmValueFormula(fieldsFilas[i].dim, fieldsFilas[i].attr, text))
+                    ? buildEpmValueFormula(fieldsFilas[i].dim, fieldsFilas[i].attr, text)
                     : text;
                 // Sobrescribe si ya había una entrada (mismo comportamiento que
                 // el bucle secuencial original: el último nivel no-nulo gana).
@@ -8239,9 +8085,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
                     // Valor canónico (antes de Excel) para el writeback —
                     // ver DracoAxisCrossValues. Mismas coordenadas físicas
                     // que la celda que se acaba de pintar.
-                    axisCrossValues.set(row + "_" + col, pI
-                        ? { dim: fieldsFilas[pI].dim, attr: fieldsFilas[pI].attr, value: coerceCellLiteral(V[pI]) }
-                        : { dim: fieldsFilas[i].dim, attr: fieldsFilas[i].attr, value: text });
+                    axisCrossValues.set(row + "_" + col, { dim: fieldsFilas[i].dim, attr: fieldsFilas[i].attr, value: text });
                 }
             }
         }
@@ -8307,15 +8151,12 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         for (let i = 1; i <= totalDimCols; i++) {
             const flag = flagsColumnas[i];
             const iAux = planColumnas.iauxReal[i];
-            if (iAux === null) continue; // "Solo texto": el ID no se pinta
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
                 const text = coerceCellLiteral(V[i]);
-                const pI = planColumnas.idPartnerReal[i];
                 const cellVal = colsStatic
-                    ? (pI ? buildEpmValueFormula(fieldsColumnas[pI].dim, fieldsColumnas[pI].attr, coerceCellLiteral(V[pI]), text)
-                          : buildEpmValueFormula(fieldsColumnas[i].dim, fieldsColumnas[i].attr, text))
+                    ? buildEpmValueFormula(fieldsColumnas[i].dim, fieldsColumnas[i].attr, text)
                     : text;
                 // Ver comentario equivalente en el bloque de FILAS: text puede
                 // ser un Number (dimensión INTEGER) y no tiene .trim().
@@ -8327,9 +8168,7 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
                     // Valor canónico (antes de Excel) para el writeback —
                     // ver DracoAxisCrossValues. Mismas coordenadas físicas
                     // que la celda que se acaba de pintar.
-                    axisCrossValues.set(row + "_" + col, pI
-                        ? { dim: fieldsColumnas[pI].dim, attr: fieldsColumnas[pI].attr, value: coerceCellLiteral(V[pI]) }
-                        : { dim: fieldsColumnas[i].dim, attr: fieldsColumnas[i].attr, value: text });
+                    axisCrossValues.set(row + "_" + col, { dim: fieldsColumnas[i].dim, attr: fieldsColumnas[i].attr, value: text });
                 }
             }
         }
@@ -9207,7 +9046,7 @@ async function actualizarInformeCore(reportIdOverride) {
         // [Punto 8] SQL ya no se escribe en A1 de la hoja de resultados:
         // se escribe en EDIT_REPORT!X1.
         const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-        editReportSheet.getRange("X1").values = [[queryText]];
+        editReportSheet.getRange("X1").values = [[draco_debugCell(queryText)]];
 
         await context.sync();
         draco_perfMark(reportId, "  Escribir X1 (sync)", tSub);
@@ -9228,7 +9067,7 @@ async function actualizarInformeCore(reportIdOverride) {
             : json;
         // [Punto 8] JSON ya no se escribe en B1 de la hoja de resultados:
         // se escribe en EDIT_REPORT!Y1.
-        editReportSheet.getRange("Y1").values = [[jsonForCell]];
+        editReportSheet.getRange("Y1").values = [[draco_debugCell(jsonForCell)]];
         await context.sync();
     });
     tPerf = draco_perfMark(reportId, "Escribir SQL/JSON en EDIT_REPORT", tPerf);
@@ -9847,7 +9686,7 @@ async function actualizarTodosCore(concurrency) {
                 const jsonForCell = job.json.length > EXCEL_CELL_CHAR_LIMIT
                     ? job.json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
                     : job.json;
-                editReportSheet.getRange("Y1").values = [[jsonForCell]];
+                editReportSheet.getRange("Y1").values = [[draco_debugCell(jsonForCell)]];
                 await jsonTo3Matrices(context, job.json, job.reportId);
             });
             paintedCount++;
@@ -9906,7 +9745,7 @@ async function actualizarTodos(event) {
 window.ReportActions = {
     actualizar, actualizarInforme, actualizarInformeFixed, actualizarTodos,
     toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
-    convertAxisStaticFormulas, repaintAxisIfHiddenIds, ensureDracoHandlersRegistered,
+    convertAxisStaticFormulas, ensureDracoHandlersRegistered,
     // "Añadir filtro" (rango con nombre sobre una celda cualquiera del libro)
     dracoFilterRangeName,
     resolveDracoFilterRangeAddress, openDracoFilterRangePicker,

@@ -42,6 +42,8 @@
                 // El diálogo envía { modelName, model } cuando el usuario
                 // pulsa "Seleccionar" y ha podido leer/parsear el fichero.
                 dialog.addEventHandler(Office.EventType.DialogMessageReceived, async (arg) => {
+                    // Petición del token de Git de la sesión (ver js/gitSession.js, F-06)
+                    if (window.GitSession && GitSession.handleDialogMessage(dialog, arg.message)) return;
 
                     let payload = null;
                     try {

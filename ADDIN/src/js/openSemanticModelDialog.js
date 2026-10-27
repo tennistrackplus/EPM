@@ -122,7 +122,7 @@ async function updateLkmlServerList() {
     }
 
     const conn = Connections.getById(connectionId);
-    const repoConfig = conn && conn.config && conn.config.semanticRepo;
+    const repoConfig = conn ? GitSession.repoConfig(conn) : null;   // token de la sesión (F-06)
     if (!repoConfig) return;
 
     list.classList.add("is-empty");
@@ -142,7 +142,7 @@ async function updateLkmlServerList() {
         items.forEach(item => {
             const row = document.createElement("div");
             row.className = "lkml-server-item";
-            row.innerHTML = `<span>${item.type === "dir" ? "📁" : "📄"}</span><span>${item.name}</span>`;
+            row.innerHTML = `<span>${item.type === "dir" ? "📁" : "📄"}</span><span>${draco_escapeHtml(item.name)}</span>`;
 
             if (item.type === "dir") {
                 row.addEventListener("click", () => {
@@ -165,7 +165,7 @@ async function updateLkmlServerList() {
     } catch (err) {
         console.error("Error al listar el repositorio:", err);
         list.classList.add("is-empty");
-        list.innerHTML = `<span class="lkml-empty-hint">${err.message || "Error al listar el repositorio."}</span>`;
+        list.innerHTML = `<span class="lkml-empty-hint">${draco_escapeHtml(err.message || "Error al listar el repositorio.")}</span>`;
     }
 }
 
@@ -304,7 +304,7 @@ function initEvents() {
                 content = await readFileAsText(lkmlSelection.file);
             } else {
                 const conn = Connections.getById(lkmlSelection.connectionId);
-                const repoConfig = conn && conn.config && conn.config.semanticRepo;
+                const repoConfig = conn ? GitSession.repoConfig(conn) : null;   // token de la sesión (F-06)
                 if (!repoConfig) throw new Error("La conexión elegida no tiene un repositorio configurado.");
                 content = await GitRepo.getFileContent(repoConfig, lkmlSelection.path);
             }
@@ -349,10 +349,20 @@ function initEvents() {
 
 }
 
-Office.onReady(() => {
+Office.onReady(async () => {
+    // El token de Git vive en la sesión del panel: se pide antes de usar el repositorio (F-06).
+    if (window.GitSession) await GitSession.requestFromOpener();
     initEvents();
     setLkmlActiveTab("server");
     populateLkmlConnectionSelect();
     updateLkmlServerList();
     updateLkmlConfirmButtonState();
 });
+
+// SEGURIDAD (auditoría F-14): todo texto externo (nombres de fichero del
+// repositorio, mensajes de error) se escapa antes de meterlo en innerHTML.
+function draco_escapeHtml(str) {
+    return String(str == null ? "" : str)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}

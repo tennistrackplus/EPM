@@ -427,249 +427,51 @@
      * vez que se lee.
      * ------------------------------------------------------------- */
 
-    /* ---------------------------------------------------------------
-     * "Mostrar ID y texto": el MODELO define el atributo de texto (dimensión:
-     *   field.textAttribute, marcado con "Texto" junto a "Key"; jerarquía:
-     *   levels[i].textAttribute) y el INFORME elige el modo por campo
-     *   (fieldOptions["zona|dim|campo"].displayMode = "ID" | "ID_TEXT" | "TEXT").
-     *   "TEXT" = mismo SQL que "ID_TEXT" (se agrupa por ID y texto) pero la
-     *   columna de ID NO se pinta: sus entradas llevan "HIDE" en la columna de
-     *   orden (M/S de EDIT_REPORT), que commands.js lee como oculta.
-     *   - Dimensión: al colocar en Filas/Columnas el atributo CLAVE de la
-     *     dimensión, con "ID_TEXT" se añade justo detrás el atributo de texto: es EXACTAMENTE
-     *     igual que si el usuario hubiese arrastrado los dos campos (dos
-     *     columnas), así que el motor no necesita saber nada de esto.
-     *   - Jerarquía: levels[i].textAttribute de cada nivel. Con "ID_TEXT"
-     *     se añade, tras los niveles de ID, una SEGUNDA jerarquía con los
-     *     atributos de texto de cada nivel (misma sangría/nodos, otra
-     *     columna). Va marcada con el sufijo TEXT_SUFFIX en el nombre de
-     *     jerarquía para que commands.js sepa que sus niveles van "pegados" a
-     *     los de ID (mismos grupos de GROUPING SETS, ver
-     *     computeGroupingSetDimensionsAndHierarchies).
-     * ------------------------------------------------------------- */
+    async function saveDesign(reportId, state) {
+        const report = getReport(reportId);
+        if (!report) return;
 
-    const TEXT_SUFFIX = "~TXT";
+        const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
 
-    const _up = v => String(v === null || v === undefined ? "" : v).trim().toUpperCase();
-
-    function _modelForReport(report) {
-        const store = window.SemanticModelStore;
-        if (!store) return { model: null, name: undefined };
-        const wanted = report && report.semanticModelName;
-        if (wanted && store.getModel(wanted)) return { model: store.getModel(wanted), name: wanted };
-        const active = store.getActiveModelName();
-        return { model: active ? store.getModel(active) : null, name: undefined };
-    }
-
-    function _dimensionField(model, dimension) {
-        if (!model || !Array.isArray(model.fields)) return null;
-        return model.fields.find(f => f.enabled && f.type === "DIMENSION" && _up(f.name) === _up(dimension)) || null;
-    }
-
-    // Atributo de texto a añadir tras el atributo `attrName` de la dimensión
-    // (solo si es su clave y la dimensión está en "ID y texto"); null si no aplica.
-    function _flatTextAttribute(field, attrName) {
-        if (!field || !field.textAttribute) return null;
-        const attrs = field.attributes || [];
-        const key = attrs.find(a => a.isKey && a.enabled !== false);
-        if (!key || _up(key.name) !== _up(attrName)) return null;
-        const txt = attrs.find(a => a.enabled && _up(a.name) === _up(field.textAttribute));
-        if (!txt || _up(txt.name) === _up(key.name)) return null;
-        return txt.name;
-    }
-
-    // { [nivel]: atributoTexto } de una jerarquía en "ID y texto", o null si
-    // no aplica (modo "ID", o algún nivel visible sin texto válido/repetido).
-    function _hierarchyTextAttributes(field, hierName, visibleLevels) {
-        if (!field) return null;
-        const hier = (field.hierarchies || []).find(h => _up(h.name) === _up(hierName));
-        if (!hier) return null;
-
-        const attrs = field.attributes || [];
-        const levelAttrs = new Set((hier.levels || []).map(l => _up(l.attribute)));
-        const used = new Set();
-        const out = {};
-        for (let i = 0; i < (hier.levels || []).length; i++) {
-            const nivel = i + 1;
-            if (visibleLevels && !visibleLevels.includes(nivel)) continue;
-            const t = hier.levels[i].textAttribute;
-            const attr = t ? attrs.find(a => a.enabled && _up(a.name) === _up(t)) : null;
-            if (!attr || levelAttrs.has(_up(attr.name)) || used.has(_up(attr.name))) return null;
-            used.add(_up(attr.name));
-            out[nivel] = attr.name;
-        }
-        return Object.keys(out).length ? out : null;
-    }
-
-    /**
-     * Expande una zona (Filas o Columnas) del diseño a la lista que lee el
-     * motor: [dim, atributo, nivel, jerarquía, subtotal, orden] por campo.
-     * ctx = { hierGrid, model }.
-     */
-    function _expandAxis(list, zoneId, fieldOptions, ctx) {
-        const { hierGrid, model } = ctx;
-
-        const subtotalAndOrder = (dimension, name) => {
+        const subtotalAndOrder = (zoneId, dimension, name, fieldOptions) => {
             const opts = (fieldOptions || {})[`${zoneId}|${dimension}|${name}`] || {};
             const subtotal = opts.showTotals ? "X" : "";
             const order = opts.sortOrder === "asc" ? "UP" : (opts.sortOrder === "desc" ? "DOWN" : "");
             return [subtotal, order];
         };
 
-        const visibleLevelsFor = (dimension, name) => {
+        const visibleLevelsFor = (zoneId, dimension, name, fieldOptions) => {
             const opts = (fieldOptions || {})[`${zoneId}|${dimension}|${name}`] || {};
             return Array.isArray(opts.visibleLevels) ? opts.visibleLevels : null;
         };
 
-        // ¿Ya está el atributo `name` de `dimension` como campo suelto en esta zona?
-        const displayModeOf = (dimension, name) => {
-            const opts = (fieldOptions || {})[`${zoneId}|${dimension}|${name}`] || {};
-            return opts.displayMode === "ID_TEXT" || opts.displayMode === "TEXT" ? opts.displayMode : "ID";
-        };
-        const wantsIdText = (dimension, name) => displayModeOf(dimension, name) !== "ID";
-
-        const hasFlat = (dimension, name) => list.some(it => !it.isHierarchy
-            && _up(it.dimension) === _up(dimension) && _up(it.name) === _up(name));
-
-        const out = [];
-        list.forEach(item => {
-            if (item.isHierarchy && existsHierarchy(hierGrid, item.dimension, item.name)) {
-                const visibleLevels = visibleLevelsFor(item.dimension, item.name);
-                const lastRow = lastRowInColumnValues(hierGrid, 4);
-                const niveles = [];
-                const hostStart = out.length;
-                for (let R = 2; R <= lastRow; R++) {
-                    if (String(cellValue(hierGrid, R, 4)).toUpperCase() === item.dimension.toUpperCase()
-                        && String(cellValue(hierGrid, R, 2)).toUpperCase() === item.name.toUpperCase()) {
-                        const nivel = Number(cellValue(hierGrid, R, 3));
-                        if (visibleLevels && !visibleLevels.includes(nivel)) continue;
-                        niveles.push(nivel);
-                        out.push([
-                            cellValue(hierGrid, R, 4), // DIMENSION
-                            cellValue(hierGrid, R, 5), // ATRIBUTO
-                            cellValue(hierGrid, R, 3), // NIVEL
-                            cellValue(hierGrid, R, 2), // JERARQUIA
-                            "", ""                     // subtotal/orden: no aplica a jerarquías
-                        ]);
-                    }
-                }
-                // "ID y texto": segunda jerarquía con los textos de cada nivel.
-                const texts = wantsIdText(item.dimension, item.name)
-                    ? _hierarchyTextAttributes(_dimensionField(model, item.dimension), item.name, visibleLevels) : null;
-                if (texts && niveles.every(n => texts[n])) {
-                    niveles.forEach(n => {
-                        out.push([item.dimension, texts[n], n, item.name + TEXT_SUFFIX, "", ""]);
-                    });
-                    // "Solo texto": los niveles de ID se consultan pero no se pintan.
-                    if (displayModeOf(item.dimension, item.name) === "TEXT") {
-                        for (let k = hostStart; k < hostStart + niveles.length; k++) out[k][5] = "HIDE";
-                    }
-                }
-            } else {
-                const [subtotal, order] = subtotalAndOrder(item.dimension, item.name);
-                const idRow = [item.dimension, item.name, 1, "", subtotal, order];
-                out.push(idRow);
-                // "ID y texto": el atributo de texto va justo detrás de la clave.
-                if (!item.isHierarchy && wantsIdText(item.dimension, item.name)) {
-                    const txt = _flatTextAttribute(_dimensionField(model, item.dimension), item.name);
-                    if (txt && !hasFlat(item.dimension, txt)) {
-                        out.push([item.dimension, txt, 1, "", "", ""]);
-                        // "Solo texto": el ID se consulta (agrupa) pero no se pinta.
-                        if (displayModeOf(item.dimension, item.name) === "TEXT") {
-                            idRow[5] = order ? order + "|HIDE" : "HIDE";
+        const expandAxis = (list, zoneId, fieldOptions) => {
+            const out = [];
+            list.forEach(item => {
+                if (item.isHierarchy && existsHierarchy(hierGrid, item.dimension, item.name)) {
+                    const visibleLevels = visibleLevelsFor(zoneId, item.dimension, item.name, fieldOptions);
+                    const lastRow = lastRowInColumnValues(hierGrid, 4);
+                    for (let R = 2; R <= lastRow; R++) {
+                        if (String(cellValue(hierGrid, R, 4)).toUpperCase() === item.dimension.toUpperCase()
+                            && String(cellValue(hierGrid, R, 2)).toUpperCase() === item.name.toUpperCase()) {
+                            const nivel = Number(cellValue(hierGrid, R, 3));
+                            if (visibleLevels && !visibleLevels.includes(nivel)) continue;
+                            out.push([
+                                cellValue(hierGrid, R, 4), // DIMENSION
+                                cellValue(hierGrid, R, 5), // ATRIBUTO
+                                cellValue(hierGrid, R, 3), // NIVEL
+                                cellValue(hierGrid, R, 2), // JERARQUIA
+                                "", ""                     // subtotal/orden: no aplica a jerarquías
+                            ]);
                         }
                     }
+                } else {
+                    const [subtotal, order] = subtotalAndOrder(zoneId, item.dimension, item.name, fieldOptions);
+                    out.push([item.dimension, item.name, 1, "", subtotal, order]);
                 }
-            }
-        });
-        return out;
-    }
-
-    /**
-     * ¿Se puede ofrecer "ID y texto" para este campo del informe? (lo usa el
-     * panel "Opciones de campo"). Devuelve
-     *   { applicable, available, reason }
-     * applicable: el campo admite el modo (clave de la dimensión o jerarquía);
-     * available : además el modelo tiene el/los atributo(s) de texto marcados.
-     */
-    function getDisplayTextInfo(reportId, dimension, name, isHierarchy) {
-        const report = getReport(reportId);
-        const field = _dimensionField(_modelForReport(report).model, dimension);
-        if (!field) return { applicable: false, available: false, reason: "" };
-
-        if (isHierarchy) {
-            const hier = (field.hierarchies || []).find(h => _up(h.name) === _up(name));
-            if (!hier) return { applicable: false, available: false, reason: "" };
-            const ok = !!_hierarchyTextAttributes(field, name, null);
-            return { applicable: true, available: ok, reason: ok ? "" : "Define el atributo de texto de todos los niveles de la jerarquía en el modelo semántico." };
-        }
-
-        const key = (field.attributes || []).find(a => a.isKey && a.enabled !== false);
-        if (!key || _up(key.name) !== _up(name)) return { applicable: false, available: false, reason: "" };
-        const ok = !!_flatTextAttribute(field, name);
-        return { applicable: true, available: ok, reason: ok ? "" : "Marca un atributo como \"Texto\" en la dimensión del modelo semántico." };
-    }
-
-    function _expansionContext(report) {
-        const { model, name } = _modelForReport(report);
-        // Mismo modelo para la jerarquía y para los textos (antes: siempre el "activo").
-        return { hierGrid: window.SemanticModelStore.getModelGridSync("MODEL_HIER", name), model };
-    }
-
-    /**
-     * Nº de columnas/filas FÍSICAS extra que aportan los "ID y texto" de una
-     * zona ("rows" | "columns") del diseño (list = campos de la zona): el
-     * taskpane lo usa para ensanchar/alargar el rango del eje y que el texto
-     * no se solape con el otro eje.
-     */
-    function countTextColumns(reportId, zoneId, list, fieldOptions) {
-        const report = getReport(reportId);
-        if (!report) return 0;
-        const ctx = _expansionContext(report);
-        if (!ctx.model) return 0;
-        const stripped = {};
-        Object.keys(fieldOptions || {}).forEach(k => {
-            const o = Object.assign({}, fieldOptions[k]);
-            delete o.displayMode;
-            stripped[k] = o;
-        });
-        // columnas físicas = entradas de nivel 1 que se pintan (las "HIDE" no)
-        const physical = rows => rows.filter(r => Number(r[2]) === 1 && String(r[5] || "").indexOf("HIDE") === -1).length;
-        const withText = physical(_expandAxis(list || [], zoneId, fieldOptions, ctx));
-        const without = physical(_expandAxis(list || [], zoneId, stripped, ctx));
-        return Math.max(0, withText - without);
-    }
-
-    /**
-     * Recalcula expandedRows/expandedCols de un informe a partir de su diseño
-     * (rows/columns/fieldOptions) y del modelo semántico ACTUAL, para que un
-     * cambio de "ID / ID y texto" (o de jerarquías) en el modelo se aplique
-     * sin tener que tocar el informe. Solo escribe si algo ha cambiado.
-     */
-    async function refreshExpansion(reportId) {
-        const report = getReport(reportId);
-        const d = report && report.design;
-        if (!d || !Array.isArray(d.rows) || !Array.isArray(d.columns)) return;
-
-        const ctx = await _expansionContext(report);
-        if (!ctx.model) return;
-
-        const expandedRows = _expandAxis(d.rows, "rows", d.fieldOptions, ctx);
-        const expandedCols = _expandAxis(d.columns, "columns", d.fieldOptions, ctx);
-
-        if (JSON.stringify(expandedRows) === JSON.stringify(d.expandedRows || [])
-            && JSON.stringify(expandedCols) === JSON.stringify(d.expandedCols || [])) return;
-
-        d.expandedRows = expandedRows;
-        d.expandedCols = expandedCols;
-        await _writeReport(reportId, report);
-    }
-
-    async function saveDesign(reportId, state) {
-        const report = getReport(reportId);
-        if (!report) return;
-
-        const ctx = await _expansionContext(report);
+            });
+            return out;
+        };
 
         // OJO: se parte del report.design ANTERIOR (spread) y solo se
         // sobrescriben los campos que gestiona esta función. Antes se
@@ -695,8 +497,8 @@
             })),
             rows: (state.rows || []).map(r => ({ dimension: r.dimension, name: r.name, isHierarchy: r.isHierarchy })),
             columns: (state.columns || []).map(c => ({ dimension: c.dimension, name: c.name, isHierarchy: c.isHierarchy })),
-            expandedRows: _expandAxis(state.rows || [], "rows", state.fieldOptions, ctx),
-            expandedCols: _expandAxis(state.columns || [], "columns", state.fieldOptions, ctx),
+            expandedRows: expandAxis(state.rows || [], "rows", state.fieldOptions),
+            expandedCols: expandAxis(state.columns || [], "columns", state.fieldOptions),
             rowsStatic: !!state.rowsStatic,
             colsStatic: !!state.colsStatic,
             rrAddress: state.rrAddress || "",
@@ -784,10 +586,6 @@
         saveReportProperties,
         setSemanticModel,
         saveDesign,
-        refreshExpansion,
-        getDisplayTextInfo,
-        countTextColumns,
-        TEXT_SUFFIX,
         updateDesignFields,
         setMemberRecognition,
         getReportGrid,

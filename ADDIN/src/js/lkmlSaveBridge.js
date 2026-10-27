@@ -35,6 +35,8 @@
 
                 // El diálogo envía { content } cuando el usuario pulsa "Guardar".
                 dialog.addEventHandler(Office.EventType.DialogMessageReceived, async (arg) => {
+                    // Petición del token de Git de la sesión (ver js/gitSession.js, F-06)
+                    if (window.GitSession && GitSession.handleDialogMessage(dialog, arg.message)) return;
 
                     let payload = null;
                     try {
@@ -51,7 +53,9 @@
                     try {
                         await Excel.run(async (context) => {
                             const sheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-                            sheet.getRange("G1").values = [[payload.content]];
+                            // Texto, nunca fórmula (auditoría F-02)
+                            const content = /^[=+\-@\t\r]/.test(payload.content) ? "'" + payload.content : payload.content;
+                            sheet.getRange("G1").values = [[content]];
                             await context.sync();
                         });
                         dialog.close();

@@ -139,11 +139,7 @@
             let lm;
 
             while ((lm = lvlRe.exec(m[2])) !== null) {
-                // "ATRIBUTO" o, en "ID y texto", "ATRIBUTO | texto: ATRIBUTO_TEXTO"
-                const parts = lm[1].split(/\s*\|\s*texto:\s*/);
-                const lvl = { attribute: parts[0].trim() };
-                if (parts[1] && parts[1].trim()) lvl.textAttribute = parts[1].trim();
-                levels.push(lvl);
+                levels.push({ attribute: lm[1].trim() });
             }
 
             if (levels.length > 0) {
@@ -182,6 +178,43 @@
      * @param {string} content Texto completo del fichero .lkml
      * @returns {{ fact: {project,dataset,table}, fields: Array }}
      */
+    /**
+     * SEGURIDAD (auditoría F-07): un .lkml puede venir del repositorio Git y
+     * haberlo escrito otro usuario. Los nombres de proyecto, dataset, tabla y
+     * columna acaban dentro de las SQL que genera el addin, así que se exige
+     * que sean identificadores simples; si no, se rechaza el fichero entero.
+     */
+    const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]{0,1023}$/;
+    const PROJECT_RE = /^([a-z][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,61}[a-z0-9]$/;
+
+    function checkIdent(value, what, allowEmpty) {
+        const v = value == null ? "" : String(value);
+        if (v === "" && allowEmpty) return;
+        if (!IDENT_RE.test(v)) throw new Error(`El fichero contiene un nombre de ${what} no válido: "${v.slice(0, 80)}".`);
+    }
+
+    function checkProject(value) {
+        const v = value == null ? "" : String(value);
+        if (v === "") return;
+        if (!PROJECT_RE.test(v)) throw new Error(`El fichero contiene un proyecto de Google Cloud no válido: "${v.slice(0, 80)}".`);
+    }
+
+    function validateIdentifiers(model) {
+        const fact = model.fact || {};
+        checkProject(fact.project);
+        checkIdent(fact.dataset, "dataset", true);
+        checkIdent(fact.table, "tabla", true);
+        (model.fields || []).forEach(f => {
+            checkIdent(f.name, "campo", false);
+            if (f.field !== undefined) checkIdent(f.field, "campo", true);
+            checkProject(f.relProject);
+            checkIdent(f.relDataset, "dataset", true);
+            checkIdent(f.relTable, "tabla", true);
+            (f.attributes || []).forEach(a => checkIdent(a.name, "atributo", false));
+            (f.hierarchies || []).forEach(h => (h.levels || []).forEach(l => checkIdent(l.attribute, "nivel de jerarquía", false)));
+        });
+    }
+
     function parseContent(content) {
 
         if (!content || typeof content !== "string" || content.trim() === "") {
@@ -220,7 +253,6 @@
                 const attributes = parseAttributes(v.body);
                 const hierarchies = parseHierarchies(v.body);
                 const join = joins[v.name];
-                const textM = v.body.match(/#\s*texto de la clave:\s*(\S+)/);
 
                 return {
                     enabled: true,
@@ -230,8 +262,7 @@
                     relDataset: relTable.dataset,
                     relTable: relTable.table,
                     attributes: attributes,
-                    hierarchies: hierarchies,
-                    textAttribute: textM ? textM[1] : ""
+                    hierarchies: hierarchies
                 };
 
             });
@@ -244,6 +275,7 @@
             fact: fact,
             fields: [...dimensionFields, ...measures]
         };
+        validateIdentifiers(result);
         // Marca de los .lkml generados por Draco Planning (ver
         // PLANNING/js/lkml-export.js): habilita la planificación sobre el modelo.
         if (/^[ \t]*#[ \t]*draco[ \t]*:[ \t]*planning[ \t]*$/im.test(content)) {

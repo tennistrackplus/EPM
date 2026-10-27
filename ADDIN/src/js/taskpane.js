@@ -168,10 +168,6 @@ const TaskPaneApp = {
         planningReport: false
     },
 
-    // Columnas/filas físicas extra que ya están contadas en el rango de cada eje
-    // por los "ID y texto" (ver reconcileTextColumns).
-    textExtra: { rows: 0, columns: 0 },
-
     // Campo actualmente seleccionado en el panel "Opciones de campo"
     // ({ zoneId, dimension, name, isHierarchy }) o null si no hay ninguno.
     selectedFieldForOptions: null,
@@ -1053,12 +1049,6 @@ const TaskPaneApp = {
      */
     async applyAxisStaticFormulas(axis, isStatic) {
         try {
-            // "Solo texto": con IDs ocultos no se puede convertir celda a celda
-            // (el ID no está en la hoja): se guarda el diseño y se repinta.
-            if (window.ReportActions && window.ReportActions.repaintAxisIfHiddenIds && this.currentReportId) {
-                await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
-                if (await window.ReportActions.repaintAxisIfHiddenIds(axis)) return;
-            }
             if (window.ReportActions && window.ReportActions.convertAxisStaticFormulas) {
                 await window.ReportActions.convertAxisStaticFormulas(axis, isStatic);
             }
@@ -1125,8 +1115,6 @@ const TaskPaneApp = {
             this.refreshCalcBadges();
 
             RangeAxis.loadFromAddresses(design.rrAddress, design.rcAddress, design.anchorAddress);
-            // El rango guardado ya incluye las columnas de "ID y texto" del diseño.
-            this.reconcileTextColumns(true);
 
             // Pintar checkboxes + sombreado/bloqueo si el eje ya venía Estático
             const chkRows = document.getElementById("chkAsymmetricRows");
@@ -1359,7 +1347,7 @@ const TaskPaneApp = {
             const result = await window.ExcelService.readDim2Data(modelName || undefined);
 
             if (result.error) {
-                container.innerHTML = `<div style='color: #a80000; padding: 4px;'>⚠️ ${result.error}</div>`;
+                container.innerHTML = `<div style='color: #a80000; padding: 4px;'>⚠️ ${draco_escapeHtml(result.error)}</div>`;
                 return;
             }
 
@@ -1415,7 +1403,7 @@ const TaskPaneApp = {
             this.refreshCalcBadges();
         } catch (err) {
             console.error("Error al cargar dimensiones:", err);
-            container.innerHTML = `<div style='color: #a80000; padding: 4px;'>❌ Error: ${err.message || err}</div>`;
+            container.innerHTML = `<div style='color: #a80000; padding: 4px;'>❌ Error: ${draco_escapeHtml(err.message || err)}</div>`;
         }
     },
 
@@ -1742,7 +1730,6 @@ const TaskPaneApp = {
             if (zoneId === "rows") RangeAxis.onRowFieldAdded(this.state.colsStatic && !this.state.rowsStatic);
             if (zoneId === "columns") RangeAxis.onColFieldAdded(this.state.rowsStatic && !this.state.colsStatic);
         }
-        this.reconcileTextColumns();
         this.refreshRangeLabels();
 
         this.renderTag(container, zoneId, entry);
@@ -1774,7 +1761,6 @@ const TaskPaneApp = {
             if (zoneId === "rows") RangeAxis.onRowFieldRemoved(this.state.colsStatic && !this.state.rowsStatic);
             if (zoneId === "columns") RangeAxis.onColFieldRemoved(this.state.rowsStatic && !this.state.colsStatic);
         }
-        this.reconcileTextColumns();
         this.refreshRangeLabels();
 
         this.scheduleAutoUpdate();
@@ -1879,20 +1865,6 @@ const TaskPaneApp = {
             this.removeFromState(zoneId, { dim: entry.dimension, name: entry.name });
             if (zoneId === "rows" || zoneId === "columns") this.cleanupMeasureGroup(container);
         });
-
-        // Clic derecho (Filas/Columnas): Mostrar → ID / ID y descripción, si el
-        // campo es la clave de una dimensión con texto, o una jerarquía.
-        if ((zoneId === "rows" || zoneId === "columns") && !isMeasure) {
-            tag.addEventListener("contextmenu", (e) => {
-                const info = window.ReportStore && window.ReportStore.getDisplayTextInfo
-                    ? window.ReportStore.getDisplayTextInfo(this.currentReportId, entry.dimension, entry.name, !!entry.isHierarchy)
-                    : null;
-                if (!info || !info.applicable) return;
-                e.preventDefault();
-                e.stopPropagation();
-                this.showDisplayModeMenu(e.clientX, e.clientY, zoneId, entry, info);
-            });
-        }
 
         // Clic (simple) sobre el campo: abre/actualiza el panel "Opciones de
         // campo" con los controles de ESE campo (medida o dimensión).
@@ -2370,7 +2342,7 @@ const TaskPaneApp = {
         const defaults = isMeasure
             // aggregation "" = la del modelo semántico (no se sobrescribe).
             ? { numberFormat: "number", decimals: 2, aggregation: "" }
-            : { showTotals: false, sortOrder: "none", expandToLevel: null, visibleLevels: null, displayMode: "ID" };
+            : { showTotals: false, sortOrder: "none", expandToLevel: null, visibleLevels: null };
         return Object.assign({}, defaults, this.state.fieldOptions[key] || {});
     },
 
@@ -2424,145 +2396,6 @@ const TaskPaneApp = {
         }
     },
 
-    /**
-     * Cada "ID y texto" añade una columna (Filas) o fila (Columnas) física:
-     * el rango del eje (RangeAxis) tiene que crecer/encoger igual que al
-     * añadir/quitar un campo, o el texto se solapa con el otro eje.
-     * reset=true: solo toma la cuenta actual como ya incluida en el rango
-     * (al cargar un informe).
-     */
-    reconcileTextColumns(reset) {
-        if (!window.ReportStore || !window.ReportStore.countTextColumns || !this.currentReportId) return;
-        ["rows", "columns"].forEach(zone => {
-            const n = window.ReportStore.countTextColumns(this.currentReportId, zone, this.listForZone(zone), this.state.fieldOptions);
-            let delta = reset ? 0 : n - (this.textExtra[zone] || 0);
-            const rowsFlag = this.state.colsStatic && !this.state.rowsStatic;
-            const colsFlag = this.state.rowsStatic && !this.state.colsStatic;
-            for (; delta > 0; delta--) {
-                if (zone === "rows") RangeAxis.onRowFieldAdded(rowsFlag); else RangeAxis.onColFieldAdded(colsFlag);
-            }
-            for (; delta < 0; delta++) {
-                if (zone === "rows") RangeAxis.onRowFieldRemoved(rowsFlag); else RangeAxis.onColFieldRemoved(colsFlag);
-            }
-            this.textExtra[zone] = n;
-        });
-        this.refreshRangeLabels();
-    },
-
-    /** Cambia "Solo ID" / "ID y texto" de un campo (panel de opciones o menú contextual). */
-    setDisplayMode(zoneId, entry, mode) {
-        const current = this.getFieldOptions(zoneId, entry);
-        current.displayMode = (mode === "ID_TEXT" || mode === "TEXT") ? mode : "ID";
-        this.setFieldOptions(zoneId, entry, current);
-        this.reconcileTextColumns();
-        const sel = this.selectedFieldForOptions;
-        if (sel && sel.zoneId === zoneId && sel.dimension === entry.dimension && sel.name === entry.name) {
-            this.renderFieldOptionsBody(zoneId, entry);
-        }
-        this.scheduleAutoUpdate();
-    },
-
-    /** Menú de clic derecho sobre un campo de Filas/Columnas: Mostrar → ID / ID y descripción. */
-    showDisplayModeMenu(x, y, zoneId, entry, info) {
-        this.hideDisplayModeMenu();
-        const saved = this.getFieldOptions(zoneId, entry).displayMode;
-        const current = (info.available && (saved === "ID_TEXT" || saved === "TEXT")) ? saved : "ID";
-
-        const menu = document.createElement("div");
-        menu.id = "displayModeMenu";
-        menu.style.cssText = "position:fixed;z-index:100000;min-width:170px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;"
-            + "box-shadow:0 4px 14px rgba(0,0,0,.18);padding:4px 0;font-size:12px;color:#0f172a;font-family:inherit;";
-
-        const title = document.createElement("div");
-        title.textContent = "Mostrar";
-        title.style.cssText = "padding:3px 12px;font-size:10px;font-weight:700;text-transform:uppercase;color:#64748b;";
-        menu.appendChild(title);
-
-        [["ID", "ID"], ["ID_TEXT", "ID y descripción"], ["TEXT", "Descripción"]].forEach(([mode, label]) => {
-            const disabled = mode !== "ID" && !info.available;
-            const item = document.createElement("div");
-            item.textContent = (current === mode ? "\u2713 " : "\u00a0\u00a0\u00a0 ") + label;
-            item.style.cssText = "padding:5px 12px;cursor:" + (disabled ? "not-allowed" : "pointer") + ";" + (disabled ? "color:#94a3b8;" : "");
-            if (disabled) item.title = info.reason;
-            if (!disabled) {
-                item.addEventListener("mouseenter", () => { item.style.background = "#eff6ff"; });
-                item.addEventListener("mouseleave", () => { item.style.background = ""; });
-                item.addEventListener("click", () => {
-                    this.hideDisplayModeMenu();
-                    if (mode !== current) this.setDisplayMode(zoneId, entry, mode);
-                });
-            }
-            menu.appendChild(item);
-        });
-
-        document.body.appendChild(menu);
-        const r = menu.getBoundingClientRect();
-        menu.style.left = Math.max(0, Math.min(x, window.innerWidth - r.width - 4)) + "px";
-        menu.style.top = Math.max(0, Math.min(y, window.innerHeight - r.height - 4)) + "px";
-
-        this._displayMenuCloser = (ev) => {
-            if (ev.type === "keydown" && ev.key !== "Escape") return;
-            if (ev.type === "mousedown" && menu.contains(ev.target)) return;
-            this.hideDisplayModeMenu();
-        };
-        setTimeout(() => {
-            document.addEventListener("mousedown", this._displayMenuCloser, true);
-            document.addEventListener("keydown", this._displayMenuCloser, true);
-            window.addEventListener("blur", this._displayMenuCloser, true);
-            window.addEventListener("scroll", this._displayMenuCloser, true);
-        }, 0);
-    },
-
-    hideDisplayModeMenu() {
-        const m = document.getElementById("displayModeMenu");
-        if (m) m.remove();
-        if (this._displayMenuCloser) {
-            document.removeEventListener("mousedown", this._displayMenuCloser, true);
-            document.removeEventListener("keydown", this._displayMenuCloser, true);
-            window.removeEventListener("blur", this._displayMenuCloser, true);
-            window.removeEventListener("scroll", this._displayMenuCloser, true);
-            this._displayMenuCloser = null;
-        }
-    },
-
-    /**
-     * "Mostrar como: Solo ID / ID y texto" del campo (clave de dimensión o
-     * jerarquía). El atributo de texto se define en el modelo semántico; aquí
-     * solo se elige el modo. Devuelve null si el campo no admite el modo.
-     */
-    buildDisplayModeBlock(zoneId, entry, options) {
-        if (!window.ReportStore || !window.ReportStore.getDisplayTextInfo) return null;
-        const info = window.ReportStore.getDisplayTextInfo(this.currentReportId, entry.dimension, entry.name, !!entry.isHierarchy);
-        if (!info.applicable) return null;
-
-        const label = document.createElement("label");
-        label.className = "field-options-field-block";
-        const span = document.createElement("span");
-        span.className = "field-options-field-label";
-        span.textContent = "Mostrar como";
-        const select = document.createElement("select");
-        select.id = "optDisplayMode";
-        [["ID", "Solo ID"], ["ID_TEXT", "ID y texto"], ["TEXT", "Solo texto"]].forEach(([v, t]) => {
-            const o = document.createElement("option");
-            o.value = v;
-            o.textContent = t;
-            select.appendChild(o);
-        });
-        select.value = (info.available && (options.displayMode === "ID_TEXT" || options.displayMode === "TEXT")) ? options.displayMode : "ID";
-        select.disabled = !info.available;
-        if (!info.available) select.title = info.reason;
-        select.addEventListener("change", () => this.setDisplayMode(zoneId, entry, select.value));
-        label.appendChild(span);
-        label.appendChild(select);
-        if (!info.available) {
-            const hint = document.createElement("div");
-            hint.className = "field-options-empty";
-            hint.textContent = info.reason;
-            label.appendChild(hint);
-        }
-        return label;
-    },
-
     buildDimensionOptionsForm(zoneId, entry, options) {
         const wrap = document.createElement("div");
         wrap.className = "field-options-group";
@@ -2599,9 +2432,6 @@ const TaskPaneApp = {
         wrap.querySelector("#optShowTotals").addEventListener("change", persist);
         wrap.querySelector("#optSortOrder").addEventListener("change", persist);
 
-        const displayBlock = this.buildDisplayModeBlock(zoneId, entry, options);
-        if (displayBlock) wrap.appendChild(displayBlock);
-
         return wrap;
     },
 
@@ -2615,9 +2445,6 @@ const TaskPaneApp = {
             container.appendChild(empty);
             return;
         }
-
-        const displayBlock = this.buildDisplayModeBlock(zoneId, entry, options);
-        if (displayBlock) container.appendChild(displayBlock);
 
         const expandLabel = document.createElement("label");
         expandLabel.className = "field-options-field-block";
@@ -2934,3 +2761,11 @@ const TaskPaneApp = {
         }
     }
 };
+
+// SEGURIDAD (auditoría F-14): todo texto externo (nombres de fichero del
+// repositorio, mensajes de error) se escapa antes de meterlo en innerHTML.
+function draco_escapeHtml(str) {
+    return String(str == null ? "" : str)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}

@@ -22,6 +22,8 @@ const LoginApp = {
     },
 
     init() {
+        // Tokens de Git guardados en disco por versiones anteriores -> a la sesión (F-06).
+        if (window.GitSession) GitSession.migrateLegacy();
         // Modo backend: reanuda la renovación automática del token si hay sesión.
         GoogleAuth.resume().finally(() => this.renderList());
         this.bindStaticEvents();
@@ -72,6 +74,8 @@ const LoginApp = {
             this.saveConnection();
         });
 
+        // En producción solo el servicio de autenticación (auditoría F-10)
+        GoogleAuth.applyModeOptions(document.getElementById("bqAuthMode"));
         document.getElementById("bqAuthMode").addEventListener("change", () => this.toggleAuthModeFields());
 
         // Selector de origen de datos dentro de la vista "crear"
@@ -258,7 +262,7 @@ const LoginApp = {
         document.getElementById("bqRepoUrl").value = "";
         document.getElementById("bqRepoBranch").value = "";
         document.getElementById("bqRepoToken").value = "";
-        document.getElementById("bqAuthMode").value = "token";
+        document.getElementById("bqAuthMode").value = GoogleAuth.simpleModeAllowed() ? "token" : "backend";
         document.getElementById("bqOAuthClientId").value = "";
         document.getElementById("bqAuthBrokerUrl").value = "";
         document.querySelectorAll("#viewCreate .connector-card").forEach(c => c.classList.remove("selected"));
@@ -279,7 +283,7 @@ const LoginApp = {
                 document.getElementById("bqRepoType").value = (cfg.semanticRepo && cfg.semanticRepo.type) || "";
                 document.getElementById("bqRepoUrl").value = (cfg.semanticRepo && cfg.semanticRepo.url) || "";
                 document.getElementById("bqRepoBranch").value = (cfg.semanticRepo && cfg.semanticRepo.branch) || "";
-                document.getElementById("bqRepoToken").value = (cfg.semanticRepo && cfg.semanticRepo.token) || "";
+                document.getElementById("bqRepoToken").value = GitSession.get(conn.id);
                 const auth = GoogleAuth.normalizeConfig(cfg);
                 document.getElementById("bqAuthMode").value = auth.authMode;
                 document.getElementById("bqOAuthClientId").value = auth.oauthClientId;
@@ -332,7 +336,7 @@ const LoginApp = {
                     type: document.getElementById("bqRepoType").value,
                     url: document.getElementById("bqRepoUrl").value.trim(),
                     branch: document.getElementById("bqRepoBranch").value.trim(),
-                    token: document.getElementById("bqRepoToken").value.trim()
+                    token: ""   // el PAT solo vive en la sesión (GitSession, auditoría F-06)
                 }
             };
         }
@@ -364,6 +368,10 @@ const LoginApp = {
             });
         } else {
             conn = Connections.create({ name, provider: this.selectedProvider, config });
+        }
+        // PAT de Git: solo en la sesión (auditoría F-06)
+        if (this.selectedProvider === "bigquery") {
+            GitSession.set(conn.id, document.getElementById("bqRepoToken").value);
         }
 
         Connections.setActiveId(conn.id);

@@ -75,7 +75,7 @@ const BQ = {
                 type: repo.type || "",
                 url: (repo.url || "").trim(),
                 branch: (repo.branch || "").trim(),
-                token: (repo.token || "").trim()
+                token: ""   // el PAT no se guarda en disco (auditoría F-06, ver gitSession.js)
             }));
         } else {
             localStorage.removeItem("bq_semantic_repo");

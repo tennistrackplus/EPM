@@ -264,12 +264,6 @@
      *                    activo (hueco ya preparado para el futuro selector).
      */
     async function getModelGrid(sheetName, modelNameOverride) {
-        return getModelGridSync(sheetName, modelNameOverride);
-    }
-
-    // Misma lectura, síncrona (no hay nada asíncrono en ella): la usan
-    // ReportStore y el taskpane cuando necesitan el resultado al instante.
-    function getModelGridSync(sheetName, modelNameOverride) {
         const header = HEADERS[sheetName];
 
         if (sheetName === "MODEL_FACT") {
@@ -313,7 +307,6 @@
         getActiveModelName,
         setActiveModelName,
         getModelGrid,
-        getModelGridSync,
         // expuestos por si hace falta reconstruir filas a mano en otro sitio
         buildRelationshipRows,
         buildDimensionRows,

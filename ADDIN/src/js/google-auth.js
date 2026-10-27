@@ -15,6 +15,10 @@
  *            llegan al navegador: el servicio entrega access tokens de
  *            corta duración y los renueva solo mientras dura la sesión.
  *
+ * PRODUCCIÓN (auditoría F-10): solo se admite el modo "backend". El modo
+ * "token" (flujo implícito, desaconsejado por OAuth 2.1) queda disponible
+ * únicamente si DracoConfig.allowSimpleOAuth = true, para pruebas.
+ *
  * En ambos modos:
  *  - Se usa un parámetro `state` aleatorio que se comprueba a la vuelta
  *    (protección CSRF / inyección de tokens).
@@ -33,10 +37,24 @@ const GoogleAuth = {
     // ---------------------------------------------------------
     // Validación de la configuración de la conexión
     // ---------------------------------------------------------
+    /** ¿Se permite el modo sencillo (flujo implícito)? Solo para pruebas. */
+    simpleModeAllowed() {
+        return !!(typeof DracoConfig !== "undefined" && DracoConfig.allowSimpleOAuth === true);
+    },
+
+    /** Deja en el selector de modo solo las opciones permitidas. */
+    applyModeOptions(selectEl) {
+        if (!selectEl || this.simpleModeAllowed()) return;
+        const opt = selectEl.querySelector('option[value="token"]');
+        if (opt) opt.remove();
+        selectEl.value = "backend";
+    },
+
     normalizeConfig(cfg) {
         const c = cfg || {};
+        const mode = c.authMode === "token" && this.simpleModeAllowed() ? "token" : "backend";
         return {
-            authMode: c.authMode === "backend" ? "backend" : "token",
+            authMode: mode,
             oauthClientId: String(c.oauthClientId || "").trim(),
             authBrokerUrl: String(c.authBrokerUrl || "").trim().replace(/\/+$/, "")
         };
@@ -44,6 +62,9 @@ const GoogleAuth = {
 
     /** Devuelve un texto de error o null si la configuración es válida. */
     validateConfig(cfg) {
+        if (cfg && cfg.authMode === "token" && !this.simpleModeAllowed()) {
+            return "En producción solo se admite el servicio de autenticación: edita la conexión e indica su URL.";
+        }
         const c = this.normalizeConfig(cfg);
         if (c.authMode === "backend") {
             if (!/^https:\/\/[^\s/?#]+(\/[^\s?#]*)?$/i.test(c.authBrokerUrl)) {
