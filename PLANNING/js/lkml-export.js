@@ -61,6 +61,9 @@ const LkmlExport = {
 
         lines.push(`# Modelo semántico: ${meta.name || modelId}`);
         lines.push("# Generado automáticamente al guardar el cubo en Draco Planning.");
+        // Marca de modelo de Draco Planning: el addin de Excel solo permite
+        // planificar sobre modelos con esta línea (ver ADDIN/src/js/lkmlImport.js).
+        lines.push("# draco: planning");
         lines.push("");
 
         /* ---------------- VIEW: tabla de hechos + measures ---------------- */

@@ -634,7 +634,7 @@ const DimensionData = {
             return;
         }
 
-        // Validación de clave única: ni BigQuery ni Snowflake la fuerzan a nivel
+        // Validación de clave única: BigQuery no la fuerza a nivel
         // de motor, así que la comprobamos aquí antes de guardar.
         const sigOf = (r) => keyCols_.map(c => String(r[c] ?? "").trim().toUpperCase()).join(" | ");
         const seen = new Map();

@@ -17,7 +17,7 @@
  *  - Un único diseñador por informe: guardar sobrescribe (sin control de
  *    versiones). "Guardar como" crea un informe nuevo.
  *  - Permisos: los de DRACO_CONTROL (no hay módulo de roles todavía).
- *  - Todo pasa por Provider, así que funciona igual en BigQuery y Snowflake.
+ *  - Todo pasa por Provider (BigQuery).
  *  - Tope de tamaño de la definición: MAX_BYTES (la consulta SQL que la
  *    guarda tiene un límite de tamaño en el motor, de en torno a 1 MB).
  *
@@ -42,11 +42,8 @@ const Informes = {
         return err;
     },
 
-    /** Comprueba la sesión antes de cada operación (y renueva Snowflake si hace falta). */
+    /** Comprueba la sesión antes de cada operación. */
     async guard() {
-        if (Provider.key() === "snowflake" && typeof SF !== "undefined" && SF.ensureConnected) {
-            try { await SF.ensureConnected(); } catch (e) { /* se resuelve abajo */ }
-        }
         if (!Provider.isConnected()) {
             throw this.fail("NO_AUTH", `Tu sesión de ${Provider.label()} ha caducado.`);
         }
@@ -80,9 +77,9 @@ const Informes = {
     },
 
     /**
-     * Literal de texto seguro para BigQuery y Snowflake. Provider.esc() solo protege comillas y barras: BigQuery NO admite
+     * Literal de texto seguro para BigQuery. Provider.esc() solo protege comillas y barras: BigQuery NO admite
      * saltos de línea reales dentro de '...' ("Unclosed string literal"), p. ej. en una descripción de varias líneas.
-     * Se escriben como \n \r \t (escapes que entienden los dos motores) y vuelven a ser saltos al leerlos.
+     * Se escriben como \n \r \t (escapes que entiende BigQuery) y vuelven a ser saltos al leerlos.
      */
     lit(v) {
         return "'" + Provider.esc(v == null ? "" : v).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t") + "'";
@@ -112,15 +109,12 @@ const Informes = {
         return e;
     },
 
-    /** Fecha de una fila: BigQuery devuelve epoch en segundos (se muestra en hora local); Snowflake, el texto tal cual. */
+    /** Fecha de una fila: BigQuery devuelve epoch en segundos (se muestra en hora local). */
     tsExpr(col) {
-        return Provider.key() === "snowflake"
-            ? `TO_CHAR(${col}, 'YYYY-MM-DD HH24:MI')`
-            : `UNIX_SECONDS(${col})`;
+        return `UNIX_SECONDS(${col})`;
     },
     formatTs(v) {
         if (v === null || v === undefined || v === "") return "";
-        if (Provider.key() === "snowflake") return String(v);
         const n = Number(v);
         if (!isFinite(n)) return String(v);
         const d = new Date(n * 1000);

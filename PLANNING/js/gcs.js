@@ -10,7 +10,7 @@
  *     explícito en cada llamada (se elige en el propio selector de la
  *     plantilla, ver UI.openBucketExcelPickerModal en ui.js).
  *
- * El scope OAuth "cloud-platform" (ya en DracoConfig.googleScopes) incluye
+ * El scope OAuth "devstorage.read_write" (en DracoConfig.googleScopes) incluye
  * acceso de lectura/escritura a Cloud Storage, así que no hace falta pedir
  * un scope adicional ni reconectar.
  */

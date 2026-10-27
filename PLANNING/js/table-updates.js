@@ -23,7 +23,7 @@
  *
  * Alcance de esta primera versión (decisiones explícitas):
  *  - El selector de tabla solo lista tablas DENTRO del esquema del
- *    proyecto actual (no se navega todo Snowflake/BigQuery como en
+ *    proyecto actual (no se navega todo BigQuery como en
  *    el add-in): es más simple y evita ediciones fuera de proyecto.
  *  - El grid trabaja "todo en memoria": se trae la tabla entera
  *    (con los filtros de cabecera aplicados) de una vez y se
@@ -1890,26 +1890,27 @@ const TableUpdates = {
         const clauses = [];
         fields.forEach(f => {
             if (!f.filter || f.filter.type === "NONE") return;
+            const col = Provider.ident(f.name, "columna");   // auditoría F-07
             if (f.filter.type === "CONST") {
                 if (f.filter.value === null || f.filter.value === undefined || f.filter.value === "") return;
-                clauses.push(`${f.name} = '${Provider.esc(f.filter.value)}'`);
+                clauses.push(`${col} = '${Provider.esc(f.filter.value)}'`);
                 return;
             }
             if (f.filter.type === "VAR") {
                 const varName = this.varNameById(f.filter.value);
                 const val = variableValues[varName];
                 if (Array.isArray(val)) {
-                    const sql = this.selOptTableSql(f.name, val);
+                    const sql = this.selOptTableSql(col, val);
                     if (sql) clauses.push(sql);
                 } else if (val && typeof val === "object" && ("low" in val || "high" in val)) {
                     // Rango simple {low, high} (variable en modo "rango").
                     const low = (val.low || "").toString().trim();
                     const high = (val.high || "").toString().trim();
-                    if (low !== "" && high !== "") clauses.push(`${f.name} BETWEEN '${Provider.esc(low)}' AND '${Provider.esc(high)}'`);
-                    else if (low !== "") clauses.push(`${f.name} >= '${Provider.esc(low)}'`);
-                    else if (high !== "") clauses.push(`${f.name} <= '${Provider.esc(high)}'`);
+                    if (low !== "" && high !== "") clauses.push(`${col} BETWEEN '${Provider.esc(low)}' AND '${Provider.esc(high)}'`);
+                    else if (low !== "") clauses.push(`${col} >= '${Provider.esc(low)}'`);
+                    else if (high !== "") clauses.push(`${col} <= '${Provider.esc(high)}'`);
                 } else if (val !== null && val !== undefined && val !== "") {
-                    clauses.push(`${f.name} = '${Provider.esc(val)}'`);
+                    clauses.push(`${col} = '${Provider.esc(val)}'`);
                 }
             }
         });
@@ -2911,7 +2912,7 @@ const TableUpdates = {
         }
     },
 
-    /** true si el tipo físico (BigQuery o Snowflake) es numérico. */
+    /** true si el tipo físico (BigQuery) es numérico. */
     isNumericType(type) {
         return /^(INT|INTEGER|INT64|SMALLINT|BIGINT|TINYINT|BYTEINT|NUMERIC|BIGNUMERIC|DECIMAL|BIGDECIMAL|NUMBER|FLOAT|FLOAT64|DOUBLE|REAL)\b/i.test(String(type || "").trim());
     },

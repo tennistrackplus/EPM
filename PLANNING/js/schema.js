@@ -3,7 +3,7 @@
  * DRACO PLANNING — ESQUEMA DE CONTROL
  * ============================================================
  * Crea (si no existen) el dataset/esquema de control y las tablas
- * maestras de Draco en el motor activo (BigQuery o Snowflake):
+ * maestras de Draco en BigQuery:
  *   - DRACO_CONTROL.PROYECTOS
  *   - DRACO_CONTROL.DIMENSIONES
  *   - DRACO_CONTROL.CUBOS
@@ -404,7 +404,7 @@ const DracoSchema = {
                     NOMBRE STRING NOT NULL,
                     DESCRIPCION STRING,
                     CUBO STRING,                 -- nombre del cubo (modelo semántico) sobre el que está diseñada
-                    MOTOR STRING,                -- 'bigquery' | 'snowflake': el SQL guardado es de ese motor
+                    MOTOR STRING,                -- 'bigquery': el SQL guardado es de ese motor
                     DEFINICION_JSON STRING,      -- definición del informe (ajustes del addin: informe, filtros, modelo...)
                     SQL_TEXT STRING,             -- SQL ya generado al guardar: al refrescar NO se vuelve a generar
                     SQL_GENERADO TIMESTAMP,      -- cuándo se generó ese SQL
@@ -466,8 +466,7 @@ const DracoSchema = {
      * Cambios sobre tablas que ya existían antes de introducir estas
      * columnas (proyectos ya bootstrapeados). `CREATE TABLE IF NOT EXISTS`
      * no las añade retroactivamente, así que se hace aquí con
-     * `ADD COLUMN IF NOT EXISTS`, soportado tal cual en BigQuery y en
-     * Snowflake. Idempotente: se puede ejecutar en cada bootstrap.
+     * `ADD COLUMN IF NOT EXISTS`. Idempotente: se puede ejecutar en cada bootstrap.
      */
     async evolve(onProgress = () => {}) {
         onProgress("Verificando columnas del modelo semántico...");
@@ -491,11 +490,6 @@ const DracoSchema = {
     },
 
     async bootstrap(onProgress = () => {}) {
-        if (Provider.key() === "snowflake") {
-            onProgress(`Verificando base de datos ${SF.getDatabase()}...`);
-            await SF.ensureDatabase();
-        }
-
         const exists = await Provider.containerExists(DracoConfig.controlDataset);
         if (!exists) {
             onProgress(`Creando ${DracoConfig.controlDataset}...`);
@@ -507,8 +501,20 @@ const DracoSchema = {
         // await secuencial, 28 tablas a ~200ms cada una son ~5-6s solo
         // aquí; en paralelo es ~el tiempo de la más lenta (~200-500ms).
         onProgress(`Verificando ${this.TABLES.length} tablas de control...`);
-        await Promise.all(this.TABLES.map(name => Provider.runQuery(this.ddl(name))));
-
-        await this.evolve(onProgress);
+        try {
+            await Promise.all(this.TABLES.map(name => Provider.runQuery(this.ddl(name))));
+            await this.evolve(onProgress);
+        } catch (err) {
+            // Un usuario sin permiso para CREAR/ALTERAR tablas en el dataset de
+            // control (solo lectura/escritura de datos) puede entrar igualmente si
+            // el esquema ya está instalado: la instalación y las migraciones las
+            // hace quien tenga permisos de administración.
+            const msg = String((err && err.message) || err);
+            if (exists && /access denied|permission|denied|403/i.test(msg)) {
+                console.warn("[Draco] Sin permiso para verificar/migrar el esquema de control; se continúa:", msg);
+                return;
+            }
+            throw err;
+        }
     }
 };

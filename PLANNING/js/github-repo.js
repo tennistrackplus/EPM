@@ -36,10 +36,11 @@ const GithubRepo = {
 
     _friendlyError(status) {
         if (status === 401 || status === 403) {
-            return `GitHub: acceso denegado (${status}). Revisa DracoConfig.semanticModelGithub.token en js/config.js.`;
+            if (typeof BQ !== "undefined" && BQ.setGitPat) BQ.setGitPat("");   // se volverá a pedir
+            return `GitHub: acceso denegado (${status}). Revisa el token de acceso a Git (se pedirá de nuevo).`;
         }
         if (status === 404) {
-            return "GitHub: repositorio o rama no encontrados (404). Revisa DracoConfig.semanticModelGithub.url/branch.";
+            return "GitHub: repositorio o rama no encontrados (404). Revisa la URL y la rama del repositorio en la conexión.";
         }
         return `GitHub: no se pudo guardar el fichero (HTTP ${status}).`;
     },
@@ -56,8 +57,8 @@ const GithubRepo = {
         const cfg = repoConfig || (typeof DracoConfig !== "undefined" && DracoConfig.semanticModelGithub) || {};
 
         const ref = this.parseUrl(cfg.url);
-        if (!ref) throw new Error("DracoConfig.semanticModelGithub.url no es una URL de GitHub válida (revisa js/config.js).");
-        if (!cfg.token) throw new Error("Falta DracoConfig.semanticModelGithub.token en js/config.js (Personal Access Token con permiso de escritura sobre el repo).");
+        if (!ref) throw new Error("La URL del repositorio Git de la conexión no es una URL de GitHub válida.");
+        if (!cfg.token) throw new Error("Falta el token de acceso a Git.");
 
         const branch = (cfg.branch || "main").trim();
         const cleanPath = (path || "").replace(/^\/+|\/+$/g, "");
@@ -108,8 +109,8 @@ const GithubRepo = {
         const cfg = repoConfig || (typeof DracoConfig !== "undefined" && DracoConfig.semanticModelGithub) || {};
 
         const ref = this.parseUrl(cfg.url);
-        if (!ref) throw new Error("DracoConfig.semanticModelGithub.url no es una URL de GitHub válida (revisa js/config.js).");
-        if (!cfg.token) throw new Error("Falta DracoConfig.semanticModelGithub.token en js/config.js (Personal Access Token con permiso de lectura sobre el repo).");
+        if (!ref) throw new Error("La URL del repositorio Git de la conexión no es una URL de GitHub válida.");
+        if (!cfg.token) throw new Error("Falta el token de acceso a Git.");
 
         const branch = (cfg.branch || "main").trim();
         const cleanPath = (path || "").replace(/^\/+|\/+$/g, "");

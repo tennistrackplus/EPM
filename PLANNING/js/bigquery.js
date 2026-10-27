@@ -3,19 +3,74 @@
  * DRACO PLANNING — CLIENTE BIGQUERY (REST API)
  * ============================================================
  * Envuelve las llamadas a la API REST de BigQuery usando el token
- * OAuth guardado en localStorage por el módulo de login.
+ * OAuth obtenido por el módulo de login.
+ *
+ * SEGURIDAD: el token se guarda SOLO en sessionStorage (no en
+ * localStorage): no se persiste en disco y desaparece al cerrar la
+ * pestaña. Se comparte con los iframes del mismo origen y se copia a
+ * las ventanas abiertas con window.open() desde la propia app.
  * No usa ninguna librería externa: solo fetch().
  */
 const BQ = {
     BASE: "https://bigquery.googleapis.com/bigquery/v2",
 
+    TOKEN_KEY: "bigquery_access_token",
+    EXPIRES_KEY: "bigquery_token_expires",
+
+    _store() {
+        return window.sessionStorage;
+    },
+
+    /** Borra el token que versiones anteriores dejaban en localStorage. */
+    purgeLegacyToken() {
+        try {
+            localStorage.removeItem(this.TOKEN_KEY);
+            localStorage.removeItem(this.EXPIRES_KEY);
+        } catch (e) { /* sin acceso a localStorage */ }
+    },
+
+    SCOPES_KEY: "bigquery_token_scopes",
+
+    /** Scopes concedidos por Google en el último login (null si se desconocen). */
+    getGrantedScopes() {
+        const raw = this._store().getItem(this.SCOPES_KEY);
+        return raw ? raw.split(/\s+/).filter(Boolean) : null;
+    },
+
+    /**
+     * ¿El token permite ESCRIBIR en BigQuery? false si solo se concedió
+     * bigquery.readonly (p. ej. el usuario desmarcó el permiso de escritura
+     * en la pantalla de consentimiento, o el servicio de autenticación del
+     * cliente solo admite lectura). Si no se conocen los scopes, true: la
+     * seguridad real la pone IAM al escribir.
+     */
+    canWriteBigQuery() {
+        const scopes = this.getGrantedScopes();
+        if (!scopes) return true;
+        return scopes.includes("https://www.googleapis.com/auth/bigquery")
+            || scopes.includes("https://www.googleapis.com/auth/cloud-platform");
+    },
+
+    setToken(token, expiresAt, scope) {
+        this._store().setItem(this.TOKEN_KEY, token);
+        this._store().setItem(this.EXPIRES_KEY, String(expiresAt));
+        if (scope) this._store().setItem(this.SCOPES_KEY, String(scope));
+    },
+
     getToken() {
-        const token = localStorage.getItem("bigquery_access_token");
-        const expires = localStorage.getItem("bigquery_token_expires");
+        const token = this._store().getItem(this.TOKEN_KEY);
+        const expires = this._store().getItem(this.EXPIRES_KEY);
         if (!token || !expires || Date.now() >= parseInt(expires, 10)) {
+            if (token) this.logout();
             return null;
         }
         return token;
+    },
+
+    logout() {
+        this._store().removeItem(this.TOKEN_KEY);
+        this._store().removeItem(this.EXPIRES_KEY);
+        this._store().removeItem(this.SCOPES_KEY);
     },
 
     getGcpProject() {
@@ -27,57 +82,86 @@ const BQ = {
     },
 
     // ---------------------------------------------------------
-    // PAT de GitHub vía Google Secret Manager
+    // Repositorio Git de modelos semánticos (.lkml)
     // ---------------------------------------------------------
-    // GitHub bloquea el push si detecta el token de DracoConfig.
-    // semanticModelGithub.token pegado tal cual en config.js, así que en
-    // vez de leerlo de ahí se lee, justo antes de usarlo, desde Secret
-    // Manager (secreto "github-pat-draco").
-    GITHUB_PAT_SECRET_NAME: "github-pat-draco",
+    // SEGURIDAD (auditoría F-04): el PAT de GitHub ya NO se lee de Secret
+    // Manager (eso obligaba a pedir el scope cloud-platform). Lo introduce
+    // el propio usuario, como en el addin de Excel, y se guarda SOLO en la
+    // sesión del navegador (sessionStorage): no se persiste en disco.
+    // URL y rama del repositorio son datos de la conexión (no secretos).
+    GIT_PAT_KEY: "draco_git_pat",
+
+    getGitPat() {
+        return sessionStorage.getItem(this.GIT_PAT_KEY) || "";
+    },
+
+    setGitPat(pat) {
+        const v = String(pat || "").trim();
+        if (v) sessionStorage.setItem(this.GIT_PAT_KEY, v);
+        else sessionStorage.removeItem(this.GIT_PAT_KEY);
+    },
+
+    /** Pide el PAT al usuario (modal propio, sin dependencias). Devuelve "" si cancela. */
+    _askGitPat(repoUrl) {
+        return new Promise((resolve) => {
+            const overlay = document.createElement("div");
+            overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:100000;";
+            const box = document.createElement("div");
+            box.style.cssText = "background:#fff;color:#1f2937;border-radius:10px;padding:20px;width:min(440px,92vw);font:14px system-ui,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.25);";
+            const title = document.createElement("h3");
+            title.textContent = "Token de acceso a Git";
+            title.style.cssText = "margin:0 0 8px;font-size:16px;";
+            const p = document.createElement("p");
+            p.textContent = `Introduce tu token de acceso (PAT) con permiso de escritura en ${repoUrl}. Solo se guarda mientras dure esta sesión del navegador.`;
+            p.style.cssText = "margin:0 0 12px;line-height:1.4;";
+            const input = document.createElement("input");
+            input.type = "password";
+            input.autocomplete = "off";
+            input.style.cssText = "width:100%;box-sizing:border-box;padding:8px;border:1px solid #d1d5db;border-radius:6px;";
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;justify-content:flex-end;gap:8px;margin-top:14px;";
+            const cancel = document.createElement("button");
+            cancel.textContent = "Cancelar";
+            const ok = document.createElement("button");
+            ok.textContent = "Aceptar";
+            [cancel, ok].forEach(b => { b.type = "button"; b.style.cssText = "padding:7px 14px;border-radius:6px;border:1px solid #d1d5db;cursor:pointer;background:#fff;"; });
+            ok.style.background = "#2659d9"; ok.style.color = "#fff"; ok.style.borderColor = "#2659d9";
+            row.append(cancel, ok);
+            box.append(title, p, input, row);
+            overlay.appendChild(box);
+            document.body.appendChild(overlay);
+            input.focus();
+            const done = (val) => { overlay.remove(); resolve(val); };
+            cancel.addEventListener("click", () => done(""));
+            ok.addEventListener("click", () => done(input.value.trim()));
+            input.addEventListener("keydown", (e) => {
+                if (e.key === "Enter") done(input.value.trim());
+                if (e.key === "Escape") done("");
+            });
+        });
+    },
 
     /**
-     * Lee la última versión del secreto "github-pat-draco" en Secret
-     * Manager y devuelve su valor en texto (el PAT de GitHub). Usa el
-     * mismo token OAuth de la sesión de BigQuery activa (hace falta el
-     * scope "cloud-platform" en DracoConfig.googleScopes, además de que
-     * el usuario tenga el rol "Secret Manager Secret Accessor" sobre ese
-     * secreto en el proyecto indicado).
-     *
-     * projectId: proyecto GCP donde vive el secreto (por defecto, el
-     * proyecto GCP activo en Planning, BQ.getGcpProject()).
+     * Configuración del repositorio para GithubRepo: { url, branch, token }.
+     * URL y rama salen de la conexión activa (o, si no, de
+     * DracoConfig.semanticModelGithub); el token, de la sesión o se pide.
      */
-    async getGithubPatFromSecretManager(projectId) {
-        const token = this.getToken();
+    async getGitRepoConfig() {
+        const active = (window.Connections && typeof Connections.getActive === "function") ? Connections.getActive() : null;
+        const repo = (active && active.config && active.config.semanticRepo) || {};
+        const def = (typeof DracoConfig !== "undefined" && DracoConfig.semanticModelGithub) || {};
+        const url = String(repo.url || def.url || "").trim();
+        const branch = String(repo.branch || def.branch || "main").trim() || "main";
+        if (!url) {
+            throw new Error("No hay repositorio Git configurado: indícalo en la conexión (URL del repositorio de modelos).");
+        }
+        let token = this.getGitPat();
         if (!token) {
-            const err = new Error("Sesión de BigQuery no válida o expirada.");
-            err.code = "NO_AUTH";
-            throw err;
+            token = await this._askGitPat(url);
+            if (!token) throw new Error("No se ha indicado el token de acceso a Git.");
+            this.setGitPat(token);
         }
-        const proj = projectId || this.getGcpProject();
-        if (!proj) {
-            throw new Error(`Falta el proyecto GCP donde está el secreto "${this.GITHUB_PAT_SECRET_NAME}".`);
-        }
-
-        const url = `https://secretmanager.googleapis.com/v1/projects/${encodeURIComponent(proj)}/secrets/${this.GITHUB_PAT_SECRET_NAME}/versions/latest:access`;
-
-        const res = await fetch(url, {
-            headers: { "Authorization": `Bearer ${token}` }
-        });
-
-        if (!res.ok) {
-            const errBody = await res.json().catch(() => null);
-            const msg = (errBody && errBody.error && errBody.error.message) || `HTTP ${res.status}`;
-            throw new Error(`No se pudo leer el secreto "${this.GITHUB_PAT_SECRET_NAME}" de Secret Manager: ${msg}`);
-        }
-
-        const data = await res.json();
-        const b64 = data && data.payload && data.payload.data;
-        if (!b64) {
-            throw new Error(`El secreto "${this.GITHUB_PAT_SECRET_NAME}" no devolvió ningún valor en Secret Manager.`);
-        }
-
-        // El payload viene en base64 (posible UTF-8): decodificación segura.
-        return decodeURIComponent(escape(atob(b64))).trim();
+        return { url, branch, token };
     },
 
     isConnected() {
@@ -202,8 +286,8 @@ const BQ = {
     // No hay ningún directorio de usuarios propio: se reutiliza la
     // política IAM del proyecto GCP activo (Resource Manager) como
     // "directorio" — cualquier persona con algún rol en el proyecto es
-    // candidata a que se le asigne una instancia. Requiere el scope
-    // "cloud-platform" (ya solicitado en el login) y permiso de lectura
+    // candidata a que se le asigne una instancia. Requiere un scope de
+    // Cloud Platform que Draco ya no pide (ver Provider.canSearchUsers) y permiso de lectura
     // de IAM sobre el proyecto; si el usuario no tiene ese permiso, la
     // búsqueda simplemente no devuelve resultados y se puede seguir
     // escribiendo el nombre a mano.
@@ -255,3 +339,6 @@ const BQ = {
 };
 
 window.BQ = BQ;
+
+// Limpieza de tokens que versiones anteriores guardaban en localStorage.
+BQ.purgeLegacyToken();

@@ -16,13 +16,8 @@ const TaskApp = {
     projects: [],
 
     async init() {
-        // Igual que Draco.init(): si el access token de Snowflake caducó
-        // mientras la pantalla estaba cerrada, intenta renovarlo en
-        // silencio con el refresh token antes de expulsar a index.html.
-        if (Provider.key() === "snowflake") {
-            await SF.ensureConnected();
-        }
-
+        // Modo backend: renueva el token de Google si hace falta (ver js/google-auth.js).
+        if (window.GoogleAuth) await GoogleAuth.resume();
         if (!Provider.isConnected() || !Provider.isReady()) {
             window.location.href = "index.html";
             return;

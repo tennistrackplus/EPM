@@ -10,8 +10,7 @@
  *    campos propios de cada proveedor, en un acordeón bajo la propia
  *    tarjeta del conector (BigQuery: proyecto de facturación opcional,
  *    seguido del selector de proyecto GCP y el panel de instalación
- *    del esquema una vez conectado; Snowflake: cuenta/warehouse/base
- *    de datos/rol).
+ *    del esquema una vez conectado).
  *
  * Las conexiones se guardan con el mismo almacén que usa el add-in de
  * Excel (js/connections.js, clave de localStorage "epm_connections"):
@@ -30,21 +29,14 @@ const LoginApp = {
     pendingInstallProvider: null, // "bigquery" mientras se muestra el panel de instalación del esquema
 
     PROVIDER_ICONS: {
-        bigquery: "https://www.vectorlogo.zone/logos/google_bigquery/google_bigquery-icon.svg",
-        snowflake: "https://app.eu.peliqan.io/img/db/snowflake.svg",
-        amazon: "https://www.vectorlogo.zone/logos/amazon_aws/amazon_aws-icon.svg",
-        fabric: "https://community.fabric.microsoft.com/html/assets/fabric-expo-icon.svg",
-        datasphere: "https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg",
-        s4cds: "https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg"
+        bigquery: "assets/datasource-db.svg"
     },
 
     async init() {
+        await GoogleAuth.resume();
         this.bindStaticEvents();
         this.renderList();
         this.setupBrowserMessageListener();
-        // Puede tardar una petición de red (renovar Snowflake); ya se
-        // pintó la lista arriba con lo que había en localStorage, y
-        // checkExistingTokens() vuelve a pintarla si logra renovar.
         await this.checkExistingTokens();
     },
 
@@ -71,7 +63,7 @@ const LoginApp = {
     getProviderDisplayName(providerKey) {
         return (window.Connections && Connections.labelFor)
             ? Connections.labelFor(providerKey)
-            : (providerKey === "bigquery" ? "BigQuery" : providerKey === "snowflake" ? "Snowflake" : providerKey);
+            : (providerKey === "bigquery" ? "BigQuery" : providerKey);
     },
 
     switchView(view) {
@@ -94,6 +86,10 @@ const LoginApp = {
         document.getElementById("btnCancelCreate").addEventListener("click", () => {
             this.switchView("list");
         });
+
+        // En producción solo el servicio de autenticación (auditoría F-10)
+        GoogleAuth.applyModeOptions(document.getElementById("bqAuthMode"));
+        document.getElementById("bqAuthMode").addEventListener("change", () => this.toggleAuthModeFields());
 
         // Selector de origen de datos dentro de la vista "crear/editar"
         document.querySelectorAll("#viewCreate .connector-card").forEach(card => {
@@ -236,9 +232,6 @@ const LoginApp = {
             const project = cfg.homeProjectId || cfg.billingProjectId;
             return project ? `${label} · ${project}` : label;
         }
-        if (conn.provider === "snowflake") {
-            return cfg.account ? `${label} · ${cfg.account}` : label;
-        }
         return label;
     },
 
@@ -286,10 +279,12 @@ const LoginApp = {
 
         document.getElementById("connName").value = "";
         document.getElementById("bqBillingProject").value = "";
-        document.getElementById("sfAccount").value = "";
-        document.getElementById("sfWarehouse").value = "";
-        document.getElementById("sfDatabase").value = "";
-        document.getElementById("sfRole").value = "";
+        document.getElementById("bqAuthMode").value = GoogleAuth.simpleModeAllowed() ? "token" : "backend";
+        document.getElementById("bqOAuthClientId").value = "";
+        document.getElementById("bqAuthBrokerUrl").value = "";
+        document.getElementById("bqRepoUrl").value = "";
+        document.getElementById("bqRepoBranch").value = "";
+        document.getElementById("bqRepoToken").value = "";
         document.querySelectorAll("#viewCreate .connector-card").forEach(c => c.classList.remove("selected"));
         this.hideInstallPanel();
 
@@ -306,11 +301,14 @@ const LoginApp = {
             document.getElementById("connName").value = conn.name;
             if (conn.provider === "bigquery") {
                 document.getElementById("bqBillingProject").value = cfg.billingProjectId || cfg.homeProjectId || "";
-            } else if (conn.provider === "snowflake") {
-                document.getElementById("sfAccount").value = cfg.account || "";
-                document.getElementById("sfWarehouse").value = cfg.warehouse || "";
-                document.getElementById("sfDatabase").value = cfg.database || "";
-                document.getElementById("sfRole").value = cfg.role || "";
+                const auth = GoogleAuth.normalizeConfig(cfg);
+                document.getElementById("bqAuthMode").value = auth.authMode;
+                document.getElementById("bqOAuthClientId").value = auth.oauthClientId;
+                document.getElementById("bqAuthBrokerUrl").value = auth.authBrokerUrl;
+                const repo = cfg.semanticRepo || {};
+                document.getElementById("bqRepoUrl").value = repo.url || "";
+                document.getElementById("bqRepoBranch").value = repo.branch || "";
+                document.getElementById("bqRepoToken").value = BQ.getGitPat();
             }
 
             const card = document.querySelector(`#viewCreate .connector-card[data-provider="${conn.provider}"]`);
@@ -345,9 +343,15 @@ const LoginApp = {
         }
     },
 
+    toggleAuthModeFields() {
+        const backend = document.getElementById("bqAuthMode").value === "backend";
+        document.getElementById("bqAuthTokenFields").style.display = backend ? "none" : "";
+        document.getElementById("bqAuthBackendFields").style.display = backend ? "" : "none";
+    },
+
     togglePanels() {
         document.getElementById("bigqueryConfigPanel").classList.toggle("visible", this.selectedProvider === "bigquery");
-        document.getElementById("snowflakeConfigPanel").classList.toggle("visible", this.selectedProvider === "snowflake");
+        this.toggleAuthModeFields();
 
         if (this.selectedProvider === "bigquery") {
             const showPicker = BQ.isConnected();
@@ -355,13 +359,6 @@ const LoginApp = {
             if (showPicker) this.maybeLoadGcpProjects();
         } else {
             document.getElementById("gcpProjectPicker").classList.remove("visible");
-        }
-
-        if (this.selectedProvider === "snowflake") {
-            document.getElementById("sfAccount").value = document.getElementById("sfAccount").value || SF.getAccount();
-            document.getElementById("sfWarehouse").value = document.getElementById("sfWarehouse").value || SF.getWarehouse();
-            document.getElementById("sfDatabase").value = document.getElementById("sfDatabase").value || SF.getDatabase();
-            document.getElementById("sfRole").value = document.getElementById("sfRole").value || SF.getRole();
         }
     },
 
@@ -372,7 +369,7 @@ const LoginApp = {
         }
     },
 
-    /** Carga en BQ/SF los parámetros guardados de una conexión (sin tocar los tokens de sesión) */
+    /** Carga en BQ los parámetros guardados de una conexión (sin tocar los tokens de sesión) */
     applyConnectionConfig(conn) {
         const cfg = conn.config || {};
         if (conn.provider === "bigquery") {
@@ -381,11 +378,6 @@ const LoginApp = {
             // se creó allí y todavía no se ha elegido un proyecto hogar en Planning,
             // se usa como punto de partida razonable (normalmente coinciden).
             BQ.setGcpProject(cfg.homeProjectId || cfg.billingProjectId || "");
-        } else if (conn.provider === "snowflake") {
-            SF.setAccount(cfg.account || "");
-            SF.setWarehouse(cfg.warehouse || "");
-            SF.setDatabase(cfg.database || DracoConfig.snowflakeDatabase);
-            SF.setRole(cfg.role || "");
         }
     },
 
@@ -393,25 +385,24 @@ const LoginApp = {
     collectConfigFromForm() {
         if (this.selectedProvider === "bigquery") {
             const billingProjectId = document.getElementById("bqBillingProject").value.trim();
-            return { billingProjectId, homeProjectId: BQ.getGcpProject() || billingProjectId || "" };
-        }
-        if (this.selectedProvider === "snowflake") {
             return {
-                account: document.getElementById("sfAccount").value.trim(),
-                warehouse: document.getElementById("sfWarehouse").value.trim(),
-                database: document.getElementById("sfDatabase").value.trim() || DracoConfig.snowflakeDatabase,
-                role: document.getElementById("sfRole").value.trim()
+                authMode: document.getElementById("bqAuthMode").value,
+                oauthClientId: document.getElementById("bqOAuthClientId").value.trim(),
+                authBrokerUrl: document.getElementById("bqAuthBrokerUrl").value.trim().replace(/\/+$/, ""),
+                billingProjectId,
+                homeProjectId: BQ.getGcpProject() || billingProjectId || "",
+                // Sin token: el PAT se guarda solo en la sesión (ver saveConnectionFromForm)
+                semanticRepo: {
+                    url: document.getElementById("bqRepoUrl").value.trim(),
+                    branch: document.getElementById("bqRepoBranch").value.trim() || "main"
+                }
             };
         }
         return {};
     },
 
     validateConfig(provider, config) {
-        if (provider === "snowflake") {
-            if (!config.account || !config.warehouse) {
-                return "Indica al menos la cuenta y el warehouse de Snowflake.";
-            }
-        }
+        if (provider === "bigquery") return GoogleAuth.validateConfig(config);
         return null;
     },
 
@@ -425,6 +416,11 @@ const LoginApp = {
         if (validationError) {
             this.showAlert(validationError, true);
             return null;
+        }
+
+        // PAT de Git: solo en la sesión del navegador, nunca en la conexión guardada.
+        if (this.selectedProvider === "bigquery") {
+            BQ.setGitPat(document.getElementById("bqRepoToken").value);
         }
 
         let conn;
@@ -455,6 +451,9 @@ const LoginApp = {
     // =====================================================================
     setupBrowserMessageListener() {
         window.addEventListener("message", (event) => {
+            // SEGURIDAD: solo se aceptan mensajes del propio origen
+            // (auth-callback.html responde con window.location.origin).
+            if (event.origin !== window.location.origin) return;
             if (typeof event.data !== "string") return;
             try {
                 const data = JSON.parse(event.data);
@@ -469,37 +468,23 @@ const LoginApp = {
         } else {
             // El flujo implícito de Google no da refresh token: si caducó,
             // no queda otra que limpiar y pedir reconectar.
-            localStorage.removeItem("bigquery_access_token");
-            localStorage.removeItem("bigquery_token_expires");
-        }
-
-        // Snowflake sí soporta refresh token: antes de rendirse y borrar la
-        // sesión, intenta renovar el access token en silencio con el que
-        // ya se guardó al conectar (ver SF.refreshAccessToken).
-        if (await SF.ensureConnected()) {
-            this.connectedProviders.snowflake = true;
-            this.renderList();
-        } else {
-            SF.logout();
+            BQ.logout();
         }
     },
 
     // ---------------------------------------------------------
     // BigQuery
     // ---------------------------------------------------------
-    connectBigQuery() {
-        if (DracoConfig.googleClientId.startsWith("TU_GOOGLE_CLIENT_ID")) {
-            this.showAlert("Falta configurar el Client ID de Google en js/config.js antes de poder conectar.", true);
+    connectBigQuery(conn) {
+        const cfg = (conn && conn.config) || this.collectConfigFromForm();
+        let authUrl;
+        try {
+            const redirectUri = new URL("auth-callback.html", window.location.href).href;
+            authUrl = GoogleAuth.buildLoginUrl(cfg, redirectUri);
+        } catch (err) {
+            this.showAlert(err.message, true);
             return;
         }
-
-        const redirectUri = new URL("auth-callback.html", window.location.href).href;
-        const authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" +
-            `client_id=${encodeURIComponent(DracoConfig.googleClientId)}` +
-            `&redirect_uri=${encodeURIComponent(redirectUri)}` +
-            "&response_type=token" +
-            `&scope=${encodeURIComponent(DracoConfig.googleScopes)}` +
-            "&prompt=consent";
 
         const width = 520, height = 660;
         const left = (window.screen.width / 2) - (width / 2);
@@ -541,32 +526,6 @@ const LoginApp = {
     },
 
     // ---------------------------------------------------------
-    // Snowflake
-    // ---------------------------------------------------------
-    async connectSnowflake() {
-        const account = document.getElementById("sfAccount").value.trim();
-        const warehouse = document.getElementById("sfWarehouse").value.trim();
-        const database = document.getElementById("sfDatabase").value.trim() || DracoConfig.snowflakeDatabase;
-        const role = document.getElementById("sfRole").value.trim();
-
-        if (!account || !warehouse) {
-            this.showAlert("Indica al menos la cuenta y el warehouse de Snowflake.", true);
-            return;
-        }
-
-        SF.setAccount(account);
-        SF.setWarehouse(warehouse);
-        SF.setDatabase(database);
-        SF.setRole(role);
-
-        try {
-            await SF.connect();
-        } catch (err) {
-            this.showAlert("Error al iniciar la conexión con Snowflake: " + err.message, true);
-        }
-    },
-
-    // ---------------------------------------------------------
     // Respuesta común de los popups de autenticación
     // ---------------------------------------------------------
     async handleAuthResponse(messageString) {
@@ -574,9 +533,8 @@ const LoginApp = {
             const response = JSON.parse(messageString);
 
             if (response.provider === "bigquery") {
-                if (response.status === "success") {
-                    localStorage.setItem("bigquery_access_token", response.token);
-                    localStorage.setItem("bigquery_token_expires", Date.now() + (parseInt(response.expiresIn, 10) * 1000));
+                // GoogleAuth comprueba el `state` y guarda el token (sessionStorage).
+                if (GoogleAuth.acceptResponse(response)) {
                     this.connectedProviders.bigquery = true;
                     this.persistActiveConnectionConfig();
                     this.showAlert("¡Conexión con Google BigQuery establecida con éxito!");
@@ -590,18 +548,6 @@ const LoginApp = {
                 return;
             }
 
-            if (response.provider === "snowflake") {
-                if (response.status === "success" && response.code) {
-                    await SF.handleAuthCode(response.code, response.state);
-                    this.connectedProviders.snowflake = true;
-                    this.persistActiveConnectionConfig();
-                    this.updateActionButton();
-                    this.showAlert("¡Conexión con Snowflake establecida con éxito!");
-                } else {
-                    this.showAlert("Error de autenticación con Snowflake: " + (response.error || "Desconocido"), true);
-                }
-                return;
-            }
         } catch (err) {
             console.error("Error leyendo respuesta de autenticación:", err);
             this.showAlert("Error al procesar la respuesta de login: " + err.message, true);
@@ -683,36 +629,15 @@ const LoginApp = {
         }
     },
 
-    async proceedSnowflake() {
-        const btnAction = document.getElementById("btnAction");
-        Provider.setKey("snowflake");
-        this.persistActiveConnectionConfig();
-        if (btnAction) {
-            btnAction.disabled = true;
-            btnAction.innerText = "Preparando tu espacio Draco...";
-        }
-        try {
-            await this.enterApp(btnAction);
-        } catch (e) {
-            if (btnAction) {
-                btnAction.disabled = false;
-                btnAction.innerText = "Reintentar";
-            }
-        }
-    },
-
     // ---------------------------------------------------------
     // Estado común
     // ---------------------------------------------------------
     logoutProvider(providerKey) {
         if (providerKey === "bigquery") {
-            localStorage.removeItem("bigquery_access_token");
-            localStorage.removeItem("bigquery_token_expires");
+            GoogleAuth.logout();
             localStorage.removeItem("draco_gcp_project");
             const picker = document.getElementById("gcpProjectPicker");
             if (picker) picker.classList.remove("visible");
-        } else if (providerKey === "snowflake") {
-            SF.logout();
         }
         this.connectedProviders[providerKey] = false;
         this.hideInstallPanel();
@@ -757,26 +682,7 @@ const LoginApp = {
                     const conn = this.saveConnectionFromForm();
                     if (!conn) return;
                     this.applyConnectionConfig(conn);
-                    this.connectBigQuery();
-                };
-            }
-            return;
-        }
-
-        if (this.selectedProvider === "snowflake") {
-            const isConnected = !!this.connectedProviders.snowflake;
-            if (isConnected) {
-                btnAction.innerText = "Entrar a Draco Planning →";
-                btnAction.onclick = async () => {
-                    this.saveConnectionFromForm();
-                    await this.proceedSnowflake();
-                };
-            } else {
-                btnAction.innerText = `Conectar a ${name}`;
-                btnAction.onclick = () => {
-                    const conn = this.saveConnectionFromForm();
-                    if (!conn) return;
-                    this.connectSnowflake();
+                    this.connectBigQuery(conn);
                 };
             }
             return;

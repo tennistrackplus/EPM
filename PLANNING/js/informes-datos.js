@@ -313,7 +313,7 @@ const InformesDatos = {
             const values = chunk.map(r =>
                 `(${columns.map(c => (r[c] === "" || r[c] === null || r[c] === undefined) ? "NULL" : `'${Provider.esc(r[c])}'`).join(", ")})`
             ).join(", ");
-            if (chunk.length) await Provider.runQuery(`INSERT INTO ${table} (${columns.join(", ")}) VALUES ${values}`);
+            if (chunk.length) await Provider.runQuery(`INSERT INTO ${table} (${columns.map(c => Provider.ident(c, "columna")).join(", ")}) VALUES ${values}`);
         }
     },
 
@@ -321,7 +321,7 @@ const InformesDatos = {
         const T = await this.open(project, ref, "any");
         const vals = this.cleanValues(T, values);
         this.checkVars(T, vals);
-        const columns = T.runFields.map(f => f.name);
+        const columns = T.runFields.map(f => Provider.ident(f.name, "columna"));   // auditoría F-07
         const current = this.cleanRows(columns, rows);
 
         const where = T.buildWhere(T.runFields, vals);          // siempre recalculado aquí

@@ -9,9 +9,8 @@
  *   2) Botón "Ejecutar":
  *        a) sube al storage cada fichero local seleccionado en una
  *           variable de tipo FILE (js/storage.js),
- *        b) llama al orquestador Python (python/flow_runner.py), vía
- *           stored procedure (Snowflake) o endpoint HTTP (BigQuery /
- *           otros), pasándole TODAS las variables de pantalla ya
+ *        b) llama al orquestador Python (python/flow_runner.py) vía
+ *           endpoint HTTP (Cloud Run), pasándole TODAS las variables de pantalla ya
  *           resueltas (las de fichero, como ruta de storage).
  *   3) Botón "Monitor": pinta la cadena de interfaces del flujo (igual
  *      que en el editor) coloreada según FLUJOS_RUN_STEPS de la última
@@ -67,6 +66,8 @@ const FlowRun = {
     },
 
     async init() {
+        // Modo backend: renueva el token de Google si hace falta (ver js/google-auth.js).
+        if (window.GoogleAuth) await GoogleAuth.resume();
         const params = new URLSearchParams(window.location.search);
         this.flujoId = params.get("flujo_id") || params.get("flowId") || params.get("id");
 
@@ -546,29 +547,29 @@ const FlowRun = {
         }
     },
 
-    /** Invoca python/flow_runner.py: stored procedure (Snowflake) o endpoint HTTP propio (BigQuery / otros). */
+    /** Invoca python/flow_runner.py a través del endpoint HTTP propio (Cloud Run). */
     async callOrchestrator(flujoId, variables, runId) {
-        const variablesJson = JSON.stringify(variables);
-
-        if (Provider.key() === "snowflake" && DracoConfig.flowRunnerProcedure) {
-            const sql = `CALL ${DracoConfig.flowRunnerProcedure}('${Provider.esc(flujoId)}', '${Provider.esc(variablesJson)}', '${Provider.esc(runId)}')`;
-            await Provider.runQuery(sql);
-            return;
-        }
-
         if (DracoConfig.flowRunnerHttpEndpoint) {
+            // El orquestador exige el token OAuth del usuario y ejecuta el flujo
+            // con SUS permisos (ver python/cloud_run_main.py).
+            const token = BQ.getToken();
+            if (!token) throw new Error("Sesión de BigQuery no válida o expirada: vuelve a conectar antes de ejecutar el flujo.");
             const resp = await fetch(DracoConfig.flowRunnerHttpEndpoint, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
                 body: JSON.stringify({ flujo_id: flujoId, variables, run_id: runId })
             });
+            if (resp.status === 401) {
+                let detail = "";
+                try { detail = (await resp.json()).error || ""; } catch (e) { /* sin cuerpo JSON */ }
+                throw new Error("El orquestador ha rechazado la sesión" + (detail ? ": " + detail : ".") + " Vuelve a conectar.");
+            }
             if (!resp.ok) throw new Error(`El orquestador respondió con error (HTTP ${resp.status})`);
             return;
         }
 
         throw new Error(
-            "No hay ningún orquestador configurado: define DracoConfig.flowRunnerProcedure " +
-            "(Snowflake) o DracoConfig.flowRunnerHttpEndpoint (BigQuery / otros) en js/config.js."
+            "No hay ningún orquestador configurado: define DracoConfig.flowRunnerHttpEndpoint en js/config.js."
         );
     },
 

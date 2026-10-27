@@ -24,7 +24,7 @@ const DracoTables = {
     MAX_NAME: 120,
     MAX_DESC: 500,
     MAX_ENGINES: 6,
-    ENGINE_URL: "tablas-draco/engine.html?v=20261023a",
+    ENGINE_URL: "tablas-draco/engine.html?v=20261022w",
 
     engines: new Map(),      // "proyecto:id" -> { frame, host, stamp, chain, lastUse }
     pending: {},             // precarga: "proyecto:id" -> { pr, at }
@@ -40,9 +40,9 @@ const DracoTables = {
     t() { return Provider.qualifyControl(this.TABLE); },
 
     /**
-     * Literal de texto seguro para BigQuery y Snowflake. Provider.esc() solo protege comillas y barras: BigQuery NO admite
+     * Literal de texto seguro para BigQuery. Provider.esc() solo protege comillas y barras: BigQuery NO admite
      * saltos de línea reales dentro de '...' ("Unclosed string literal"), y el SQL generado por el addin los lleva (CRLF).
-     * Se escriben como \n \r \t (escapes que entienden los dos motores) y vuelven a ser saltos al leerlos.
+     * Se escriben como \n \r \t (escapes que entiende BigQuery) y vuelven a ser saltos al leerlos.
      */
     lit(v) {
         return "'" + Provider.esc(v == null ? "" : v).replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t") + "'";
@@ -219,7 +219,7 @@ const DracoTables = {
             gone.forEach(r => this.dispose(projectId, r.TABLA_DRACO_ID));
             out.removed = gone.length;
         }
-        const old = Provider.key() === "snowflake" ? "DATEADD(day, -3, CURRENT_TIMESTAMP())" : "TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 3 DAY)";
+        const old = "TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 3 DAY)";
         await Informes.q(`DELETE FROM ${t} WHERE PROYECTO_ID = '${pid}' AND INFORME_ID LIKE 'PEND:%' AND FECHA_CREACION < ${old}`).catch(() => {});
         return out;
     },
@@ -273,10 +273,9 @@ const DracoTables = {
     },
 
     /**
-     * Modelo del cubo en el formato de SemanticModelStore (el que lee el addin), sea cual sea el proveedor:
-     *   1) BigQuery: el .lkml que Planning sube a GitHub al guardar el cubo (rápido, sin tocar tablas).
-     *   2) Si no hay .lkml (cubo sin generar, GitHub/secreto inaccesible...) o el proveedor es Snowflake (que
-     *      solo guarda un YAML en un stage y no genera .lkml): se RECONSTRUYE desde el propio cubo, con lo mismo que
+     * Modelo del cubo en el formato de SemanticModelStore (el que lee el addin):
+     *   1) El .lkml que Planning sube a GitHub al guardar el cubo (rápido, sin tocar tablas).
+     *   2) Si no hay .lkml (cubo sin generar, GitHub/secreto inaccesible...): se RECONSTRUYE desde el propio cubo, con lo mismo que
      *      Planning usa para generar ese modelo (CUBOS.CAMPOS_JSON + DIMENSIONES + JERARQUIAS).
      * Cacheado por cubo y fecha del modelo. Si ninguna vía funciona, el error cuenta el motivo de cada una.
      */
@@ -288,10 +287,8 @@ const DracoTables = {
         if (this._modelCache[key]) return this._modelCache[key];
         const reasons = [];
         let model = null;
-        if (this.engine() !== "snowflake") {      // solo BigQuery genera .lkml
-            try { model = await this.modelFromLkml(project, cube); }
-            catch (err) { reasons.push("GitHub: " + err.message); }
-        }
+        try { model = await this.modelFromLkml(project, cube); }
+        catch (err) { reasons.push("GitHub: " + err.message); }
         if (!model) {
             try { model = await this.modelFromCube(project, cube); }
             catch (err) { reasons.push("cubo: " + err.message); }
@@ -312,9 +309,7 @@ const DracoTables = {
             path = SemanticModel.buildPath(project, ident).replace(/\.yaml$/i, ".lkml");
         }
         if (!path) throw new Error("el cubo no tiene ruta de modelo (.lkml)");
-        const cfg = (typeof DracoConfig !== "undefined" && DracoConfig.semanticModelGithub) || {};
-        const token = await BQ.getGithubPatFromSecretManager();
-        const text = await GithubRepo.getFile(path, { url: cfg.url, branch: cfg.branch, token });
+        const text = await GithubRepo.getFile(path, await BQ.getGitRepoConfig());
         if (text === null) throw new Error(`no existe ${path}`);
         return this.lkmlToSemanticModel(LkmlParse.parse(text));
     },
@@ -635,8 +630,7 @@ const DracoTables = {
      * Devuelve { sql, groups: [{ sql, keys: [[col, key]] }] } (los grupos sueltos sirven para reintentar si falla).
      */
     kpiSql(items) {
-        const prov = Provider.key();
-        const iff = (cond, x) => !cond ? x : (prov === "snowflake" ? `IFF(${cond}, ${x}, NULL)` : prov === "fabric" ? `CASE WHEN ${cond} THEN ${x} END` : `IF(${cond}, ${x}, NULL)`);
+        const iff = (cond, x) => !cond ? x : `IF(${cond}, ${x}, NULL)`;
         const AGG = { SUM: "SUM", AVG: "AVG", COUNT: "COUNT", MIN: "MIN", MAX: "MAX" };
         const byGroup = new Map();
         items.forEach((it, ix) => {
@@ -698,9 +692,8 @@ const DracoTables = {
      */
     /** Join y condición de un filtro de la barra sobre un KPI (alias fijo por dimensión: xf_<DIM>). */
     kpiFilterSql(f) {
-        const sf = Provider.key() === "snowflake";
-        const db = f.fld.relProject || (sf ? SF.getDatabase() : BQ.getGcpProject());
-        const table = sf ? `${db}.${f.fld.relDataset}.${f.fld.relTable}` : `\`${db}.${f.fld.relDataset}.${f.fld.relTable}\``;
+        const db = f.fld.relProject || BQ.getGcpProject();
+        const table = `\`${db}.${f.fld.relDataset}.${f.fld.relTable}\``;
         const key = (f.fld.attributes || []).find(a => a.isKey) || (f.fld.attributes || [])[0];
         const ok = (x) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(String(x || ""));
         if (!key || !ok(f.fld.name) || !ok(key.name) || !ok(f.att.name)) return null;
@@ -718,7 +711,7 @@ const DracoTables = {
         const out = { values: {}, errors: {}, nombres: {} };
         const list = (kpis || []).filter(k => k && k.id);
         if (!list.length) return out;
-        const ck = project.PROYECTO_ID + "|inline|" + JSON.stringify(list.map(k => [k.id, k.parts, k.vars])) + "|" + JSON.stringify(variables || {}) + "|" + JSON.stringify(filtersByKpi || {});
+        const ck = project.PROYECTO_ID + "|inline|" + JSON.stringify(list.map(k => [k.id, k.parts, k.vars, !!k.trend, k.trendBy || ""])) + "|" + JSON.stringify(variables || {}) + "|" + JSON.stringify(filtersByKpi || {});
         const hit = this._kpiCache[ck];
         if (hit && Date.now() - hit.at < this.KPI_TTL) return hit.res;
         const over = {};
@@ -743,6 +736,29 @@ const DracoTables = {
             items.push({ key: k.id, parts, conds, extraJoins, exc });
         }
         await this.runKpiItems(items, out);
+        // TENDENCIA (minigráfico de la tarjeta): serie por periodo de los KPIs que la piden, con las mismas piezas que su
+        // valor (tabla, joins, condiciones, agregación y escala) agrupadas por la columna de periodo de la tabla de hechos
+        out.trends = {};
+        const AGG = { SUM: 1, AVG: 1, COUNT: 1, MIN: 1, MAX: 1 };
+        for (const k of list) {
+            if (!k.trend) continue;
+            const it = items.find(x => x.key === k.id);
+            if (!it) continue;
+            const col = String(k.trendBy || "PERIODO").trim().toUpperCase();
+            if (!/^[A-Z][A-Z0-9_]*$/.test(col)) continue;
+            const cond = it.conds.length ? it.conds.map(c => "(" + c + ")").join(" AND ") : null;
+            const agg = String(it.parts.agg || "SUM").toUpperCase();
+            let e = agg === "COUNT_DISTINCT" ? `COUNT(DISTINCT ${it.parts.field})` : `${AGG[agg] ? agg : "SUM"}(${it.parts.field})`;
+            const sc = Number(it.parts.scale);
+            if (isFinite(sc) && sc > 1) e = "(" + e + ") / " + sc;
+            const joins = [String(it.parts.joins || "").trim()].concat(it.extraJoins || []).filter(Boolean);
+            const sql = `SELECT CAST(f.${col} AS STRING) AS P, ${e} AS V\n${it.parts.from}` + (joins.length ? "\n" + joins.join("\n") : "")
+                + (cond ? "\nWHERE " + cond : "") + "\nGROUP BY 1\nORDER BY 1";
+            try {
+                const rows = await Provider.runQuery(sql);
+                out.trends[k.id] = rows.map(r => ({ p: String(r.P ?? r.p), v: Number(r.V ?? r.v) })).filter(x => isFinite(x.v)).slice(-24);
+            } catch (e2) { /* sin tendencia: la tarjeta se ve igual, sin minigráfico */ }
+        }
         this._kpiCache[ck] = { at: Date.now(), res: out };
         return out;
     },
@@ -855,9 +871,8 @@ const DracoTables = {
         if (!f) throw this.fail("NO_FIELD", `La dimensión «${dim}» no está en el cubo «${cubeName}».`);
         const a = (f.attributes || []).find(x => String(x.name).toUpperCase() === String(attr).toUpperCase());
         if (!a) throw this.fail("NO_FIELD", `El atributo «${attr}» no está en la dimensión «${dim}».`);
-        const sf = Provider.key() === "snowflake";
-        const db = f.relProject || (sf ? SF.getDatabase() : BQ.getGcpProject());
-        const table = sf ? `${db}.${f.relDataset}.${f.relTable}` : `\`${db}.${f.relDataset}.${f.relTable}\``;
+        const db = f.relProject || BQ.getGcpProject();
+        const table = `\`${db}.${f.relDataset}.${f.relTable}\``;
         const col = /^[A-Za-z_][A-Za-z0-9_]*$/.test(a.name) ? a.name : null;
         if (!col) throw this.fail("BAD_INPUT", "Nombre de atributo no válido.");
         const rows = await Provider.runQuery(`SELECT DISTINCT ${col} AS V FROM ${table} WHERE ${col} IS NOT NULL ORDER BY 1 LIMIT 5000`);
@@ -942,9 +957,6 @@ const DracoTables = {
         const g = first.grid;
         const job = eng.chain.then(async () => {
             const win = eng.frame.contentWindow;
-            if (win.PowerBIQuery && win.PowerBIQuery.isActiveModel()) {
-                throw this.fail("READ_ONLY", "Los modelos semánticos de Power BI son de solo lectura: la planificación no está disponible.");
-            }
             const ranges = this.planningRanges(eng.host);
             const editable = (r, c) => ranges.some(x => r >= x.r1 && r <= x.r2 && c >= x.c1 && c <= x.c2);
             const store = eng.host.state.cells;
@@ -1030,7 +1042,50 @@ const DracoTables = {
             });
             return { entries, items };
         };
-        const rows = axis(d.rows, "rows"), cols = axis(d.cols || d.columns, "columns");
+        const rows = axis(d.rows, "rows");
+        // COLUMNAS ESTÁTICAS: "cols": { "static": [ {label, value: {"DIM.ATTR": "valor", ...}, measure?} | {label, formula, format?, icons?} ] }
+        // Cada línea de valor es una columna fija (=EPM_VALUE por nivel) y cada línea de fórmula una columna calculada
+        // (=EPM_FORMULA) que referencia otras por su nombre: "[Real 2025] - [Ppto 2025]". Igual que en el diseñador.
+        const stc = d.cols && !Array.isArray(d.cols) && Array.isArray(d.cols.static) ? d.cols.static : null;
+        const cols = stc ? { entries: [], items: [] } : axis(d.cols || d.columns, "columns");
+        let stLines = null, stFields = [];
+        if (stc) {
+            const nm = (l) => String((l && l.label) || "").trim();
+            const labels = {};
+            stc.forEach((l, i) => {
+                const lb = nm(l);
+                if (!lb) { errors.push(`«${d.name || d.key}»: la columna ${i + 1} no tiene "label".`); return; }
+                if (labels[up(lb)]) errors.push(`«${d.name || d.key}»: la columna «${lb}» está repetida.`);
+                labels[up(lb)] = true;
+            });
+            stLines = [];
+            stc.forEach((l, i) => {
+                const lb = nm(l);
+                if (l && l.formula) {
+                    String(l.formula).replace(/\[([^\]]+)\]/g, (m0, ref) => { if (!labels[up(ref.trim())]) errors.push(`«${d.name || d.key}»: la fórmula de «${lb}» usa [${ref}], que no es ninguna columna.`); return m0; });
+                    stLines.push({ type: "f", label: lb, formula: String(l.formula), format: l.format || "", icons: l.icons || "" });
+                    return;
+                }
+                const vals = {}, keys = Object.keys((l && l.value) || {});
+                if (!keys.length) { errors.push(`«${d.name || d.key}»: la columna «${lb}» necesita "value" o "formula".`); return; }
+                keys.forEach(k => {
+                    const r = this.parseFieldRef(k), dim = dims[up(r.dim)];
+                    const a = dim && (dim.attributes || []).find(x => up(x.name) === up(r.attr));
+                    if (!a) { errors.push(`«${d.name || d.key}»: en la columna «${lb}», «${k}» no es un campo del cubo.`); return; }
+                    const fk = dim.name + "|" + a.name;
+                    if (!stFields.some(f => f.key === fk)) stFields.push({ key: fk, dim: dim.name, attr: a.name });
+                    vals[fk] = String(l.value[k]);
+                });
+                let ms = l.measure ? meas[up(l.measure)] : null;
+                if (l.measure && !ms) errors.push(`«${d.name || d.key}»: la medida «${l.measure}» de «${lb}» no existe.`);
+                stLines.push({ type: "v", label: lb, vals, measure: ms ? ms.name : null });
+            });
+            stLines.filter(x => x.type === "v").forEach(x => stFields.forEach(f => {
+                if (!(f.key in x.vals)) errors.push(`«${d.name || d.key}»: la columna «${x.label}» no indica ${f.dim}.${f.attr} (todas las columnas de valor deben dar valor a los mismos campos).`);
+            }));
+            stFields.forEach(f => { cols.entries.push([f.dim, f.attr, 1, "", "", ""]); cols.items.push({ dimension: f.dim, name: f.attr, isHierarchy: false }); });
+            if (!stLines.some(x => x.type === "v")) errors.push(`«${d.name || d.key}»: las columnas estáticas necesitan al menos una columna de valor.`);
+        }
         const mEntries = [], mItems = [];
         (Array.isArray(d.measures) ? d.measures : []).forEach(m => {
             const f = meas[up(m)];
@@ -1055,12 +1110,33 @@ const DracoTables = {
         const ir = inRows ? rows.items.concat(mItems) : rows.items, ic = inRows ? cols.items : cols.items.concat(mItems);
         // celdas de inicio: cabeceras de columna desde la fila 2; las filas empiezan debajo (rangos como el diseñador)
         const colL = (n) => { let t = ""; for (let x = n; x > 0; x = Math.floor((x - 1) / 26)) t = String.fromCharCode(65 + (x - 1) % 26) + t; return t; };
-        const nr = Math.max(1, er.length), nc = Math.max(1, ec.length);
+        // columnas de cabecera de fila: una por campo (una jerarquía ocupa UNA columna, con sangría por nivel);
+        // filas de cabecera de columna: una por nivel de las columnas (cada nivel de una jerarquía es una fila)
+        const nr = Math.max(1, ir.length), nc = Math.max(1, ec.length);
         const firstDataRow = 2 + nc, firstValueCol = 2 + nr;
+        // celdas del eje estático (hoja principal; claves "fila_columna" desde 0): cabeceras desde la fila 2
+        const cells = {};
+        if (stLines && !errors.length) {
+            const q = (x) => '"' + String(x == null ? "" : x).replace(/"/g, '""') + '"';
+            const colOf = {}; stLines.forEach((x, i) => { colOf[up(x.label)] = firstValueCol + i; });
+            const defMeasure = mEntries.length ? mEntries[0][1] : "";
+            stLines.forEach((x, i) => {
+                const col = firstValueCol + i;
+                if (x.type === "f") {
+                    const expr = x.formula.replace(/\[([^\]]+)\]/g, (m0, ref) => colL(colOf[up(ref.trim())]) + "2");
+                    cells[`1_${col - 1}`] = { f: `=EPM_FORMULA(${q(x.label)},${expr},${q(x.format)},${q(x.icons)})`, v: x.label };
+                    return;
+                }
+                // texto visible (4.º argumento de EPM_VALUE): el nombre de la columna arriba; el resto de niveles, en blanco
+                stFields.forEach((f, k) => { const disp = k === 0 ? x.label : ""; cells[`${1 + k}_${col - 1}`] = { f: `=EPM_VALUE(${q(f.dim)},${q(f.attr)},${q(x.vals[f.key])},${q(disp)})`, v: disp }; });
+                const m = x.measure || defMeasure;
+                cells[`${1 + stFields.length}_${col - 1}`] = { f: `=EPM_VALUE("MEASURE",${q(m)},"","")`, v: "" };
+            });
+        }
         return {
-            errors,
+            errors, cells,
             design: {
-                filters, rows: ir, columns: ic, expandedRows: er, expandedCols: ec, rowsStatic: false, colsStatic: false,
+                filters, rows: ir, columns: ic, expandedRows: er, expandedCols: ec, rowsStatic: false, colsStatic: !!stLines,
                 fieldOptions, resultSheetName: "Hoja1",
                 rrAddress: `B${firstDataRow}:${colL(1 + nr)}${firstDataRow}`,
                 rcAddress: `${colL(firstValueCol)}2:${colL(firstValueCol)}${1 + nc}`
@@ -1068,7 +1144,8 @@ const DracoTables = {
         };
     },
 
-    async createFromSpec(project, defs, owner) {
+    /** validateOnly: solo comprueba todas las definiciones (para luego crearlas de una en una, mostrando el avance). */
+    async createFromSpec(project, defs, owner, validateOnly) {
         if (!Array.isArray(defs) || !defs.length) return {};
         const cubes = await this.cubes(project.PROYECTO_ID);
         const keys = {}, errors = [], prepared = [];
@@ -1081,13 +1158,14 @@ const DracoTables = {
             const model = await this.resolveModel(project, cube);
             const comp = this.compileNewDesign(model, Object.assign({}, d, { cube: cube.name }));
             if (comp.errors.length) { errors.push(...comp.errors); continue; }
-            prepared.push({ d, cube, model, design: comp.design });
+            prepared.push({ d, cube, model, design: comp.design, cells: comp.cells });
         }
         if (errors.length) {
             const err = this.fail("INVALID", "No se ha creado ninguna tabla. " + errors.slice(0, 6).join(" ") + (errors.length > 6 ? ` (y ${errors.length - 6} más)` : ""));
             err.details = { errors };
             throw err;
         }
+        if (validateOnly) return { ok: true, count: prepared.length };
         const out = {};
         for (const p of prepared) out[p.d.key] = await this.createOneFromDesign(project, Object.assign(p, { owner }));
         return out;
@@ -1104,6 +1182,11 @@ const DracoTables = {
             if (win.SemanticModelStore.setActiveModelName) await win.SemanticModelStore.setActiveModelName(p.cube.name);
             const rep = await win.ReportStore.createReport(p.cube.name, "Hoja1");
             await win.ReportStore.updateDesignFields(rep.id, p.design);
+            // eje estático: sus celdas =EPM_VALUE / =EPM_FORMULA en la hoja, como si se hubieran escrito en el diseñador
+            if (p.cells && Object.keys(p.cells).length) {
+                const store = eng.host.state.cells || (eng.host.state.cells = {});
+                Object.keys(p.cells).forEach(k => { store[k] = Object.assign({}, store[k] || {}, p.cells[k]); });
+            }
             if (win.ReportStore.renameReport) await win.ReportStore.renameReport(rep.id, p.d.name || p.d.label || p.d.key);
             return await fn(win, eng, rep);
         } finally {
@@ -1116,7 +1199,7 @@ const DracoTables = {
      * Se validan contra el modelo y se calculan sus piezas con el motor (lo mismo que el diseñador en modo KPI).
      * No se guarda nada: la página los lleva en línea (dracoKpis con cubo, def y parts). Devuelve { key: { cubo, def, parts } }.
      */
-    async kpisFromSpec(project, kpis) {
+    async kpisFromSpec(project, kpis, validateOnly) {
         if (!Array.isArray(kpis) || !kpis.length) return {};
         const cubes = await this.cubes(project.PROYECTO_ID);
         const errors = [], prepared = [], keys = {};
@@ -1144,6 +1227,7 @@ const DracoTables = {
             err.details = { errors };
             throw err;
         }
+        if (validateOnly) return { ok: true, count: prepared.length };
         const out = {};
         for (const p of prepared) {
             out[p.d.key] = await this.withDesignEngine(p, async (win, eng) => {
@@ -1355,9 +1439,9 @@ const DracoTables = {
                 case "dt.varsFor": return await this.varsFor(project, p.refs || []);
                 case "dt.reports": return await this.reportsOf(project, p.ref);
                 case "dt.createFromSpec":   // Tablas Draco definidas en el JSON de una página (p. ej. por un agente de IA)
-                    return await this.createFromSpec(project, p.defs || [], p.owner || null);
+                    return await this.createFromSpec(project, p.defs || [], p.owner || null, !!p.validateOnly);
                 case "dt.kpisFromSpec":     // KPIs definidos en el JSON de una página: sus piezas SQL (no se guarda nada)
-                    return await this.kpisFromSpec(project, p.kpis || []);
+                    return await this.kpisFromSpec(project, p.kpis || [], !!p.validateOnly);
                 case "dt.planSave":   // planificación: guarda los valores tecleados en la tabla del informe
                     return await this.planSave(project, p.ref, p.cells || [], { variables: p.variables || {}, filters: p.filters || [], axis: p.axis || null });
                 case "dt.kpis":

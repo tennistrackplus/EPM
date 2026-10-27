@@ -707,7 +707,7 @@ const WidgetTableEditor = {
             // y con la conexión ya autenticada de esta app (provider-bridge.js).
             const iframe = document.createElement("iframe");
             iframe.className = "wte-taskpane-frame";
-            iframe.src = "widget-taskpane/taskpane.html?v=20260907a";
+            iframe.src = "widget-taskpane/taskpane.html?v=20261022w";
             panel.appendChild(iframe);
             this._taskpaneFrame = iframe;
             if (!resizer._wired) {

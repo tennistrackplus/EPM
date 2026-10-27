@@ -77,7 +77,8 @@ const UI = {
             .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")
             .replace(/>/g, "&gt;")
-            .replace(/"/g, "&quot;");
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");   // auditoría F-14
     },
 
     FIELD_TYPES: ["STRING", "INTEGER", "FLOAT", "NUMERIC", "BOOLEAN", "DATE", "DATETIME", "TIMESTAMP"],
@@ -1017,7 +1018,7 @@ const UI = {
     },
 
     /**
-     * Popup de selección de tabla origen (BigQuery o Snowflake). Mockup:
+     * Popup de selección de tabla origen (BigQuery). Mockup:
      * lista de tablas de ejemplo con buscador, igual que el picker de
      * dimensiones. Devuelve Promise<{tableName, fields}|null>.
      */
@@ -1423,7 +1424,8 @@ const UI = {
 
             try {
                 const fullTable = Provider.qualify(project.DATASET, dim.TABLA);
-                const rows = await Provider.runQuery(`SELECT DISTINCT ${keyCol} AS V FROM ${fullTable} ORDER BY ${keyCol} LIMIT 5000`);
+                const col = Provider.ident(keyCol, "columna");
+                const rows = await Provider.runQuery(`SELECT DISTINCT ${col} AS V FROM ${fullTable} ORDER BY ${col} LIMIT 5000`);
                 allValues = rows.map(r => String(r.V));
             } catch (err) {
                 overlay.innerHTML = shell(`<div class="module-empty">Error al leer los valores: ${UI.escapeHtml(err.message)}</div>`);
@@ -2226,7 +2228,7 @@ const UI = {
                     const niveles = safeParse(hierRows[0].NIVELES_JSON, []);
                     const levelCol = niveles[(validation.level || 1) - 1];
                     if (!levelCol) return [];
-                    whereClause = ` WHERE ${levelCol} = '${Provider.esc(validation.node)}'`;
+                    whereClause = ` WHERE ${Provider.ident(levelCol, "columna")} = '${Provider.esc(validation.node)}'`;
                 }
 
                 const sql = descCol

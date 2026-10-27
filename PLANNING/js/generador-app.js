@@ -31,9 +31,8 @@ const GeneradorApp = {
     pendingInformeId: null, // ?informe_id=... para abrir un informe al cargar
 
     async init() {
-        if (Provider.key() === "snowflake") {
-            await SF.ensureConnected();
-        }
+        // Modo backend: renueva el token de Google si hace falta (ver js/google-auth.js).
+        if (window.GoogleAuth) await GoogleAuth.resume();
         if (!Provider.isConnected() || !Provider.isReady()) {
             window.location.href = "index.html";
             return;
@@ -139,7 +138,7 @@ const GeneradorApp = {
         if (this.pendingInformeId) { qs.set("informe_id", this.pendingInformeId); this.pendingInformeId = null; }
         document.getElementById("toolEmpty").hidden = true;
         frame.hidden = false;
-        qs.set("v", "20261023e");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
+        qs.set("v", "20261027a");   // cambia en cada versión para que el navegador no use una herramienta antigua en caché
         frame.src = "informes-herramienta.html?" + qs.toString();
     },
 

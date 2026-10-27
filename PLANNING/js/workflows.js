@@ -1231,7 +1231,7 @@ const Workflows = {
         // 2) Limpieza total de la configuración anterior de pasos -------
         // Antes esto eran hasta 7-8 idas y vueltas SECUENCIALES (2 SELECT
         // para sacar ids + 4 DELETE en un bucle uno detrás de otro + el
-        // DELETE final de PASOS). Cada ida y vuelta a BigQuery/Snowflake
+        // DELETE final de PASOS). Cada ida y vuelta a BigQuery
         // tiene su propio overhead de arranque de job, así que esto es lo
         // que hacía lento el guardado. Ahora:
         //   a) TAREAS_VALORES se borra con una única subconsulta anidada

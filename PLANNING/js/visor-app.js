@@ -39,9 +39,8 @@ const VisorApp = {
     preloaded: null,        // informe ya leído en paralelo con la lista de proyectos
 
     async init() {
-        if (Provider.key() === "snowflake") {
-            await SF.ensureConnected();
-        }
+        // Modo backend: renueva el token de Google si hace falta (ver js/google-auth.js).
+        if (window.GoogleAuth) await GoogleAuth.resume();
         if (!Provider.isConnected() || !Provider.isReady()) {
             window.location.href = "index.html";
             return;
@@ -313,7 +312,7 @@ const VisorApp = {
         const frame = document.getElementById("viewerFrame");
         if (this.viewerReady) return this.viewerReady;
         this.viewerReady = new Promise((resolve) => { this._resolveReady = resolve; });
-        frame.src = "informes-herramienta.html?mode=viewer&v=20261023e";   // la versión evita una herramienta antigua en caché
+        frame.src = "informes-herramienta.html?mode=viewer&v=20261027a";   // la versión evita una herramienta antigua en caché
         return this.viewerReady;
     },
 

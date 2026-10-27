@@ -37,11 +37,6 @@ const Loads = {
             { name: "raw_erp.ventas_linea", fields: [{ name: "id_venta", type: "STRING" }, { name: "fecha", type: "DATE" }, { name: "id_cliente", type: "STRING" }, { name: "id_producto", type: "STRING" }, { name: "cantidad", type: "INTEGER" }, { name: "importe", type: "FLOAT" }] },
             { name: "raw_erp.clientes", fields: [{ name: "id_cliente", type: "STRING" }, { name: "nombre", type: "STRING" }, { name: "pais", type: "STRING" }, { name: "segmento", type: "STRING" }] },
             { name: "raw_rrhh.empleados", fields: [{ name: "id_empleado", type: "STRING" }, { name: "nombre", type: "STRING" }, { name: "departamento", type: "STRING" }, { name: "fecha_alta", type: "DATE" }] }
-        ],
-        snowflake: [
-            { name: "RAW.ERP.VENTAS_LINEA", fields: [{ name: "ID_VENTA", type: "STRING" }, { name: "FECHA", type: "DATE" }, { name: "ID_CLIENTE", type: "STRING" }, { name: "ID_PRODUCTO", type: "STRING" }, { name: "CANTIDAD", type: "INTEGER" }, { name: "IMPORTE", type: "FLOAT" }] },
-            { name: "RAW.ERP.PRODUCTOS", fields: [{ name: "ID_PRODUCTO", type: "STRING" }, { name: "DESCRIPCION", type: "STRING" }, { name: "FAMILIA", type: "STRING" }] },
-            { name: "RAW.FINANZAS.PRESUPUESTO", fields: [{ name: "EJERCICIO", type: "INTEGER" }, { name: "CENTRO_COSTE", type: "STRING" }, { name: "IMPORTE_PPTO", type: "FLOAT" }] }
         ]
     },
 
@@ -326,7 +321,7 @@ const Loads = {
     // están implementados; el resto queda listado (deshabilitado) para que se
     // vea de un vistazo hacia dónde crece esto (Web service, otros sistemas...).
     ORIGIN_TYPES: [
-        { key: "tabla", icon: "🗄", label: "Tabla", desc: "BigQuery o Snowflake" },
+        { key: "tabla", icon: "🗄", label: "Tabla", desc: "BigQuery" },
         { key: "fichero", icon: "📄", label: "Fichero", desc: "CSV, Excel, JSON, ancho fijo" },
         { key: "webservice", icon: "🌐", label: "Web service", desc: "Próximamente", disabled: true },
         { key: "sistema", icon: "🔌", label: "Otro sistema", desc: "Próximamente", disabled: true }
@@ -475,9 +470,6 @@ const Loads = {
                     <div id="loadOriginPanel" class="load-origin-panel"></div>
 
                     <div class="load-fn-toolbar">
-                        <button class="btn btn-secondary btn-sm" id="btnFnInput">⚙ Función cambiar datos input</button>
-                        <button class="btn btn-secondary btn-sm" id="btnFnOutput">⚙ Función cambiar datos output</button>
-                        <button class="btn btn-secondary btn-sm" id="btnFnMappingCode">{ } Mapeo por código</button>
                         <span class="load-fn-toolbar-spacer"></span>
                         <span class="form-hint" id="mappingModeHint"></span>
                     </div>
@@ -526,31 +518,8 @@ const Loads = {
             titleEl.textContent = newName;
         });
 
-        document.getElementById("btnFnInput").addEventListener("click", async () => {
-            const code = await UI.openCodeEditorModal({
-                title: "Función: cambiar datos input",
-                subtitle: this.editing.name,
-                code: this.editing.inputTransformCode
-            });
-            if (code !== null) {
-                this.editing.inputTransformCode = code;
-                UI.toast("Código de transformación de input listo — se guardará al pulsar \"Guardar interfaz\".", "success");
-            }
-        });
 
-        document.getElementById("btnFnOutput").addEventListener("click", async () => {
-            const code = await UI.openCodeEditorModal({
-                title: "Función: cambiar datos output",
-                subtitle: this.editing.name,
-                code: this.editing.outputTransformCode
-            });
-            if (code !== null) {
-                this.editing.outputTransformCode = code;
-                UI.toast("Código de transformación de output listo — se guardará al pulsar \"Guardar interfaz\".", "success");
-            }
-        });
 
-        document.getElementById("btnFnMappingCode").addEventListener("click", () => this.toggleMappingCode());
 
         overlay.classList.add("visible");
         this._onResize = () => this.scheduleConnectorRedraw();
@@ -603,7 +572,6 @@ const Loads = {
                         <label>Conector</label>
                         <select id="originConnector">
                             <option value="bigquery" ${o.connector === "bigquery" ? "selected" : ""}>BigQuery</option>
-                            <option value="snowflake" ${o.connector === "snowflake" ? "selected" : ""}>Snowflake</option>
                         </select>
                     </div>
                     <div class="form-group" style="flex:1;">
@@ -618,7 +586,7 @@ const Loads = {
             document.getElementById("originConnector").addEventListener("change", (e) => { o.connector = e.target.value; });
             document.getElementById("btnPickTable").addEventListener("click", async () => {
                 const tables = this.MOCK_TABLES[o.connector] || [];
-                const picked = await UI.openTablePickerModal({ connector: o.connector === "snowflake" ? "Snowflake" : "BigQuery", tables });
+                const picked = await UI.openTablePickerModal({ connector: "BigQuery", tables });
                 if (!picked) return;
                 o.tableName = picked.name;
                 o.fields = picked.fields.map(f => ({ ...f, custom: false, filter: null }));
@@ -874,7 +842,6 @@ const Loads = {
                     <option value="constante" ${m.type === "constante" ? "selected" : ""}>Constante</option>
                     <option value="variable" ${m.type === "variable" ? "selected" : ""}>Variable</option>
                     <option value="formula" ${m.type === "formula" ? "selected" : ""}>Fórmula</option>
-                    <option value="funcion" ${m.type === "funcion" ? "selected" : ""}>Función</option>
                 </select>
                 <div class="load-map-target" data-out-drop="${f.id}">
                     ${this.mappingSummaryHtml(m)}
@@ -1065,7 +1032,24 @@ const Loads = {
     // ------------------------------------------------------------
     // Guardado — reparte los datos en las 5 tablas de control
     // ------------------------------------------------------------
+    /**
+     * SEGURIDAD (auditoría F-01): el código Python libre (mapeo por código,
+     * funciones y transformaciones de input/output) ya no se ejecuta. Una
+     * interfaz antigua que lo use no se puede guardar hasta redefinirla con
+     * el mapeo visual y fórmulas.
+     */
+    usesUserCode() {
+        const e = this.editing || {};
+        if (e.mappingMode === "code") return true;
+        if ((e.inputTransformCode || "").trim() || (e.outputTransformCode || "").trim()) return true;
+        return Object.values(e.outputMappings || {}).some(m => m && m.type === "funcion");
+    },
+
     async save() {
+        if (this.usesUserCode()) {
+            UI.toast("Esta interfaz usa código Python (mapeo por código, funciones o transformaciones), que ya no se admite por seguridad. Redefínela con el mapeo visual y fórmulas.", "error");
+            return;
+        }
         const btn = document.getElementById("loadFormSave");
         if (btn) { btn.disabled = true; btn.textContent = "Guardando…"; }
         try {
@@ -1097,7 +1081,7 @@ const Loads = {
         // independientes entre sí (solo el DELETE+INSERT *dentro* de un
         // mismo grupo tiene que ir en orden). Antes se lanzaban los 9
         // await uno detrás de otro, así que el guardado tardaba la SUMA
-        // de las 9 llamadas a BigQuery/Snowflake (~1-2s cada una). Al
+        // de las 9 llamadas a BigQuery (~1-2s cada una). Al
         // lanzar los grupos en paralelo con Promise.all, el tiempo total
         // pasa a ser el del grupo más lento, no la suma de todos.
 

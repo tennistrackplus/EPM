@@ -160,7 +160,7 @@ const MyTasks = {
 
     async loadMyEmail() {
         // Se cachea en memoria: mientras la pestaña siga abierta no hace
-        // falta volver a preguntarle a BigQuery/Snowflake quién soy.
+        // falta volver a preguntarle a BigQuery quién soy.
         if (this.myEmail) return;
         try {
             const rows = await Provider.runQuery(`SELECT ${Provider.currentUserExpr()} AS EMAIL`);

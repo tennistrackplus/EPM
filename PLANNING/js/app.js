@@ -1,7 +1,7 @@
 /**
  * Controlador principal de app.html: sesión, selector de proyecto,
  * enrutado del menú de Administración y panel de progreso.
- * Funciona igual sobre BigQuery o sobre Snowflake a través de Provider.
+ * Habla con el motor (BigQuery) a través de Provider.
  */
 const Draco = {
     currentProject: null,   // { PROYECTO_ID, PROYECTO, DESCRIPCION, DATASET }
@@ -9,13 +9,8 @@ const Draco = {
     currentModule: "dimensiones",
 
     async init() {
-        // Si el access token de Snowflake caducó mientras la app estaba
-        // abierta (o al recargar), intenta renovarlo en silencio con el
-        // refresh token antes de expulsar al usuario a index.html.
-        if (Provider.key() === "snowflake") {
-            await SF.ensureConnected();
-        }
-
+        // Modo backend: renueva el token de Google si hace falta (ver js/google-auth.js).
+        if (window.GoogleAuth) await GoogleAuth.resume();
         if (!Provider.isConnected() || !Provider.isReady()) {
             window.location.href = "index.html";
             return;

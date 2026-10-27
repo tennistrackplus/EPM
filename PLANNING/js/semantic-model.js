@@ -4,27 +4,16 @@
  * ============================================================
  * Al guardar un Cubo (crear o editar), genera un "modelo semántico"
  * en YAML —tabla de hechos, dimensiones con sus atributos, y
- * jerarquías— y lo guarda en el mismo sitio donde Draco guarda ya
- * cualquier otro fichero: el stage de Snowflake (@DRACO_LANDING),
- * reutilizando exactamente el mecanismo de js/storage.js (trocear +
- * INSERT + SP_FINALIZE_FILE_UPLOAD) que ya usa flow_run.html.
- *
- * El objetivo es que un proceso externo (el add-in de Excel, carpeta
- * addin/src) pueda leer luego ese YAML desde el stage y rellenar sus
- * pestañas model_dimension / model_Fact / model_hier sin tener que
- * volver a consultar DRACO_CONTROL. ESTE MÓDULO SOLO GENERA Y GUARDA
- * el fichero — no toca nada del add-in.
+ * jerarquías—, lo ofrece como descarga en el navegador y, además,
+ * genera su equivalente .lkml y lo sube al repositorio GitHub
+ * configurado (ver generateAndPushLkml). ESTE MÓDULO SOLO GENERA Y
+ * GUARDA el fichero — no toca nada del add-in.
  *
  * Estructura completa documentada en README.md, sección
- * "Modelo semántico (YAML)".
- *
- * Si el proveedor activo no es Snowflake, o la subida al stage falla
- * por lo que sea (falta de conectividad, permisos...), el modelo se
- * genera igualmente y se ofrece como descarga en el navegador, para
- * no bloquear nunca el guardado del cubo.
+ * "Modelo semántico (YAML)". Nunca bloquea el guardado del cubo.
  */
 const SemanticModel = {
-    // Carpeta dentro del stage donde se guardan los modelos.
+    // Carpeta (ruta) donde se guardan los modelos.
     FOLDER: "semantic_models",
     // Versión del propio formato del YAML (para que el add-in pueda
     // saber si sabe leerlo).
@@ -102,7 +91,7 @@ const SemanticModel = {
                 project: project.PROYECTO,
                 project_id: project.PROYECTO_ID,
                 engine: Provider.key(),
-                database: Provider.key() === "snowflake" ? SF.getDatabase() : (typeof BQ !== "undefined" ? BQ.getGcpProject() : null),
+                database: (typeof BQ !== "undefined" ? BQ.getGcpProject() : null),
                 schema: project.DATASET,
                 generated_at: new Date().toISOString()
             },
@@ -185,7 +174,7 @@ const SemanticModel = {
     },
 
     // ------------------------------------------------------------
-    // 3. Guardado: genera el YAML de un cubo y lo sube al stage
+    // 3. Guardado: genera el YAML de un cubo (y su .lkml en GitHub)
     // ------------------------------------------------------------
     buildPath(project, cuboIdent) {
         const projIdent = Provider.toIdentifier(project.PROYECTO) || project.PROYECTO_ID;
@@ -223,54 +212,28 @@ const SemanticModel = {
             const path = this.buildPath(project, ident);
             const fileName = path.split("/").pop();
 
-            let uploaded = false;
-            if (Provider.key() === "snowflake" && typeof Storage !== "undefined") {
-                try {
-                    const file = new File([yamlText], fileName, { type: "text/yaml" });
-                    await Storage.upload(file, path);
-                    uploaded = true;
-                } catch (upErr) {
-                    console.error("No se pudo subir el modelo semántico al stage de Snowflake:", upErr);
-                }
-            }
-
             try {
                 await this.ensureColumns();
-                // IMPORTANTE: para BigQuery el YAML no se sube a ningún stage
-                // (uploaded se queda en false, esa rama es solo Snowflake),
-                // pero el .lkml SÍ se sube a GitHub un poco más abajo
+                // El .lkml se sube a GitHub un poco más abajo
                 // (generateAndPushLkml) en esta misma ruta (con extensión
-                // .lkml en vez de .yaml). Si aquí solo se registrara la ruta
-                // cuando uploaded=true, CUBOS.MODELO_YAML_PATH se quedaría
-                // vacío para todo cubo de BigQuery aunque el .lkml exista y
-                // funcione perfectamente en GitHub — que es justo el bug que
-                // hacía que el widget de informe dijera "no existe".
-                const pathToRecord = (Provider.key() === "snowflake") ? (uploaded ? path : "") : path;
+                // .lkml en vez de .yaml): se registra siempre la ruta.
                 await Provider.runQuery(`
                     UPDATE ${Provider.qualifyControl("CUBOS")}
-                    SET MODELO_YAML_PATH = '${Provider.esc(pathToRecord)}',
+                    SET MODELO_YAML_PATH = '${Provider.esc(path)}',
                         MODELO_YAML_FECHA = CURRENT_TIMESTAMP()
                     WHERE ${Cubes.ID_COL} = '${Provider.esc(cuboInfo.id)}'`);
             } catch (regErr) {
                 console.error("No se pudo registrar la ruta del modelo semántico en CUBOS:", regErr);
             }
 
-            if (uploaded) {
-                const stage = (typeof DracoConfig !== "undefined" && DracoConfig.snowflakeUploadStage) || "@DRACO_LANDING";
-                UI.toast(`Modelo semántico guardado en ${stage}/${path}`, "success");
-            } else {
-                UI.toast("Modelo semántico generado. No se pudo subir automáticamente al stage: se descarga el YAML.", "info");
-                UI.downloadBlob(fileName, yamlText, "text/yaml;charset=utf-8");
-            }
+            UI.toast("Modelo semántico generado: se descarga el YAML.", "info");
+            UI.downloadBlob(fileName, yamlText, "text/yaml;charset=utf-8");
 
-            // Si el proveedor activo es BigQuery, además del YAML se genera el
-            // .lkml equivalente (mismo formato que ya exporta el add-in de
+            // Además del YAML se genera el .lkml equivalente (mismo formato que ya exporta el add-in de
             // Excel, ver js/lkml-export.js) y se hace commit directo en el
             // repositorio de GitHub configurado en DracoConfig.semanticModelGithub.
             // Nunca bloquea el guardado del cubo: si falla, solo avisa.
-            if (Provider.key() === "bigquery") {
-                await this.generateAndPushLkml(model, path);
-            }
+            await this.generateAndPushLkml(model, path);
         } catch (err) {
             console.error("Error generando el modelo semántico:", err);
             UI.toast("Aviso: el cubo se guardó, pero falló la generación del modelo semántico YAML.", "error");
@@ -299,12 +262,9 @@ const SemanticModel = {
             const lkmlText = LkmlExport.buildContent(model);
             const lkmlPath = yamlPath.replace(/\.yaml$/i, ".lkml");
 
-            // Justo antes de llamar a GitHub: el token no sale de
-            // DracoConfig.semanticModelGithub.token (config.js), sino del
-            // secreto "github-pat-draco" en Google Secret Manager.
-            const cfg = (typeof DracoConfig !== "undefined" && DracoConfig.semanticModelGithub) || {};
-            const token = await BQ.getGithubPatFromSecretManager();
-            const repoConfig = { url: cfg.url, branch: cfg.branch, token };
+            // Repositorio de la conexión y PAT introducido por el usuario
+            // (solo en la sesión del navegador). Ver BQ.getGitRepoConfig().
+            const repoConfig = await BQ.getGitRepoConfig();
 
             await GithubRepo.putFile(
                 lkmlPath,

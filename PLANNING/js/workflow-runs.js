@@ -175,7 +175,7 @@ const WorkflowRuns = {
             // en el listado en lugar de la fecha de creación. Se cargan en
             // una segunda consulta y se agrupan aquí en JS (evita depender
             // de funciones de agregación de strings distintas entre
-            // BigQuery/Snowflake).
+            // BigQuery).
             if (this.runs.length) {
                 const varRows = await Provider.runQuery(`
                     SELECT RUN_ID, NOMBRE, VALOR

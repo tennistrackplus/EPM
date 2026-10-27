@@ -3,53 +3,43 @@
  * DRACO PLANNING — CAPA DE ABSTRACCIÓN DE PROVEEDOR
  * ============================================================
  * El resto de la app (schema.js, app.js, dimensions.js, cubes.js)
- * habla siempre con "Provider", nunca directamente con BQ o SF.
- * Así los mismos flujos (proyectos, dimensiones, cubos) funcionan
- * igual sobre BigQuery o sobre Snowflake.
+ * habla siempre con "Provider", nunca directamente con BQ.
+ * En esta versión el único motor es BigQuery; la interfaz se mantiene
+ * para poder añadir otros sin tocar el resto de la app.
  */
 const Provider = {
     key() {
-        return localStorage.getItem("draco_active_provider") || "bigquery";
+        return "bigquery";
     },
     setKey(k) {
-        localStorage.setItem("draco_active_provider", k);
+        // Solo hay un motor: se ignora y se limpia el valor heredado.
+        try { localStorage.removeItem("draco_active_provider"); } catch (e) { /* sin acceso */ }
     },
     label() {
-        return this.key() === "snowflake" ? "Snowflake" : "BigQuery";
+        return "BigQuery";
     },
 
     isConnected() {
-        return this.key() === "snowflake" ? SF.isConnected() : BQ.isConnected();
+        return BQ.isConnected();
     },
 
-    /** ¿Hay ya un "hogar" (proyecto GCP / cuenta+warehouse Snowflake) elegido? */
+    /** ¿Hay ya un "hogar" (proyecto GCP) elegido? */
     isReady() {
-        return this.key() === "snowflake" ? SF.isReady() : (BQ.isConnected() && !!BQ.getGcpProject());
+        return BQ.isConnected() && !!BQ.getGcpProject();
     },
 
     /** Texto corto para mostrar en la topbar */
     homeLabel() {
-        if (this.key() === "snowflake") {
-            return `${SF.getAccount()} · ${SF.getDatabase()} · WH ${SF.getWarehouse()}`;
-        }
         return BQ.getGcpProject();
     },
 
     logout() {
-        if (this.key() === "snowflake") {
-            SF.logout();
-        } else {
-            localStorage.removeItem("bigquery_access_token");
-            localStorage.removeItem("bigquery_token_expires");
-            localStorage.removeItem("draco_gcp_project");
-        }
+        BQ.logout();
+        localStorage.removeItem("draco_gcp_project");
     },
 
     /** Ejecuta SQL y devuelve siempre un array de objetos { columna: valor } */
     async runQuery(sql) {
-        if (this.key() === "snowflake") {
-            return SF.runQuery(sql);
-        }
         const result = await BQ.query(BQ.getGcpProject(), sql);
         return BQ.rowsToObjects(result);
     },
@@ -62,9 +52,9 @@ const Provider = {
         return BQ.toIdentifier(v);
     },
 
-    /** SESSION_USER() en BigQuery, CURRENT_USER() en Snowflake */
+    /** Usuario de la sesión en el motor */
     currentUserExpr() {
-        return this.key() === "snowflake" ? "CURRENT_USER()" : "SESSION_USER()";
+        return "SESSION_USER()";
     },
 
     /** UUID generado en el propio motor (fallback si no hay crypto.randomUUID en el navegador) */
@@ -75,9 +65,14 @@ const Provider = {
     // ---------------------------------------------------------
     // Buscador de usuarios (asignación de ejecuciones de Workflows)
     // ---------------------------------------------------------
-    /** Por ahora solo disponible sobre BigQuery (usa la política IAM del proyecto GCP como directorio) */
+    /**
+     * Buscador de usuarios a partir de la política IAM del proyecto. Necesita
+     * un scope de Cloud Platform que Draco ya no pide (auditoría F-04), así
+     * que solo se activa si la sesión lo tiene; si no, se escribe el email.
+     */
     canSearchUsers() {
-        return this.key() === "bigquery";
+        const scopes = (BQ.getGrantedScopes && BQ.getGrantedScopes()) || [];
+        return scopes.some(s => s.indexOf("https://www.googleapis.com/auth/cloud-platform") === 0);
     },
 
     /** Devuelve como mucho 20 emails que contengan `query` (o los primeros 20 si `query` está vacío) */
@@ -91,61 +86,72 @@ const Provider = {
 
     /** Traduce un tipo de campo "canónico" al tipo físico del motor activo */
     mapFieldType(type) {
-        if (this.key() === "bigquery" && type === "FLOAT") return "FLOAT64";
-        return type; // STRING/INTEGER/NUMERIC/BOOLEAN/DATE/DATETIME/TIMESTAMP son válidos en ambos motores
+        if (type === "FLOAT") return "FLOAT64";
+        return type; // STRING/INTEGER/NUMERIC/BOOLEAN/DATE/DATETIME/TIMESTAMP son válidos en BigQuery
     },
 
-    /** dataset (BigQuery) o esquema (Snowflake) */
+    /** dataset de BigQuery */
     async containerExists(name) {
-        return this.key() === "snowflake"
-            ? SF.schemaExists(name)
-            : BQ.datasetExists(BQ.getGcpProject(), name);
+        return BQ.datasetExists(BQ.getGcpProject(), name);
     },
 
     async createContainer(name, description = "") {
-        return this.key() === "snowflake"
-            ? SF.createSchema(name, description)
-            : BQ.createDataset(BQ.getGcpProject(), name, description);
+        return BQ.createDataset(BQ.getGcpProject(), name, description);
     },
 
     async deleteContainer(name) {
-        return this.key() === "snowflake"
-            ? SF.dropSchema(name)
-            : BQ.deleteDataset(BQ.getGcpProject(), name);
+        return BQ.deleteDataset(BQ.getGcpProject(), name);
     },
 
-    /** Referencia totalmente cualificada a una tabla dentro de un dataset/esquema */
+    /** Referencia totalmente cualificada a una tabla dentro de un dataset */
     qualify(container, table) {
-        if (this.key() === "snowflake") {
-            return `${SF.getDatabase()}.${container}.${table}`;
+        return `\`${this.projectId(BQ.getGcpProject())}.${this.ident(container, "dataset")}.${this.ident(table, "tabla")}\``;
+    },
+
+    // ---------------------------------------------------------
+    // SEGURIDAD (auditoría F-07): los nombres de dataset, tabla y columna
+    // que salen de las tablas de control los puede escribir otro usuario.
+    // Antes de meterlos en una SQL se valida que sean identificadores
+    // simples; si no, se rechaza la operación (no se intenta "arreglar").
+    // ---------------------------------------------------------
+    IDENT_RE: /^[A-Za-z_][A-Za-z0-9_]{0,1023}$/,
+    PROJECT_RE: /^([a-z][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,61}[a-z0-9]$/,
+
+    /** Devuelve el identificador si es válido; si no, lanza un error. */
+    ident(name, what = "identificador") {
+        const v = String(name == null ? "" : name);
+        if (!this.IDENT_RE.test(v)) {
+            throw new Error(`Nombre de ${what} no válido: "${v.slice(0, 80)}". Solo se admiten letras, números y "_" (sin empezar por número).`);
         }
-        return `\`${BQ.getGcpProject()}.${container}.${table}\``;
+        return v;
+    },
+
+    /** Valida un ID de proyecto de Google Cloud. */
+    projectId(id) {
+        const v = String(id == null ? "" : id);
+        if (!this.PROJECT_RE.test(v)) throw new Error(`ID de proyecto de Google Cloud no válido: "${v.slice(0, 80)}".`);
+        return v;
     },
 
     qualifyControl(table) {
         return this.qualify(DracoConfig.controlDataset, table);
     },
 
-    /** Nombre de la "base de datos" (Snowflake) o proyecto GCP (BigQuery) activo */
+    /** Proyecto GCP activo */
     databaseLabel() {
-        return this.key() === "snowflake" ? SF.getDatabase() : BQ.getGcpProject();
+        return BQ.getGcpProject();
     },
 
-    /** Lista los nombres de tabla dentro de un dataset/esquema (para selectores de tabla) */
+    /** Lista los nombres de tabla dentro de un dataset (para selectores de tabla) */
     async listTablesInContainer(container) {
-        const sql = this.key() === "snowflake"
-            ? `SELECT TABLE_NAME FROM ${SF.getDatabase()}.INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '${this.esc(container)}' ORDER BY TABLE_NAME`
-            : `SELECT TABLE_NAME FROM \`${BQ.getGcpProject()}.${container}.INFORMATION_SCHEMA.TABLES\` ORDER BY TABLE_NAME`;
+        const sql = `SELECT TABLE_NAME FROM \`${BQ.getGcpProject()}.${container}.INFORMATION_SCHEMA.TABLES\` ORDER BY TABLE_NAME`;
         const rows = await this.runQuery(sql);
         return rows.map(r => r.TABLE_NAME);
     },
 
     /** Lista { name, type } de las columnas físicas de una tabla, en orden */
     async listColumns(container, table) {
-        const sql = this.key() === "snowflake"
-            ? `SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION FROM ${SF.getDatabase()}.INFORMATION_SCHEMA.COLUMNS
-               WHERE TABLE_SCHEMA = '${this.esc(container)}' AND TABLE_NAME = '${this.esc(table)}' ORDER BY ORDINAL_POSITION`
-            : `SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION FROM \`${BQ.getGcpProject()}.${container}.INFORMATION_SCHEMA.COLUMNS\`
+        const sql = `SELECT COLUMN_NAME, DATA_TYPE, ORDINAL_POSITION FROM \`${BQ.getGcpProject()}.${container}.INFORMATION_SCHEMA.COLUMNS\`
                WHERE TABLE_NAME = '${this.esc(table)}' ORDER BY ORDINAL_POSITION`;
         const rows = await this.runQuery(sql);
         return rows.map(r => ({ name: r.COLUMN_NAME, type: r.DATA_TYPE }));
