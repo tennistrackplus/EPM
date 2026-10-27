@@ -147,7 +147,8 @@ const BQ = {
      * DracoConfig.semanticModelGithub); el token, de la sesión o se pide.
      */
     async getGitRepoConfig() {
-        const active = (window.Connections && typeof Connections.getActive === "function") ? Connections.getActive() : null;
+        // OJO: Connections se declara con «const» (connections.js), así que NO existe como window.Connections
+        const active = (typeof Connections !== "undefined" && typeof Connections.getActive === "function") ? Connections.getActive() : null;
         const repo = (active && active.config && active.config.semanticRepo) || {};
         const def = (typeof DracoConfig !== "undefined" && DracoConfig.semanticModelGithub) || {};
         const url = String(repo.url || def.url || "").trim();

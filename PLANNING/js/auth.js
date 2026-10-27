@@ -61,7 +61,7 @@ const LoginApp = {
     },
 
     getProviderDisplayName(providerKey) {
-        return (window.Connections && Connections.labelFor)
+        return (typeof Connections !== "undefined" && Connections.labelFor)
             ? Connections.labelFor(providerKey)
             : (providerKey === "bigquery" ? "BigQuery" : providerKey);
     },
@@ -185,7 +185,7 @@ const LoginApp = {
     // =====================================================================
     renderList() {
         const list = document.getElementById("savedConnectionsList");
-        if (!list || !window.Connections) return;
+        if (!list || typeof Connections === "undefined") return;
 
         const connections = Connections.list();
         const activeId = Connections.getActiveId();
@@ -441,7 +441,7 @@ const LoginApp = {
 
     /** Guarda (merge) solo la config de la conexión activa, sin tocar su nombre */
     persistActiveConnectionConfig() {
-        if (!window.Connections || !this.selectedProvider || !this.editingConnectionId) return;
+        if (typeof Connections === "undefined" || !this.selectedProvider || !this.editingConnectionId) return;
         const config = this.collectConfigFromForm();
         Connections.update(this.editingConnectionId, { config });
     },

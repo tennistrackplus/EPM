@@ -11,7 +11,7 @@ const DracoConfig = {
     // solo se admita el servicio de autenticación (AUTH-BROKER).
     // Ponerlo a true solo en entornos de prueba.
     // ---------------------------------------------------------
-    allowSimpleOAuth: true,
+    allowSimpleOAuth: false,
     // ---------------------------------------------------------
     // BigQuery (Google OAuth 2.0)
     // ---------------------------------------------------------
