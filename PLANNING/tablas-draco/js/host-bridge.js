@@ -70,7 +70,7 @@
     // iframe en el padre).
     try {
         const params = new URLSearchParams(window.location.search);
-        if (params.has("wteDialogId")) window.__wteDialogId = parseInt(params.get("wteDialogId"), 10);
+        if (params.has("wteDialogId")) window.__wteDialogId = String(params.get("wteDialogId"));
     } catch (e) { /* no debería fallar nunca */ }
 
     // El anfitrión (diseñador de Tablas Draco o motor sin interfaz) crea el iframe y le cuelga
@@ -981,14 +981,21 @@
         return editor.state.taskpaneSettings;
     }
 
-    let dialogSeq = 0;
+    // SEGURIDAD (auditoría F-16): ids de diálogo aleatorios (no adivinables)
+    // y mensajes solo entre ventanas del mismo origen, comprobando quién los envía.
+    function newDialogId() {
+        const b = new Uint8Array(12);
+        crypto.getRandomValues(b);
+        return Array.from(b, x => x.toString(16).padStart(2, "0")).join("");
+    }
     const openDialogs = {};
 
     window.addEventListener("message", (ev) => {
+        if (ev.origin !== window.location.origin) return;
         const msg = ev.data;
         if (!msg || msg.__wteDialog === undefined) return;
-        const entry = openDialogs[msg.__wteDialog];
-        if (!entry) return;
+        const entry = Object.prototype.hasOwnProperty.call(openDialogs, msg.__wteDialog) ? openDialogs[msg.__wteDialog] : null;
+        if (!entry || ev.source !== entry.frame.contentWindow) return;
         if (msg.type === "childMessage") {
             (entry.handlers.DialogMessageReceived || []).forEach(h => h({ message: msg.payload }));
         }
@@ -1042,7 +1049,7 @@
                 // una ventana de Office real; el resto del contrato
                 // (addEventHandler, messageChild, close) se mantiene igual.
                 displayDialogAsync(url, options, callback) {
-                    const id = ++dialogSeq;
+                    const id = newDialogId();
                     // El id se pasa por la URL (no basta con asignarlo tras
                     // el evento "load" del iframe): Office.onReady del hijo
                     // se dispara en una microtarea, ANTES de que "load"
@@ -1064,7 +1071,7 @@
                             delete openDialogs[id];
                         },
                         messageChild(msg) {
-                            frame.contentWindow.postMessage({ __wteDialog: id, type: "parentMessage", payload: msg }, "*");
+                            frame.contentWindow.postMessage({ __wteDialog: id, type: "parentMessage", payload: msg }, window.location.origin);
                         },
                         addEventHandler(eventType, handler) {
                             if (!openDialogs[id]) return;
@@ -1078,12 +1085,13 @@
                 // Lado HIJO (dentro del propio diálogo): manda un mensaje al padre.
                 messageParent(msg) {
                     const id = window.__wteDialogId;
-                    window.parent.postMessage({ __wteDialog: id, type: "childMessage", payload: msg }, "*");
+                    window.parent.postMessage({ __wteDialog: id, type: "childMessage", payload: msg }, window.location.origin);
                 },
                 addHandlerAsync(eventType, handler, callback) {
                     window.addEventListener("message", (ev) => {
+                        if (ev.origin !== window.location.origin || ev.source !== window.parent) return;
                         const m = ev.data;
-                        if (!m || m.type !== "parentMessage") return;
+                        if (!m || m.type !== "parentMessage" || m.__wteDialog !== window.__wteDialogId) return;
                         handler({ message: m.payload });
                     });
                     // Como en Office: se avisa de que el manejador ya está puesto

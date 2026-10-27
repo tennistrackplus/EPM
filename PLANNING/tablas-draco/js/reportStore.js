@@ -16,7 +16,7 @@
  * vivir en una celda física:
  *   - D1 / E1: hoja y celda activas al pulsar "Editar informe" (para saber
  *     dónde estaba el usuario).
- *   - X1 / Y1: último SQL y último JSON devueltos por BigQuery/Snowflake.
+ *   - X1 / Y1: último SQL y último JSON devueltos por BigQuery.
  *   - A5 y el resto del "picker" de miembros: comunicación por doble clic
  *     con el XLAM.
  *   - B1: flag de reconocimiento de miembros.

@@ -526,6 +526,8 @@ const TaskPaneApp = {
             }
         };
 
+        await safeStep("applyPlanningGateUI", () => this.applyPlanningGateUI());
+
         if (typeof FilterModal !== "undefined" && FilterModal.init) {
             await safeStep("FilterModal.init", () => FilterModal.init());
         }
@@ -715,6 +717,7 @@ const TaskPaneApp = {
 
         const propModelSelect = document.getElementById("propSemanticModel");
         if (propModelSelect) propModelSelect.addEventListener("change", () => {
+            this.applyPlanningGateToProperties();
             if (document.getElementById("propPlanningReport").checked) this.renderDimensionsBehaviorRows();
         });
 
@@ -1344,7 +1347,7 @@ const TaskPaneApp = {
             const result = await window.ExcelService.readDim2Data(modelName || undefined);
 
             if (result.error) {
-                container.innerHTML = `<div style='color: #a80000; padding: 4px;'>⚠️ ${result.error}</div>`;
+                container.innerHTML = `<div style='color: #a80000; padding: 4px;'>⚠️ ${draco_escapeHtml(result.error)}</div>`;
                 return;
             }
 
@@ -1400,7 +1403,7 @@ const TaskPaneApp = {
             this.refreshCalcBadges();
         } catch (err) {
             console.error("Error al cargar dimensiones:", err);
-            container.innerHTML = `<div style='color: #a80000; padding: 4px;'>❌ Error: ${err.message || err}</div>`;
+            container.innerHTML = `<div style='color: #a80000; padding: 4px;'>❌ Error: ${draco_escapeHtml(err.message || err)}</div>`;
         }
     },
 
@@ -1801,7 +1804,7 @@ const TaskPaneApp = {
 
         // SEGURIDAD: titleText puede incluir valores de miembro reales
         // (describeFilter -> valores elegidos en memberPicker, que a su vez
-        // provienen de datos de BigQuery/Snowflake, no de código de este
+        // provienen de datos de BigQuery, no de código de este
         // add-in). NUNCA insertar ese texto con innerHTML: si una fila de
         // datos contiene marcado HTML (p.ej. "<img src=x onerror=...>"),
         // se ejecutaría en el contexto del add-in con acceso a
@@ -2064,6 +2067,7 @@ const TaskPaneApp = {
         document.getElementById("propOverwriteStaticFormats").checked = !!this.reportProperties.overwriteStaticFormats;
         document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
         document.getElementById("propPlanningReport").checked = !!this.reportProperties.planningReport;
+        this.applyPlanningGateToProperties();
 
         await this.toggleDimensionsBehaviorSection();
 
@@ -2171,7 +2175,47 @@ const TaskPaneApp = {
     },
 
     openDistributeValuesModal() {
+        if (window.DracoPlanningGate) {
+            const report = window.ReportStore ? window.ReportStore.getReport(window.ReportStore.getActiveReportId()) : null;
+            const gate = DracoPlanningGate.check(report ? report.semanticModelName : "");
+            if (!gate.ok) {
+                alert(gate.reason);
+                return;
+            }
+        }
         if (window.DistributeValuesPanel) window.DistributeValuesPanel.open();
+    },
+
+    /**
+     * Planificación según la sesión (DracoPlanningGate): con un token de solo
+     * lectura no se muestra nada de planificación (botón "Distribuir valores",
+     * casilla "Informe de planificación") y se desactiva "Guardar" en la cinta.
+     * Se llama al iniciar el panel y tras cada inicio de sesión.
+     */
+    applyPlanningGateUI() {
+        if (!window.DracoPlanningGate) return;
+        const canWrite = DracoPlanningGate.canWrite();
+        const btn = document.getElementById("btnDistribuirValores");
+        if (btn) btn.style.display = canWrite ? "" : "none";
+        DracoPlanningGate.syncRibbon();
+    },
+
+    /** Casilla "Informe de planificación" del modal de propiedades según la puerta. */
+    applyPlanningGateToProperties() {
+        const checkbox = document.getElementById("propPlanningReport");
+        if (!checkbox || !window.DracoPlanningGate) return;
+        const row = checkbox.closest("label") || checkbox.parentElement;
+        const modelName = (document.getElementById("propSemanticModel") || {}).value || "";
+        const gate = DracoPlanningGate.check(modelName);
+        // Solo lectura: no se muestra. Modelo que no es de Draco Planning: se ve desactivada, con el motivo.
+        if (row) row.style.display = DracoPlanningGate.canWrite() ? "" : "none";
+        checkbox.disabled = !gate.ok;
+        if (row) row.title = gate.ok ? "" : gate.reason;
+        if (!gate.ok) {
+            checkbox.checked = false;
+            const section = document.getElementById("propDimensionsBehaviorSection");
+            if (section) section.style.display = "none";
+        }
     },
 
     closeReportPropertiesModal() {
@@ -2203,7 +2247,8 @@ const TaskPaneApp = {
             overwriteFormats: document.getElementById("propOverwriteFormats").checked,
             overwriteStaticFormats: document.getElementById("propOverwriteStaticFormats").checked,
             autoFitColumns: document.getElementById("propAutoFitColumns").checked,
-            planningReport: document.getElementById("propPlanningReport").checked,
+            planningReport: document.getElementById("propPlanningReport").checked
+                && (!window.DracoPlanningGate || DracoPlanningGate.check(document.getElementById("propSemanticModel").value).ok),
             dimensionsBehavior
         };
 
@@ -2716,3 +2761,11 @@ const TaskPaneApp = {
         }
     }
 };
+
+// SEGURIDAD (auditoría F-14): todo texto externo (nombres de fichero del
+// repositorio, mensajes de error) se escapa antes de meterlo en innerHTML.
+function draco_escapeHtml(str) {
+    return String(str == null ? "" : str)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}

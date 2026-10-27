@@ -376,99 +376,6 @@ function hidePane(event) {
     }
 }
 
-/**
- * Ejecuta la consulta SQL en BigQuery y vuelca los resultados en la hoja activa comenzando en A1 de forma optimizada
- * @param {Office.AddinCommands.Event} event
- */
-async function writeHolaInA1(event) {
-    try {
-        const token = localStorage.getItem("bigquery_access_token");
-        const expires = localStorage.getItem("bigquery_token_expires");
-
-        // Comprobación de token de autenticación
-        if (!token || !expires || Date.now() >= parseInt(expires)) {
-            console.error("No hay una sesión activa de BigQuery. Inicia sesión en el panel primero.");
-            return;
-        }
-
-        const projectId = "bigqueryexcelconnector";
-        const sqlQuery = "select * from `ANALYTICS.DIM_CECO`";
-
-        // Petición a la API de BigQuery con deshabilitación de Legacy SQL
-        const response = await fetch(`https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/queries`, {
-            method: "POST",
-            headers: {
-                "Authorization": `Bearer ${token}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-                query: sqlQuery,
-                useLegacySql: false
-            })
-        });
-
-        const data = await response.json();
-
-        if (data.error) {
-            console.error("Error devuelto por la API de BigQuery:", data.error.message);
-            return;
-        }
-
-        if (!data.schema || !data.schema.fields) {
-            console.warn("La consulta no devolvió estructuras de datos válidas.");
-            return;
-        }
-
-        const fields = data.schema.fields;
-        const fieldsCount = fields.length;
-        const rawRows = data.rows || [];
-        const rowsCount = rawRows.length;
-
-        // 1. Extraer los nombres de las columnas (Cabecera)
-        const headers = new Array(fieldsCount);
-        for (let i = 0; i < fieldsCount; i++) {
-            headers[i] = fields[i].name;
-        }
-
-        // 2. Conversión optimizada de datos a matriz 2D
-        const gridData = new Array(rowsCount + 1);
-        gridData[0] = headers;
-
-        for (let i = 0; i < rowsCount; i++) {
-            const rowCells = rawRows[i].f;
-            const rowArray = new Array(fieldsCount);
-            for (let j = 0; j < fieldsCount; j++) {
-                const val = rowCells[j].v;
-                rowArray[j] = val !== null && val !== undefined ? val : "";
-            }
-            gridData[i + 1] = rowArray;
-        }
-
-        // 3. Escribir los resultados en Excel optimizando el rendimiento visual
-        await Excel.run(async (context) => {
-            // Suspender el redibujado de la pantalla en Excel durante la inserción
-            context.workbook.application.suspendScreenUpdatingUntilNextSync();
-
-            const sheet = context.workbook.worksheets.getActiveWorksheet();
-            const totalRows = gridData.length;
-
-            // Definir el rango total e inyectar la matriz completa de una sola vez
-            const range = sheet.getRangeByIndexes(0, 0, totalRows, fieldsCount);
-            range.values = gridData;
-
-            await context.sync();
-        });
-
-    } catch (error) {
-        console.error("Error al ejecutar la consulta o pintar los datos en Excel:", error);
-    } finally {
-        // OBLIGATORIO: Informar a Excel que la función finalizó
-        if (event) {
-            event.completed();
-        }
-    }
-}
-
 /* ==========================================================================
  * ============  TRADUCCIÓN LITERAL DE LAS MACROS VBA (BOTÓN ACTUALIZAR)  ==
  * ==========================================================================
@@ -484,10 +391,9 @@ async function writeHolaInA1(event) {
  * usaba el VBA (ws.Cells(R, C)).
  *
  * AJUSTES ACORDADOS CON EL USUARIO (respecto al VBA original):
- *   - ProjectId: hardcodeado a "bigqueryexcelconnector" (la hoja
- *     "M.S. - Definición" no existe en este complemento).
- *   - Token: se lee de localStorage("bigquery_access_token"), que es el
- *     mecanismo que ya usa este Add-in (la hoja "CONFIG" no existe).
+ *   - ProjectId: el de facturación de la conexión o, si no hay, el de la
+ *     tabla consultada (BQ.jobProjectFor).
+ *   - Token: BQ.getToken() (sessionStorage; la hoja "CONFIG" no existe).
  *   - Se añade (nuevo requerimiento) la escritura del SQL generado en la
  *     celda A1 de la hoja "CSV_RESULT" antes de ejecutarlo contra BigQuery.
  *
@@ -588,7 +494,7 @@ async function endDracoPerfLog() {
             editReportSheet.load("isNullObject");
             await context.sync();
             if (editReportSheet.isNullObject) return;
-            editReportSheet.getRange("Z1").values = [[text]];
+            editReportSheet.getRange("Z1").values = [[draco_debugCell(text)]];
             await context.sync();
         });
     } catch (e) {
@@ -2084,23 +1990,7 @@ function buildIdArray(atributesGrid, defs, idFieldName) {
         }
     }
 
-    if (Provider.key() === "snowflake") {
-        // Snowflake no tiene UNNEST([STRUCT(...)]) ni ARRAY(SELECT...WHERE...);
-        // el equivalente es construir el array con un elemento condicional
-        // por ID (NULL si la condición no se cumple) y compactarlo con
-        // ARRAY_CONSTRUCT_COMPACT, que descarta los NULL.
-        const items = [];
-        for (const [id, conds] of dict.entries()) {
-            items.push("IFF(" + conds.join(" AND ") + ", " + id + ", NULL)");
-        }
-
-        let sql = "ARRAY_CONSTRUCT_COMPACT(" + CRLF;
-        sql += items.map(s => "        " + s).join("," + CRLF) + CRLF;
-        sql += "    )";
-        return sql;
-    }
-
-    // BigQuery (comportamiento original, sin cambios)
+    // BigQuery
     const structs = [];
     for (const [id, conds] of dict.entries()) {
         structs.push("STRUCT(" + id + " AS " + idFieldName + ", (" + conds.join(" AND ") + ") AS COND)");
@@ -2113,41 +2003,6 @@ function buildIdArray(atributesGrid, defs, idFieldName) {
     sql += "    WHERE COND" + CRLF;
     sql += ")";
 
-    return sql;
-}
-
-/**
- * Equivalente T-SQL (Microsoft Fabric) de buildIdArray: T-SQL no tiene
- * arrays, así que en vez de etiquetar cada fila con un ARRAY de IDs se
- * genera una tabla derivada para CROSS APPLY con una fila por ID
- * (NULL si la condición no se cumple), igual que el IFF + compactado de
- * Snowflake. Los NULL se descartan después en el WHERE del SELECT final.
- * Devuelve: "(VALUES (CASE WHEN ... THEN 1 END), ...) AS alias(ID_FIELD)"
- */
-function buildIdValuesFabric(atributesGrid, defs, idFieldName, alias) {
-    const dict = new Map();
-
-    for (const v of defs) {
-        const key = String(v.R);
-        const condPart = v.AttributeName + "=" + sqlValue(atributesGrid, v.Dimension, v.AttributeName, v.Value);
-
-        if (!dict.has(key)) {
-            dict.set(key, [condPart]);
-        } else {
-            dict.get(key).push(condPart);
-        }
-    }
-
-    const items = [];
-    for (const [id, conds] of dict.entries()) {
-        items.push("(CASE WHEN " + conds.join(" AND ") + " THEN " + id + " END)");
-    }
-    // Sin definiciones: una única fila NULL -> no casa nada (igual que un array vacío)
-    if (items.length === 0) items.push("(CAST(NULL AS INT))");
-
-    let sql = "(VALUES" + CRLF;
-    sql += items.map(s => "        " + s).join("," + CRLF) + CRLF;
-    sql += "    ) AS " + alias + "(" + idFieldName + ")";
     return sql;
 }
 
@@ -2191,15 +2046,8 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     const measureField = (measureRow && String(cellValue(measuresGrid, measureRow, 6)).trim())
         || measureName;
 
-    // Modelo de Power BI/Fabric: consulta DAX con una celda por
-    // ROW_ID x COLUMN_ID (ver PowerBIQuery.buildFixedQuery).
-    if (window.PowerBIQuery && window.PowerBIQuery.isActiveModel()) {
-        return window.PowerBIQuery.buildFixedQuery(rowsDefs, colDefs, measureName, ReportState, measuresGrid, atributesGrid);
-    }
-
-    const isFabric = Provider.key() === "fabric";
-    const rowIdsArray = isFabric ? "" : buildIdArray(atributesGrid, rowsDefs, "ROW_ID");
-    const columnIdsArray = isFabric ? "" : buildIdArray(atributesGrid, colDefs, "COLUMN_ID");
+    const rowIdsArray = buildIdArray(atributesGrid, rowsDefs, "ROW_ID");
+    const columnIdsArray = buildIdArray(atributesGrid, colDefs, "COLUMN_ID");
 
     // Filtros del informe (zona "Filtros") + filtros "bloqueados" (Añadir
     // filtro, tanto los de ESTE informe como los globales de "Todos los
@@ -2234,36 +2082,6 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     sql += buildGroupByBase(relGrid, rowsDefs, colDefs, excCols) + CRLF;
     sql += ")," + CRLF + CRLF;
 
-    if (isFabric) {
-        // T-SQL: sin arrays -> CROSS APPLY sobre BASE con una fila por
-        // ROW_ID/COLUMN_ID candidato, y se descartan los que no cumplen.
-        // Se quita la coma final del CTE BASE (no hay TAGGED).
-        sql = sql.replace(/\),\r?\n\r?\n$/, ")" + CRLF + CRLF);
-        if (exc) {
-            sql += "SELECT" + CRLF + "    ROW_ID," + CRLF + "    COLUMN_ID," + CRLF + "    " + exc.agg + "(IMPORTE) AS IMPORTE" + CRLF + "FROM (" + CRLF;
-            sql += "SELECT" + CRLF + "    R.ROW_ID," + CRLF + "    C.COLUMN_ID," + CRLF;
-            rNames.forEach(n => { sql += "    B." + n + "," + CRLF; });
-            sql += "    SUM(B.IMPORTE) AS IMPORTE" + CRLF + "FROM BASE B" + CRLF;
-            sql += "CROSS APPLY " + buildIdValuesFabric(atributesGrid, rowsDefs, "ROW_ID", "R") + CRLF;
-            sql += "CROSS APPLY " + buildIdValuesFabric(atributesGrid, colDefs, "COLUMN_ID", "C") + CRLF;
-            sql += "WHERE R.ROW_ID IS NOT NULL AND C.COLUMN_ID IS NOT NULL" + CRLF;
-            sql += "GROUP BY R.ROW_ID, C.COLUMN_ID" + rNames.map(n => ", B." + n).join("") + CRLF;
-            sql += ") X" + CRLF + "GROUP BY ROW_ID, COLUMN_ID" + CRLF + "ORDER BY ROW_ID, COLUMN_ID";
-            return sql;
-        }
-        sql += "SELECT" + CRLF;
-        sql += "    R.ROW_ID," + CRLF;
-        sql += "    C.COLUMN_ID," + CRLF;
-        sql += "    SUM(B.IMPORTE) AS IMPORTE" + CRLF;
-        sql += "FROM BASE B" + CRLF;
-        sql += "CROSS APPLY " + buildIdValuesFabric(atributesGrid, rowsDefs, "ROW_ID", "R") + CRLF;
-        sql += "CROSS APPLY " + buildIdValuesFabric(atributesGrid, colDefs, "COLUMN_ID", "C") + CRLF;
-        sql += "WHERE R.ROW_ID IS NOT NULL AND C.COLUMN_ID IS NOT NULL" + CRLF;
-        sql += "GROUP BY R.ROW_ID, C.COLUMN_ID" + CRLF;
-        sql += "ORDER BY R.ROW_ID, C.COLUMN_ID";
-        return sql;
-    }
-
     // ---- CTE TAGGED: etiqueta cada fila de BASE con los ROW_ID/COLUMN_ID
     //      que cumple, sin volver a escanear BASE por cada uno ----
     sql += "TAGGED AS (" + CRLF + CRLF;
@@ -2279,27 +2097,14 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     // ---- SELECT final: cruce ROW_ID x COLUMN_ID + agregación ----
     // (con agregación de excepción: suma por celda y dimensiones de referencia y, encima, la excepción)
     if (exc) sql += "SELECT" + CRLF + "    ROW_ID," + CRLF + "    COLUMN_ID," + CRLF + "    " + exc.agg + "(IMPORTE) AS IMPORTE" + CRLF + "FROM (" + CRLF;
-    // BigQuery usa UNNEST(array) AS alias; Snowflake no soporta esa forma
-    // sobre un array literal -> se usa LATERAL FLATTEN, que devuelve el
-    // valor en una columna "VALUE" (de tipo VARIANT) que hay que castear.
     sql += "SELECT" + CRLF;
-    if (Provider.key() === "snowflake") {
-        sql += "    ROW_ID_F.VALUE::INTEGER AS ROW_ID," + CRLF;
-        sql += "    COLUMN_ID_F.VALUE::INTEGER AS COLUMN_ID," + CRLF;
-        rNames.forEach(n => { sql += "    " + n + "," + CRLF; });
-        sql += "    SUM(IMPORTE) AS IMPORTE" + CRLF;
-        sql += "FROM TAGGED," + CRLF;
-        sql += "LATERAL FLATTEN(input => ROW_IDS) AS ROW_ID_F," + CRLF;
-        sql += "LATERAL FLATTEN(input => COLUMN_IDS) AS COLUMN_ID_F" + CRLF;
-    } else {
-        sql += "    ROW_ID," + CRLF;
-        sql += "    COLUMN_ID," + CRLF;
-        rNames.forEach(n => { sql += "    " + n + "," + CRLF; });
-        sql += "    SUM(IMPORTE) AS IMPORTE" + CRLF;
-        sql += "FROM TAGGED," + CRLF;
-        sql += "UNNEST(ROW_IDS) AS ROW_ID," + CRLF;
-        sql += "UNNEST(COLUMN_IDS) AS COLUMN_ID" + CRLF;
-    }
+    sql += "    ROW_ID," + CRLF;
+    sql += "    COLUMN_ID," + CRLF;
+    rNames.forEach(n => { sql += "    " + n + "," + CRLF; });
+    sql += "    SUM(IMPORTE) AS IMPORTE" + CRLF;
+    sql += "FROM TAGGED," + CRLF;
+    sql += "UNNEST(ROW_IDS) AS ROW_ID," + CRLF;
+    sql += "UNNEST(COLUMN_IDS) AS COLUMN_ID" + CRLF;
     if (exc) {
         sql += "GROUP BY ROW_ID, COLUMN_ID" + rNames.map(n => ", " + n).join("") + CRLF;
         sql += ") X" + CRLF;
@@ -2324,16 +2129,14 @@ function escapeJSON(text) {
 }
 
 /**
- * Convierte las filas ya normalizadas de Provider/SF.runQuery (array de
- * objetos { COLUMNA: valor }) al mismo formato de texto que devuelve
- * BigQuery y que ya saben leer parseJsonValueTriples() y
- * jsonTo3MatricesCore(): ambos escanean el texto buscando el literal
- * `"v":` una vez por celda, en el mismo orden fila a fila / columna a
- * columna del SELECT — no hace falta que sea JSON válido de verdad, solo
- * que contenga exactamente esos tokens y nada más. Así Snowflake reutiliza
- * los dos parsers existentes sin tocarlos.
+ * Convierte filas ya normalizadas (array de objetos { COLUMNA: valor }, p. ej.
+ * las de Provider.runQuery) al mismo formato de texto que devuelve BigQuery y
+ * que ya saben leer parseJsonValueTriples() y jsonTo3MatricesCore(): ambos
+ * escanean el texto buscando el literal `"v":` una vez por celda, en el mismo
+ * orden fila a fila / columna a columna del SELECT. Lo usa Tablas Draco
+ * (Planning), que ejecuta con su propia conexión.
  */
-function snowflakeRowsToPseudoBqJson(rows) {
+function rowsToPseudoBqJson(rows) {
     let out = '{"rows":[';
     rows.forEach((row, i) => {
         if (i > 0) out += ",";
@@ -2358,20 +2161,13 @@ function snowflakeRowsToPseudoBqJson(rows) {
  * @param {string} sql
  * @param {string} [billingProjectId] Proyecto de facturación a usar para el job
  *   de BigQuery (jobs.query). Si no se indica, se usa BQ.getBillingProject()
- *   (config de la conexión) y, en su defecto, "bigqueryexcelconnector" como
+ *   (config de la conexión) y, en su defecto, el proyecto de la tabla del SQL
  *   antes. Quien llama y SÍ sabe a qué proyecto pertenece la tabla destino
  *   (p.ej. executeDracoPlanningInserts, a partir del INSERT INTO `proyecto.dataset.tabla`)
  *   debe pasarlo aquí para que el job se facture ahí y no en un proyecto sin
  *   billing (ver executeDracoPlanningInserts).
  */
 async function executeSQL(sql, billingProjectId) {
-    // Modelo semántico de Power BI/Fabric: la "consulta" es un objeto DAX
-    // (ver js/powerBiQuery.js), no un texto SQL. Devuelve el mismo pseudo
-    // JSON de BigQuery, así que el pintado no cambia.
-    if (sql && typeof sql === "object" && sql.kind === "powerbi-dax") {
-        return await window.PowerBIQuery.execute(sql);
-    }
-
     // Variables ($NOMBRE$ en las líneas EPM_VALUE de un eje Estático, ver
     // js/variablesStore.js): el SQL se genera con el marcador y se sustituye
     // por el valor AQUÍ, justo antes de ejecutarlo. Así un SQL guardado (Tablas
@@ -2380,30 +2176,19 @@ async function executeSQL(sql, billingProjectId) {
         sql = window.DracoVariables.resolveSql(sql, Provider.key());
     }
 
-    // [Tablas Draco] Planning ya tiene la conexión autenticada (BigQuery o Snowflake): se usa siempre ella.
+    // [Tablas Draco] Planning ya tiene la conexión autenticada: se usa siempre ella.
     if (window.DracoEngineApi) {
-        return snowflakeRowsToPseudoBqJson(await Provider.runQuery(sql));
+        return rowsToPseudoBqJson(await Provider.runQuery(sql));
     }
 
-    if (Provider.key() === "snowflake") {
-        const rows = await SF.runQuery(sql);
-        return snowflakeRowsToPseudoBqJson(rows);
-    }
+    // BigQuery
+    const token = BQ.getToken();
 
-    if (Provider.key() === "fabric") {
-        // Mismo texto "pseudo JSON de BigQuery" que usan los parsers existentes
-        return await FB.runQueryPseudoBqJson(sql);
-    }
-
-    // BigQuery (comportamiento original, sin cambios)
-    const token = localStorage.getItem("bigquery_access_token");
-    const expires = localStorage.getItem("bigquery_token_expires");
-
-    if (!token || !expires || Date.now() >= parseInt(expires)) {
+    if (!token) {
         throw new Error("No hay una sesión activa de BigQuery. Inicia sesión en el panel primero.");
     }
 
-    const projectId = billingProjectId || BQ.getBillingProject() || "bigqueryexcelconnector";
+    const projectId = BQ.jobProjectFor(sql, billingProjectId);
 
     const url = "https://bigquery.googleapis.com/bigquery/v2/projects/" + projectId + "/queries";
 
@@ -2476,8 +2261,8 @@ function parseJsonValueTriples(json) {
 //
 // NULL -> celda en blanco: BigQuery devuelve los NULL sin comillas
 // ({"v": null}, con el JSON "bonito" -> el texto extraído empieza por
-// "null" seguido de espacios/saltos de línea) y Snowflake/Fabric/Power BI
-// generan ese mismo literal en su pseudo JSON. Antes se pintaba tal cual
+// "null" seguido de espacios/saltos de línea), y rowsToPseudoBqJson genera
+// ese mismo literal. Antes se pintaba tal cual
 // ("null" en la celda). Las cabeceras de Filas/Columnas ya descartaban esos
 // valores antes de llegar aquí (indexOf("null") === 0), así que esto solo
 // cambia el pintado de VALORES (medidas), que es lo que se buscaba.
@@ -2487,13 +2272,38 @@ function isDracoNullLiteral(text) {
     return t === "null" || t === "undefined";
 }
 
+/**
+ * SEGURIDAD (auditoría F-15): las celdas de depuración de EDIT_REPORT
+ * (W1 y Z1 de planificación, X1 con la SQL, Y1 con el JSON de resultados)
+ * quedaban guardadas DENTRO del .xlsx y viajaban al compartir el libro.
+ * Ahora solo se rellenan si DracoConfig.debugWorkbookCells = true; si no,
+ * se escriben vacías (así además se borra lo que dejaron versiones anteriores).
+ */
+function draco_debugCell(value) {
+    const on = typeof DracoConfig !== "undefined" && DracoConfig.debugWorkbookCells === true;
+    return on ? value : "";
+}
+
 function coerceCellLiteral(text) {
     if (isDracoNullLiteral(text)) return "";
     text = String(text);
     if (text.trim() !== "" && !isNaN(text)) {
         return Number(text);
     }
-    return text;
+    return draco_neutralizeFormula(text);
+}
+
+/**
+ * SEGURIDAD (auditoría F-02, inyección de fórmulas): un texto que viene de
+ * BigQuery y empieza por = + - @, tabulador o retorno se escribe con un
+ * apóstrofo delante para que Excel lo trate como TEXTO y no lo ejecute como
+ * fórmula (p. ej. =HYPERLINK(...) o =WEBSERVICE(...) metidos en un dato).
+ * Solo afecta a los DATOS pintados; las fórmulas propias de Draco
+ * (EPM_VALUE, EPM_FORMULA) se escriben por otras rutas y no pasan por aquí.
+ */
+function draco_neutralizeFormula(text) {
+    if (typeof text !== "string" || text === "") return text;
+    return /^[=+\-@\t\r]/.test(text) ? "'" + text : text;
 }
 
 // reportId -> Map("fila_columna" -> valor), con el valor que jsonPaintValues
@@ -2675,14 +2485,13 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     // de resultados: se escriben en EDIT_REPORT!X1 (SQL) e Y1 (JSON).
     await Excel.run(async (context) => {
         const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-        // En modelos de Power BI "sql" es un objeto con el DAX en .text
-        editReportSheet.getRange("X1").values = [[typeof sql === "string" ? sql : sql.text]];
+        editReportSheet.getRange("X1").values = [[draco_debugCell(typeof sql === "string" ? sql : sql.text)]];
 
         const EXCEL_CELL_CHAR_LIMIT = 32000; // límite real de Excel: 32767
         const jsonForCell = json.length > EXCEL_CELL_CHAR_LIMIT
             ? json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
             : json;
-        editReportSheet.getRange("Y1").values = [[jsonForCell]];
+        editReportSheet.getRange("Y1").values = [[draco_debugCell(jsonForCell)]];
 
         await context.sync();
     });
@@ -2739,7 +2548,7 @@ async function surfaceErrorToSheet(error) {
     try {
         await Excel.run(async (context) => {
             const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-            editReportSheet.getRange("X1").values = [["ERROR: " + (error && error.message ? error.message : String(error))]];
+            editReportSheet.getRange("X1").values = [[draco_debugCell("ERROR: " + (error && error.message ? error.message : String(error)))]];
             await context.sync();
         });
     } catch (e2) {
@@ -2782,7 +2591,7 @@ async function actualizarInformeFixed(event) {
  * Estático lo lean igual que siempre. Las medidas en este eje se reparten
  * por miembro en la posición en que están en el diseño.
  *
- * SQL (BigQuery; Snowflake y Fabric con sus equivalentes, igual que Fijo):
+ * SQL (BigQuery):
  *   BASE   : atributos del eje estático + del dinámico + una SUM por
  *            medida, filtrado por (condiciones estáticas en OR) AND filtros.
  *   TAGGED : cada fila de BASE etiquetada con las líneas estáticas que cumple.
@@ -2798,11 +2607,7 @@ function dracoReportMode(editReportGrid) {
     const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
     const colsStatic = String(cellValue(editReportGrid, 12, 14)).trim().toUpperCase() === "X";
     if (rowsStatic && colsStatic) return "fixed";
-    if (rowsStatic || colsStatic) {
-        // Power BI/Fabric semántico: sin consulta híbrida, sigue por el Dinámico de siempre
-        if (window.PowerBIQuery && window.PowerBIQuery.isActiveModel()) return "dynamic";
-        return "hybrid";
-    }
+    if (rowsStatic || colsStatic) return "hybrid";
     return "dynamic";
 }
 
@@ -2960,9 +2765,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
 
     if (lines.length === 0) return { sql: null, plan };
 
-    const provider = Provider.key();
-    const isFabric = provider === "fabric";
-    const TRUE_EXPR = isFabric ? "1=1" : "TRUE";
+    const TRUE_EXPR = "TRUE";
 
     // --- BASE: atributos estáticos (de las condiciones) + dinámicos + medidas
     const selectCols = new Map();
@@ -3040,38 +2843,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     const gFlags = (excMs.length && hierFields.length) ? dynNames : [];
     const gSel = (colRef) => gFlags.map((n, i) => ", GROUPING(" + colRef(n) + ") AS DRC_G_" + i).join("");
     let excSrc = null;      // { lineRef, colRef, mRef, from } para AGG_E_n
-    if (isFabric) {
-        const values = lines.map(l => "(CASE WHEN " + lineCond(l) + " THEN " + l.id + " END)");
-        excSrc = { lineRef: "L.LINE_ID", colRef: n => "B." + n, mRef: a => "B." + a,
-            from: "    FROM BASE B" + CRLF + "    CROSS APPLY (VALUES" + CRLF + values.map(v => "        " + v).join("," + CRLF) + CRLF + "    ) AS L(LINE_ID)" + CRLF + "    WHERE L.LINE_ID IS NOT NULL" + CRLF };
-        sql += "AGG AS (" + CRLF
-            + "    SELECT L.LINE_ID" + dynNames.map(n => ", B." + n + " AS " + n).join("") + gSel(n => "B." + n)
-            + measureCols.map(m => ", SUM(B." + m.alias + ") AS " + m.alias).join("") + CRLF
-            + "    FROM BASE B" + CRLF
-            + "    CROSS APPLY (VALUES" + CRLF + values.map(v => "        " + v).join("," + CRLF) + CRLF + "    ) AS L(LINE_ID)" + CRLF
-            + "    WHERE L.LINE_ID IS NOT NULL" + CRLF
-            + "    " + groupBy("L.LINE_ID", n => "B." + n) + CRLF
-            + ")" + CRLF + CRLF;
-    } else if (provider === "snowflake") {
-        const items = lines.map(l => "IFF(" + lineCond(l) + ", " + l.id + ", NULL)");
-        sql += "TAGGED AS (" + CRLF
-            + "    SELECT " + [...dynNames, ...mSel, ...rAll].map(x => x + ", ").join("")
-            + "ARRAY_CONSTRUCT_COMPACT(" + CRLF + items.map(x => "        " + x).join("," + CRLF) + CRLF + "    ) AS LINE_IDS" + CRLF
-            + "    FROM BASE" + CRLF + ")," + CRLF + CRLF;
-        excSrc = { lineRef: "LINE_ID", colRef: n => n, mRef: a => a,
-            from: "    FROM (" + CRLF
-                + "        SELECT L.VALUE::INTEGER AS LINE_ID" + [...dynNames, ...mSel, ...rAll].map(x => ", T." + x + " AS " + x).join("") + CRLF
-                + "        FROM TAGGED T, LATERAL FLATTEN(input => T.LINE_IDS) AS L" + CRLF
-                + "    ) X" + CRLF };
-        sql += "AGG AS (" + CRLF
-            + "    SELECT LINE_ID" + dynNames.map(n => ", " + n).join("") + gSel(n => n) + measureCols.map(m => ", SUM(" + m.alias + ") AS " + m.alias).join("") + CRLF
-            + "    FROM (" + CRLF
-            + "        SELECT L.VALUE::INTEGER AS LINE_ID" + [...dynNames, ...mSel].map(x => ", T." + x + " AS " + x).join("") + CRLF
-            + "        FROM TAGGED T, LATERAL FLATTEN(input => T.LINE_IDS) AS L" + CRLF
-            + "    ) X" + CRLF
-            + "    " + groupBy("LINE_ID", n => n) + CRLF
-            + ")" + CRLF + CRLF;
-    } else {
+    {
         const structs = lines.map(l => "STRUCT(" + l.id + " AS LINE_ID, (" + lineCond(l) + ") AS COND)");
         sql += "TAGGED AS (" + CRLF
             + "    SELECT " + [...dynNames, ...mSel, ...rAll].map(x => x + ", ").join("")
@@ -3775,9 +3547,9 @@ async function actualizarInformeHybridCore(reportIdOverride) {
 
         await Excel.run(async (context) => {
             const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-            editReportSheet.getRange("X1").values = [[built.sql || "(Híbrido: el eje Estático no tiene ninguna línea EPM_VALUE todavía)"]];
+            editReportSheet.getRange("X1").values = [[draco_debugCell(built.sql || "(Híbrido: el eje Estático no tiene ninguna línea EPM_VALUE todavía)")]];
             const LIMIT = 32000;
-            editReportSheet.getRange("Y1").values = [[json.length > LIMIT ? json.substring(0, LIMIT) + " ...(truncado)" : json]];
+            editReportSheet.getRange("Y1").values = [[draco_debugCell(json.length > LIMIT ? json.substring(0, LIMIT) + " ...(truncado)" : json)]];
             await context.sync();
         });
 
@@ -4380,7 +4152,7 @@ function configSetTuplesWithSubtotals(relGrid) {
 // "DENSE_RANK() OVER (ORDER BY ...) AS <alias>" a partir de las partes
 // del ORDER BY; si el eje está vacío (no hay ningún campo en él), una
 // constante 1: todo el resultado cae en una única fila/columna lógica
-// (DENSE_RANK sin ORDER BY no es válido en Snowflake).
+// (DENSE_RANK sin ORDER BY no es portable).
 function buildDenseRankExpression(orderParts, alias) {
     if (orderParts) orderParts = orderParts.map(dracoCalcOrderPart);
     if (!orderParts || orderParts.length === 0) {
@@ -6380,7 +6152,7 @@ async function writeDracoPlanningDebug(msg) {
             editReportSheet.load("isNullObject");
             await context.sync();
             if (editReportSheet.isNullObject) return;
-            editReportSheet.getRange("W1").values = [[new Date().toLocaleTimeString() + " | " + msg]];
+            editReportSheet.getRange("W1").values = [[draco_debugCell(new Date().toLocaleTimeString() + " | " + msg)]];
             await context.sync();
         });
     } catch (e) {
@@ -9274,13 +9046,10 @@ async function actualizarInformeCore(reportIdOverride) {
         // marcado con subtotal en L/R (ver hasAnySubtotalMarked/buildSQL).
         const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
 
-        // Modelo de Power BI/Fabric: consulta DAX en vez de SQL (ver js/powerBiQuery.js)
         // [Tablas Draco] con SQL ya generado y guardado no se vuelve a construir (loadReportDefinition sigue
         // haciendo falta: deja listo ReportState, que usa el pintado).
         sql = (window.DracoEngineApi && window.DracoEngineApi.storedSql)
             ? window.DracoEngineApi.storedSql
-            : (window.PowerBIQuery && window.PowerBIQuery.isActiveModel())
-            ? window.PowerBIQuery.buildDynamicQuery(ReportState, measuresGrid, atributesGrid, subtotalsOnTop)
             : buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
         tSub = draco_perfMark(reportId, "  loadReportDefinition + buildSQL (JS puro)", tSub);
 
@@ -9288,9 +9057,9 @@ async function actualizarInformeCore(reportIdOverride) {
         console.log("BuildSQL ->", queryText);
 
         // [Punto 8] SQL ya no se escribe en A1 de la hoja de resultados:
-        // se escribe en EDIT_REPORT!X1 (en modelos de Power BI, el DAX).
+        // se escribe en EDIT_REPORT!X1.
         const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
-        editReportSheet.getRange("X1").values = [[queryText]];
+        editReportSheet.getRange("X1").values = [[draco_debugCell(queryText)]];
 
         await context.sync();
         draco_perfMark(reportId, "  Escribir X1 (sync)", tSub);
@@ -9311,7 +9080,7 @@ async function actualizarInformeCore(reportIdOverride) {
             : json;
         // [Punto 8] JSON ya no se escribe en B1 de la hoja de resultados:
         // se escribe en EDIT_REPORT!Y1.
-        editReportSheet.getRange("Y1").values = [[jsonForCell]];
+        editReportSheet.getRange("Y1").values = [[draco_debugCell(jsonForCell)]];
         await context.sync();
     });
     tPerf = draco_perfMark(reportId, "Escribir SQL/JSON en EDIT_REPORT", tPerf);
@@ -9615,9 +9384,7 @@ async function dracoBuildDynamicQuery(reportId) {
         loadReportDefinition(editReportGrid, reportId);
         applyFilterMeasuresToDynamicReport();
         const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
-        sql = (window.PowerBIQuery && window.PowerBIQuery.isActiveModel())
-            ? window.PowerBIQuery.buildDynamicQuery(ReportState, measuresGrid, atributesGrid, subtotalsOnTop)
-            : buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
+        sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
         // OJO: en ReportState, "Columns" son las Filas de la hoja y "Rows" las Columnas (herencia del VBA)
         nRowDims = ReportState.ColumnCount;
         nColDims = ReportState.RowCount;
@@ -9783,7 +9550,7 @@ async function actualizar(event) {
 
 /**
  * Ejecuta N tareas asíncronas con un límite de concurrencia (para no
- * lanzar, p.ej., 20 consultas a BigQuery/Snowflake a la vez sin control).
+ * lanzar, p.ej., 20 consultas a BigQuery a la vez sin control).
  */
 async function runWithConcurrency(items, limit, worker) {
     let next = 0;
@@ -9803,7 +9570,7 @@ async function runWithConcurrency(items, limit, worker) {
  * ReportStore (no solo el activo) y los actualiza:
  *   1) Construye el SQL de cada uno (síncrono/local, en serie: no hace
  *      falta red y así no se pisan los unos a los otros al leer su grid).
- *   2) Lanza las consultas a BigQuery/Snowflake EN PARALELO (con un tope
+ *   2) Lanza las consultas a BigQuery EN PARALELO (con un tope
  *      de concurrencia): es la parte lenta (red) y cada informe es
  *      independiente, así que no hay motivo para esperarlas una a una.
  *   3) Pinta cada resultado en Excel EN SERIE: la API de Excel no admite
@@ -9878,10 +9645,7 @@ async function actualizarTodosCore(concurrency) {
                     loadReportDefinition(editReportGrid, reportId);
                     applyFilterMeasuresToDynamicReport();
                     const subtotalsOnTop = String(cellValue(editReportGrid, 4, 4)).trim().toUpperCase() === "X";
-                    // Modelo de Power BI/Fabric: consulta DAX (ver js/powerBiQuery.js)
-                    sql = (window.PowerBIQuery && window.PowerBIQuery.isActiveModel())
-                        ? window.PowerBIQuery.buildDynamicQuery(ReportState, measuresGrid, atributesGrid, subtotalsOnTop)
-                        : buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
+                    sql = buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop);
                 });
                 dynamicJobs.push({ reportId, reportName: r.name, sql });
             }
@@ -9890,7 +9654,7 @@ async function actualizarTodosCore(concurrency) {
         }
     }
 
-    // 2) Consultas de los informes "Dinámicos" a BigQuery/Snowflake EN
+    // 2) Consultas de los informes "Dinámicos" a BigQuery EN
     //    PARALELO (tope de concurrencia por defecto 4): es la parte lenta
     //    (red, sin tocar Excel) y cada informe es independiente. Al ir
     //    varias a la vez, el indicador no puede mostrar un "en curso" por
@@ -9935,7 +9699,7 @@ async function actualizarTodosCore(concurrency) {
                 const jsonForCell = job.json.length > EXCEL_CELL_CHAR_LIMIT
                     ? job.json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
                     : job.json;
-                editReportSheet.getRange("Y1").values = [[jsonForCell]];
+                editReportSheet.getRange("Y1").values = [[draco_debugCell(jsonForCell)]];
                 await jsonTo3Matrices(context, job.json, job.reportId);
             });
             paintedCount++;
@@ -10686,13 +10450,11 @@ function dracoPlanningSqlLiteralForMeasureValue(value) {
 // construye el INSERT, no dos.
 /**
  * Extrae el proyecto GCP de una tabla ya cualificada por Provider.qualify()
- * (`proyecto.dataset.tabla`, con o sin backticks — en Snowflake sería
- * BD.esquema.tabla, así que ahí no aplica y se devuelve null). Esto es lo
+ * (`proyecto.dataset.tabla`, con o sin backticks). Esto es lo
  * que permite facturar el INSERT contra el MISMO proyecto donde vive la
  * tabla de hechos real, en vez de un proyecto de facturación fijo.
  */
 function projectIdFromQualifiedTable(qualifiedTable) {
-    if (Provider.key() === "snowflake" || Provider.key() === "fabric") return null;
     const clean = String(qualifiedTable || "").replace(/`/g, "").trim();
     const parts = clean.split(".");
     return parts.length >= 3 ? parts[0] : null;
@@ -10754,13 +10516,13 @@ async function writeDracoPlanningMergeSql(rows, dimNames) {
 }
 
 /**
- * Ejecuta de verdad, contra el proveedor activo (BigQuery/Snowflake, ver
+ * Ejecuta de verdad, contra el proveedor activo (BigQuery, ver
  * executeSQL), cada INSERT generado por buildDracoPlanningInsertStatements
  * — uno por tabla de hechos distinta. Se para en el primero que falle
  * (no sigue con los demás) y devuelve el error tal cual lo dio el
  * proveedor, para poder mostrarlo.
  *
- * BigQuery/Snowflake no lanzan excepción si el SQL falla — devuelven un
+ * BigQuery no lanzan excepción si el SQL falla — devuelven un
  * texto/JSON con "error"/"errors" dentro, con código 200 igualmente — por
  * eso hace falta mirar el contenido de la respuesta, no solo capturar
  * try/catch.
@@ -10884,12 +10646,10 @@ async function guardarPlanificacion(event) {
     try {
         console.log("Guardar planificación: ejecuta el INSERT contra el proveedor activo y refresca los informes afectados.");
 
-        // Los modelos semánticos de Power BI/Fabric son de solo lectura:
-        // no hay tabla de hechos en la que escribir.
-        if (window.PowerBIQuery && window.PowerBIQuery.isActiveModel()) {
-            showPlanningValidationBadge(false,
-                "Los modelos semánticos de Power BI son de solo lectura: la planificación no está disponible para ellos.",
-                "Planificación no disponible", "Modelo de Power BI");
+        // Solo con permiso de escritura y sobre modelos de Draco Planning (ver DracoPlanningGate).
+        if (window.DracoPlanningGate && !DracoPlanningGate.canWrite()) {
+            showPlanningValidationBadge(false, DracoPlanningGate.check("").reason,
+                "Planificación no disponible", "Permiso de solo lectura");
             return;
         }
 
@@ -10904,6 +10664,16 @@ async function guardarPlanificacion(event) {
         // De paso, si todo va bien, ya vienen montadas las filas del INSERT
         // (validation.rows) — ver la función para el detalle.
         const validation = await validateDracoPlanningMandatoryDimensions();
+        if (window.DracoPlanningGate && validation.rows && window.ReportStore) {
+            const rejected = Array.from(new Set(validation.rows.map(r => r.reportId)))
+                .map(id => window.ReportStore.getReport(id))
+                .filter(rep => rep && !DracoPlanningGate.check(rep.semanticModelName).ok);
+            if (rejected.length) {
+                showPlanningValidationBadge(false, DracoPlanningGate.check(rejected[0].semanticModelName).reason,
+                    "Planificación no disponible", "Modelo no válido para planificar");
+                return;
+            }
+        }
         if (!validation.valid) {
             const detalle = validation.errors
                 .map(e => `${e.reportName} · ${e.cell}: ${e.missingDims.join(", ")}`)
@@ -11669,7 +11439,6 @@ try {
     Office.actions.associate("mostrarVistaInformes", mostrarVistaInformes);
     Office.actions.associate("mostrarVistaConexion", mostrarVistaConexion);
     Office.actions.associate("mostrarVistaEditarModelo", mostrarVistaEditarModelo);
-    Office.actions.associate("writeHolaInA1", writeHolaInA1);
     Office.actions.associate("actualizarInformeFixed", actualizarInformeFixed);
     Office.actions.associate("actualizarInforme", actualizarInforme);
     Office.actions.associate("actualizar", actualizar);

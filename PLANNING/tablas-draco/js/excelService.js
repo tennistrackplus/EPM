@@ -224,24 +224,14 @@ async function svcFetchWithTimeout(url, options) {
 }
 
 async function executeSQLBigQuery(sql) {
-    if (Provider.key() === "snowflake") {
-        const rows = await SF.runQuery(sql);
-        return svcRowsToPseudoBqJson(rows);
-    }
-
-    if (Provider.key() === "fabric") {
-        return await FB.runQueryPseudoBqJson(sql);
-    }
-
     // BigQuery
-    const token = localStorage.getItem("bigquery_access_token");
-    const expires = localStorage.getItem("bigquery_token_expires");
+    const token = BQ.getToken();
 
-    if (!token || !expires || Date.now() >= parseInt(expires)) {
+    if (!token) {
         throw new Error("No hay una sesión activa de BigQuery. Inicia sesión en el panel primero.");
     }
 
-    const projectId = "bigqueryexcelconnector";
+    const projectId = BQ.jobProjectFor(sql);
     const baseUrl = "https://bigquery.googleapis.com/bigquery/v2/projects/" + projectId;
     const headers = {
         "Authorization": "Bearer " + token,
@@ -398,11 +388,6 @@ const ExcelService = {
         const atribGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
         const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
 
-        // Modelo de Power BI/Fabric: consulta DAX (objeto) en vez de SQL
-        if (window.PowerBIQuery && window.PowerBIQuery.isActiveModel()) {
-            return window.PowerBIQuery.buildMembersQuery(dimension, name, atribGrid, hierGrid);
-        }
-
         if (existsAttribute(atribGrid, dimension, name)) {
             return buildAttributeSQL(atribGrid, dimension, name);
         }
@@ -437,10 +422,6 @@ const ExcelService = {
     },
 
     async executeSQL(sql) {
-        // Modelo de Power BI/Fabric: la consulta es un objeto DAX (ver js/powerBiQuery.js)
-        if (sql && typeof sql === "object" && sql.kind === "powerbi-dax") {
-            return await window.PowerBIQuery.execute(sql);
-        }
         return await executeSQLBigQuery(sql);
     },
 
