@@ -18,6 +18,8 @@
             font-size: var(--fs-md);
         }
     </style>
+    <script src="js/i18n.js?v=20261022w"></script>
+    <script src="js/i18n/en.js?v=20261022w"></script>
 </head>
 <body>
     <div class="box">Completando el inicio de sesión...</div>
@@ -34,6 +36,8 @@
             }
 
             const params = parseHashParams(window.location.hash);
+            // Se borra el fragmento de la URL para que el token no quede en el historial.
+            try { history.replaceState(null, "", window.location.pathname); } catch (e) { /* noop */ }
             let payload;
 
             if (params.access_token) {
@@ -41,13 +45,17 @@
                     status: "success",
                     provider: "bigquery",
                     token: params.access_token,
-                    expiresIn: params.expires_in || "3600"
+                    expiresIn: params.expires_in || "3600",
+                    state: params.state || null,
+                    session: params.session || null,
+                    scope: params.scope || null
                 });
             } else {
                 payload = JSON.stringify({
                     status: "error",
                     provider: "bigquery",
-                    error: params.error || "No se recibió ningún token de acceso."
+                    error: params.error || "No se recibió ningún token de acceso.",
+                    state: params.state || null
                 });
             }
 
@@ -55,16 +63,10 @@
                 window.opener.postMessage(payload, window.location.origin);
                 window.close();
             } else {
-                // Fallback: guarda directamente y redirige (por si el navegador bloqueó window.opener)
+                // Sin ventana de origen (el navegador bloqueó window.opener):
+                // el token NO se guarda aquí; hay que volver a conectar desde la app.
                 document.querySelector(".box").textContent =
-                    "Autenticación completada. Puedes cerrar esta ventana.";
-                try {
-                    const data = JSON.parse(payload);
-                    if (data.status === "success") {
-                        localStorage.setItem("bigquery_access_token", data.token);
-                        localStorage.setItem("bigquery_token_expires", Date.now() + (parseInt(data.expiresIn, 10) * 1000));
-                    }
-                } catch (e) { /* noop */ }
+                    "No se ha podido devolver la sesión a Draco Planning. Cierra esta ventana y vuelve a pulsar «Conectar».";
             }
         })();
     </script>
