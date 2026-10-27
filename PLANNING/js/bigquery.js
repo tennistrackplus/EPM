@@ -147,8 +147,19 @@ const BQ = {
      * DracoConfig.semanticModelGithub); el token, de la sesión o se pide.
      */
     async getGitRepoConfig() {
-        // OJO: Connections se declara con «const» (connections.js), así que NO existe como window.Connections
-        const active = (typeof Connections !== "undefined" && typeof Connections.getActive === "function") ? Connections.getActive() : null;
+        // Conexión activa. OJO: Connections se declara con «const» (connections.js), así que NO existe como
+        // window.Connections; y en las páginas que no cargan connections.js (app.html, generador, visor) se lee
+        // directamente de donde la guarda: localStorage «epm_connections» + «epm_active_connection_id».
+        let active = null;
+        if (typeof Connections !== "undefined" && typeof Connections.getActive === "function") {
+            active = Connections.getActive();
+        } else {
+            try {
+                const id = localStorage.getItem("epm_active_connection_id");
+                const list = JSON.parse(localStorage.getItem("epm_connections") || "[]");
+                active = (id && Array.isArray(list)) ? (list.find(c => c && c.id === id) || null) : null;
+            } catch (e) { active = null; }
+        }
         const repo = (active && active.config && active.config.semanticRepo) || {};
         const def = (typeof DracoConfig !== "undefined" && DracoConfig.semanticModelGithub) || {};
         const url = String(repo.url || def.url || "").trim();
