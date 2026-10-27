@@ -12,7 +12,6 @@ const DracoConfig = {
     // Ponerlo a true solo en entornos de prueba.
     // ---------------------------------------------------------
     allowSimpleOAuth: true,
-    
     // ---------------------------------------------------------
     // BigQuery (Google OAuth 2.0)
     // ---------------------------------------------------------
