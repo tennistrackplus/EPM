@@ -6,12 +6,16 @@
     xsi:type="TaskPaneApp">
 
   <Id>b7e1a4d2-3c9f-4a2e-9b1a-1234567890ab</Id>
-  <Version>1.0.0.2</Version>
+  <Version>1.0.0.3</Version>
   <ProviderName>Draco BI</ProviderName>
   <DefaultLocale>es-ES</DefaultLocale>
 
-  <DisplayName DefaultValue="Draco BI"/>
-  <Description DefaultValue="Draco BI para Excel"/>
+  <DisplayName DefaultValue="Draco BI">
+    <Override Locale="en-US" Value="Draco BI"/>
+  </DisplayName>
+  <Description DefaultValue="Draco BI para Excel">
+    <Override Locale="en-US" Value="Draco BI for Excel"/>
+  </Description>
 
   <IconUrl DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icon-80.png"/>
@@ -990,41 +994,41 @@
 
       <bt:ShortStrings>
 
-        <bt:String id="TabLabel" DefaultValue="Draco BI"/>
+        <bt:String id="TabLabel" DefaultValue="Draco BI"><bt:Override Locale="en-US" Value="Draco BI"/></bt:String>
 
-        <bt:String id="ConexionGroupLabel" DefaultValue="Conexión"/>
-        <bt:String id="ConexionButtonLabel" DefaultValue="Conexión"/>
+        <bt:String id="ConexionGroupLabel" DefaultValue="Conexión"><bt:Override Locale="en-US" Value="Connection"/></bt:String>
+        <bt:String id="ConexionButtonLabel" DefaultValue="Conexión"><bt:Override Locale="en-US" Value="Connection"/></bt:String>
 
-        <bt:String id="ModeloGroupLabel" DefaultValue="Modelo semántico"/>
-        <bt:String id="ModeloCrearButtonLabel" DefaultValue="Editar modelos semántico"/>
-        <bt:String id="ModeloAbrirButtonLabel" DefaultValue="Abrir modelo semántico"/>
-        <bt:String id="ModeloGuardarButtonLabel" DefaultValue="Guardar modelo semántico"/>
+        <bt:String id="ModeloGroupLabel" DefaultValue="Modelo semántico"><bt:Override Locale="en-US" Value="Semantic model"/></bt:String>
+        <bt:String id="ModeloCrearButtonLabel" DefaultValue="Editar modelos semántico"><bt:Override Locale="en-US" Value="Edit semantic models"/></bt:String>
+        <bt:String id="ModeloAbrirButtonLabel" DefaultValue="Abrir modelo semántico"><bt:Override Locale="en-US" Value="Open semantic model"/></bt:String>
+        <bt:String id="ModeloGuardarButtonLabel" DefaultValue="Guardar modelo semántico"><bt:Override Locale="en-US" Value="Save semantic model"/></bt:String>
 
-        <bt:String id="EdicionGroupLabel" DefaultValue="Edición"/>
-        <bt:String id="CrearInformeButtonLabel" DefaultValue="Editar informes"/>
-        <bt:String id="ActualizarInformeButtonLabel" DefaultValue="Actualizar informe"/>
+        <bt:String id="EdicionGroupLabel" DefaultValue="Edición"><bt:Override Locale="en-US" Value="Edit"/></bt:String>
+        <bt:String id="CrearInformeButtonLabel" DefaultValue="Editar informes"><bt:Override Locale="en-US" Value="Edit reports"/></bt:String>
+        <bt:String id="ActualizarInformeButtonLabel" DefaultValue="Actualizar informe"><bt:Override Locale="en-US" Value="Refresh report"/></bt:String>
 
-        <bt:String id="ReconMiembrosLabel" DefaultValue="Reconoc. de miembros"/>
-        <bt:String id="DistribuirValoresButtonLabel" DefaultValue="Distribuir valores"/>
-        <bt:String id="AnadirFiltroButtonLabel" DefaultValue="Añadir filtro"/>
+        <bt:String id="ReconMiembrosLabel" DefaultValue="Reconoc. de miembros"><bt:Override Locale="en-US" Value="Member recognition"/></bt:String>
+        <bt:String id="DistribuirValoresButtonLabel" DefaultValue="Distribuir valores"><bt:Override Locale="en-US" Value="Distribute values"/></bt:String>
+        <bt:String id="AnadirFiltroButtonLabel" DefaultValue="Añadir filtro"><bt:Override Locale="en-US" Value="Add filter"/></bt:String>
 
-        <bt:String id="InformeGroupLabel" DefaultValue="Informe"/>
-        <bt:String id="CopiarInformeButtonLabel" DefaultValue="Copiar informe"/>
-        <bt:String id="PegarInformeButtonLabel" DefaultValue="Pegar informe"/>
-        <bt:String id="EliminarInformeButtonLabel" DefaultValue="Eliminar informe"/>
+        <bt:String id="InformeGroupLabel" DefaultValue="Informe"><bt:Override Locale="en-US" Value="Report"/></bt:String>
+        <bt:String id="CopiarInformeButtonLabel" DefaultValue="Copiar informe"><bt:Override Locale="en-US" Value="Copy report"/></bt:String>
+        <bt:String id="PegarInformeButtonLabel" DefaultValue="Pegar informe"><bt:Override Locale="en-US" Value="Paste report"/></bt:String>
+        <bt:String id="EliminarInformeButtonLabel" DefaultValue="Eliminar informe"><bt:Override Locale="en-US" Value="Delete report"/></bt:String>
 
-        <bt:String id="PlanifGroupLabel" DefaultValue="Planificación"/>
-        <bt:String id="PlanifGuardarButtonLabel" DefaultValue="Guardar"/>
+        <bt:String id="PlanifGroupLabel" DefaultValue="Planificación"><bt:Override Locale="en-US" Value="Planning"/></bt:String>
+        <bt:String id="PlanifGuardarButtonLabel" DefaultValue="Guardar"><bt:Override Locale="en-US" Value="Save"/></bt:String>
 
-        <bt:String id="CloudGroupLabel" DefaultValue="Cloud Storage"/>
-        <bt:String id="AbrirBucketButtonLabel" DefaultValue="Abrir bucket"/>
-        <bt:String id="GuardarBucketButtonLabel" DefaultValue="Guardar en bucket"/>
+        <bt:String id="CloudGroupLabel" DefaultValue="Cloud Storage"><bt:Override Locale="en-US" Value="Cloud Storage"/></bt:String>
+        <bt:String id="AbrirBucketButtonLabel" DefaultValue="Abrir bucket"><bt:Override Locale="en-US" Value="Open bucket"/></bt:String>
+        <bt:String id="GuardarBucketButtonLabel" DefaultValue="Guardar en bucket"><bt:Override Locale="en-US" Value="Save to bucket"/></bt:String>
 
-        <bt:String id="MasGroupLabel" DefaultValue="Más"/>
-        <bt:String id="OpcionesButtonLabel" DefaultValue="Opciones"/>
-        <bt:String id="PreferenciasItemLabel" DefaultValue="Preferencias"/>
-        <bt:String id="DiagnosticoItemLabel" DefaultValue="Diagnóstico"/>
-        <bt:String id="AcercaDeItemLabel" DefaultValue="Acerca de"/>
+        <bt:String id="MasGroupLabel" DefaultValue="Más"><bt:Override Locale="en-US" Value="More"/></bt:String>
+        <bt:String id="OpcionesButtonLabel" DefaultValue="Opciones"><bt:Override Locale="en-US" Value="Options"/></bt:String>
+        <bt:String id="PreferenciasItemLabel" DefaultValue="Preferencias"><bt:Override Locale="en-US" Value="Preferences"/></bt:String>
+        <bt:String id="DiagnosticoItemLabel" DefaultValue="Diagnóstico"><bt:Override Locale="en-US" Value="Diagnostics"/></bt:String>
+        <bt:String id="AcercaDeItemLabel" DefaultValue="Acerca de"><bt:Override Locale="en-US" Value="About"/></bt:String>
 
       </bt:ShortStrings>
 
@@ -1037,79 +1041,79 @@
 
         <bt:String
           id="ConexionButtonTooltip"
-          DefaultValue="Abre el panel de conexión y fuentes de datos"/>
+          DefaultValue="Abre el panel de conexión y fuentes de datos"><bt:Override Locale="en-US" Value="Opens the connection and data sources pane"/></bt:String>
 
         <bt:String
           id="ModeloButtonTooltip"
-          DefaultValue="Abre el panel para crear o editar el modelo semántico (modelo en estrella)"/>
+          DefaultValue="Abre el panel para crear o editar el modelo semántico (modelo en estrella)"><bt:Override Locale="en-US" Value="Opens the pane to create or edit the semantic model (star schema)"/></bt:String>
 
         <bt:String
           id="ModeloAbrirButtonTooltip"
-          DefaultValue="Abre un modelo semántico existente desde LookML (.lkml), en un repositorio o en local"/>
+          DefaultValue="Abre un modelo semántico existente desde LookML (.lkml), en un repositorio o en local"><bt:Override Locale="en-US" Value="Opens an existing semantic model from LookML (.lkml), from a repository or a local file"/></bt:String>
 
         <bt:String
           id="ModeloGuardarButtonTooltip"
-          DefaultValue="Guarda el modelo semántico actual como LookML (.lkml), en un repositorio o en local"/>
+          DefaultValue="Guarda el modelo semántico actual como LookML (.lkml), en un repositorio o en local"><bt:Override Locale="en-US" Value="Saves the current semantic model as LookML (.lkml), to a repository or locally"/></bt:String>
 
         <bt:String
           id="EditarInfTooltip"
-          DefaultValue="Abre el panel para editar el diseño del informe (filtros, filas y columnas)"/>
+          DefaultValue="Abre el panel para editar el diseño del informe (filtros, filas y columnas)"><bt:Override Locale="en-US" Value="Opens the pane to edit the report layout (filters, rows and columns)"/></bt:String>
 
         <bt:String
           id="ActualizarInformeButtonTooltip"
-          DefaultValue="Actualiza el informe ejecutando la consulta y escribiendo los resultados en Excel"/>
+          DefaultValue="Actualiza el informe ejecutando la consulta y escribiendo los resultados en Excel"><bt:Override Locale="en-US" Value="Refreshes the report by running the query and writing the results to Excel"/></bt:String>
 
         <bt:String
           id="ReconMiembrosTooltip"
-          DefaultValue="Activa o desactiva el reconocimiento de miembros al escribir valores en el informe"/>
+          DefaultValue="Activa o desactiva el reconocimiento de miembros al escribir valores en el informe"><bt:Override Locale="en-US" Value="Turns member recognition on or off when typing values in the report"/></bt:String>
 
         <bt:String
           id="DistribuirValoresButtonTooltip"
-          DefaultValue="Distribuye o redistribuye un importe entre las celdas seleccionadas del informe (equitativo, proporcional o manual)"/>
+          DefaultValue="Distribuye o redistribuye un importe entre las celdas seleccionadas del informe (equitativo, proporcional o manual)"><bt:Override Locale="en-US" Value="Distributes or redistributes an amount across the selected report cells (equal, proportional or manual)"/></bt:String>
 
         <bt:String
           id="AnadirFiltroButtonTooltip"
-          DefaultValue="Crea un rango con nombre sobre la celda seleccionada para un filtro de dimensión + informe (o 'Todos'); doble clic en esa celda para elegir los valores"/>
+          DefaultValue="Crea un rango con nombre sobre la celda seleccionada para un filtro de dimensión + informe (o 'Todos'); doble clic en esa celda para elegir los valores"><bt:Override Locale="en-US" Value="Creates a named range on the selected cell for a dimension + report filter (or 'All'); double-click that cell to choose the values"/></bt:String>
 
         <bt:String
           id="CopiarInformeButtonTooltip"
-          DefaultValue="Copia el diseño y las propiedades del informe activo, para pegarlos en otro"/>
+          DefaultValue="Copia el diseño y las propiedades del informe activo, para pegarlos en otro"><bt:Override Locale="en-US" Value="Copies the layout and properties of the active report, to paste them into another one"/></bt:String>
 
         <bt:String
           id="PegarInformeButtonTooltip"
-          DefaultValue="Crea un informe nuevo en la celda seleccionada con el diseño y las propiedades copiadas"/>
+          DefaultValue="Crea un informe nuevo en la celda seleccionada con el diseño y las propiedades copiadas"><bt:Override Locale="en-US" Value="Creates a new report in the selected cell with the copied layout and properties"/></bt:String>
 
         <bt:String
           id="EliminarInformeButtonTooltip"
-          DefaultValue="Elimina el informe activo (te preguntará si también quieres borrar su contenido en la hoja)"/>
+          DefaultValue="Elimina el informe activo (te preguntará si también quieres borrar su contenido en la hoja)"><bt:Override Locale="en-US" Value="Deletes the active report (you will be asked whether to also clear its content on the sheet)"/></bt:String>
 
         <bt:String
           id="PlanifGuardarButtonTooltip"
-          DefaultValue="Genera el INSERT con los cambios marcados en un informe de planificación (celdas resaltadas en cian) y, tras revisarlo en EDIT_REPORT!V4, lo ejecuta"/>
+          DefaultValue="Genera el INSERT con los cambios marcados en un informe de planificación (celdas resaltadas en cian) y, tras revisarlo en EDIT_REPORT!V4, lo ejecuta"><bt:Override Locale="en-US" Value="Generates the INSERT with the changes marked in a planning report (cells highlighted in cyan) and, after you review it in EDIT_REPORT!V4, runs it"/></bt:String>
 
         <bt:String
           id="GuardarBucketButtonTooltip"
-          DefaultValue="Elige un proyecto y un bucket de Google Cloud Storage y sube una copia del Excel activo (tal cual está guardado)"/>
+          DefaultValue="Elige un proyecto y un bucket de Google Cloud Storage y sube una copia del Excel activo (tal cual está guardado)"><bt:Override Locale="en-US" Value="Choose a Google Cloud Storage project and bucket and upload a copy of the active workbook (as saved)"/></bt:String>
 
         <bt:String
           id="AbrirBucketButtonTooltip"
-          DefaultValue="Elige un proyecto y un bucket de Google Cloud Storage, lista sus archivos Excel y permite descargar el elegido"/>
+          DefaultValue="Elige un proyecto y un bucket de Google Cloud Storage, lista sus archivos Excel y permite descargar el elegido"><bt:Override Locale="en-US" Value="Choose a Google Cloud Storage project and bucket, list its Excel files and download the selected one"/></bt:String>
 
         <bt:String
           id="OpcionesButtonTooltip"
-          DefaultValue="Preferencias, diagnóstico y acerca de Draco BI"/>
+          DefaultValue="Preferencias, diagnóstico y acerca de Draco BI"><bt:Override Locale="en-US" Value="Preferences, diagnostics and about Draco BI"/></bt:String>
 
         <bt:String
           id="PreferenciasItemTooltip"
-          DefaultValue="Preferencias del complemento (próximamente)"/>
+          DefaultValue="Preferencias del complemento (próximamente)"><bt:Override Locale="en-US" Value="Add-in preferences (coming soon)"/></bt:String>
 
         <bt:String
           id="DiagnosticoItemTooltip"
-          DefaultValue="Herramientas de diagnóstico (próximamente)"/>
+          DefaultValue="Herramientas de diagnóstico (próximamente)"><bt:Override Locale="en-US" Value="Diagnostic tools (coming soon)"/></bt:String>
 
         <bt:String
           id="AcercaDeItemTooltip"
-          DefaultValue="Información sobre Draco BI (próximamente)"/>
+          DefaultValue="Información sobre Draco BI (próximamente)"><bt:Override Locale="en-US" Value="About Draco BI (coming soon)"/></bt:String>
 
       </bt:LongStrings>
 

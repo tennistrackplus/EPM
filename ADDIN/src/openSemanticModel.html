@@ -6,6 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Abrir modelo semántico</title>
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <script src="js/i18n.js?v=20261022w"></script>
+    <script src="js/i18n/en.js?v=20261022w"></script>
     <link rel="stylesheet" href="css/theme.css">
     <link rel="stylesheet" href="css/lkmlDialog.css">
 </head>
@@ -43,7 +45,7 @@
                     <button type="button" class="icon-btn" id="lkmlServerUpBtn" title="Subir un nivel">⬆</button>
                 </div>
 
-                <div class="lkml-server-list" id="lkmlServerList">
+                <div class="lkml-server-list" id="lkmlServerList" data-no-i18n>
                     <span class="lkml-empty-hint">Selecciona una conexión para explorar los ficheros .lkml del repositorio.</span>
                 </div>
             </div>
@@ -70,10 +72,11 @@
 
     </div>
 
-    <script src="js/config.js?v=20261022t"></script>
-    <script src="js/connections.js?v=20261022t"></script>
+    <script src="js/config.js?v=20261022w"></script>
+    <script src="js/connections.js?v=20261022w"></script>
+    <script src="js/gitSession.js?v=20261022w"></script>
     <script src="js/gitRepo.js"></script>
-    <script src="js/lkmlImport.js"></script>
-    <script src="js/openSemanticModelDialog.js?v=20261022t"></script>
+    <script src="js/lkmlImport.js?v=20261022w"></script>
+    <script src="js/openSemanticModelDialog.js?v=20261022w"></script>
 </body>
 </html>
