@@ -1,79 +1,28 @@
 {
-  "allowCustomDataForDataTypeAny": true,
   "functions": [
     {
       "id": "EPM_VALUE",
       "name": "EPM_VALUE",
-      "description": "Devuelve el texto indicado en el parámetro Display.",
-      "result": {
-        "type": "string",
-        "dimensionality": "scalar"
-      },
+      "description": "Miembro de una dimensión en un eje Estático de un informe Draco. Devuelve el texto a mostrar.",
+      "result": { "type": "string", "dimensionality": "scalar" },
       "parameters": [
-        {
-          "name": "dimension",
-          "description": "Nombre de la dimensión.",
-          "type": "string",
-          "dimensionality": "scalar"
-        },
-        {
-          "name": "atributo",
-          "description": "Nombre del atributo.",
-          "type": "string",
-          "dimensionality": "scalar"
-        },
-        {
-          "name": "valor",
-          "description": "Valor asignado.",
-          "type": "any",
-          "dimensionality": "scalar"
-        },
-        {
-          "name": "display",
-          "description": "Texto a mostrar en la celda.",
-          "type": "string",
-          "dimensionality": "scalar"
-        }
+        { "name": "Dimension", "description": "Dimensión", "type": "any", "dimensionality": "scalar" },
+        { "name": "Atributo", "description": "Atributo", "type": "any", "dimensionality": "scalar" },
+        { "name": "Valor", "description": "Valor (ID) del miembro", "type": "any", "dimensionality": "scalar" },
+        { "name": "Display", "description": "Texto a mostrar", "type": "any", "dimensionality": "scalar", "optional": true }
       ]
     },
     {
       "id": "EPM_FORMULA",
       "name": "EPM_FORMULA",
-      "description": "Línea calculada de un eje Estático: muestra el texto; Draco copia la fórmula a cada celda de valores de la línea.",
-      "result": {
-        "type": "string",
-        "dimensionality": "scalar"
-      },
+      "description": "Línea calculada de un eje Estático de un informe Draco. Devuelve el texto de la línea.",
+      "result": { "type": "string", "dimensionality": "scalar" },
       "parameters": [
-        {
-          "name": "texto",
-          "description": "Texto a mostrar en la cabecera.",
-          "type": "string",
-          "dimensionality": "scalar"
-        },
-        {
-          "name": "formula",
-          "description": "Fórmula a copiar en cada celda de la línea, escrita como si estuviera en esta celda (p. ej. A6-A7).",
-          "type": "any",
-          "dimensionality": "scalar",
-          "optional": true
-        },
-        {
-          "name": "formato",
-          "description": "Formato de número opcional (p. ej. 0.0%).",
-          "type": "string",
-          "dimensionality": "scalar",
-          "optional": true
-        },
-        {
-          "name": "barras",
-          "description": "Barras opcionales: barra | solo barra, con invertir, izq=40, dcha=25, neg=#color, pos=#color.",
-          "type": "string",
-          "dimensionality": "scalar",
-          "optional": true
-        }
+        { "name": "Texto", "description": "Texto de la línea", "type": "any", "dimensionality": "scalar" },
+        { "name": "Formula", "description": "Fórmula de la línea (se copia a cada celda)", "type": "any", "dimensionality": "scalar", "optional": true },
+        { "name": "Formato", "description": "Formato de número", "type": "any", "dimensionality": "scalar", "optional": true },
+        { "name": "Barras", "description": "Barras e iconos", "type": "any", "dimensionality": "scalar", "optional": true }
       ]
     }
-  ],
-  "allowErrorForDataTypeAny": true
+  ]
 }

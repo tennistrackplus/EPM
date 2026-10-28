@@ -6,7 +6,7 @@
     xsi:type="TaskPaneApp">
 
   <Id>b7e1a4d2-3c9f-4a2e-9b1a-1234567890ab</Id>
-  <Version>1.0.0.4</Version>
+  <Version>1.0.0.5</Version>
   <ProviderName>Draco BI</ProviderName>
   <DefaultLocale>es-ES</DefaultLocale>
 
@@ -81,6 +81,24 @@
                documentado por Microsoft, sin dejar una URL huérfana a
                commands.html. -->
           <FunctionFile resid="TaskpaneUrl"/>
+
+          <!-- Funciones personalizadas DRACO.EPM_VALUE / DRACO.EPM_FORMULA
+               (js/functions.js) en el MISMO runtime compartido (Page =
+               taskpane.html). Las usa Excel online o un escritorio sin el
+               XLAM; con XLAM, el add-in escribe EPM_VALUE/EPM_FORMULA del
+               VBA (ver ensureDracoFnMode en commands.js). -->
+          <ExtensionPoint xsi:type="CustomFunctions">
+            <Script>
+              <SourceLocation resid="FunctionsJsUrl"/>
+            </Script>
+            <Page>
+              <SourceLocation resid="TaskpaneUrl"/>
+            </Page>
+            <Metadata>
+              <SourceLocation resid="FunctionsJsonUrl"/>
+            </Metadata>
+            <Namespace resid="FunctionsNamespace"/>
+          </ExtensionPoint>
 
           <ExtensionPoint xsi:type="PrimaryCommandSurface">
 
@@ -314,6 +332,52 @@
 
                   <Action xsi:type="ExecuteFunction">
                     <FunctionName>toggleMemberRecognition</FunctionName>
+                  </Action>
+
+                </Control>
+
+                <!-- AÑADIR VALOR -->
+
+                <Control xsi:type="Button" id="AnadirValorButton">
+
+                  <Label resid="AnadirValorButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="AnadirValorButtonLabel"/>
+                    <Description resid="AnadirValorButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="AnadirValor16"/>
+                    <bt:Image size="32" resid="AnadirValor32"/>
+                    <bt:Image size="80" resid="AnadirValor80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>anadirValor</FunctionName>
+                  </Action>
+
+                </Control>
+
+                <!-- AÑADIR FÓRMULA -->
+
+                <Control xsi:type="Button" id="AnadirFormulaButton">
+
+                  <Label resid="AnadirFormulaButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="AnadirFormulaButtonLabel"/>
+                    <Description resid="AnadirFormulaButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="AnadirFormula16"/>
+                    <bt:Image size="32" resid="AnadirFormula32"/>
+                    <bt:Image size="80" resid="AnadirFormula80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>anadirFormula</FunctionName>
                   </Action>
 
                 </Control>
@@ -710,6 +774,38 @@
 
                 <Items>
 
+                  <Item id="AnadirValorContextItem">
+                    <Label resid="AnadirValorButtonLabel"/>
+                    <Supertip>
+                      <Title resid="AnadirValorButtonLabel"/>
+                      <Description resid="AnadirValorButtonTooltip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="AnadirValor16"/>
+                      <bt:Image size="32" resid="AnadirValor32"/>
+                      <bt:Image size="80" resid="AnadirValor80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>anadirValor</FunctionName>
+                    </Action>
+                  </Item>
+
+                  <Item id="AnadirFormulaContextItem">
+                    <Label resid="AnadirFormulaButtonLabel"/>
+                    <Supertip>
+                      <Title resid="AnadirFormulaButtonLabel"/>
+                      <Description resid="AnadirFormulaButtonTooltip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="AnadirFormula16"/>
+                      <bt:Image size="32" resid="AnadirFormula32"/>
+                      <bt:Image size="80" resid="AnadirFormula80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>anadirFormula</FunctionName>
+                    </Action>
+                  </Item>
+
                   <Item id="DistribuirValoresContextItem">
 
                     <Label resid="DistribuirValoresButtonLabel"/>
@@ -941,6 +1037,19 @@
         <bt:Image id="ActualizarInforme80"
                   DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-actualizar-informe-80.png"/>
 
+        <bt:Image id="AnadirValor16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-anadir-valor-16.png"/>
+        <bt:Image id="AnadirValor32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-anadir-valor-32.png"/>
+        <bt:Image id="AnadirValor80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-anadir-valor-80.png"/>
+        <bt:Image id="AnadirFormula16"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-anadir-formula-16.png"/>
+        <bt:Image id="AnadirFormula32"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-anadir-formula-32.png"/>
+        <bt:Image id="AnadirFormula80"
+                  DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-anadir-formula-80.png"/>
+
         <bt:Image id="ReconocimientoOff16"
                   DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/assets/icons/btn-reconocimiento-off-16.png"/>
         <bt:Image id="ReconocimientoOff32"
@@ -1099,6 +1208,14 @@
           DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/src/semantic_model.html"/>
 
         <bt:Url
+          id="FunctionsJsUrl"
+          DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/src/js/functions.js"/>
+
+        <bt:Url
+          id="FunctionsJsonUrl"
+          DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/src/functions.json"/>
+
+        <bt:Url
           id="TaskpaneUrl"
           DefaultValue="https://tennistrackplus.github.io/EPM/ADDIN/src/taskpane.html"/>
 
@@ -1111,6 +1228,9 @@
 
       <bt:ShortStrings>
 
+        <bt:String id="FunctionsNamespace" DefaultValue="DRACO"/>
+        <bt:String id="AnadirValorButtonLabel" DefaultValue="Añadir valor"><bt:Override Locale="en-US" Value="Add value"/></bt:String>
+        <bt:String id="AnadirFormulaButtonLabel" DefaultValue="Añadir fórmula"><bt:Override Locale="en-US" Value="Add formula"/></bt:String>
         <bt:String id="TabLabel" DefaultValue="Draco BI"><bt:Override Locale="en-US" Value="Draco BI"/></bt:String>
 
         <bt:String id="ConexionGroupLabel" DefaultValue="Conexión"><bt:Override Locale="en-US" Value="Connection"/></bt:String>
@@ -1247,6 +1367,8 @@
           id="AcercaDeItemTooltip"
           DefaultValue="Información sobre Draco BI (próximamente)"><bt:Override Locale="en-US" Value="About Draco BI (coming soon)"/></bt:String>
 
+        <bt:String id="AnadirValorButtonTooltip" DefaultValue="Abre el buscador de miembros en la celda seleccionada (igual que el doble clic). También en Excel online."><bt:Override Locale="en-US" Value="Opens the member search for the selected cell (same as double-click). Also in Excel online."/></bt:String>
+        <bt:String id="AnadirFormulaButtonTooltip" DefaultValue="Añade o edita una línea calculada (EPM_FORMULA) en la celda seleccionada de un eje Estático."><bt:Override Locale="en-US" Value="Adds or edits a calculated line (EPM_FORMULA) in the selected cell of a Static axis."/></bt:String>
       </bt:LongStrings>
 
     </Resources>
