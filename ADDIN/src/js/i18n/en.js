@@ -580,3 +580,63 @@ DracoI18n.register("en", {
     "Nivel {n} — {a}": "Level {n} — {a}",
     "✓ Nivel {n} — {a}": "✓ Level {n} — {a}"
 });
+
+// ---- Filtros desde Filas/Columnas, bloque de medidas y dimensiones de la tabla de hechos
+DracoI18n.register("en", {
+    "Origen de los atributos": "Attribute source",
+    "Tabla de hechos": "Fact table",
+    "Tabla de dimensión (JOIN)": "Dimension table (JOIN)",
+    "+ Añadir columna": "+ Add column",
+    "Columnas de la tabla de hechos que forman parte de esta dimensión (atributos y niveles de jerarquía). También puedes arrastrar un campo de la lista sobre la dimensión.": "Fact table columns that belong to this dimension (attributes and hierarchy levels). You can also drag a field from the list onto the dimension.",
+    "Es la tabla de hechos: la dimensión usa sus columnas directamente, sin JOIN.": "This is the fact table: the dimension uses its columns directly, without a JOIN.",
+    "Solo se pueden agrupar columnas en una dimensión de la tabla de hechos.": "Columns can only be grouped into a fact table dimension.",
+    "{c} añadido a la dimensión {d}.": "{c} added to the {d} dimension.",
+    "No se puede añadir {c} a {d}.": "{c} cannot be added to {d}.",
+    "Doble clic: filtrar este campo": "Double-click: filter this field",
+    "Arrastra para mover todas las medidas": "Drag to move all measures",
+    "El bloque de medidas solo puede ir a Filas o Columnas.": "The measures block can only go to Rows or Columns.",
+    "Ese campo ya está en esta zona.": "That field is already in this area."
+});
+
+// ---- «Añadir valor» / «Añadir fórmula» (editor EPM_FORMULA del panel)
+DracoI18n.register("en", {
+    "ƒx Añadir fórmula": "ƒx Add formula",
+    "ƒx Editar fórmula": "ƒx Edit formula",
+    "Texto": "Text",
+    "Fórmula": "Formula",
+    "Formato": "Format",
+    "Barras": "Bars",
+    "Iconos": "Icons",
+    "Cortes": "Thresholds",
+    "⊕ Insertar la selección de Excel": "⊕ Insert the Excel selection",
+    "Sin barras": "No bars",
+    "Número y barra": "Number and bar",
+    "Solo barra": "Bar only",
+    "Invertir colores": "Invert colours",
+    "Esp. izq. %": "Left space %",
+    "Esp. dcha. %": "Right space %",
+    "Sin iconos": "No icons",
+    "Semáforo (pelotitas)": "Traffic lights",
+    "Señales": "Signs",
+    "Automáticos (33 % / 67 %)": "Automatic (33 % / 67 %)",
+    "Fijos": "Fixed",
+    "Ámbar desde": "Amber from",
+    "Verde desde": "Green from",
+    "Triángulo desde": "Triangle from",
+    "Círculo verde desde": "Green circle from",
+    "Invertir (verde para valores bajos)": "Invert (green for low values)",
+    "Solo el icono": "Icon only",
+    "Cancelar": "Cancel",
+    "Insertar": "Insert",
+    "Guardar": "Save",
+    "Pon un texto.": "Enter a text.",
+    "Escribe o compón la fórmula.": "Write or build the formula.",
+    "Los paréntesis no cuadran.": "The parentheses do not match.",
+    "Hay unas comillas sin cerrar.": "There are unclosed quotes.",
+    "Celda: {c}": "Cell: {c}",
+    "Selecciona una celda o un rango en Excel y pulsa «Insertar la selección». Escribe la fórmula como si estuviera en {a}: se copia a cada celda de la línea igual que copiar y pegar.": "Select a cell or range in Excel and press “Insert the selection”. Write the formula as if it were in {a}: it is copied to each cell of the line like copy and paste.",
+    "Condiciones: SI(A6=\"HOLA\";5;A6+10). Compara números o textos con = <> < > <= >=.": "Conditions: SI(A6=\"HELLO\";5;A6+10). Compare numbers or texts with = <> < > <= >=.",
+    "Fórmula escrita en {a}. Actualiza el informe para calcular la línea.": "Formula written in {a}. Refresh the report to calculate the line.",
+    "Selecciona una celda de Filas/Columnas de un informe Draco.": "Select a Rows/Columns cell of a Draco report.",
+    "Excel no acepta la fórmula: {e}": "Excel does not accept the formula: {e}"
+});
