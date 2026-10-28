@@ -12,7 +12,6 @@ const DracoConfig = {
     // Ponerlo a true solo en entornos de prueba.
     // ---------------------------------------------------------
     allowSimpleOAuth: true,
-    
 
     // ---------------------------------------------------------
     // Auditoría F-15: celdas de depuración de EDIT_REPORT (SQL, JSON de

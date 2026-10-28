@@ -1,32 +1,37 @@
 /**
- * Devuelve el texto indicado en el parámetro Display.
- * @customfunction EPM_VALUE
- * @param {string} dimension Nombre de la dimensión.
- * @param {string} atributo Nombre del atributo.
- * @param {any} valor Valor asignado.
- * @param {string} display Texto a mostrar en la celda.
- * @returns {string} El texto proporcionado en display.
+ * Funciones personalizadas de Draco: DRACO.EPM_VALUE y DRACO.EPM_FORMULA.
+ * ---------------------------------------------------------------------
+ * Las mismas que el XLAM (EPM_VALUE / EPM_FORMULA en VBA) para donde no
+ * hay XLAM: Excel online y escritorio sin él. Office exige un espacio de
+ * nombres (DRACO.), así que el add-in escribe un nombre u otro según el
+ * equipo y adapta las fórmulas del libro al abrirlo (ver ensureDracoFnMode
+ * en commands.js). Se cargan en el runtime compartido (taskpane.html).
+ *
+ * Igual que en VBA, solo devuelven el texto a mostrar: el add-in lee sus
+ * argumentos de la fórmula, no del resultado.
  */
-function EPM_VALUE(dimension, atributo, valor, display) {
-    return display;
-}
+(function () {
+    "use strict";
 
-/**
- * Línea calculada de un eje Estático (o del Estático de un Híbrido): la
- * celda muestra el texto; al refrescar, Draco copia la fórmula del 2º
- * parámetro a cada celda de valores de la línea, igual que copiar y pegar
- * esta celda (referencias relativas), con el formato y las barras opcionales.
- * @customfunction EPM_FORMULA
- * @param {string} texto Texto a mostrar en la cabecera.
- * @param {any} [formula] Fórmula a copiar (p. ej. A6-A7).
- * @param {string} [formato] Formato de número opcional (p. ej. 0.0%).
- * @param {string} [barras] Barras opcionales (p. ej. barra|invertir|izq=40|dcha=25).
- * @returns {string} El texto.
- */
-function EPM_FORMULA(texto, formula, formato, barras) {
-    return texto;
-}
+    function isErr(v) { return v instanceof Error || (v && typeof v === "object" && v.type === "Error"); }
+    function txt(v) {
+        if (v === null || v === undefined || isErr(v)) return "";
+        if (Array.isArray(v)) return txt(v[0] && v[0][0]);
+        return String(v);
+    }
 
-// Registro explícito de la función en Office.js
-CustomFunctions.associate("EPM_VALUE", EPM_VALUE);
-CustomFunctions.associate("EPM_FORMULA", EPM_FORMULA);
+    /** EPM_VALUE(Dimension, Atributo, Valor, Display) -> Display */
+    function epmValue(dimension, atributo, valor, display) {
+        return txt(display);
+    }
+
+    /** EPM_FORMULA(Texto, [Formula], [Formato], [Barras]) -> Texto */
+    function epmFormula(texto, formula, formato, barras) {
+        return txt(texto);
+    }
+
+    if (typeof CustomFunctions !== "undefined" && CustomFunctions.associate) {
+        CustomFunctions.associate("EPM_VALUE", epmValue);
+        CustomFunctions.associate("EPM_FORMULA", epmFormula);
+    }
+})();

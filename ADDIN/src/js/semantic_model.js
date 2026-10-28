@@ -106,6 +106,9 @@ async function ensureCoreModelSheets() {
             editSheet.getRange("D5").values = [["X"]];
             editSheet.getRange("D6").values = [["X"]];
 
+            // Recién creada: se decide (después) si las EPM_* son del XLAM o del add-in
+            setTimeout(() => { if (window.DracoFn) window.DracoFn.ensure(); }, 0);
+
         }
 
         editSheet.visibility = Excel.SheetVisibility.hidden;

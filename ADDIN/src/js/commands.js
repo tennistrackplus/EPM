@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-28-inc123";
+const DRACO_BUILD = "2026-10-28-xlam-min";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -100,6 +100,10 @@ async function flushDracoLog() {
 
 Office.onReady(() => {
     dracoLog("Add-in cargado. BUILD=" + DRACO_BUILD + " | url=" + window.location.pathname);
+    // Nombre de EPM_VALUE/EPM_FORMULA por plataforma, sin tocar el libro
+    // (la comprobación del XLAM se hace al crear EDIT_REPORT o antes de la
+    // primera escritura, nunca al abrir: ver ensureDracoFnMode).
+    dracoFnModeFromPlatform();
 });
 
 /**
@@ -113,6 +117,7 @@ Office.onReady(() => {
  * deja oculta.
  */
 async function ensureEditReportSheetFromRibbon() {
+    let created = false;
     try {
         await Excel.run(async (context) => {
             const sheets = context.workbook.worksheets;
@@ -124,11 +129,13 @@ async function ensureEditReportSheetFromRibbon() {
                 editSheet = sheets.add("EDIT_REPORT");
                 editSheet.getRange("D5").values = [["X"]];
                 editSheet.getRange("D6").values = [["X"]];
+                created = true;
             }
 
             editSheet.visibility = Excel.SheetVisibility.hidden;
             await context.sync();
         });
+        if (created) await ensureDracoFnMode(); // XLAM o funciones personalizadas
     } catch (e) {
         console.error("[Draco] No se pudo asegurar la hoja EDIT_REPORT al abrir el modelo semántico:", e);
     }
@@ -1756,8 +1763,8 @@ async function readRowDefinitions(context, editReportGrid, csvGrid) {
 
                 let F = String(cellFormula(csvGrid, R, Col));
 
-                F = replaceAll(F, "=@");
-                F = replaceAll(F, "=EPM_VALUE(");
+                // "=EPM_VALUE(", "=@EPM_VALUE(" o "=DRACO.EPM_VALUE(" (función personalizada de Excel online)
+                F = F.replace(/^\s*=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i, "");
                 F = replaceAll(F, ")");
 
                 const V = F.indexOf(";") !== -1
@@ -1799,8 +1806,8 @@ async function readColumnDefinitions(context, editReportGrid, csvGrid) {
 
                 let F = String(cellFormula(csvGrid, R, Col));
 
-                F = replaceAll(F, "=@");
-                F = replaceAll(F, "=EPM_VALUE(");
+                // "=EPM_VALUE(", "=@EPM_VALUE(" o "=DRACO.EPM_VALUE(" (función personalizada de Excel online)
+                F = F.replace(/^\s*=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i, "");
                 F = replaceAll(F, ")");
 
                 const V = F.indexOf(";") !== -1
@@ -2459,6 +2466,7 @@ async function jsonPaintValues(context, json, reportId) {
  * Actualizar()).
  */
 async function actualizarInformeFixedCore(reportIdOverride) {
+    await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
     beginDracoPerfLog();
@@ -3274,7 +3282,7 @@ function parseEpmValueArgs(formula) {
 // (con o sin "=" / "@"); devuelve null si no es una llamada a `fnName`.
 function splitDracoFunctionArgs(formula, fnName) {
     const f = String(formula || "");
-    const re = new RegExp("^\\s*=\\s*@?\\s*" + fnName + "\\s*\\(", "i");
+    const re = new RegExp("^\\s*=\\s*@?\\s*(?:DRACO\\.)?" + fnName + "\\s*\\(", "i");
     const m = re.exec(f);
     if (!m) return null;
     const args = [];
@@ -3394,7 +3402,7 @@ async function scanDracoStaticAxis(context, sheet, editReportGrid, axis) {
             if (typeof a1 !== "string") break;
             const row = isRows ? anchor.row + i : anchor.row + k;
             const col = isRows ? anchor.col + k : anchor.col + i;
-            if (/^\s*=\s*@?\s*EPM_FORMULA\s*\(/i.test(a1)) {
+            if (/^\s*=\s*@?\s*(?:DRACO\.)?EPM_FORMULA\s*\(/i.test(a1)) {
                 const r1c1 = isRows ? area.formulasR1C1[i][k] : area.formulasR1C1[k][i];
                 const args = splitDracoFunctionArgs(r1c1, "EPM_FORMULA") || [];
                 if (!line) line = { line: isRows ? row : col, isFormula: true, measure: null, cells: [] };
@@ -3408,7 +3416,7 @@ async function scanDracoStaticAxis(context, sheet, editReportGrid, axis) {
                 line.cells.push({ row, col, indent: 0 });
                 break;
             }
-            if (!/^\s*=\s*@?\s*EPM_VALUE\s*\(/i.test(a1)) break;
+            if (!/^\s*=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i.test(a1)) break;
             const args = parseEpmValueArgs(a1) || [];
             const dim = String(args[0] || "").toUpperCase();
             const attr = String(args[1] || "").toUpperCase();
@@ -5070,7 +5078,131 @@ function getDracoReportProperties() {
 function buildEpmValueFormula(dim, attr, value, display) {
     const esc = (s) => String(s === null || s === undefined ? "" : s).replace(/"/g, '""');
     const disp = display !== undefined ? display : value;
-    return '=EPM_VALUE("' + esc(dim) + '","' + esc(attr) + '","' + esc(value) + '","' + esc(disp) + '")';
+    return '=' + dracoFnName("EPM_VALUE") + '("' + esc(dim) + '","' + esc(attr) + '","' + esc(value) + '","' + esc(disp) + '")';
+}
+
+/* ---------------------------------------------------------------------
+ * EPM_VALUE / EPM_FORMULA: funciones del XLAM o funciones personalizadas
+ * ---------------------------------------------------------------------
+ * En Excel de escritorio las da el XLAM (VBA, más rápido). Donde no hay
+ * XLAM (Excel online, o un escritorio sin él) las da el propio add-in como
+ * funciones personalizadas (js/functions.js), que Office exige con espacio
+ * de nombres: DRACO.EPM_VALUE / DRACO.EPM_FORMULA.
+ *
+ * CUÁNDO se decide (nunca al abrir el libro, para no modificarlo ni
+ * recalcular nada solo por abrirlo):
+ *   - Al cargar el add-in, sin escribir nada: Excel online -> DRACO.*;
+ *     escritorio -> se supone XLAM.
+ *   - En escritorio, la comprobación real del XLAM (=EPM_FORMULA("ok") en
+ *     EDIT_REPORT!AC1, y se borra) se hace al CREAR la hoja EDIT_REPORT o,
+ *     en un libro que ya la tenía, justo antes de la primera escritura de
+ *     la sesión (actualizar, buscador de miembros, Estático, fórmula).
+ *   - En ese mismo momento (una vez por sesión) se pasan las fórmulas que
+ *     ya hubiera en los ejes (Draco_*_Rows/Cols) al nombre de este equipo:
+ *     un libro hecho en escritorio funciona en online y al revés.
+ * Depende del EQUIPO, no del libro: por eso no se guarda en el libro.
+ * Al LEER, todas las expresiones aceptan los dos nombres.
+ * En Tablas Draco (Planning) no hay Excel real: se queda sin prefijo.
+ * --------------------------------------------------------------------- */
+let DracoFnPrefix = "";            // "" = XLAM | "DRACO." = funciones personalizadas
+let DracoFnModePromise = null;
+const DRACO_FN_PROBE_CELL = "AC1";
+
+function dracoFnName(base) { return DracoFnPrefix + base; }
+
+function dracoIsRealExcel() {
+    return typeof Excel !== "undefined" && typeof Excel.run === "function" && !window.DracoEngineApi;
+}
+
+function dracoIsExcelOnline() {
+    try { return Office.context.platform === Office.PlatformType.OfficeOnline; } catch (e) { return false; }
+}
+
+/** Decisión inicial sin tocar el libro (al cargar el add-in). */
+function dracoFnModeFromPlatform() {
+    if (dracoIsRealExcel() && dracoIsExcelOnline()) DracoFnPrefix = "DRACO.";
+}
+
+/**
+ * Comprobación definitiva (una vez por sesión). Llamar SOLO cuando el
+ * add-in ya va a escribir en el libro: al crear EDIT_REPORT o antes de la
+ * primera escritura. Sin EDIT_REPORT no hace nada (se reintenta después).
+ */
+function ensureDracoFnMode() {
+    if (DracoFnModePromise) return DracoFnModePromise;
+    if (!dracoIsRealExcel()) return Promise.resolve(DracoFnPrefix);
+    dracoFnModeFromPlatform();
+    DracoFnModePromise = (async () => {
+        let decided = false;
+        try {
+            await Excel.run(async (context) => {
+                const sh = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+                sh.load("isNullObject");
+                await context.sync();
+                if (sh.isNullObject) return; // sin informes todavía: se decide al crearla
+                if (dracoIsExcelOnline()) { DracoFnPrefix = "DRACO."; decided = true; return; } // online nunca tiene XLAM
+                const probe = sh.getRange(DRACO_FN_PROBE_CELL);
+                DracoSuppressChangeEvents = true;
+                try {
+                    probe.formulas = [['=EPM_FORMULA("ok")']];
+                    probe.calculate();          // por si el libro está en cálculo manual
+                    probe.load("values");
+                    await context.sync();
+                    const xlam = String(probe.values[0][0]) === "ok";
+                    probe.clear(Excel.ClearApplyTo.contents);
+                    await context.sync();
+                    DracoFnPrefix = xlam ? "" : "DRACO.";
+                    decided = true;
+                } finally {
+                    DracoSuppressChangeEvents = false;
+                }
+            });
+        } catch (e) {
+            console.warn("[Draco] No se pudo comprobar si está el XLAM:", e);
+        }
+        if (!decided) { DracoFnModePromise = null; return DracoFnPrefix; }
+        dracoLog("Funciones EPM_*: " + (DracoFnPrefix ? "personalizadas del add-in (DRACO.*)" : "del XLAM"));
+        try { await normalizeDracoFunctionNames(); }
+        catch (e) { dracoLog("No se pudieron adaptar las fórmulas EPM_* del libro: " + dracoErrMsg(e)); }
+        return DracoFnPrefix;
+    })();
+    return DracoFnModePromise;
+}
+
+/** Pasa las EPM_VALUE/EPM_FORMULA de los ejes de los informes al nombre que toca en este equipo. */
+async function normalizeDracoFunctionNames() {
+    const toCustom = DracoFnPrefix === "DRACO.";
+    const re = toCustom
+        ? /(^|[^A-Za-z0-9_.])(EPM_(?:VALUE|FORMULA))(\s*\()/gi
+        : /DRACO\.(EPM_(?:VALUE|FORMULA))(\s*\()/gi;
+    let changed = 0;
+    await Excel.run(async (context) => {
+        const names = context.workbook.names;
+        names.load("items/name");
+        await context.sync();
+        const ranges = names.items
+            .filter(n => /^Draco_.+_(Rows|Cols)$/i.test(n.name))
+            .map(n => { const r = n.getRangeOrNullObject(); r.load(["isNullObject", "formulas"]); return r; });
+        if (!ranges.length) return;
+        await context.sync();
+        DracoSuppressChangeEvents = true;
+        try {
+            ranges.forEach(r => {
+                if (r.isNullObject) return;
+                r.formulas.forEach((row, i) => row.forEach((f, j) => {
+                    if (typeof f !== "string" || f.charAt(0) !== "=") return;
+                    const g = toCustom
+                        ? f.replace(re, (m, pre, fn, par) => pre + "DRACO." + fn + par)
+                        : f.replace(re, (m, fn, par) => fn + par);
+                    if (g !== f) { r.getCell(i, j).formulas = [[g]]; changed++; }
+                }));
+            });
+            if (changed) await context.sync();
+        } finally {
+            DracoSuppressChangeEvents = false;
+        }
+    });
+    if (changed) dracoLog("Fórmulas EPM_* adaptadas a este equipo: " + changed);
 }
 
 /* ---------------------------------------------------------------------
@@ -5215,6 +5347,7 @@ async function repaintAxisIfHiddenIds(axis) {
 }
 
 async function convertAxisStaticFormulas(axis, makeStatic) {
+    await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
     const reportId = activeReportIdOrNull();
     const rangeName = axis === "rows" ? dracoRangeNames(reportId).rows : dracoRangeNames(reportId).cols;
     // DracoCollapseState/DracoIndicatorMap usan "rows"/"cols" como clave de
@@ -5268,13 +5401,13 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         const indentLevels = await readIndentLevelsForRange(context, range);
 
         const GLYPH_PREFIX = /^[▸▾]\s+/; // indicador +/- fusionado (solo aplica en eje Dinámico)
-        const EPM_RE = /^=\s*EPM_VALUE\s*\(/i;
+        const EPM_RE = /^=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i;
         const EPM_VALOR_RE = /EPM_VALUE\s*\(\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"((?:[^"]|"")*)"/i;
         // Solo para la fila/columna MEASURE (ver comentario en
         // buildAxisFieldLevelsTable): su fórmula lleva el Valor (3er
         // argumento) vacío y el nombre real en el Display (4º argumento),
         // al revés que un campo normal.
-        const EPM_MEASURE_RE = /^=\s*EPM_VALUE\s*\(\s*"MEASURE"/i;
+        const EPM_MEASURE_RE = /^=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(\s*"MEASURE"/i;
         const EPM_DISPLAY_RE = /EPM_VALUE\s*\(\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"((?:[^"]|"")*)"/i;
 
         const newFormulas = [];
@@ -6874,6 +7007,7 @@ function displayDracoDialogOnce(url, options) {
  * por otra petición), con la fórmula ya escrita si se eligió un valor.
  */
 async function openMemberRecognitionPicker(addr, located, initialSearch) {
+    await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
     const id = ++DracoPickerSeq;
     const tag = "[picker#" + id + "]";
     const t0 = Date.now();
@@ -7108,7 +7242,7 @@ async function toggleDracoCollapseAtCell(context, sheetName, targetAddr, flag) {
 
     // Una celda de eje Estático es una fórmula EPM_VALUE (sin glifo +/-).
     const formula = targetRange.formulas[0][0];
-    const isStaticFormula = typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula);
+    const isStaticFormula = typeof formula === "string" && /^=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i.test(formula);
 
     const key = (targetRange.rowIndex + 1) + "_" + (targetRange.columnIndex + 1);
     const meta = indicatorMap.get(key);
@@ -7255,8 +7389,10 @@ async function runDracoMemberRecognitionAction(context, sheetName, targetAddr, t
     }
     // Ya es EPM_VALUE (tecleada, pegada, o escrita por nosotros mismos
     // hace un instante): salir para no reabrir el buscador en bucle.
-    if (typeof formula === "string" && /^=\s*EPM_VALUE\s*\(/i.test(formula)) {
-        dracoLog(tag, "REC: la celda ya es una fórmula EPM_VALUE, se ignora:", sheetName, addr);
+    if (typeof formula === "string" && /^\s*=/.test(formula)) {
+        // EPM_VALUE (tecleada, pegada o escrita por nosotros mismos hace un
+        // instante), EPM_FORMULA u otra fórmula: no es un miembro tecleado.
+        dracoLog(tag, "REC: la celda tiene una fórmula, se ignora:", sheetName, addr);
         return;
     }
     const currentText = String(value);
@@ -7282,6 +7418,8 @@ async function runDracoMemberRecognitionAction(context, sheetName, targetAddr, t
     fieldLocated.reportId = located.reportId;
     fieldLocated.growth = located.growth || null;
 
+    // Excel ya ha movido la selección (Intro/Tab): se vuelve a la celda tecleada (lo hacía el XLAM)
+    try { cell.select(); await context.sync(); } catch (e) { /* hoja no activa */ }
     dracoLog(tag, `REC: abriendo picker (${fieldLocated.dim} / ${fieldLocated.attr}) para ${sheetName}!${addr}...`);
     return { addr, fieldLocated, initialSearch: currentText };
 }
@@ -7398,6 +7536,10 @@ async function readAndClearDracoPickerRequest(eventAddr, suppressedAtEvent) {
     if (!req) return;
 
     const tag = "[req#" + req.id + "]";
+    if (req.flag === "REC" && !suppressedAtEvent && dracoRecIsDuplicate(req.sheetName, req.targetAddr)) {
+        dracoLog(tag, "REC del XLAM ignorado: ya lo ha detectado el add-in (se puede quitar App_SheetChange del XLAM)");
+        return;
+    }
     if (req.flag === "REC" && suppressedAtEvent) {
         dracoLog(tag, "REC " + req.sheetName + "!" + req.targetAddr + " ignorado (lo provocó un repintado del add-in)");
         return;
@@ -7409,6 +7551,83 @@ async function readAndClearDracoPickerRequest(eventAddr, suppressedAtEvent) {
 
     if (DracoCurrentPicker) DracoCurrentPicker.close("nuevo " + req.flag + " (req#" + req.id + ")");
     runDracoPickerLoop();
+}
+
+/**
+ * Encola una petición del buscador de miembros SIN pasar por EDIT_REPORT!T2:V2
+ * (botón «Añadir valor» y reconocimiento de miembros detectado en JS).
+ * Mismo camino que las del XLAM: gana la última y se procesa en runDracoPickerLoop.
+ * fromButton: si la celda no es de un informe, se avisa en el panel.
+ */
+let DracoLastRec = { key: "", at: 0 };
+/* El mismo REC puede llegar dos veces (XLAM antiguo + detector JS): solo cuenta el primero (3 s). */
+function dracoRecIsDuplicate(sheetName, targetAddr) {
+    const key = String(sheetName) + "!" + String(targetAddr).replace(/\$/g, "").toUpperCase(), now = Date.now();
+    if (DracoLastRec.key === key && now - DracoLastRec.at < 3000) return true;
+    DracoLastRec = { key, at: now };
+    return false;
+}
+function queueDracoPickerRequest(sheetName, targetAddr, flag, fromButton) {
+    if (flag === "REC" && dracoRecIsDuplicate(sheetName, targetAddr)) {
+        dracoLog("REC JS de " + sheetName + "!" + targetAddr + " ignorado: aviso repetido (XLAM antiguo o la misma edición)");
+        return;
+    }
+    const req = { id: ++DracoPickerReqSeq, sheetName, targetAddr, flag, fromButton: !!fromButton };
+    dracoLog("[req#" + req.id + "]", "recibido " + flag + " " + sheetName + "!" + targetAddr + (fromButton ? " (botón)" : " (JS)"));
+    DracoPickerPending = req;
+    if (DracoCurrentPicker) DracoCurrentPicker.close("nuevo " + flag + " (req#" + req.id + ")");
+    runDracoPickerLoop();
+}
+
+/* ---------------------------------------------------------------------
+ * RECONOCIMIENTO DE MIEMBROS EN JS (sustituye a App_SheetChange del XLAM)
+ * ---------------------------------------------------------------------
+ * worksheets.onChanged (todas las hojas): al teclear un valor en UNA celda
+ * se encola un REC; el filtrado fino (¿está activado el reconocimiento?,
+ * ¿es una celda de Filas/Columnas de un informe?, ¿es una fórmula?) lo hace
+ * runDracoMemberRecognitionAction, igual que con el XLAM. Funciona también
+ * en Excel online. Se ignoran: EDIT_REPORT, los cambios de otros usuarios
+ * (coautoría), las celdas vaciadas y los rangos (pegar/rellenar).
+ * Si un XLAM antiguo sigue enviando REC por EDIT_REPORT!T2:V2, ese duplicado
+ * se descarta (ver readAndClearDracoPickerRequest).
+ * --------------------------------------------------------------------- */
+let DracoRecListenerRegistered = false;
+async function registerDracoMemberRecognitionListener(context) {
+    if (DracoRecListenerRegistered) return;
+    if (!dracoIsRealExcel()) return; // Tablas Draco (Planning) tiene su propio camino
+    try {
+        if (!Office.context.requirements.isSetSupported("ExcelApi", "1.9")) {
+            dracoLog("Reconocimiento de miembros en JS no disponible (ExcelApi 1.9).");
+            return;
+        }
+    } catch (e) { return; }
+    DracoRecListenerRegistered = true;
+    context.workbook.worksheets.onChanged.add(handleDracoSheetEdited);
+    await context.sync();
+    dracoLog("Reconocimiento de miembros (JS) registrado.");
+}
+
+async function handleDracoSheetEdited(ev) {
+    try {
+        if (!ev || DracoSuppressChangeEvents) return;
+        if (ev.changeType && ev.changeType !== "RangeEdited") return;
+        if (ev.source && ev.source !== "Local") return;
+        const addr = String(ev.address || "");
+        if (!addr || addr.indexOf(":") !== -1) return;      // solo una celda
+        const after = ev.details ? ev.details.valueAfter : undefined;
+        if (after === "" || after === null) return;          // celda vaciada
+        let sheetName = null;
+        await Excel.run(async (context) => {
+            const sh = context.workbook.worksheets.getItemOrNullObject(ev.worksheetId);
+            sh.load(["isNullObject", "name"]);
+            await context.sync();
+            if (!sh.isNullObject) sheetName = sh.name;
+        });
+        if (!sheetName || sheetName.toUpperCase() === "EDIT_REPORT") return;
+        queueDracoPickerRequest(sheetName, addr, "REC", false);
+    } catch (e) {
+        dracoLog("Reconocimiento de miembros (JS): " + dracoErrMsg(e));
+    }
 }
 
 async function runDracoPickerLoop() {
@@ -7428,7 +7647,12 @@ async function runDracoPickerLoop() {
                         : await runDracoMemberRecognitionAction(context, req.sheetName, req.targetAddr, tag);
                 });
                 dracoLog(tag, "resuelto en " + (Date.now() - t0) + " ms" + (target ? "" : " -> no se abre picker"));
-                if (!target) continue;
+                if (!target) {
+                    if (req.fromButton && typeof TaskPaneApp !== "undefined" && TaskPaneApp.setAutoStatus) {
+                        TaskPaneApp.setAutoStatus("Selecciona una celda de Filas/Columnas de un informe Draco.");
+                    }
+                    continue;
+                }
                 if (DracoPickerPending) {
                     dracoLog(tag, "no se abre: ya ha llegado una petición más nueva");
                     continue;
@@ -7488,6 +7712,10 @@ async function registerEditReportPickerHandlerInner(context) {
 
     DracoEditReportHandlerRegistered = true;
     dracoLog("Listener de EDIT_REPORT!T2:V2 (DC/REC) registrado.");
+
+    // Reconocimiento de miembros en JS (antes lo detectaba el XLAM con
+    // App_SheetChange): un solo listener para todas las hojas del libro.
+    await registerDracoMemberRecognitionListener(context);
 }
 
 // NOTA: aquí existía handleDracoPlanningValueChanged (onChanged de cada
@@ -9201,6 +9429,7 @@ async function writeIndentRuns(context, sheet, cellsMap) {
  * cuál esté activo en el taskpane.
  */
 async function actualizarInformeCore(reportIdOverride) {
+    await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
     beginDracoPerfLog();
@@ -9770,6 +9999,7 @@ async function runWithConcurrency(items, limit, worker) {
  * a los demás: se registra en consola y se sigue con el resto.
  */
 async function actualizarTodosCore(concurrency) {
+    await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
     if (!window.ReportStore) return;
     const reports = window.ReportStore.listReports();
     if (!reports || reports.length === 0) return;
@@ -11302,7 +11532,7 @@ async function filtrarValoresSeleccionados(event) {
                     if (value === "" || value === null || value === undefined) continue;
                     let dim, attr, v = value;
                     const fx = sel.formulas[r][c];
-                    const args = (typeof fx === "string" && /^=\s*EPM_VALUE\s*\(/i.test(fx)) ? parseEpmValueArgs(fx) : null;
+                    const args = (typeof fx === "string" && /^=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i.test(fx)) ? parseEpmValueArgs(fx) : null;
                     if (args && args.length >= 3) {
                         dim = args[0]; attr = args[1]; v = args[2];
                     } else {
@@ -11403,6 +11633,54 @@ async function campoOpciones(event) {
     try { await dracoFieldActionFromCell("options"); }
     catch (error) { console.error("Error en campoOpciones:", error); }
     finally { if (event) event.completed(); }
+}
+
+/* ---------------------------------------------------------------------
+ * Botones «Añadir valor» y «Añadir fórmula» (cinta y clic derecho)
+ * ---------------------------------------------------------------------
+ * «Añadir valor» = lo mismo que el doble clic del XLAM sobre la celda
+ * activa (buscador de miembros), sin XLAM: sirve también en Excel online.
+ * «Añadir fórmula» = línea calculada EPM_FORMULA en la celda activa, con el
+ * mismo editor que «Fórmula» de Tablas Draco en Planning (en el panel).
+ * --------------------------------------------------------------------- */
+async function dracoActiveCell() {
+    let out = null;
+    await Excel.run(async (context) => {
+        const sheet = context.workbook.worksheets.getActiveWorksheet();
+        sheet.load("name");
+        const cell = context.workbook.getActiveCell();
+        cell.load(["address", "formulas"]);
+        await context.sync();
+        out = { sheetName: sheet.name, address: cell.address.split("!").pop().replace(/\$/g, ""), formula: cell.formulas[0][0] };
+    });
+    return out;
+}
+
+async function anadirValor(event) {
+    try {
+        await ensureDracoHandlersRegistered();
+        const c = await dracoActiveCell();
+        if (c) queueDracoPickerRequest(c.sheetName, c.address, "DC", true);
+    } catch (error) {
+        console.error("Error en Añadir valor:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+async function anadirFormula(event) {
+    try {
+        await ensureDracoFnMode();
+        const c = await dracoActiveCell();
+        if (c && typeof TaskPaneApp !== "undefined" && TaskPaneApp.openEpmFormulaPanel) {
+            if (Office.addin && Office.addin.showAsTaskpane) { try { await Office.addin.showAsTaskpane(); } catch (e) { /* nada */ } }
+            TaskPaneApp.openEpmFormulaPanel(c);
+        }
+    } catch (error) {
+        console.error("Error en Añadir fórmula:", error);
+    } finally {
+        if (event) event.completed();
+    }
 }
 
 async function abrirAnadirFiltro(event) {
@@ -11777,6 +12055,8 @@ try {
     Office.actions.associate("abrirDistribuirValores", abrirDistribuirValores);
     Office.actions.associate("abrirAnadirFiltro", abrirAnadirFiltro);
     Office.actions.associate("filtrarValoresSeleccionados", filtrarValoresSeleccionados);
+    Office.actions.associate("anadirValor", anadirValor);
+    Office.actions.associate("anadirFormula", anadirFormula);
     Office.actions.associate("campoTotalesMostrar", campoTotalesMostrar);
     Office.actions.associate("campoTotalesOcultar", campoTotalesOcultar);
     Office.actions.associate("campoMostrarID", campoMostrarID);
@@ -11794,3 +12074,11 @@ try {
 } catch (e) {
     console.warn("Office.actions.associate no disponible en este contexto:", e);
 }
+
+// Para el panel (js/epmFormulaPanel.js): nombre de las funciones EPM_* en este equipo y
+// silenciar el reconocimiento de miembros mientras el add-in escribe.
+window.DracoFn = {
+    name: dracoFnName,
+    ensure: ensureDracoFnMode,
+    suppress: function (on) { DracoSuppressChangeEvents = !!on; }
+};
