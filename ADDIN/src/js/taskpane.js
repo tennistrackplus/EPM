@@ -168,6 +168,10 @@ const TaskPaneApp = {
         planningReport: false
     },
 
+    // Columnas/filas físicas extra que ya están contadas en el rango de cada eje
+    // por los "ID y texto" (ver reconcileTextColumns).
+    textExtra: { rows: 0, columns: 0 },
+
     // Campo actualmente seleccionado en el panel "Opciones de campo"
     // ({ zoneId, dimension, name, isHierarchy }) o null si no hay ninguno.
     selectedFieldForOptions: null,
@@ -202,6 +206,77 @@ const TaskPaneApp = {
             rrAddress: RangeAxis.addressOf("rr"),
             rcAddress: RangeAxis.addressOf("rc")
         };
+    },
+
+    /**
+     * "Filtrar valores seleccionados" (clic derecho en celdas del informe):
+     * pone en Filtros, para cada campo {dim, attr, values}, la lista de
+     * valores (sustituye la selección si el campo ya estaba en Filtros).
+     */
+    async setFilterValues(reportId, items) {
+        if (!this.currentReportId || String(this.currentReportId) !== String(reportId)) {
+            this.setAutoStatus("Abre ese informe en el panel para filtrar sus valores.");
+            return;
+        }
+        items.forEach(({ dim, attr, values }) => {
+            const filter = { mode: "list", attribute: attr, values: values.slice(), ranges: [], excludeValues: [], excludeRanges: [] };
+            let entry = this.state.filters.find(f => !f.isHierarchy
+                && String(f.dimension).toUpperCase() === String(dim).toUpperCase()
+                && String(f.realAttribute || f.name).toUpperCase() === String(attr).toUpperCase());
+            if (entry) {
+                entry.filter = filter;
+            } else {
+                this.state.filters.push({ dimension: dim, name: attr, isHierarchy: false, realAttribute: attr, filter });
+            }
+        });
+        const filtersContent = document.querySelector('.zone-card[data-zone="filters"] .dropzone-content');
+        if (filtersContent) {
+            filtersContent.innerHTML = "";
+            this.state.filters.forEach(f => this.renderTag(filtersContent, "filters", f));
+            if (this.renderLockedFilterTags) this.renderLockedFilterTags(filtersContent);
+        }
+        this.scheduleAutoUpdate();
+    },
+
+    /**
+     * Clic derecho en una celda del informe (ver dracoFieldActionFromCell en
+     * commands.js): aplica una acción al campo de esa celda, cambiando antes
+     * de informe si hace falta. action: "totals:show|hide", "mode:ID|ID_TEXT|TEXT",
+     * "options" (abre Opciones de campo: niveles y expandir de una jerarquía).
+     */
+    async fieldActionFromCell(target, action) {
+        if (!this.currentReportId || String(this.currentReportId) !== String(target.reportId)) {
+            const sel = document.getElementById("reportSelector") || document.getElementById("reportSelect");
+            if (sel) sel.value = String(target.reportId);
+            await this.onReportSelectorChange(String(target.reportId));
+        }
+        const zone = target.axis === "columns" ? "columns" : "rows";
+        const list = this.listForZone(zone) || [];
+        const up = (x) => String(x || "").toUpperCase();
+        const sameDim = list.filter(e => up(e.dimension) === up(target.dim));
+        let entry = sameDim.find(e => e.isHierarchy && up(e.name) === up(target.attr))
+            || sameDim.find(e => !e.isHierarchy && up(e.name) === up(target.attr))
+            || sameDim.find(e => !e.isHierarchy && up(e.name) === up(target.levelAttr))
+            || (sameDim.length === 1 ? sameDim[0] : null);
+        if (!entry) { this.setAutoStatus("No se encontró el campo de la celda en el diseño."); return; }
+
+        if (action === "options") {
+            await this.selectFieldForOptions(zone, entry);
+        } else if (action.indexOf("mode:") === 0) {
+            const info = window.ReportStore.getDisplayTextInfo(this.currentReportId, entry.dimension, entry.name, !!entry.isHierarchy);
+            const mode = action.slice(5);
+            if (!info || !info.applicable) { this.setAutoStatus("Este campo no tiene texto asociado."); return; }
+            if (mode !== "ID" && !info.available) { this.setAutoStatus(info.reason); return; }
+            this.setDisplayMode(zone, entry, mode);
+        } else if (action.indexOf("totals:") === 0) {
+            if (entry.isHierarchy) { this.setAutoStatus("Una jerarquía no tiene totales: usa Opciones del campo."); return; }
+            const cur = this.getFieldOptions(zone, entry);
+            cur.showTotals = action === "totals:show";
+            this.setFieldOptions(zone, entry, cur);
+            const selF = this.selectedFieldForOptions;
+            if (selF && selF.zoneId === zone && selF.dimension === entry.dimension && selF.name === entry.name) this.renderFieldOptionsBody(zone, entry);
+            this.scheduleAutoUpdate();
+        }
     },
 
     scheduleAutoUpdate() {
@@ -1049,6 +1124,12 @@ const TaskPaneApp = {
      */
     async applyAxisStaticFormulas(axis, isStatic) {
         try {
+            // "Solo texto": con IDs ocultos no se puede convertir celda a celda
+            // (el ID no está en la hoja): se guarda el diseño y se repinta.
+            if (window.ReportActions && window.ReportActions.repaintAxisIfHiddenIds && this.currentReportId) {
+                await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
+                if (await window.ReportActions.repaintAxisIfHiddenIds(axis)) return;
+            }
             if (window.ReportActions && window.ReportActions.convertAxisStaticFormulas) {
                 await window.ReportActions.convertAxisStaticFormulas(axis, isStatic);
             }
@@ -1115,6 +1196,8 @@ const TaskPaneApp = {
             this.refreshCalcBadges();
 
             RangeAxis.loadFromAddresses(design.rrAddress, design.rcAddress, design.anchorAddress);
+            // El rango guardado ya incluye las columnas de "ID y texto" del diseño.
+            this.reconcileTextColumns(true);
 
             // Pintar checkboxes + sombreado/bloqueo si el eje ya venía Estático
             const chkRows = document.getElementById("chkAsymmetricRows");
@@ -1730,6 +1813,7 @@ const TaskPaneApp = {
             if (zoneId === "rows") RangeAxis.onRowFieldAdded(this.state.colsStatic && !this.state.rowsStatic);
             if (zoneId === "columns") RangeAxis.onColFieldAdded(this.state.rowsStatic && !this.state.colsStatic);
         }
+        this.reconcileTextColumns();
         this.refreshRangeLabels();
 
         this.renderTag(container, zoneId, entry);
@@ -1761,6 +1845,7 @@ const TaskPaneApp = {
             if (zoneId === "rows") RangeAxis.onRowFieldRemoved(this.state.colsStatic && !this.state.rowsStatic);
             if (zoneId === "columns") RangeAxis.onColFieldRemoved(this.state.rowsStatic && !this.state.colsStatic);
         }
+        this.reconcileTextColumns();
         this.refreshRangeLabels();
 
         this.scheduleAutoUpdate();
@@ -1865,6 +1950,25 @@ const TaskPaneApp = {
             this.removeFromState(zoneId, { dim: entry.dimension, name: entry.name });
             if (zoneId === "rows" || zoneId === "columns") this.cleanupMeasureGroup(container);
         });
+
+        // Clic derecho (Filas/Columnas): Mostrar → ID / ID y descripción, si el
+        // campo es la clave de una dimensión con texto, o una jerarquía.
+        if ((zoneId === "rows" || zoneId === "columns") && !isMeasure) {
+            tag.addEventListener("contextmenu", async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const x = e.clientX, y = e.clientY;
+                const info = window.ReportStore && window.ReportStore.getDisplayTextInfo
+                    ? window.ReportStore.getDisplayTextInfo(this.currentReportId, entry.dimension, entry.name, !!entry.isHierarchy)
+                    : null;
+                let levels = null;
+                if (entry.isHierarchy) {
+                    try { levels = await window.ExcelService.getHierarchyLevels(entry.dimension, entry.name); }
+                    catch (err) { console.error("Niveles de la jerarquía:", err); }
+                }
+                this.showDisplayModeMenu(x, y, zoneId, entry, info, levels);
+            });
+        }
 
         // Clic (simple) sobre el campo: abre/actualiza el panel "Opciones de
         // campo" con los controles de ESE campo (medida o dimensión).
@@ -2342,7 +2446,7 @@ const TaskPaneApp = {
         const defaults = isMeasure
             // aggregation "" = la del modelo semántico (no se sobrescribe).
             ? { numberFormat: "number", decimals: 2, aggregation: "" }
-            : { showTotals: false, sortOrder: "none", expandToLevel: null, visibleLevels: null };
+            : { showTotals: false, sortOrder: "none", expandToLevel: null, visibleLevels: null, displayMode: "ID" };
         return Object.assign({}, defaults, this.state.fieldOptions[key] || {});
     },
 
@@ -2396,6 +2500,216 @@ const TaskPaneApp = {
         }
     },
 
+    /**
+     * Cada "ID y texto" añade una columna (Filas) o fila (Columnas) física:
+     * el rango del eje (RangeAxis) tiene que crecer/encoger igual que al
+     * añadir/quitar un campo, o el texto se solapa con el otro eje.
+     * reset=true: solo toma la cuenta actual como ya incluida en el rango
+     * (al cargar un informe).
+     */
+    reconcileTextColumns(reset) {
+        if (!window.ReportStore || !window.ReportStore.countTextColumns || !this.currentReportId) return;
+        ["rows", "columns"].forEach(zone => {
+            const n = window.ReportStore.countTextColumns(this.currentReportId, zone, this.listForZone(zone), this.state.fieldOptions);
+            let delta = reset ? 0 : n - (this.textExtra[zone] || 0);
+            const rowsFlag = this.state.colsStatic && !this.state.rowsStatic;
+            const colsFlag = this.state.rowsStatic && !this.state.colsStatic;
+            for (; delta > 0; delta--) {
+                if (zone === "rows") RangeAxis.onRowFieldAdded(rowsFlag); else RangeAxis.onColFieldAdded(colsFlag);
+            }
+            for (; delta < 0; delta++) {
+                if (zone === "rows") RangeAxis.onRowFieldRemoved(rowsFlag); else RangeAxis.onColFieldRemoved(colsFlag);
+            }
+            this.textExtra[zone] = n;
+        });
+        this.refreshRangeLabels();
+    },
+
+    /** Cambia "Solo ID" / "ID y texto" de un campo (panel de opciones o menú contextual). */
+    setDisplayMode(zoneId, entry, mode) {
+        const current = this.getFieldOptions(zoneId, entry);
+        current.displayMode = (mode === "ID_TEXT" || mode === "TEXT") ? mode : "ID";
+        this.setFieldOptions(zoneId, entry, current);
+        this.reconcileTextColumns();
+        const sel = this.selectedFieldForOptions;
+        if (sel && sel.zoneId === zoneId && sel.dimension === entry.dimension && sel.name === entry.name) {
+            this.renderFieldOptionsBody(zoneId, entry);
+        }
+        this.scheduleAutoUpdate();
+    },
+
+    /**
+     * Menú de clic derecho sobre un campo de Filas/Columnas (mismas opciones
+     * que "Opciones de campo"): Mostrar (ID / ID y descripción / Descripción),
+     * Totales (atributos) o Jerarquía (niveles a mostrar y expandir hasta).
+     */
+    showDisplayModeMenu(x, y, zoneId, entry, info, levels) {
+        this.hideDisplayModeMenu();
+
+        const menu = document.createElement("div");
+        menu.id = "displayModeMenu";
+        menu.style.cssText = "position:fixed;z-index:100000;min-width:190px;max-height:80vh;overflow:auto;background:#fff;border:1px solid #cbd5e1;border-radius:6px;"
+            + "box-shadow:0 4px 14px rgba(0,0,0,.18);padding:4px 0;font-size:12px;color:#0f172a;font-family:inherit;";
+
+        const addTitle = (text) => {
+            const t = document.createElement("div");
+            t.textContent = text;
+            t.style.cssText = "padding:5px 12px 3px;font-size:10px;font-weight:700;text-transform:uppercase;color:#64748b;";
+            menu.appendChild(t);
+        };
+        const addSep = () => {
+            const h = document.createElement("div");
+            h.style.cssText = "height:1px;background:#e2e8f0;margin:4px 0;";
+            menu.appendChild(h);
+        };
+        // onPick(); keepOpen=true deja el menú abierto (casillas de niveles)
+        const addItem = (label, checked, onPick, opts) => {
+            opts = opts || {};
+            const item = document.createElement("div");
+            const mark = () => (checked ? "\u2713 " : "\u00a0\u00a0\u00a0 ");
+            item.textContent = mark() + label;
+            item.style.cssText = "padding:5px 12px;cursor:" + (opts.disabled ? "not-allowed" : "pointer") + ";" + (opts.disabled ? "color:#94a3b8;" : "");
+            if (opts.title) item.title = opts.title;
+            if (!opts.disabled) {
+                item.addEventListener("mouseenter", () => { item.style.background = "#eff6ff"; });
+                item.addEventListener("mouseleave", () => { item.style.background = ""; });
+                item.addEventListener("click", () => {
+                    if (opts.keepOpen) {
+                        checked = !checked;
+                        item.textContent = mark() + label;
+                    } else {
+                        this.hideDisplayModeMenu();
+                    }
+                    onPick(checked);
+                });
+            }
+            menu.appendChild(item);
+        };
+
+        // --- Mostrar (ID / ID y descripción / Descripción)
+        if (info && info.applicable) {
+            const saved = this.getFieldOptions(zoneId, entry).displayMode;
+            const current = (info.available && (saved === "ID_TEXT" || saved === "TEXT")) ? saved : "ID";
+            addTitle("Mostrar");
+            [["ID", "ID"], ["ID_TEXT", "ID y descripción"], ["TEXT", "Descripción"]].forEach(([mode, label]) => {
+                const disabled = mode !== "ID" && !info.available;
+                addItem(label, current === mode, () => { if (mode !== current) this.setDisplayMode(zoneId, entry, mode); },
+                    { disabled, title: disabled ? info.reason : "" });
+            });
+        }
+
+        const patchOptions = (patch) => {
+            const cur = Object.assign(this.getFieldOptions(zoneId, entry), patch);
+            this.setFieldOptions(zoneId, entry, cur);
+            const sel = this.selectedFieldForOptions;
+            if (sel && sel.zoneId === zoneId && sel.dimension === entry.dimension && sel.name === entry.name) {
+                this.renderFieldOptionsBody(zoneId, entry);
+            }
+            this.scheduleAutoUpdate();
+        };
+
+        if (entry.isHierarchy) {
+            // --- Jerarquía: niveles a mostrar y expandir hasta nivel
+            const opts = this.getFieldOptions(zoneId, entry);
+            if (levels && levels.length) {
+                if (menu.children.length) addSep();
+                addTitle("Jerarquía \u203a Mostrar niveles");
+                const visible = new Set(Array.isArray(opts.visibleLevels) ? opts.visibleLevels : levels.map(l => l.nivel));
+                levels.forEach(l => {
+                    addItem(`Nivel ${l.nivel} \u2014 ${l.attribute}`, visible.has(l.nivel), (checked) => {
+                        if (checked) visible.add(l.nivel); else visible.delete(l.nivel);
+                        patchOptions({ visibleLevels: levels.map(v => v.nivel).filter(n => visible.has(n)) });
+                    }, { keepOpen: true });
+                });
+                addSep();
+                addTitle("Jerarquía \u203a Expandir hasta nivel");
+                const exp = opts.expandToLevel;
+                addItem("(todos)", exp === null || exp === undefined || exp === "", () => patchOptions({ expandToLevel: null }));
+                levels.forEach(l => {
+                    addItem(`Nivel ${l.nivel} \u2014 ${l.attribute}`, String(exp) === String(l.nivel), () => patchOptions({ expandToLevel: Number(l.nivel) }));
+                });
+            } else {
+                if (menu.children.length) addSep();
+                addTitle("Jerarquía");
+                addItem("No se pudieron cargar los niveles", false, () => {}, { disabled: true });
+            }
+        } else {
+            // --- Totales (subtotales) mostrar / ocultar
+            if (menu.children.length) addSep();
+            addTitle("Totales");
+            const showing = !!this.getFieldOptions(zoneId, entry).showTotals;
+            addItem("Mostrar", showing, () => { if (!showing) patchOptions({ showTotals: true }); });
+            addItem("Ocultar", !showing, () => { if (showing) patchOptions({ showTotals: false }); });
+        }
+
+        document.body.appendChild(menu);
+        const r = menu.getBoundingClientRect();
+        menu.style.left = Math.max(0, Math.min(x, window.innerWidth - r.width - 4)) + "px";
+        menu.style.top = Math.max(0, Math.min(y, window.innerHeight - r.height - 4)) + "px";
+
+        this._displayMenuCloser = (ev) => {
+            if (ev.type === "keydown" && ev.key !== "Escape") return;
+            if (ev.type === "mousedown" && menu.contains(ev.target)) return;
+            this.hideDisplayModeMenu();
+        };
+        setTimeout(() => {
+            document.addEventListener("mousedown", this._displayMenuCloser, true);
+            document.addEventListener("keydown", this._displayMenuCloser, true);
+            window.addEventListener("blur", this._displayMenuCloser, true);
+            window.addEventListener("scroll", this._displayMenuCloser, true);
+        }, 0);
+    },
+
+    hideDisplayModeMenu() {
+        const m = document.getElementById("displayModeMenu");
+        if (m) m.remove();
+        if (this._displayMenuCloser) {
+            document.removeEventListener("mousedown", this._displayMenuCloser, true);
+            document.removeEventListener("keydown", this._displayMenuCloser, true);
+            window.removeEventListener("blur", this._displayMenuCloser, true);
+            window.removeEventListener("scroll", this._displayMenuCloser, true);
+            this._displayMenuCloser = null;
+        }
+    },
+
+    /**
+     * "Mostrar como: Solo ID / ID y texto" del campo (clave de dimensión o
+     * jerarquía). El atributo de texto se define en el modelo semántico; aquí
+     * solo se elige el modo. Devuelve null si el campo no admite el modo.
+     */
+    buildDisplayModeBlock(zoneId, entry, options) {
+        if (!window.ReportStore || !window.ReportStore.getDisplayTextInfo) return null;
+        const info = window.ReportStore.getDisplayTextInfo(this.currentReportId, entry.dimension, entry.name, !!entry.isHierarchy);
+        if (!info.applicable) return null;
+
+        const label = document.createElement("label");
+        label.className = "field-options-field-block";
+        const span = document.createElement("span");
+        span.className = "field-options-field-label";
+        span.textContent = "Mostrar como";
+        const select = document.createElement("select");
+        select.id = "optDisplayMode";
+        [["ID", "Solo ID"], ["ID_TEXT", "ID y texto"], ["TEXT", "Solo texto"]].forEach(([v, t]) => {
+            const o = document.createElement("option");
+            o.value = v;
+            o.textContent = t;
+            select.appendChild(o);
+        });
+        select.value = (info.available && (options.displayMode === "ID_TEXT" || options.displayMode === "TEXT")) ? options.displayMode : "ID";
+        select.disabled = !info.available;
+        if (!info.available) select.title = info.reason;
+        select.addEventListener("change", () => this.setDisplayMode(zoneId, entry, select.value));
+        label.appendChild(span);
+        label.appendChild(select);
+        if (!info.available) {
+            const hint = document.createElement("div");
+            hint.className = "field-options-empty";
+            hint.textContent = info.reason;
+            label.appendChild(hint);
+        }
+        return label;
+    },
+
     buildDimensionOptionsForm(zoneId, entry, options) {
         const wrap = document.createElement("div");
         wrap.className = "field-options-group";
@@ -2432,6 +2746,9 @@ const TaskPaneApp = {
         wrap.querySelector("#optShowTotals").addEventListener("change", persist);
         wrap.querySelector("#optSortOrder").addEventListener("change", persist);
 
+        const displayBlock = this.buildDisplayModeBlock(zoneId, entry, options);
+        if (displayBlock) wrap.appendChild(displayBlock);
+
         return wrap;
     },
 
@@ -2445,6 +2762,9 @@ const TaskPaneApp = {
             container.appendChild(empty);
             return;
         }
+
+        const displayBlock = this.buildDisplayModeBlock(zoneId, entry, options);
+        if (displayBlock) container.appendChild(displayBlock);
 
         const expandLabel = document.createElement("label");
         expandLabel.className = "field-options-field-block";

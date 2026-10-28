@@ -194,18 +194,36 @@ const BQ = {
         return window.sessionStorage;
     },
 
-    /** Borra el token que versiones anteriores dejaban en localStorage. */
+    /**
+     * Respaldo en localStorage (token de 1 h, nunca en el .xlsx ni en la URL).
+     * sessionStorage se pierde al recargar/cerrar el panel o cuando el panel,
+     * el ribbon y los diálogos corren en contextos distintos: Draco pedía
+     * conexión estando conectado. localStorage lo comparten todos los
+     * contextos del add-in y getToken() lo descarta al caducar.
+     */
+    _local() {
+        try { return window.localStorage; } catch (e) { return null; }
+    },
+
+    /** Antes borraba el token de localStorage; ahora solo descarta uno caducado. */
     purgeLegacyToken() {
+        const ls = this._local();
+        if (!ls) return;
         try {
-            localStorage.removeItem(this.TOKEN_KEY);
-            localStorage.removeItem(this.EXPIRES_KEY);
-        } catch (e) { /* sin acceso a localStorage */ }
+            const exp = parseInt(ls.getItem(this.EXPIRES_KEY) || "0", 10);
+            if (!exp || Date.now() >= exp) {
+                ls.removeItem(this.TOKEN_KEY);
+                ls.removeItem(this.EXPIRES_KEY);
+                ls.removeItem(this.SCOPES_KEY);
+            }
+        } catch (e) { /* sin acceso */ }
     },
 
     SCOPES_KEY: "bigquery_token_scopes",
 
     /** Scopes concedidos por Google en el último login (null si se desconocen). */
     getGrantedScopes() {
+        this._rehydrate();
         const raw = this._store().getItem(this.SCOPES_KEY);
         return raw ? raw.split(/\s+/).filter(Boolean) : null;
     },
@@ -228,9 +246,33 @@ const BQ = {
         this._store().setItem(this.TOKEN_KEY, token);
         this._store().setItem(this.EXPIRES_KEY, String(expiresAt));
         if (scope) this._store().setItem(this.SCOPES_KEY, String(scope));
+        const ls = this._local();
+        if (ls) {
+            try {
+                ls.setItem(this.TOKEN_KEY, token);
+                ls.setItem(this.EXPIRES_KEY, String(expiresAt));
+                if (scope) ls.setItem(this.SCOPES_KEY, String(scope));
+            } catch (e) { /* sin acceso */ }
+        }
+    },
+
+    /** Si este contexto no tiene token pero otro lo dejó en localStorage, lo copia aquí. */
+    _rehydrate() {
+        const ls = this._local();
+        if (!ls || this._store().getItem(this.TOKEN_KEY)) return;
+        try {
+            const t = ls.getItem(this.TOKEN_KEY), e = ls.getItem(this.EXPIRES_KEY);
+            if (t && e && Date.now() < parseInt(e, 10)) {
+                this._store().setItem(this.TOKEN_KEY, t);
+                this._store().setItem(this.EXPIRES_KEY, e);
+                const sc = ls.getItem(this.SCOPES_KEY);
+                if (sc) this._store().setItem(this.SCOPES_KEY, sc);
+            }
+        } catch (err) { /* sin acceso */ }
     },
 
     getToken() {
+        this._rehydrate();
         const token = this._store().getItem(this.TOKEN_KEY);
         const expires = this._store().getItem(this.EXPIRES_KEY);
         if (!token || !expires || Date.now() >= parseInt(expires, 10)) {
@@ -273,6 +315,14 @@ const BQ = {
         this._store().removeItem(this.TOKEN_KEY);
         this._store().removeItem(this.EXPIRES_KEY);
         this._store().removeItem(this.SCOPES_KEY);
+        const ls = this._local();
+        if (ls) {
+            try {
+                ls.removeItem(this.TOKEN_KEY);
+                ls.removeItem(this.EXPIRES_KEY);
+                ls.removeItem(this.SCOPES_KEY);
+            } catch (e) { /* sin acceso */ }
+        }
     },
 
     /**

@@ -194,6 +194,7 @@ const GoogleAuth = {
     /** Al cargar una página: reanuda la renovación (o renueva ya si caducó). */
     async resume() {
         if (!this.hasBackendSession()) return;
+        BQ.getToken(); // rehidrata desde el respaldo si este contexto no tenía token
         const expires = parseInt(sessionStorage.getItem(BQ.EXPIRES_KEY) || "0", 10);
         if (!BQ.getToken() || expires - Date.now() < 5 * 60 * 1000) {
             await this.refresh();

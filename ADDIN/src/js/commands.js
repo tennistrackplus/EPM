@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-20-escala";
+const DRACO_BUILD = "2026-10-28-merge";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -409,6 +409,23 @@ function hidePane(event) {
 const CRLF = "\r\n";
 
 /**
+ * "Mostrar ID y texto" en una JERARQUÍA (ver ReportStore._expandAxis): la
+ * jerarquía de textos se añade tras la de IDs con este sufijo en el NOMBRE de
+ * jerarquía (columna K/Q de EDIT_REPORT). Sus niveles comparten grupo de
+ * GROUPING SETS con los niveles de ID (no son niveles nuevos) y no cuentan
+ * como profundidad al contraer/expandir.
+ */
+const DRACO_HIER_TEXT_SUFFIX = "~TXT";
+// Columna de orden de EDIT_REPORT (M/S) con la marca "HIDE": "Solo texto".
+function dracoIsHiddenMarker(v) {
+    return String(v === null || v === undefined ? "" : v).toUpperCase().indexOf("HIDE") !== -1;
+}
+function dracoIsHierTextName(name) {
+    const n = String(name || "");
+    return n.length > DRACO_HIER_TEXT_SUFFIX.length && n.endsWith(DRACO_HIER_TEXT_SUFFIX);
+}
+
+/**
  * Estado global del informe (equivalente a las variables Public del módulo VBA)
  */
 const ReportState = {
@@ -755,6 +772,12 @@ function mergeEditReportGrid(physicalGrid, designGrid) {
 async function getEditReportGrid(context, reportIdOverride) {
     const physicalGrid = await getValuesGrid(context, "EDIT_REPORT");
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
+    // Mantiene al día las columnas de "ID y texto" (y las jerarquías) con el
+    // modelo semántico actual aunque el informe no se haya vuelto a guardar.
+    if (window.ReportStore && reportId && window.ReportStore.refreshExpansion) {
+        try { await window.ReportStore.refreshExpansion(reportId); }
+        catch (e) { console.warn("[Draco] No se pudo actualizar la expansión del diseño:", e); }
+    }
     const designGrid = (window.ReportStore && reportId)
         ? window.ReportStore.getReportGrid(reportId)
         : { values: [], startRow: 0, startCol: 0 };
@@ -982,7 +1005,10 @@ function loadRows(editReportGrid) {
         } else {
             ReportState.RowCount++;
 
-            if (Number(cellValue(editReportGrid, R, 16)) === 1) {
+            // "Solo texto": el ID (orden = "HIDE", col. S) se consulta pero no se pinta,
+            // así que no ocupa columna física.
+            const hiddenRow = dracoIsHiddenMarker(cellValue(editReportGrid, R, 19));
+            if (Number(cellValue(editReportGrid, R, 16)) === 1 && !hiddenRow) {
                 ReportState.AttrRowCount++;
             }
 
@@ -993,6 +1019,10 @@ function loadRows(editReportGrid) {
                 Dimension: dim,
                 AttributeName: String(cellValue(editReportGrid, R, 15)).trim(),
                 Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
+                // Columna Q: nombre de jerarquía; con sufijo "~TXT" es la
+                // jerarquía de TEXTOS de un "ID y texto" (ver DRACO_HIER_TEXT_SUFFIX).
+                IsTextCompanion: dracoIsHierTextName(cellValue(editReportGrid, R, 17)),
+                Hidden: hiddenRow,
                 // Columna R de EDIT_REPORT: "X" = generar subtotal para este
                 // campo (ver buildConfigSetsWithSubtotals). No se usa en
                 // absoluto si NINGÚN campo del informe tiene esta marca.
@@ -1023,7 +1053,8 @@ function loadColumns(editReportGrid) {
                 Zone: "rows"
             });
         } else {
-            if (Number(cellValue(editReportGrid, R, 10)) === 1) {
+            const hiddenCol = dracoIsHiddenMarker(cellValue(editReportGrid, R, 13)); // columna M
+            if (Number(cellValue(editReportGrid, R, 10)) === 1 && !hiddenCol) {
                 ReportState.AttrColumnCount++;
             }
 
@@ -1036,6 +1067,9 @@ function loadColumns(editReportGrid) {
                 Dimension: dim,
                 AttributeName: String(cellValue(editReportGrid, R, 9)).trim(),
                 Hierarchy: hierRaw === "" ? 0 : Number(hierRaw),
+                // Columna K: nombre de jerarquía (ver loadRows / DRACO_HIER_TEXT_SUFFIX).
+                IsTextCompanion: dracoIsHierTextName(cellValue(editReportGrid, R, 11)),
+                Hidden: hiddenCol,
                 // Columna L de EDIT_REPORT: "X" = generar subtotal para este
                 // campo (ver buildConfigSetsWithSubtotals).
                 Subtotal: String(cellValue(editReportGrid, R, 12)).trim().toUpperCase() === "X"
@@ -2668,6 +2702,7 @@ function readDracoAxisFields(editReportGrid, isColumnsAxis) {
         const attr = String(cellValue(editReportGrid, R, dimCol + 1)).trim();
         const nivel = Number(cellValue(editReportGrid, R, dimCol + 2)) || 1;
         const hier = String(cellValue(editReportGrid, R, dimCol + 3)).trim();
+        const hidden = dracoIsHiddenMarker(cellValue(editReportGrid, R, dimCol + 5));
         const last = fields[fields.length - 1];
         if (dim.toUpperCase() === "MEASURE") {
             if (!fields.some(f => f.type === "measure")) fields.push({ type: "measure" });
@@ -2675,10 +2710,13 @@ function readDracoAxisFields(editReportGrid, isColumnsAxis) {
             if (last && last.type === "hier" && last.name.toUpperCase() === hier.toUpperCase() && last.dim.toUpperCase() === dim.toUpperCase()) {
                 last.levels.push({ attr, nivel });
             } else {
-                fields.push({ type: "hier", dim, name: hier, levels: [{ attr, nivel }] });
+                fields.push({ type: "hier", dim, name: hier, levels: [{ attr, nivel }], hidden });
             }
         } else if (!fields.some(f => f.type === "attr" && f.dim.toUpperCase() === dim.toUpperCase() && f.attr.toUpperCase() === attr.toUpperCase())) {
-            fields.push({ type: "attr", dim, attr });
+            // "Solo texto": el texto sustituye al ID oculto que lo precede
+            const idPartner = (last && last.type === "attr" && last.hidden && !hidden
+                && last.dim.toUpperCase() === dim.toUpperCase()) ? last : null;
+            fields.push({ type: "attr", dim, attr, hidden, idPartner });
         }
         R++;
     }
@@ -2729,6 +2767,14 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     fields.forEach(f => {
         if (f.type === "attr") f.col = colIdx(f.dim, f.attr);
         if (f.type === "hier") f.levels.forEach(l => { l.col = colIdx(f.dim, l.attr); });
+    });
+    // "ID y texto" en una jerarquía: la jerarquía de textos (sufijo ~TXT) se
+    // cuelga de la de IDs (hostField) y comparte su profundidad/agrupación.
+    fields.forEach(f => {
+        if (f.type !== "hier" || !dracoIsHierTextName(f.name)) return;
+        const hostName = f.name.slice(0, f.name.length - DRACO_HIER_TEXT_SUFFIX.length).toUpperCase();
+        const host = fields.find(h => h.type === "hier" && h !== f && h.dim.toUpperCase() === f.dim.toUpperCase() && h.name.toUpperCase() === hostName);
+        if (host) f.hostField = host;
     });
     const measureLevelIdx = fields.findIndex(f => f.type === "measure");
     const dynZone = dynamicIsColumns ? "columns" : "rows";
@@ -2811,7 +2857,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     // GROUP BY de AGG: con jerarquías en el eje dinámico, GROUPING SETS con
     // una combinación por profundidad de cada jerarquía (nodos + hojas,
     // como el modo Dinámico); sin jerarquías, GROUP BY normal.
-    const hierFields = fields.filter(f => f.type === "hier");
+    const hierFields = fields.filter(f => f.type === "hier" && !f.hostField);
     const plainCols = fields.filter(f => f.type === "attr").map(f => dynNames[f.col]);
     const groupBy = (lineRef, colRef, extra) => {
         extra = extra || [];
@@ -2821,7 +2867,13 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
         let combos = [[]];
         hierFields.forEach(h => {
             const next = [];
-            combos.forEach(c => { for (let d = 1; d <= h.levels.length; d++) next.push([...c, h.levels.slice(0, d).map(l => dynNames[l.col])]); });
+            const texts = fields.filter(t => t.hostField === h);
+            combos.forEach(c => {
+                for (let d = 1; d <= h.levels.length; d++) {
+                    next.push([...c, h.levels.slice(0, d).map(l => dynNames[l.col]),
+                        ...texts.map(t => t.levels.slice(0, d).map(l => dynNames[l.col]))]);
+                }
+            });
             combos = next;
         });
         const sets = combos.map(c => {
@@ -2888,7 +2940,8 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
         const parts = [];
         flds.forEach(f => {
             if (f.type === "attr") parts.push(dynNames[f.col]);
-            if (f.type === "hier") f.levels.forEach((l, i) => {
+            // La jerarquía de textos ("ID y texto") no ordena: va por sus IDs.
+            if (f.type === "hier" && !f.hostField) f.levels.forEach((l, i) => {
                 if (i > 0) parts.push(nullFirst(dynNames[l.col]));
                 parts.push(dynNames[l.col]);
             });
@@ -2990,7 +3043,9 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
     }
     if (members.size === 0 && nDyn === 0 && !plan.dynMeasures.length) tuples.push({ dyn: 1, mIdx: -1, mem: { attrs: [] } });
     const tupleIndex = new Map(tuples.map((t, j) => [t.dyn + "_" + t.mIdx, j]));
-    const headerDepth = plan.fields.length;
+    // "Solo texto": los campos ocultos (ID) se consultan pero no se pintan en la cabecera.
+    const paintFields = plan.fields.filter(f => !f.hidden);
+    const headerDepth = paintFields.length;
     const valCell = (lineId, j) => plan.dynamicIsColumns ? { r: lineId, c: anchor.col + j } : { r: anchor.row + j, c: lineId };
     const firstDyn = plan.dynamicIsColumns ? anchor.col : anchor.row;
     const nTuples = tuples.length;
@@ -3032,20 +3087,34 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
         for (let r = 0; r < rowsN; r++) grid.push(new Array(colsN).fill(""));
         const isNull = (v) => v === undefined || isDracoNullLiteral(v);
         tuples.forEach((t, j) => {
-            plan.fields.forEach((fld, k) => {
+            paintFields.forEach((fld, k) => {
                 let f = "", indent = 0;
                 if (fld.type === "measure") {
                     const mName = t.mIdx >= 0 ? plan.dynMeasures[t.mIdx] : "";
                     if (mName) f = buildEpmValueFormula("MEASURE", mName, "", mName);
                 } else if (fld.type === "attr") {
                     const v = t.mem.attrs[fld.col];
-                    if (!isNull(v)) f = buildEpmValueFormula(fld.dim, fld.attr, v);
+                    if (!isNull(v)) {
+                        // Solo texto: atributo y valor del ID, descripción = texto
+                        f = fld.idPartner
+                            ? buildEpmValueFormula(fld.dim, fld.idPartner.attr, t.mem.attrs[fld.idPartner.col], v)
+                            : buildEpmValueFormula(fld.dim, fld.attr, v);
+                    }
                 } else {
+                    // Jerarquía de textos ("ID y texto"): misma profundidad que la de IDs
+                    // (un texto NULL no la acorta), el valor es el texto de ese nivel.
+                    const depthFld = fld.hostField || fld;
                     let depth = 0;
-                    while (depth < fld.levels.length && !isNull(t.mem.attrs[fld.levels[depth].col])) depth++;
+                    while (depth < depthFld.levels.length && !isNull(t.mem.attrs[depthFld.levels[depth].col])) depth++;
                     if (depth > 0) {
-                        const lv = fld.levels[depth - 1];
-                        f = buildEpmValueFormula(fld.dim, lv.attr, t.mem.attrs[lv.col]);
+                        const lv = fld.levels[Math.min(depth, fld.levels.length) - 1];
+                        const v = t.mem.attrs[lv.col];
+                        if (!fld.hostField || !isNull(v)) {
+                            const hl = (fld.hostField && fld.hostField.hidden) ? fld.hostField.levels[Math.min(depth, fld.hostField.levels.length) - 1] : null;
+                            f = hl
+                                ? buildEpmValueFormula(fld.dim, hl.attr, t.mem.attrs[hl.col], v)
+                                : buildEpmValueFormula(fld.dim, lv.attr, v);
+                        }
                         indent = depth - 1;
                     }
                 }
@@ -3972,14 +4041,45 @@ function generateHierarchyCombinations(hierarchies) {
  * combinando niveles de jerarquía de Filas y Columnas.
  */
 function computeGroupingSetDimensionsAndHierarchies(relGrid) {
+    // ---- Campos "lógicos" de cada eje ----
+    // Los niveles de la jerarquía de TEXTOS de un "ID y texto" (IsTextCompanion)
+    // no son niveles nuevos: cada uno se agrupa SIEMPRE junto al nivel de ID
+    // de su misma dimensión y NIVEL (si no, el "odómetro" generaría
+    // combinaciones de ID de un nivel con texto de otro). Se cuelgan de ese
+    // campo ("extra") y se emiten juntos en cada conjunto de agrupación.
+    function logicalFields(fields) {
+        const out = [];
+        for (const f of fields) {
+            if (f.IsTextCompanion) {
+                let host = null;
+                for (let k = out.length - 1; k >= 0; k--) {
+                    if (out[k].f.Dimension === f.Dimension && Number(out[k].f.Hierarchy) === Number(f.Hierarchy)) {
+                        host = out[k];
+                        break;
+                    }
+                }
+                if (host) {
+                    host.extra.push(f);
+                    continue;
+                }
+                // sin nivel de ID al que pegarse: se trata como un campo normal
+            }
+            out.push({ f, extra: [] });
+        }
+        return out;
+    }
+
+    const logicalRows = logicalFields(ReportState.Rows);
+    const logicalCols = logicalFields(ReportState.Columns);
+
     // ---- DIMENSIONS: Filas primero, luego Columnas ----
+    // Cada posición es la columna del campo o, si lleva texto pegado, un
+    // array [columna, columnaTexto] (ver groupingSetTupleToColumnList).
     const dimensions = [null]; // índice 1-based, dimensions[0] sin usar
 
-    for (const r of ReportState.Rows) {
-        dimensions.push(dracoAxisCol(relGrid, r));
-    }
-    for (const c of ReportState.Columns) {
-        dimensions.push(dracoAxisCol(relGrid, c));
+    for (const l of [...logicalRows, ...logicalCols]) {
+        const cols = [dracoAxisCol(relGrid, l.f), ...l.extra.map(e => dracoAxisCol(relGrid, e))];
+        dimensions.push(cols.length === 1 ? cols[0] : cols);
     }
 
     // ---- HIERARCHIES: longitud de cada tramo de "misma JERARQUÍA real" ----
@@ -3997,11 +4097,12 @@ function computeGroupingSetDimensionsAndHierarchies(relGrid) {
     // NIVEL=1 seguidos (aunque sean de la misma dimensión) rompen el tramo
     // y se tratan como dos tramos de longitud 1 -igual que si fueran de
     // dimensiones distintas-, sin generar ningún subtotal automático.
-    function pushHierarchyRunLengths(fields, out) {
+    function pushHierarchyRunLengths(logical, out) {
         let lastDim = "";
         let lastLevel = 0;
         let contador = 0;
-        for (const f of fields) {
+        for (const l of logical) {
+            const f = l.f;
             const nivel = Number(f.Hierarchy) || 0;
             if (contador > 0 && f.Dimension === lastDim && nivel === lastLevel + 1) {
                 contador++;
@@ -4016,8 +4117,8 @@ function computeGroupingSetDimensionsAndHierarchies(relGrid) {
     }
 
     const hierarchies = [];
-    pushHierarchyRunLengths(ReportState.Rows, hierarchies);
-    pushHierarchyRunLengths(ReportState.Columns, hierarchies);
+    pushHierarchyRunLengths(logicalRows, hierarchies);
+    pushHierarchyRunLengths(logicalCols, hierarchies);
 
     // ---- HIERARCHIES ACUM ----
     const hierarchiesAcum = [];
@@ -4056,11 +4157,10 @@ function groupingSetTupleToColumnList(item, dimensions, hierarchiesAcum) {
     for (let i = 0; i < item.length; i++) {
         for (let j = 1; j <= item[i]; j++) {
             if (item[i] > 0) {
-                if (i === 0) {
-                    cols.push(dimensions[j]);
-                } else {
-                    cols.push(dimensions[j + hierarchiesAcum[i - 1]]);
-                }
+                const dimEntry = i === 0 ? dimensions[j] : dimensions[j + hierarchiesAcum[i - 1]];
+                // Un campo con texto pegado ("ID y texto") aporta sus dos columnas.
+                if (Array.isArray(dimEntry)) cols.push(...dimEntry);
+                else cols.push(dimEntry);
             }
             // item[i] === 0 no ocurre nunca en el flujo normal (generateHierarchyCombinations
             // nunca baja de 1): se deja sin aportar columnas, en vez del literal "[TOTAL]"
@@ -4800,10 +4900,16 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
     // mismo interruptor (subtotalsOnTop); ahora son independientes.
     const hierarchyNodesOnTop = opts.hierarchyNodesOnTop !== false;
 
+    // Posiciones (1..count) de la jerarquía de TEXTOS de un "ID y texto": no
+    // son niveles (su valor puede ser NULL de verdad si el miembro no tiene
+    // descripción), así que no cuentan para la profundidad del nodo.
+    const companion = opts.companion || [];
+
     const items = [];
     for (const V of dict.values()) {
         let deepest = 0;
         for (let i = 1; i <= count; i++) {
+            if (companion[i]) continue;
             if (String(V[i]).toLowerCase().indexOf("null") === 0) break;
             deepest = i;
         }
@@ -4831,7 +4937,7 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
         let i = 1;
         while (i <= count) {
             let j = i;
-            while (j < count && Number(flags[j + 1]) === Number(flags[j]) + 1) j++;
+            while (j < count && Number(flags[j + 1]) === Number(flags[j]) + 1 && !!companion[j + 1] === !!companion[j]) j++;
             const len = j - i + 1;
             for (let k = i; k <= j; k++) tramoLen[k] = len;
             i = j + 1;
@@ -5010,6 +5116,7 @@ function buildAxisFieldLevelsTable(editReportGrid, axis) {
             columns[measureIaux].maxFlag = 1;
             continue;
         }
+        if (lvl.hidden) continue; // "Solo texto": el ID no tiene columna
         const flag = lvl.flag || 1;
         if (flag === 1 || !current) {
             iAux++;
@@ -5068,6 +5175,27 @@ async function readIndentLevelsForRange(context, range) {
     }
 }
 
+
+/**
+ * "Solo texto": las celdas de texto de un eje con IDs ocultos NO se pueden
+ * convertir in situ entre texto y EPM_VALUE (el ID no está en la hoja), así
+ * que se repinta desde el último resultado. Requiere el diseño ya guardado
+ * con el nuevo Estático/Dinámico. Devuelve true si el eje tiene IDs ocultos
+ * (se haya repintado o no, porque aún no hubiese resultado).
+ */
+async function repaintAxisIfHiddenIds(axis) {
+    const reportId = activeReportIdOrNull();
+    let hasHidden = false;
+    await Excel.run(async (context) => {
+        const editReportGrid = await getEditReportGrid(context);
+        const [dimCol, attrCol, hierCol] = axis === "rows" ? [8, 9, 10] : [14, 15, 16];
+        hasHidden = buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol).some(l => l.hidden);
+        if (!hasHidden) return;
+        const lastJson = DracoLastJsonByReport.get(dracoStateKey(reportId));
+        if (lastJson) await jsonTo3Matrices(context, lastJson, reportId);
+    });
+    return hasHidden;
+}
 
 async function convertAxisStaticFormulas(axis, makeStatic) {
     const reportId = activeReportIdOrNull();
@@ -5322,9 +5450,11 @@ async function resolveDracoFieldForAxisLevel(context, reportId, axis, level, ind
     // plana de un único nivel — así que aquí se usa el nombre de la
     // Jerarquía en vez del Attr del nivel concreto. Attr (NIVEL1/NIVEL2)
     // solo se usa para la fórmula EPM_VALUE final, no para buscar.
-    const searchAttr = field.jerarquia || field.attr;
+    // La jerarquía de TEXTOS de un "ID y texto" (sufijo ~TXT) no existe en el
+    // modelo: se busca por el atributo de texto del nivel.
+    const searchAttr = (field.jerarquia && !dracoIsHierTextName(field.jerarquia)) ? field.jerarquia : field.attr;
 
-    return { axis, level, dim: field.dim, attr: searchAttr };
+    return { axis, level, dim: field.dim, attr: searchAttr, levelAttr: field.attr };
 }
 
 // NOTA: aquí existía handleDracoMemberRecognitionChanged, la función
@@ -7448,7 +7578,11 @@ function buildDracoAxisLevels(editReportGrid, dimCol, attrCol, hierCol, jerCol) 
             // mismo nombre (p.ej. "H_CUENTA"), a diferencia de `attr`
             // (NIVEL1/NIVEL2...), que sí cambia por nivel. Cadena vacía para
             // campos que no son jerarquía, o si no se pide esta columna.
-            jerarquia: jerCol ? String(cellValue(editReportGrid, R, jerCol)).trim() : ""
+            jerarquia: jerCol ? String(cellValue(editReportGrid, R, jerCol)).trim() : "",
+            // Jerarquía de TEXTOS de un "ID y texto" (ver DRACO_HIER_TEXT_SUFFIX)
+            isTextCompanion: jerCol ? dracoIsHierTextName(cellValue(editReportGrid, R, jerCol)) : false,
+            // "Solo texto": columna de ID que se consulta pero no se pinta
+            hidden: dracoIsHiddenMarker(cellValue(editReportGrid, R, hierCol + 3))
         });
         R++;
     }
@@ -7490,7 +7624,16 @@ function computeAxisPaintPlan(levels) {
     const flagsReal = [];
     const fieldsReal = [];
     const iauxReal = [];
+    const companionReal = []; // companionReal[i] = true si la posición i es de la jerarquía de textos
     const flag1OrdinalToIaux = [];
+    // Ordinales de nivel 1 ocultos ("Solo texto") pendientes de apuntar a la
+    // columna del texto que los sustituye (la siguiente que se pinte).
+    let pendingHiddenOrdinals = [];
+    // "Solo texto" + eje Estático: la fórmula EPM_VALUE de la columna de TEXTO
+    // lleva el ID (atributo y valor) y el texto solo como descripción;
+    // idPartnerReal[i] = posición del ID oculto al que sustituye el texto i.
+    const idPartnerReal = [];
+    const hiddenDims = []; // { idx, dim, flag, claimed }
     // Una entrada por medida, TODAS compartiendo el mismo iAux (una única
     // fila/columna física "extra" para el grupo de medidas del eje, no una
     // por medida): measureLevels[k].ordinal (0..N-1) es la posición de esa
@@ -7514,17 +7657,50 @@ function computeAxisPaintPlan(levels) {
         }
         dimIdx++;
         const flag = level.flag;
+        if (level.hidden) {
+            hiddenDims.push({ idx: dimIdx, dim: level.dim, flag: level.flag, claimed: false });
+            // Solo se consulta: sin columna física (iauxReal = null => no se pinta).
+            // Su +/- (si es nodo de jerarquía) se pinta en la columna del texto.
+            if (flag === 1) {
+                ordinal++;
+                pendingHiddenOrdinals.push(ordinal);
+            }
+            flagsReal[dimIdx] = flag;
+            companionReal[dimIdx] = !!level.isTextCompanion;
+            fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr };
+            iauxReal[dimIdx] = null;
+            continue;
+        }
         if (flag === 1) {
             iAux++;
             ordinal++;
             flag1OrdinalToIaux[ordinal] = iAux;
+            pendingHiddenOrdinals.forEach(o => { flag1OrdinalToIaux[o] = iAux; });
+            pendingHiddenOrdinals = [];
         }
         flagsReal[dimIdx] = flag;
+        companionReal[dimIdx] = !!level.isTextCompanion;
         fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr };
         iauxReal[dimIdx] = iAux;
+
+        // ¿Es el texto que sustituye a un ID oculto?
+        let partner = null;
+        if (level.isTextCompanion) {
+            for (let k = hiddenDims.length - 1; k >= 0; k--) {
+                const h = hiddenDims[k];
+                if (!h.claimed && h.dim === level.dim && h.flag === flag) { partner = h; break; }
+            }
+        } else {
+            const prev = hiddenDims[hiddenDims.length - 1];
+            if (prev && !prev.claimed && prev.idx === dimIdx - 1 && prev.dim === level.dim) partner = prev;
+        }
+        if (partner) {
+            partner.claimed = true;
+            idPartnerReal[dimIdx] = partner.idx;
+        }
     }
 
-    return { flagsReal, fieldsReal, iauxReal, flag1OrdinalToIaux, measureLevels, totalIaux: iAux, dimCount: dimIdx };
+    return { flagsReal, companionReal, idPartnerReal, fieldsReal, iauxReal, flag1OrdinalToIaux, measureLevels, totalIaux: iAux, dimCount: dimIdx };
 }
 
 /**
@@ -7693,8 +7869,8 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     // el eje físico completo una vez (con las filas MEASURE incluidas) y
     // se deriva de ahí tanto la correspondencia {dim, attr, NIVEL} de cada
     // dimensión real como la columna/fila física de cada etiqueta MEASURE.
-    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10);      // H/I/J
-    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16); // N/O/P
+    const levelsFilas = buildDracoAxisLevels(editReportGrid, 8, 9, 10, 11);      // H/I/J (+K: jerarquía)
+    const levelsColumnas = buildDracoAxisLevels(editReportGrid, 14, 15, 16, 17); // N/O/P (+Q: jerarquía)
 
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
@@ -7862,8 +8038,8 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         }
     }
 
-    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, dracoCollapseState.rows.collapsed, flagsFilas, { subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
-    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, dracoCollapseState.cols.collapsed, flagsColumnas, { subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
+    const rowsFilter = filterAndCompactDracoAxis(rowDict, totalDimFilas, dracoCollapseState.rows.collapsed, flagsFilas, { companion: planFilas.companionReal, subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
+    const colsFilter = filterAndCompactDracoAxis(colDict, totalDimCols, dracoCollapseState.cols.collapsed, flagsColumnas, { companion: planColumnas.companionReal, subtotalsOnTop: reportProps.subtotalsOnTop, hierarchyNodesOnTop: reportProps.hierarchyNodesOnTop });
 
     console.log("jsonTo3Matrices diagnóstico:", {
         totalCampos, filas,
@@ -8061,14 +8237,17 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         for (let i = 1; i <= totalDimFilas; i++) {
             const flag = flagsFilas[i];
             const iAux = planFilas.iauxReal[i];
+            if (iAux === null) continue; // "Solo texto": el ID no se pinta
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
                 const text = coerceCellLiteral(V[i]);
                 // Eje Estático: se escribe como fórmula EPM_VALUE editable
                 // (mismo formato que lee el flujo Fijo), no como texto plano.
+                const pI = planFilas.idPartnerReal[i];
                 const cellVal = rowsStatic
-                    ? buildEpmValueFormula(fieldsFilas[i].dim, fieldsFilas[i].attr, text)
+                    ? (pI ? buildEpmValueFormula(fieldsFilas[pI].dim, fieldsFilas[pI].attr, coerceCellLiteral(V[pI]), text)
+                          : buildEpmValueFormula(fieldsFilas[i].dim, fieldsFilas[i].attr, text))
                     : text;
                 // Sobrescribe si ya había una entrada (mismo comportamiento que
                 // el bucle secuencial original: el último nivel no-nulo gana).
@@ -8085,7 +8264,9 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
                     // Valor canónico (antes de Excel) para el writeback —
                     // ver DracoAxisCrossValues. Mismas coordenadas físicas
                     // que la celda que se acaba de pintar.
-                    axisCrossValues.set(row + "_" + col, { dim: fieldsFilas[i].dim, attr: fieldsFilas[i].attr, value: text });
+                    axisCrossValues.set(row + "_" + col, pI
+                        ? { dim: fieldsFilas[pI].dim, attr: fieldsFilas[pI].attr, value: coerceCellLiteral(V[pI]) }
+                        : { dim: fieldsFilas[i].dim, attr: fieldsFilas[i].attr, value: text });
                 }
             }
         }
@@ -8151,12 +8332,15 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
         for (let i = 1; i <= totalDimCols; i++) {
             const flag = flagsColumnas[i];
             const iAux = planColumnas.iauxReal[i];
+            if (iAux === null) continue; // "Solo texto": el ID no se pinta
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
                 const text = coerceCellLiteral(V[i]);
+                const pI = planColumnas.idPartnerReal[i];
                 const cellVal = colsStatic
-                    ? buildEpmValueFormula(fieldsColumnas[i].dim, fieldsColumnas[i].attr, text)
+                    ? (pI ? buildEpmValueFormula(fieldsColumnas[pI].dim, fieldsColumnas[pI].attr, coerceCellLiteral(V[pI]), text)
+                          : buildEpmValueFormula(fieldsColumnas[i].dim, fieldsColumnas[i].attr, text))
                     : text;
                 // Ver comentario equivalente en el bloque de FILAS: text puede
                 // ser un Number (dimensión INTEGER) y no tiene .trim().
@@ -8168,7 +8352,9 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
                     // Valor canónico (antes de Excel) para el writeback —
                     // ver DracoAxisCrossValues. Mismas coordenadas físicas
                     // que la celda que se acaba de pintar.
-                    axisCrossValues.set(row + "_" + col, { dim: fieldsColumnas[i].dim, attr: fieldsColumnas[i].attr, value: text });
+                    axisCrossValues.set(row + "_" + col, pI
+                        ? { dim: fieldsColumnas[pI].dim, attr: fieldsColumnas[pI].attr, value: coerceCellLiteral(V[pI]) }
+                        : { dim: fieldsColumnas[i].dim, attr: fieldsColumnas[i].attr, value: text });
                 }
             }
         }
@@ -9745,7 +9931,7 @@ async function actualizarTodos(event) {
 window.ReportActions = {
     actualizar, actualizarInforme, actualizarInformeFixed, actualizarTodos,
     toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
-    convertAxisStaticFormulas, ensureDracoHandlersRegistered,
+    convertAxisStaticFormulas, repaintAxisIfHiddenIds, ensureDracoHandlersRegistered,
     // "Añadir filtro" (rango con nombre sobre una celda cualquiera del libro)
     dracoFilterRangeName,
     resolveDracoFilterRangeAddress, openDracoFilterRangePicker,
@@ -11065,6 +11251,143 @@ async function abrirVariables(event) {
     }
 }
 
+/**
+ * Clic derecho sobre celdas de Filas/Columnas -> "Filtrar valores
+ * seleccionados": los valores (ID) de las celdas seleccionadas pasan a la
+ * zona Filtros del informe, como lista de valores del campo de cada celda
+ * (si ese campo ya estaba en Filtros se sustituye su selección).
+ * Celdas EPM_VALUE (estático) usan su atributo/valor (el ID); el resto, el
+ * campo del nivel de la celda y su texto.
+ */
+async function filtrarValoresSeleccionados(event) {
+    try {
+        const groups = new Map(); // "DIM|ATTR" -> {dim, attr, values:Set}
+        let reportId = null;
+        let problem = "";
+        await Excel.run(async (context) => {
+            const sheet = context.workbook.worksheets.getActiveWorksheet();
+            sheet.load("id");
+            const sel = context.workbook.getSelectedRange();
+            sel.load(["address", "rowIndex", "columnIndex", "rowCount", "columnCount", "values", "formulas"]);
+            await context.sync();
+            if (sel.rowCount * sel.columnCount > 5000) { problem = "Selección demasiado grande."; return; }
+
+            const indents = await readIndentLevelsForRange(context, sel);
+            const first = sel.address.split("!").pop().split(":")[0].replace(/\$/g, "");
+            const located = await findDracoRowsNamedRangeForCell(context, sheet.id, first);
+            if (!located) { problem = "La selección no está en Filas/Columnas de un informe Draco."; return; }
+            reportId = located.reportId;
+
+            const fieldCache = new Map();
+            for (let r = 0; r < sel.rowCount; r++) {
+                for (let c = 0; c < sel.columnCount; c++) {
+                    const value = sel.values[r][c];
+                    if (value === "" || value === null || value === undefined) continue;
+                    let dim, attr, v = value;
+                    const fx = sel.formulas[r][c];
+                    const args = (typeof fx === "string" && /^=\s*EPM_VALUE\s*\(/i.test(fx)) ? parseEpmValueArgs(fx) : null;
+                    if (args && args.length >= 3) {
+                        dim = args[0]; attr = args[1]; v = args[2];
+                    } else {
+                        const level = located.axis === "rows" ? located.level + c : located.level + r;
+                        const key = level + "|" + indents[r][c];
+                        if (!fieldCache.has(key)) {
+                            fieldCache.set(key, await resolveDracoFieldForAxisLevel(context, located.reportId, located.axis, level, indents[r][c]));
+                        }
+                        const f = fieldCache.get(key);
+                        if (!f) continue;
+                        dim = f.dim; attr = f.levelAttr || f.attr;
+                    }
+                    if (!dim || !attr || String(dim).toUpperCase() === "MEASURE") continue;
+                    const g = dim + "|" + attr;
+                    if (!groups.has(g)) groups.set(g, { dim, attr, values: new Set() });
+                    groups.get(g).values.add(String(v));
+                }
+            }
+        });
+
+        if (problem || !groups.size) {
+            console.warn("[Draco] Filtrar valores seleccionados:", problem || "ninguna celda de campo seleccionada.");
+            if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.setAutoStatus) {
+                TaskPaneApp.setAutoStatus(problem || "Selecciona celdas de Filas/Columnas para filtrar.");
+            }
+            return;
+        }
+        if (typeof TaskPaneApp === "undefined" || !TaskPaneApp.setFilterValues) {
+            console.warn("[Draco] Filtrar valores seleccionados: taskpane no disponible.");
+            return;
+        }
+        await TaskPaneApp.setFilterValues(reportId, Array.from(groups.values()).map(g => ({ dim: g.dim, attr: g.attr, values: Array.from(g.values) })));
+        if (Office.addin && Office.addin.showAsTaskpane) { try { await Office.addin.showAsTaskpane(); } catch (e) { /* nada */ } }
+    } catch (error) {
+        console.error("Error al filtrar valores seleccionados:", error);
+    } finally {
+        if (event) event.completed();
+    }
+}
+
+/**
+ * Clic derecho sobre una celda de Filas/Columnas -> acciones sobre SU campo
+ * (totales, mostrar ID/descripción, opciones de jerarquía). Averigua el
+ * informe y el campo de la celda activa y se lo pasa al taskpane.
+ */
+async function dracoFieldActionFromCell(action) {
+    let target = null;
+    await Excel.run(async (context) => {
+        const sheet = context.workbook.worksheets.getActiveWorksheet();
+        sheet.load("id");
+        const sel = context.workbook.getSelectedRange();
+        sel.load("address");
+        await context.sync();
+        const first = sel.address.split("!").pop().split(":")[0].replace(/\$/g, "");
+        const located = await findDracoRowsNamedRangeForCell(context, sheet.id, first);
+        if (!located) return;
+        const cell = sheet.getRange(first);
+        cell.format.load("indentLevel");
+        await context.sync();
+        const f = await resolveDracoFieldForAxisLevel(context, located.reportId, located.axis, located.level, cell.format.indentLevel);
+        if (!f || String(f.dim).toUpperCase() === "MEASURE") return;
+        target = { reportId: located.reportId, axis: located.axis, dim: f.dim, attr: f.attr, levelAttr: f.levelAttr };
+    });
+    if (!target) {
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.setAutoStatus) TaskPaneApp.setAutoStatus("La celda no es un campo de Filas/Columnas de un informe Draco.");
+        return;
+    }
+    if (typeof TaskPaneApp === "undefined" || !TaskPaneApp.fieldActionFromCell) return;
+    await TaskPaneApp.fieldActionFromCell(target, action);
+    if (action === "options" && Office.addin && Office.addin.showAsTaskpane) { try { await Office.addin.showAsTaskpane(); } catch (e) { /* nada */ } }
+}
+async function campoTotalesMostrar(event) {
+    try { await dracoFieldActionFromCell("totals:show"); }
+    catch (error) { console.error("Error en campoTotalesMostrar:", error); }
+    finally { if (event) event.completed(); }
+}
+async function campoTotalesOcultar(event) {
+    try { await dracoFieldActionFromCell("totals:hide"); }
+    catch (error) { console.error("Error en campoTotalesOcultar:", error); }
+    finally { if (event) event.completed(); }
+}
+async function campoMostrarID(event) {
+    try { await dracoFieldActionFromCell("mode:ID"); }
+    catch (error) { console.error("Error en campoMostrarID:", error); }
+    finally { if (event) event.completed(); }
+}
+async function campoMostrarIDTexto(event) {
+    try { await dracoFieldActionFromCell("mode:ID_TEXT"); }
+    catch (error) { console.error("Error en campoMostrarIDTexto:", error); }
+    finally { if (event) event.completed(); }
+}
+async function campoMostrarTexto(event) {
+    try { await dracoFieldActionFromCell("mode:TEXT"); }
+    catch (error) { console.error("Error en campoMostrarTexto:", error); }
+    finally { if (event) event.completed(); }
+}
+async function campoOpciones(event) {
+    try { await dracoFieldActionFromCell("options"); }
+    catch (error) { console.error("Error en campoOpciones:", error); }
+    finally { if (event) event.completed(); }
+}
+
 async function abrirAnadirFiltro(event) {
     if (dracoFilterDialogOpen) {
         console.warn("[Draco] Añadir filtro: ya hay un diálogo abierto; se ignora este segundo clic.");
@@ -11436,6 +11759,13 @@ try {
     Office.actions.associate("openFieldOptions", openFieldOptions);
     Office.actions.associate("abrirDistribuirValores", abrirDistribuirValores);
     Office.actions.associate("abrirAnadirFiltro", abrirAnadirFiltro);
+    Office.actions.associate("filtrarValoresSeleccionados", filtrarValoresSeleccionados);
+    Office.actions.associate("campoTotalesMostrar", campoTotalesMostrar);
+    Office.actions.associate("campoTotalesOcultar", campoTotalesOcultar);
+    Office.actions.associate("campoMostrarID", campoMostrarID);
+    Office.actions.associate("campoMostrarIDTexto", campoMostrarIDTexto);
+    Office.actions.associate("campoMostrarTexto", campoMostrarTexto);
+    Office.actions.associate("campoOpciones", campoOpciones);
     Office.actions.associate("abrirVariables", abrirVariables);
     Office.actions.associate("guardarPlanificacion", guardarPlanificacion);
     Office.actions.associate("guardarExcelEnBucket", guardarExcelEnBucket);

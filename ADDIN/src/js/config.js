@@ -11,7 +11,7 @@ const DracoConfig = {
     // solo se admita el servicio de autenticación (AUTH-BROKER).
     // Ponerlo a true solo en entornos de prueba.
     // ---------------------------------------------------------
-    allowSimpleOAuth: true,
+    allowSimpleOAuth: false,
 
     // ---------------------------------------------------------
     // Auditoría F-15: celdas de depuración de EDIT_REPORT (SQL, JSON de

@@ -139,7 +139,11 @@
             let lm;
 
             while ((lm = lvlRe.exec(m[2])) !== null) {
-                levels.push({ attribute: lm[1].trim() });
+                // "ATRIBUTO" o, en "ID y texto", "ATRIBUTO | texto: ATRIBUTO_TEXTO"
+                const parts = lm[1].split(/\s*\|\s*texto:\s*/);
+                const lvl = { attribute: parts[0].trim() };
+                if (parts[1] && parts[1].trim()) lvl.textAttribute = parts[1].trim();
+                levels.push(lvl);
             }
 
             if (levels.length > 0) {
@@ -211,7 +215,11 @@
             checkIdent(f.relDataset, "dataset", true);
             checkIdent(f.relTable, "tabla", true);
             (f.attributes || []).forEach(a => checkIdent(a.name, "atributo", false));
-            (f.hierarchies || []).forEach(h => (h.levels || []).forEach(l => checkIdent(l.attribute, "nivel de jerarquía", false)));
+            if (f.textAttribute !== undefined) checkIdent(f.textAttribute, "atributo de texto", true);
+            (f.hierarchies || []).forEach(h => (h.levels || []).forEach(l => {
+                checkIdent(l.attribute, "nivel de jerarquía", false);
+                if (l.textAttribute !== undefined) checkIdent(l.textAttribute, "atributo de texto", true);
+            }));
         });
     }
 
@@ -253,6 +261,7 @@
                 const attributes = parseAttributes(v.body);
                 const hierarchies = parseHierarchies(v.body);
                 const join = joins[v.name];
+                const textM = v.body.match(/#\s*texto de la clave:\s*(\S+)/);
 
                 return {
                     enabled: true,
@@ -262,7 +271,8 @@
                     relDataset: relTable.dataset,
                     relTable: relTable.table,
                     attributes: attributes,
-                    hierarchies: hierarchies
+                    hierarchies: hierarchies,
+                    textAttribute: textM ? textM[1] : ""
                 };
 
             });

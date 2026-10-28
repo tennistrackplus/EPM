@@ -34,7 +34,16 @@
 (function () {
 
     const SHAPE_NAME = "EPM_BusyIndicator";
-    const FRAME_MS = 150;
+    // En Excel Online cada Excel.run/sync es una ida y vuelta de red
+    // (cientos de ms). Con 150ms se acumulaban decenas de llamadas
+    // encoladas que frenaban el trabajo real (y el volcado del log a
+    // EDIT_REPORT) y hacían que el spinner "se congelara". Se espacia más
+    // en la web y, además, tick() no solapa llamadas (ver tickBusy).
+    const IS_WEB = (function () {
+        try { return Office.context.platform === Office.PlatformType.OfficeOnline; }
+        catch (e) { return false; }
+    })();
+    const FRAME_MS = IS_WEB ? 1200 : 150;
 
     // Spinner "círculo giratorio" — se ve como un circulito rotando, más
     // vistoso que | / - \ y con buen soporte de fuente en Windows/Mac.
@@ -102,11 +111,15 @@
     async function findShape(context) {
         if (!sheetName) return null;
         const sheet = context.workbook.worksheets.getItemOrNullObject(sheetName);
-        const shapes = sheet.shapes;
-        shapes.load("items/name");
+        sheet.load("isNullObject");
         await context.sync();
         if (sheet.isNullObject) return null; // la hoja se borró mientras tanto
-        return shapes.items.find(s => s.name === SHAPE_NAME) || null;
+        // Búsqueda directa por nombre (antes se cargaban TODOS los shapes
+        // de la hoja en cada llamada).
+        const shape = sheet.shapes.getItemOrNullObject(SHAPE_NAME);
+        shape.load("isNullObject");
+        await context.sync();
+        return shape.isNullObject ? null : shape;
     }
 
     // Duración mínima que se deja el indicador visible una vez creado,
@@ -116,7 +129,12 @@
     const MIN_VISIBLE_MS = 400;
     let shownAt = 0;
 
+    let tickInFlight = false;
     async function tick() {
+        // Sin solapes: si el tick anterior aún no ha vuelto de Excel, se
+        // salta este (evita la cola de Excel.run en Excel Online).
+        if (tickInFlight) return;
+        tickInFlight = true;
         frameIdx = (frameIdx + 1) % FRAMES.length;
         try {
             await Excel.run(async (context) => {
@@ -130,6 +148,8 @@
             // falla (p.ej. la hoja activa cambió a una protegida), se
             // reintenta en el siguiente; hide() limpia igualmente al acabar.
             console.warn("[BusyIndicator] No se pudo animar el indicador:", err);
+        } finally {
+            tickInFlight = false;
         }
     }
 
