@@ -6,7 +6,7 @@
     xsi:type="TaskPaneApp">
 
   <Id>b7e1a4d2-3c9f-4a2e-9b1a-1234567890ab</Id>
-  <Version>1.0.0.5</Version>
+  <Version>1.0.0.6</Version>
   <ProviderName>Draco BI</ProviderName>
   <DefaultLocale>es-ES</DefaultLocale>
 
@@ -308,6 +308,30 @@
 
                   <Action xsi:type="ExecuteFunction">
                     <FunctionName>actualizar</FunctionName>
+                  </Action>
+
+                </Control>
+
+
+                <!-- ACTUALIZAR TODOS (antes un icono en la cabecera del panel) -->
+
+                <Control xsi:type="Button" id="ActualizarTodosButton">
+
+                  <Label resid="ActualizarTodosButtonLabel"/>
+
+                  <Supertip>
+                    <Title resid="ActualizarTodosButtonLabel"/>
+                    <Description resid="ActualizarTodosButtonTooltip"/>
+                  </Supertip>
+
+                  <Icon>
+                    <bt:Image size="16" resid="ActualizarInforme16"/>
+                    <bt:Image size="32" resid="ActualizarInforme32"/>
+                    <bt:Image size="80" resid="ActualizarInforme80"/>
+                  </Icon>
+
+                  <Action xsi:type="ExecuteFunction">
+                    <FunctionName>actualizarTodos</FunctionName>
                   </Action>
 
                 </Control>
@@ -1229,6 +1253,7 @@
       <bt:ShortStrings>
 
         <bt:String id="FunctionsNamespace" DefaultValue="DRACO"/>
+        <bt:String id="ActualizarTodosButtonLabel" DefaultValue="Actualizar todos"><bt:Override Locale="en-US" Value="Refresh all"/></bt:String>
         <bt:String id="AnadirValorButtonLabel" DefaultValue="Añadir valor"><bt:Override Locale="en-US" Value="Add value"/></bt:String>
         <bt:String id="AnadirFormulaButtonLabel" DefaultValue="Añadir fórmula"><bt:Override Locale="en-US" Value="Add formula"/></bt:String>
         <bt:String id="TabLabel" DefaultValue="Draco BI"><bt:Override Locale="en-US" Value="Draco BI"/></bt:String>
@@ -1367,6 +1392,7 @@
           id="AcercaDeItemTooltip"
           DefaultValue="Información sobre Draco BI (próximamente)"><bt:Override Locale="en-US" Value="About Draco BI (coming soon)"/></bt:String>
 
+        <bt:String id="ActualizarTodosButtonTooltip" DefaultValue="Actualiza todos los informes del libro."><bt:Override Locale="en-US" Value="Refreshes all the reports in the workbook."/></bt:String>
         <bt:String id="AnadirValorButtonTooltip" DefaultValue="Abre el buscador de miembros en la celda seleccionada (igual que el doble clic). También en Excel online."><bt:Override Locale="en-US" Value="Opens the member search for the selected cell (same as double-click). Also in Excel online."/></bt:String>
         <bt:String id="AnadirFormulaButtonTooltip" DefaultValue="Añade o edita una línea calculada (EPM_FORMULA) en la celda seleccionada de un eje Estático."><bt:Override Locale="en-US" Value="Adds or edits a calculated line (EPM_FORMULA) in the selected cell of a Static axis."/></bt:String>
       </bt:LongStrings>
