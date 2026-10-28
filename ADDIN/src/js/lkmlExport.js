@@ -102,6 +102,9 @@
 
             lines.push(`view: ${dimId} {`);
             if (dimTable) lines.push(`  sql_table_name: \`${dimTable}\` ;;`);
+            // Dimensión sobre la tabla de hechos (sin JOIN): se marca para
+            // recuperarla igual al importar (nombre exacto de la columna).
+            if (!dim.relTable) lines.push(`  # draco: dimension de hechos: ${dim.name}`);
             lines.push("");
 
             if (attributes.length > 0) {
@@ -157,6 +160,7 @@
 
             const dimId = sanitize(dim.name);
             if (!dimId) return;
+            if (!dim.relTable) return; // dimensión de la tabla de hechos: sin join
 
             const attributes = (dim.attributes || []).filter(a => a.enabled);
             const keyAttr = attributes.find(a => a.isKey);

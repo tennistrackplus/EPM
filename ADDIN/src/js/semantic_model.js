@@ -142,6 +142,14 @@ function initEvents() {
 
     document.getElementById("btnCloseTreeModal").addEventListener("click", closeTreeModal);
 
+    // Dimensión sobre la TABLA DE HECHOS (sin JOIN) o sobre una tabla de dimensión
+    document.getElementById("dimSourceFact").addEventListener("change", () => setDimensionSource("FACT"));
+    document.getElementById("dimSourceTable").addEventListener("change", () => setDimensionSource("TABLE"));
+    document.getElementById("btnDimFactAdd").addEventListener("click", () => {
+        const sel = document.getElementById("dimFactAddColumn");
+        if (sel && sel.value) addFactColumnToDimension(currentConfigFieldIndex, sel.value);
+    });
+
     document.getElementById("btnSaveMeasureModal").addEventListener("click", saveMeasureModal);
 
     document.getElementById("btnCloseMeasureModal").addEventListener("click",()=>{
@@ -810,6 +818,18 @@ function selectFactTable(projectId, datasetId, tableId) {
         closeTreeModal();
         fetchFactFields(false);
     } else if (currentTreeTarget === "DIM") {
+        const factP = document.getElementById("factProject").value.trim();
+        const factD = document.getElementById("factDataset").value;
+        const factT = document.getElementById("factTable").value;
+        if (projectId === factP && datasetId === factD && tableId === factT) {
+            // Elegir la tabla de hechos como "tabla de dimensión" generaba un
+            // JOIN de la tabla consigo misma: se usa el modo sin JOIN.
+            closeTreeModal();
+            showToast("Es la tabla de hechos: la dimensión usa sus columnas directamente, sin JOIN.", "success");
+            setDimensionSource("FACT");
+            return;
+        }
+        releaseGroupedColumns(fieldsState[currentConfigFieldIndex]);
         document.getElementById("dimRelProject").value = projectId;
         document.getElementById("dimRelDataset").value = datasetId;
         document.getElementById("dimRelTable").value = tableId;
@@ -886,6 +906,14 @@ async function fetchFactFields(isModelLoad = false) {
                 };
             });
 
+            // Columnas agrupadas en una dimensión de la tabla de hechos: no
+            // son campos sueltos aunque el modelo guardado (o importado de un
+            // .lkml) no lo dijera.
+            groupedOwnersMap().forEach((owner, colName) => {
+                const col = fieldsState.find(f => f.name === colName);
+                if (col) col.enabled = false;
+            });
+
             renderFieldsTable();
             document.getElementById("fieldsCard").style.display = "block";
         }
@@ -899,10 +927,56 @@ function renderFieldsTable() {
     const list = document.getElementById("fieldsList");
     list.innerHTML = "";
 
+    // Orden de pintado: cada campo suelto y, justo debajo y sangradas, las
+    // columnas de la tabla de hechos agrupadas en él (si es una dimensión
+    // de la tabla de hechos). fieldsState no cambia de orden.
+    const owners = groupedOwnersMap();
+    const order = [];
     fieldsState.forEach((field, idx) => {
+        if (owners.has(field.name)) return;
+        order.push(idx);
+        fieldsState.forEach((child, cIdx) => {
+            if (owners.get(child.name) === field.name) order.push(cIdx);
+        });
+    });
+
+    order.forEach(idx => {
+        const field = fieldsState[idx];
+        const owner = owners.get(field.name) || "";
 
         const row = document.createElement("div");
         row.className = "field-row";
+        if (owner) {
+            row.classList.add("field-grouped");
+            row.title = `Columna de la dimensión ${owner}. Ábrela para quitarla del grupo.`;
+        }
+
+        // Arrastrar un campo sobre una dimensión de la tabla de hechos lo
+        // añade como atributo de esa dimensión (ver addFactColumnToDimension).
+        row.draggable = !owner;
+        row.addEventListener("dragstart", (e) => {
+            draggedFieldIndex = idx;
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("text/plain", field.name);
+        });
+        row.addEventListener("dragend", () => {
+            draggedFieldIndex = null;
+            list.querySelectorAll(".drop-target").forEach(r => r.classList.remove("drop-target"));
+        });
+        row.addEventListener("dragover", (e) => {
+            if (draggedFieldIndex === null || !canGroupInto(idx, draggedFieldIndex)) return;
+            e.preventDefault();
+            row.classList.add("drop-target");
+        });
+        row.addEventListener("dragleave", () => row.classList.remove("drop-target"));
+        row.addEventListener("drop", (e) => {
+            e.preventDefault();
+            row.classList.remove("drop-target");
+            const from = draggedFieldIndex;
+            draggedFieldIndex = null;
+            if (from === null || !canGroupInto(idx, from)) return;
+            addFactColumnToDimension(idx, fieldsState[from].name);
+        });
 
         // SEGURIDAD: field.alias es texto libre editado por el usuario (y
         // field.name puede venir de un modelo importado desde un repo Git
@@ -951,12 +1025,36 @@ function renderFieldsTable() {
         arrowDiv.className = "field-arrow";
         arrowDiv.textContent = "\u203a"; // ›
 
+        if (owner) {
+            enableInput.disabled = true;
+            typeSelect.disabled = true;
+        }
+
         row.appendChild(enableInput);
         row.appendChild(typeSelect);
         row.appendChild(fieldInfo);
+
+        // Dimensión de la tabla de hechos con columnas agrupadas: nº de atributos
+        const groupedCount = (!owner && isFactDimension(field))
+            ? (field.attributes || []).filter(a => a.name !== field.name).length : 0;
+        if (groupedCount > 0) {
+            const badge = document.createElement("span");
+            badge.className = "field-group-badge";
+            badge.textContent = `+${groupedCount}`;
+            badge.title = "Columnas de la tabla de hechos agrupadas en esta dimensión";
+            row.appendChild(badge);
+        }
+
         row.appendChild(arrowDiv);
 
-        row.onclick = () => openConfigModal(idx);
+        row.onclick = () => {
+            if (owner) {
+                const ownerIdx = fieldsState.findIndex(f => f.name === owner);
+                if (ownerIdx >= 0) openConfigModal(ownerIdx);
+                return;
+            }
+            openConfigModal(idx);
+        };
 
         list.appendChild(row);
 
@@ -965,7 +1063,17 @@ function renderFieldsTable() {
 }
 
 function updateFieldAlias(index, val) { fieldsState[index].alias = val; }
-function updateFieldType(index, val) { fieldsState[index].type = val; }
+function updateFieldType(index, val) {
+    const field = fieldsState[index];
+    if (val !== "DIMENSION" && isFactDimension(field)) releaseGroupedColumns(field);
+    field.type = val;
+    if (val !== "DIMENSION" && (field.attributes || []).some(a => a.name !== field.name)) {
+        field.attributes = [];
+        field.hierarchies = [];
+        field.textAttribute = "";
+    }
+    renderFieldsTable();
+}
 function updateFieldEnabled(index, val) { fieldsState[index].enabled = val; }
 
 function openConfigModal(index) {
@@ -997,10 +1105,15 @@ function openConfigModal(index) {
 
         if (proj && ds && tbl) {
             document.getElementById("dimRelFullConcat").value = `${proj}.${ds}.${tbl}`;
+            showDimensionSourceUI("TABLE");
             fetchDimensionAttributes(false);
         } else {
+            // Sin tabla de dimensión: la dimensión vive en la tabla de hechos.
             document.getElementById("dimRelFullConcat").value = "";
-            document.getElementById("attributesContainer").style.display = "none";
+            ensureFactAttributes(field);
+            showDimensionSourceUI("FACT");
+            renderAttributesTable(field.attributes);
+            document.getElementById("attributesContainer").style.display = "block";
         }
 
         renderHierarchiesList();
@@ -1161,6 +1274,19 @@ function renderAttributesTable(attributes) {
         row.appendChild(keyLabel);
         row.appendChild(textLabel);
 
+        // Dimensión de la tabla de hechos: se puede sacar una columna del
+        // grupo (vuelve a la lista de campos como campo suelto). La columna
+        // propia de la dimensión no se puede quitar.
+        if (isFactDimension(field) && attr.name !== field.name) {
+            const rm = document.createElement("button");
+            rm.type = "button";
+            rm.className = "attr-remove-btn";
+            rm.title = "Quitar de la dimensión";
+            rm.textContent = "\u2715";
+            rm.addEventListener("click", (e) => { e.stopPropagation(); removeFactColumnFromDimension(field, attr.name); });
+            row.appendChild(rm);
+        }
+
         list.appendChild(row);
 
     });
@@ -1212,6 +1338,205 @@ function updateAttrText(idx, checked) {
     const field = fieldsState[currentConfigFieldIndex];
     field.textAttribute = checked ? field.attributes[idx].name : "";
     renderAttributesTable(field.attributes);
+}
+
+/* =====================================================================
+ * DIMENSIONES SOBRE LA TABLA DE HECHOS (sin JOIN)
+ *
+ * Una dimensión sin tabla de dimensión (relTable vacío) lee sus atributos
+ * de la propia tabla de hechos: el SQL los usa como f.<columna>, sin JOIN
+ * (ver getTableAlias en commands.js). Sus atributos son columnas de la
+ * tabla de hechos: la propia columna de la dimensión (clave) y las que se
+ * agrupen en ella (p. ej. SOC + SOC_N1, SOC_N2, SOC_N3), con las que se
+ * pueden crear jerarquías igual que en una tabla de dimensión.
+ * Las columnas agrupadas dejan de ser campos sueltos (enabled = false) y se
+ * pintan sangradas bajo su dimensión. Que una columna está agrupada se
+ * deduce de los atributos, no se guarda aparte.
+ * ===================================================================== */
+
+let draggedFieldIndex = null;
+
+function isFactDimension(field) {
+    return !!field && field.type === "DIMENSION" && !field.relTable;
+}
+
+/** Map nombreColumna -> nombreDimensión de las columnas agrupadas. */
+function groupedOwnersMap() {
+    const names = new Set(fieldsState.map(f => f.name));
+    const map = new Map();
+    fieldsState.forEach(dim => {
+        if (!isFactDimension(dim)) return;
+        (dim.attributes || []).forEach(a => {
+            if (a.name !== dim.name && names.has(a.name) && !map.has(a.name)) map.set(a.name, dim.name);
+        });
+    });
+    return map;
+}
+
+/** Atributos iniciales de una dimensión de la tabla de hechos: su propia columna como clave. */
+function ensureFactAttributes(field) {
+    if (!field || (field.attributes && field.attributes.length > 0)) return;
+    field.attributes = [{
+        name: field.name,
+        alias: field.alias || field.name,
+        dataType: field.dataType,
+        isKey: true,
+        enabled: true
+    }];
+}
+
+function canGroupInto(targetIdx, sourceIdx) {
+    if (targetIdx === sourceIdx) return false;
+    const target = fieldsState[targetIdx];
+    const source = fieldsState[sourceIdx];
+    if (!target || !source || !isFactDimension(target) || !target.enabled) return false;
+    if (groupedOwnersMap().has(target.name)) return false; // una columna agrupada no recibe otras
+    // Una dimensión que ya agrupa columnas no se mete dentro de otra
+    if (isFactDimension(source) && (source.attributes || []).some(a => a.name !== source.name)) return false;
+    return !(target.attributes || []).some(a => a.name === source.name);
+}
+
+function addFactColumnToDimension(dimIdx, columnName) {
+    const dim = fieldsState[dimIdx];
+    const col = fieldsState.find(f => f.name === columnName);
+    if (!dim || !col || !isFactDimension(dim)) {
+        showToast("Solo se pueden agrupar columnas en una dimensión de la tabla de hechos.", "error");
+        return;
+    }
+    const srcIdx = fieldsState.indexOf(col);
+    if (!canGroupInto(dimIdx, srcIdx)) {
+        showToast(`No se puede añadir ${columnName} a ${dim.name}.`, "error");
+        return;
+    }
+    // Si estaba en otra dimensión de la tabla de hechos, sale de ella
+    const prevOwner = groupedOwnersMap().get(columnName);
+    if (prevOwner) {
+        const prev = fieldsState.find(f => f.name === prevOwner);
+        if (prev) dropAttributeFromField(prev, columnName);
+    }
+    ensureFactAttributes(dim);
+    dim.attributes.push({
+        name: col.name,
+        alias: col.alias || col.name,
+        dataType: col.dataType,
+        isKey: false,
+        enabled: true
+    });
+    // Ya no es un campo suelto del modelo: vive dentro de la dimensión
+    col.enabled = false;
+    col.type = "DIMENSION";
+
+    renderFieldsTable();
+    if (currentConfigFieldIndex === dimIdx && document.getElementById("dimensionModal").style.display === "block") {
+        renderAttributesTable(dim.attributes);
+        renderHierarchiesList();
+        refreshFactAddSelect(dim);
+    }
+    showToast(`${col.name} añadido a la dimensión ${dim.name}.`, "success");
+}
+
+/** Quita un atributo de una dimensión y lo limpia de sus jerarquías y del texto. */
+function dropAttributeFromField(field, attrName) {
+    field.attributes = (field.attributes || []).filter(a => a.name !== attrName);
+    if (field.textAttribute === attrName) field.textAttribute = "";
+    field.hierarchies = (field.hierarchies || [])
+        .map(h => ({
+            name: h.name,
+            levels: (h.levels || []).filter(l => l.attribute !== attrName)
+                .map(l => (l.textAttribute === attrName ? { attribute: l.attribute } : l))
+        }))
+        .filter(h => h.levels.length > 0);
+}
+
+function removeFactColumnFromDimension(field, columnName) {
+    if (!field || columnName === field.name) return;
+    dropAttributeFromField(field, columnName);
+    const col = fieldsState.find(f => f.name === columnName);
+    if (col) col.enabled = true; // vuelve a ser un campo suelto
+    renderAttributesTable(field.attributes);
+    renderHierarchiesList();
+    refreshFactAddSelect(field);
+    renderFieldsTable();
+}
+
+/** Al pasar la dimensión a una tabla de dimensión, sus columnas agrupadas vuelven a ser campos sueltos. */
+function releaseGroupedColumns(field) {
+    if (!isFactDimension(field)) return;
+    (field.attributes || []).forEach(a => {
+        if (a.name === field.name) return;
+        const col = fieldsState.find(f => f.name === a.name);
+        if (col) col.enabled = true;
+    });
+}
+
+/** Desplegable "+ Añadir columna": columnas de la tabla de hechos aún libres. */
+function refreshFactAddSelect(field) {
+    const sel = document.getElementById("dimFactAddColumn");
+    if (!sel || !field) return;
+    sel.innerHTML = "";
+    const owners = groupedOwnersMap();
+    const used = new Set((field.attributes || []).map(a => a.name));
+    const candidates = fieldsState.filter(f => f !== field && !used.has(f.name)
+        && !owners.has(f.name)
+        && !(isFactDimension(f) && (f.attributes || []).some(a => a.name !== f.name)));
+    const first = document.createElement("option");
+    first.value = "";
+    first.textContent = candidates.length ? "(elige una columna)" : "(no quedan columnas libres)";
+    sel.appendChild(first);
+    candidates.forEach(f => {
+        const o = document.createElement("option");
+        o.value = f.name;
+        o.textContent = f.name + (f.type === "MEASURE" ? "  · medida" : "") + (f.enabled ? "" : "  · deshabilitado");
+        sel.appendChild(o);
+    });
+}
+
+/** Muestra los controles de un origen sin tocar el modelo. */
+function showDimensionSourceUI(source) {
+    const isFact = source === "FACT";
+    document.getElementById("dimSourceFact").checked = isFact;
+    document.getElementById("dimSourceTable").checked = !isFact;
+    document.getElementById("dimTableSelector").style.display = isFact ? "none" : "";
+    document.getElementById("dimFactAddRow").style.display = isFact ? "flex" : "none";
+    if (isFact) refreshFactAddSelect(fieldsState[currentConfigFieldIndex]);
+}
+
+/** Cambia el origen de los atributos de la dimensión abierta. */
+function setDimensionSource(source) {
+    const field = fieldsState[currentConfigFieldIndex];
+    if (!field) return;
+
+    if (source === "FACT") {
+        if (field.relTable) {
+            // Los atributos y jerarquías de la tabla de dimensión no existen en la de hechos
+            field.relProject = "";
+            field.relDataset = "";
+            field.relTable = "";
+            field.attributes = [];
+            field.hierarchies = [];
+            field.textAttribute = "";
+        }
+        document.getElementById("dimRelProject").value = "";
+        document.getElementById("dimRelDataset").value = "";
+        document.getElementById("dimRelTable").value = "";
+        document.getElementById("dimRelFullConcat").value = "";
+        ensureFactAttributes(field);
+        showDimensionSourceUI("FACT");
+        renderAttributesTable(field.attributes);
+        document.getElementById("attributesContainer").style.display = "block";
+        renderHierarchiesList();
+        renderFieldsTable();
+        return;
+    }
+
+    // TABLE: hasta elegir la tabla no se toca el modelo (si se cierra sin
+    // elegir, la dimensión sigue en la tabla de hechos).
+    showDimensionSourceUI("TABLE");
+    if (!field.relTable) {
+        document.getElementById("dimRelProject").value = document.getElementById("factProject").value;
+        document.getElementById("dimRelDataset").value = document.getElementById("factDataset").value;
+        openTreeModal("DIM");
+    }
 }
 
 function saveDimModal() {

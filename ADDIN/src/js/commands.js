@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-28-merge";
+const DRACO_BUILD = "2026-10-28-inc123";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -1889,6 +1889,23 @@ function buildFrom(measuresGrid, measureNameOverride, relGrid) {
                     cellValue(relGrid, R, 5)
                 ) + " f";
             }
+        }
+        // Solo dimensiones de la propia tabla de hechos (sin JOIN, ver
+        // getTableAlias): no hay relación de la que sacar la tabla; se usa la
+        // tabla de hechos del modelo (la de sus medidas o, si no tiene, la
+        // declarada en el modelo activo).
+        if (measuresGrid && lastRowInColumnValues(measuresGrid, 1) >= 2 && cellValue(measuresGrid, 2, 5)) {
+            return "FROM " + Provider.qualify(
+                cellValue(measuresGrid, 2, 3),
+                cellValue(measuresGrid, 2, 4),
+                cellValue(measuresGrid, 2, 5)
+            ) + " f";
+        }
+        const sms = window.SemanticModelStore;
+        const active = sms && sms.getActiveModelName && sms.getActiveModelName();
+        const fact = active && sms.getModel(active) && sms.getModel(active).fact;
+        if (fact && fact.table) {
+            return "FROM " + Provider.qualify(fact.project, fact.dataset, fact.table) + " f";
         }
         throw new Error("No se encuentra la tabla de hechos de las dimensiones del informe (MODEL_RELATIONSHIP).");
     }

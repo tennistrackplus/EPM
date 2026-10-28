@@ -262,14 +262,20 @@
                 const hierarchies = parseHierarchies(v.body);
                 const join = joins[v.name];
                 const textM = v.body.match(/#\s*texto de la clave:\s*(\S+)/);
+                // Dimensión de la tabla de hechos (sin JOIN): marca explícita o,
+                // en ficheros antiguos, vista sobre la propia tabla de hechos sin join.
+                const factDimM = v.body.match(/#\s*draco:\s*dimension de hechos:\s*(\S+)/);
+                const sameAsFact = !join && relTable.table && relTable.table === fact.table
+                    && relTable.dataset === fact.dataset && relTable.project === fact.project;
+                const onFact = !!factDimM || sameAsFact;
 
                 return {
                     enabled: true,
                     type: "DIMENSION",
-                    name: join ? join.factField : v.name,
-                    relProject: relTable.project,
-                    relDataset: relTable.dataset,
-                    relTable: relTable.table,
+                    name: factDimM ? factDimM[1] : (join ? join.factField : v.name),
+                    relProject: onFact ? "" : relTable.project,
+                    relDataset: onFact ? "" : relTable.dataset,
+                    relTable: onFact ? "" : relTable.table,
                     attributes: attributes,
                     hierarchies: hierarchies,
                     textAttribute: textM ? textM[1] : ""

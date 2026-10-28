@@ -1088,7 +1088,7 @@ const TaskPaneApp = {
         const zone = document.querySelector(`.zone-card[data-zone="${zoneId}"]`);
         if (!zone) return;
         zone.classList.toggle("zone-locked", locked);
-        zone.querySelectorAll(".dropped-tag").forEach(tag => { tag.draggable = !locked; });
+        zone.querySelectorAll(".dropped-tag, .measure-group").forEach(tag => { tag.draggable = !locked; });
     },
 
     isZoneLocked(zoneId) {
@@ -1589,7 +1589,19 @@ const TaskPaneApp = {
         // está arrastrando una tag ya colocada (sourceTag), no un campo
         // nuevo desde la lista de la izquierda.
         const dragged = this.draggedElementData;
-        if (dragged && dragged.sourceTag && dragged.sourceZone === zoneId) {
+        if (dragged && dragged.isMeasureBlock && dragged.sourceZone === zoneId) {
+            // Bloque "Σ Medidas" completo: se coloca entre las dimensiones
+            // del eje (encima o debajo de cualquiera de ellas).
+            const dropzoneContent = e.currentTarget.querySelector(".dropzone-content");
+            if (dropzoneContent) {
+                const afterElement = this.getDragAfterElement(dropzoneContent, e.clientY);
+                if (afterElement == null) {
+                    dropzoneContent.appendChild(dragged.sourceTag);
+                } else if (afterElement !== dragged.sourceTag) {
+                    dropzoneContent.insertBefore(dragged.sourceTag, afterElement);
+                }
+            }
+        } else if (dragged && dragged.sourceTag && dragged.sourceZone === zoneId) {
             const dropzoneContent = e.currentTarget.querySelector(".dropzone-content");
             if (dropzoneContent) {
                 // Una medida se reordena SOLO dentro de su propio grupo
@@ -1616,7 +1628,9 @@ const TaskPaneApp = {
     // colarse dentro del grupo de medidas al reordenar dimensiones sueltas,
     // ni al revés.
     getDragAfterElement(container, y) {
-        const elements = [...container.querySelectorAll(":scope > .dropped-tag:not(.dragging)")];
+        // El bloque "Σ Medidas" cuenta como un elemento más: una dimensión
+        // puede quedar encima o debajo de él, y el bloque entre dimensiones.
+        const elements = [...container.querySelectorAll(":scope > .dropped-tag:not(.dragging), :scope > .measure-group:not(.dragging)")];
         return elements.reduce((closest, child) => {
             const box = child.getBoundingClientRect();
             const offset = y - box.top - box.height / 2;
@@ -1643,7 +1657,25 @@ const TaskPaneApp = {
             group = document.createElement("div");
             group.className = "measure-group";
             group.dataset.zone = zoneId;
-            group.innerHTML = `<div class="measure-group-title">Σ Medidas</div><div class="measure-group-content"></div>`;
+            group.innerHTML = `<div class="measure-group-title" title="Arrastra para mover todas las medidas">Σ Medidas</div><div class="measure-group-content"></div>`;
+            // El bloque entero se arrastra (desde su título o su borde): se
+            // recoloca entre las dimensiones del eje o pasa al otro eje con
+            // todas sus medidas. Cada medida sigue arrastrándose sola dentro
+            // del bloque (su dragstart para la propagación).
+            group.draggable = !this.isZoneLocked(zoneId);
+            group.addEventListener("dragstart", (e) => {
+                const zone = group.dataset.zone;
+                this.draggedElementData = {
+                    data: { dim: "MEASURE", name: "", isHierarchy: false },
+                    sourceTag: group,
+                    sourceZone: zone,
+                    isMeasureBlock: true
+                };
+                group.classList.add("dragging");
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", "draco-measure-block");
+            });
+            group.addEventListener("dragend", () => group.classList.remove("dragging"));
             dropzoneContent.appendChild(group);
         }
         return group.querySelector(".measure-group-content");
@@ -1715,8 +1747,23 @@ const TaskPaneApp = {
         }
         if (!this.draggedElementData) return;
 
-        const { data, sourceTag, sourceZone } = this.draggedElementData;
+        const { data, sourceTag, sourceZone, isMeasureBlock } = this.draggedElementData;
         const targetContent = dropzoneBox.querySelector(".dropzone-content");
+
+        if (isMeasureBlock) {
+            this.draggedElementData = null;
+            if (sourceZone === zoneId) {
+                this.syncStateOrderFromDom(zoneId, targetContent);
+                return;
+            }
+            if (zoneId !== "rows" && zoneId !== "columns") {
+                this.flashZoneWarning(zoneId, "El bloque de medidas solo puede ir a Filas o Columnas.");
+                return;
+            }
+            if (this.isZoneLocked(sourceZone)) return;
+            this.moveMeasureBlock(sourceZone, zoneId);
+            return;
+        }
 
         if (sourceZone === zoneId) {
             // Mismo eje: handleDragOver ya reordenó la tag en el DOM en
@@ -1744,6 +1791,21 @@ const TaskPaneApp = {
             return;
         }
 
+        // Dimensiones entre Filtros y Filas/Columnas: se COPIAN (el campo
+        // sigue donde estaba y además aparece en el destino). Así un filtro
+        // no se pierde al llevar la dimensión a Filas, ni al revés. Las
+        // medidas, y los movimientos entre Filas y Columnas, siguen moviendo.
+        const crossesFilters = !!sourceZone && ((sourceZone === "filters") !== (zoneId === "filters"));
+        if (sourceTag && crossesFilters && !this.isMeasureField(data)) {
+            if (this.listForZone(zoneId).some(x => x.dimension === data.dim && x.name === data.name)) {
+                this.flashZoneWarning(zoneId, "Ese campo ya está en esta zona.");
+            } else {
+                this.addField(targetContent, zoneId, data);
+            }
+            this.draggedElementData = null;
+            return;
+        }
+
         if (sourceTag) {
             sourceTag.remove();
             this.removeFromState(sourceZone, data);
@@ -1756,6 +1818,73 @@ const TaskPaneApp = {
         this.addField(targetContent, zoneId, data);
 
         this.draggedElementData = null;
+    },
+
+    /**
+     * Mueve TODAS las medidas de un eje al otro (arrastrando el bloque
+     * "Σ Medidas"), en el mismo orden, al final del eje de destino.
+     */
+    moveMeasureBlock(fromZone, toZone) {
+        const fromContent = document.querySelector(`.zone-card[data-zone="${fromZone}"] .dropzone-content`);
+        const toContent = document.querySelector(`.zone-card[data-zone="${toZone}"] .dropzone-content`);
+        if (!fromContent || !toContent) return;
+        const measures = this.listForZone(fromZone)
+            .filter(x => String(x.dimension).toUpperCase() === "MEASURE")
+            .map(x => ({ dim: x.dimension, name: x.name, isHierarchy: x.isHierarchy }));
+        if (!measures.length) return;
+        measures.forEach(m => {
+            const tag = [...fromContent.querySelectorAll(".dropped-tag")]
+                .find(t => t.dataset.dim === m.dim && t.dataset.fieldName === m.name);
+            if (tag) tag.remove();
+            this.removeFromState(fromZone, m);
+        });
+        this.cleanupMeasureGroup(fromContent);
+        measures.forEach(m => this.addField(toContent, toZone, m));
+    },
+
+    /** Vuelve a pintar la zona Filtros a partir de this.state.filters. */
+    rerenderFiltersZone() {
+        const filtersContent = document.querySelector('.zone-card[data-zone="filters"] .dropzone-content');
+        if (!filtersContent) return;
+        filtersContent.innerHTML = "";
+        this.state.filters.forEach(f => this.renderTag(filtersContent, "filters", f));
+        if (this.renderLockedFilterTags) this.renderLockedFilterTags(filtersContent);
+    },
+
+    /**
+     * Doble clic en una dimensión de Filas/Columnas: abre el mismo diálogo
+     * de filtro que en la zona Filtros y guarda la selección EN Filtros
+     * (crea el filtro si no estaba; si ya estaba, lo sustituye). El campo
+     * sigue en Filas/Columnas.
+     */
+    async openFilterForAxisField(entry) {
+        if (typeof FilterModal === "undefined" || !FilterModal.open) return;
+        const same = f => f.dimension === entry.dimension && f.name === entry.name;
+        const existing = this.state.filters.find(same);
+        const result = await FilterModal.open({
+            dim: entry.dimension,
+            name: entry.name,
+            isHierarchy: entry.isHierarchy,
+            currentFilter: existing ? existing.filter : null
+        });
+        if (!result) return;
+        if (existing) {
+            existing.filter = result;
+            if (!existing.isHierarchy) existing.realAttribute = result.attribute || existing.name;
+            this.rerenderFiltersZone();
+            this.scheduleAutoUpdate();
+        } else {
+            const filtersContent = document.querySelector('.zone-card[data-zone="filters"] .dropzone-content');
+            if (!filtersContent) return;
+            this.addField(filtersContent, "filters", { dim: entry.dimension, name: entry.name, isHierarchy: entry.isHierarchy });
+            const added = this.state.filters.find(same);
+            if (added) {
+                added.filter = result;
+                if (!added.isHierarchy) added.realAttribute = result.attribute || added.name;
+            }
+            this.rerenderFiltersZone();
+            this.scheduleAutoUpdate();
+        }
     },
 
     // Reconstruye this.state.<zona> en el mismo orden en que han quedado
@@ -1950,6 +2079,17 @@ const TaskPaneApp = {
             this.removeFromState(zoneId, { dim: entry.dimension, name: entry.name });
             if (zoneId === "rows" || zoneId === "columns") this.cleanupMeasureGroup(container);
         });
+
+        // Doble clic en una dimensión de Filas/Columnas: filtro sobre ella
+        // (se guarda en la zona Filtros, ver openFilterForAxisField).
+        if ((zoneId === "rows" || zoneId === "columns") && !isMeasure) {
+            tag.title = "Doble clic: filtrar este campo";
+            tag.addEventListener("dblclick", (e) => {
+                if (e.target.closest(".dropped-tag-remove")) return;
+                e.stopPropagation();
+                this.openFilterForAxisField(entry);
+            });
+        }
 
         // Clic derecho (Filas/Columnas): Mostrar → ID / ID y descripción, si el
         // campo es la clave de una dimensión con texto, o una jerarquía.
