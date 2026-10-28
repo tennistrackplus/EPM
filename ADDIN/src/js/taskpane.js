@@ -1407,13 +1407,27 @@ const TaskPaneApp = {
             console.error("Error al añadir el informe:", err);
             alert("Error al añadir el informe: " + (err.message || err));
         } finally {
-            if (btn) { btn.disabled = false; btn.innerText = "Añadir informe"; }
+            if (btn) { btn.disabled = false; btn.innerText = "+ Informe"; }
         }
     },
 
     /* -------------------------------------------------------------
      * Lista de campos disponibles (izquierda)
      * ----------------------------------------------------------- */
+    /**
+     * Al volver a «Editar informes» (p. ej. desde el modelo semántico): vuelve
+     * a leer los modelos y los campos de dimensiones del informe actual, por
+     * si el modelo semántico ha cambiado.
+     */
+    async refreshSemanticFields() {
+        try {
+            await this.populateModelSelectorMain();
+            await this.loadFields();
+        } catch (e) {
+            console.warn("[Draco] No se pudieron recargar los campos del modelo:", e);
+        }
+    },
+
     async loadFields() {
         const container = document.getElementById("availableFieldsContainer");
         if (!container) return;
@@ -2567,6 +2581,8 @@ const TaskPaneApp = {
         const container = document.querySelector(".taskpane-container");
         const btn = document.getElementById("btnFieldOptions");
         if (container) container.classList.toggle("field-options-open", open);
+        // Más ancho con las propiedades del campo a la vista; normal al cerrarlas
+        if (window.dracoSetTaskpaneWidth) window.dracoSetTaskpaneWidth(open ? "wide" : "normal");
         if (btn) btn.classList.toggle("toggle-active", open);
         if (!open) this.selectedFieldForOptions = null;
         this.updateRibbonToggleLabel("BtnOpcionesCampo", "Opciones de campo", open);

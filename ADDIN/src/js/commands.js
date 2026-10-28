@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-28-xlam-min";
+const DRACO_BUILD = "2026-10-28-diseno";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -12055,6 +12055,7 @@ try {
     Office.actions.associate("abrirDistribuirValores", abrirDistribuirValores);
     Office.actions.associate("abrirAnadirFiltro", abrirAnadirFiltro);
     Office.actions.associate("filtrarValoresSeleccionados", filtrarValoresSeleccionados);
+    Office.actions.associate("actualizarTodos", actualizarTodos);
     Office.actions.associate("anadirValor", anadirValor);
     Office.actions.associate("anadirFormula", anadirFormula);
     Office.actions.associate("campoTotalesMostrar", campoTotalesMostrar);
