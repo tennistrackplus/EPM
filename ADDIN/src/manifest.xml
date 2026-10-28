@@ -6,7 +6,7 @@
     xsi:type="TaskPaneApp">
 
   <Id>b7e1a4d2-3c9f-4a2e-9b1a-1234567890ab</Id>
-  <Version>1.0.0.3</Version>
+  <Version>1.0.0.4</Version>
   <ProviderName>Draco BI</ProviderName>
   <DefaultLocale>es-ES</DefaultLocale>
 
@@ -731,6 +731,123 @@
 
                   </Item>
 
+                  <Item id="FiltrarValoresSeleccionadosContextItem">
+
+                    <Label resid="FiltrarValoresSelLabel"/>
+
+                    <Supertip>
+                      <Title resid="FiltrarValoresSelLabel"/>
+                      <Description resid="FiltrarValoresSelTooltip"/>
+                    </Supertip>
+
+                    <Icon>
+                      <bt:Image size="16" resid="AnadirFiltro16"/>
+                      <bt:Image size="32" resid="AnadirFiltro32"/>
+                      <bt:Image size="80" resid="AnadirFiltro80"/>
+                    </Icon>
+
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>filtrarValoresSeleccionados</FunctionName>
+                    </Action>
+
+                  </Item>
+
+                  <Item id="campoTotalesMostrarContextItem">
+                    <Label resid="campoTotalesMostrarLabel"/>
+                    <Supertip>
+                      <Title resid="campoTotalesMostrarLabel"/>
+                      <Description resid="campoTotalesMostrarTip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="AnadirFiltro16"/>
+                      <bt:Image size="32" resid="AnadirFiltro32"/>
+                      <bt:Image size="80" resid="AnadirFiltro80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>campoTotalesMostrar</FunctionName>
+                    </Action>
+                  </Item>
+
+                  <Item id="campoTotalesOcultarContextItem">
+                    <Label resid="campoTotalesOcultarLabel"/>
+                    <Supertip>
+                      <Title resid="campoTotalesOcultarLabel"/>
+                      <Description resid="campoTotalesOcultarTip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="AnadirFiltro16"/>
+                      <bt:Image size="32" resid="AnadirFiltro32"/>
+                      <bt:Image size="80" resid="AnadirFiltro80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>campoTotalesOcultar</FunctionName>
+                    </Action>
+                  </Item>
+
+                  <Item id="campoMostrarIDContextItem">
+                    <Label resid="campoMostrarIDLabel"/>
+                    <Supertip>
+                      <Title resid="campoMostrarIDLabel"/>
+                      <Description resid="campoMostrarIDTip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="AnadirFiltro16"/>
+                      <bt:Image size="32" resid="AnadirFiltro32"/>
+                      <bt:Image size="80" resid="AnadirFiltro80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>campoMostrarID</FunctionName>
+                    </Action>
+                  </Item>
+
+                  <Item id="campoMostrarIDTextoContextItem">
+                    <Label resid="campoMostrarIDTextoLabel"/>
+                    <Supertip>
+                      <Title resid="campoMostrarIDTextoLabel"/>
+                      <Description resid="campoMostrarIDTextoTip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="AnadirFiltro16"/>
+                      <bt:Image size="32" resid="AnadirFiltro32"/>
+                      <bt:Image size="80" resid="AnadirFiltro80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>campoMostrarIDTexto</FunctionName>
+                    </Action>
+                  </Item>
+
+                  <Item id="campoMostrarTextoContextItem">
+                    <Label resid="campoMostrarTextoLabel"/>
+                    <Supertip>
+                      <Title resid="campoMostrarTextoLabel"/>
+                      <Description resid="campoMostrarTextoTip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="AnadirFiltro16"/>
+                      <bt:Image size="32" resid="AnadirFiltro32"/>
+                      <bt:Image size="80" resid="AnadirFiltro80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>campoMostrarTexto</FunctionName>
+                    </Action>
+                  </Item>
+
+                  <Item id="campoOpcionesContextItem">
+                    <Label resid="campoOpcionesLabel"/>
+                    <Supertip>
+                      <Title resid="campoOpcionesLabel"/>
+                      <Description resid="campoOpcionesTip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="AnadirFiltro16"/>
+                      <bt:Image size="32" resid="AnadirFiltro32"/>
+                      <bt:Image size="80" resid="AnadirFiltro80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>campoOpciones</FunctionName>
+                    </Action>
+                  </Item>
+
                 </Items>
 
               </Control>
@@ -1011,6 +1128,13 @@
         <bt:String id="ReconMiembrosLabel" DefaultValue="Reconoc. de miembros"><bt:Override Locale="en-US" Value="Member recognition"/></bt:String>
         <bt:String id="DistribuirValoresButtonLabel" DefaultValue="Distribuir valores"><bt:Override Locale="en-US" Value="Distribute values"/></bt:String>
         <bt:String id="AnadirFiltroButtonLabel" DefaultValue="Añadir filtro"><bt:Override Locale="en-US" Value="Add filter"/></bt:String>
+        <bt:String id="campoTotalesMostrarLabel" DefaultValue="Totales: mostrar"><bt:Override Locale="en-US" Value="Totals: show"/></bt:String>
+        <bt:String id="campoTotalesOcultarLabel" DefaultValue="Totales: ocultar"><bt:Override Locale="en-US" Value="Totals: hide"/></bt:String>
+        <bt:String id="campoMostrarIDLabel" DefaultValue="Mostrar: ID"><bt:Override Locale="en-US" Value="Show: ID"/></bt:String>
+        <bt:String id="campoMostrarIDTextoLabel" DefaultValue="Mostrar: ID y descripción"><bt:Override Locale="en-US" Value="Show: ID and description"/></bt:String>
+        <bt:String id="campoMostrarTextoLabel" DefaultValue="Mostrar: descripción"><bt:Override Locale="en-US" Value="Show: description"/></bt:String>
+        <bt:String id="campoOpcionesLabel" DefaultValue="Opciones del campo (niveles, expandir)…"><bt:Override Locale="en-US" Value="Field options (levels, expand)…"/></bt:String>
+        <bt:String id="FiltrarValoresSelLabel" DefaultValue="Filtrar valores seleccionados"><bt:Override Locale="en-US" Value="Filter selected values"/></bt:String>
 
         <bt:String id="InformeGroupLabel" DefaultValue="Informe"><bt:Override Locale="en-US" Value="Report"/></bt:String>
         <bt:String id="CopiarInformeButtonLabel" DefaultValue="Copiar informe"><bt:Override Locale="en-US" Value="Copy report"/></bt:String>
@@ -1074,6 +1198,14 @@
         <bt:String
           id="AnadirFiltroButtonTooltip"
           DefaultValue="Crea un rango con nombre sobre la celda seleccionada para un filtro de dimensión + informe (o 'Todos'); doble clic en esa celda para elegir los valores"><bt:Override Locale="en-US" Value="Creates a named range on the selected cell for a dimension + report filter (or 'All'); double-click that cell to choose the values"/></bt:String>
+
+        <bt:String id="campoTotalesMostrarTip" DefaultValue="Muestra los subtotales del campo de la celda seleccionada"><bt:Override Locale="en-US" Value="Shows the subtotals of the selected cell's field"/></bt:String>
+        <bt:String id="campoTotalesOcultarTip" DefaultValue="Oculta los subtotales del campo de la celda seleccionada"><bt:Override Locale="en-US" Value="Hides the subtotals of the selected cell's field"/></bt:String>
+        <bt:String id="campoMostrarIDTip" DefaultValue="Muestra solo el ID del campo de la celda seleccionada"><bt:Override Locale="en-US" Value="Shows only the ID of the selected cell's field"/></bt:String>
+        <bt:String id="campoMostrarIDTextoTip" DefaultValue="Muestra ID y descripción del campo de la celda seleccionada"><bt:Override Locale="en-US" Value="Shows ID and description of the selected cell's field"/></bt:String>
+        <bt:String id="campoMostrarTextoTip" DefaultValue="Muestra solo la descripción del campo de la celda seleccionada"><bt:Override Locale="en-US" Value="Shows only the description of the selected cell's field"/></bt:String>
+        <bt:String id="campoOpcionesTip" DefaultValue="Abre las opciones del campo de la celda seleccionada: niveles de jerarquía y expandir hasta nivel"><bt:Override Locale="en-US" Value="Opens the selected cell's field options: hierarchy levels and expand to level"/></bt:String>
+        <bt:String id="FiltrarValoresSelTooltip" DefaultValue="Añade a Filtros los valores (ID) de las celdas seleccionadas de Filas/Columnas"><bt:Override Locale="en-US" Value="Adds the values (IDs) of the selected Rows/Columns cells to Filters"/></bt:String>
 
         <bt:String
           id="CopiarInformeButtonTooltip"
