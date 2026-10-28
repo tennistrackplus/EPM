@@ -392,6 +392,14 @@ body {
     padding: 0 2px;
 }
 
+.measure-group[draggable="true"] > .measure-group-title {
+    cursor: grab;
+}
+
+.measure-group.dragging {
+    opacity: 0.5;
+}
+
 .measure-group-content {
     display: flex;
     flex-wrap: wrap;
