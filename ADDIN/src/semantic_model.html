@@ -6,8 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EPM Data Studio · Modelo semántico</title>
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <script src="js/i18n.js?v=20261028a"></script>
-    <script src="js/i18n/en.js?v=20261028a"></script>
+    <script src="js/i18n.js?v=20261028b"></script>
+    <script src="js/i18n/en.js?v=20261028b"></script>
     <link rel="stylesheet" href="css/theme.css">
     <style>
         * {
@@ -579,6 +579,74 @@
             user-select: none;
         }
 
+        .dim-source-switch {
+            display: flex;
+            gap: 14px;
+            margin: 2px 0 8px;
+            font-size: 12px;
+        }
+
+        .dim-source-switch label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+        }
+
+        .dim-fact-add {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 6px;
+        }
+
+        .dim-fact-add select {
+            flex: 1 1 140px;
+            min-width: 0;
+            font-size: 12px;
+        }
+
+        .field-row.field-grouped {
+            padding-left: 22px;
+            height: 28px;
+            background: #f8fafc;
+            opacity: .85;
+        }
+
+        .field-row.field-grouped .field-name::before {
+            content: "\21B3  ";
+        }
+
+        .field-row.drop-target {
+            outline: 2px dashed #0e9c71;
+            outline-offset: -2px;
+            background: #ecfdf5;
+        }
+
+        .field-group-badge {
+            flex: 0 0 auto;
+            font-size: 10px;
+            color: #0e9c71;
+            border: 1px solid #a7f3d0;
+            border-radius: 8px;
+            padding: 0 6px;
+            white-space: nowrap;
+        }
+
+        .attr-remove-btn {
+            border: none;
+            background: transparent;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 0 4px;
+        }
+
+        .attr-remove-btn:hover {
+            color: #dc2626;
+        }
+
         .display-hint {
             margin-top: 3px;
             font-size: 10px;
@@ -864,13 +932,22 @@
                 <label>Alias</label>
                 <input type="text" id="modalDimAlias" />
             </div>
-            <h4>Tabla de atributos</h4>
-            <div class="card-header" style="margin-bottom:6px;">
+            <h4>Origen de los atributos</h4>
+            <div class="dim-source-switch">
+                <label><input type="radio" name="dimSource" id="dimSourceFact" value="FACT" /> <span>Tabla de hechos</span></label>
+                <label><input type="radio" name="dimSource" id="dimSourceTable" value="TABLE" /> <span>Tabla de dimensión (JOIN)</span></label>
+            </div>
+            <div id="dimTableSelector" class="card-header" style="margin-bottom:6px;">
                 <div class="sap-search-input-group" style="flex:1;">
                     <input type="text" id="dimRelFullConcat" readonly placeholder="Seleccionar tabla de dimensión..." style="cursor: pointer;" />
                     <button type="button" class="sap-search-btn" id="dimSapSearchBtn" title="Ayuda de búsqueda (F4)">🔍</button>
                 </div>
                 <span class="eye-icon" id="btnViewDimData" title="Ver datos (SELECT * LIMIT 500)" style="margin-left:6px;">👁</span>
+            </div>
+            <div id="dimFactAddRow" class="dim-fact-add" style="display:none;">
+                <select id="dimFactAddColumn" data-no-i18n></select>
+                <button type="button" class="btn btn-secondary btn-sm" id="btnDimFactAdd">+ Añadir columna</button>
+                <div class="display-hint">Columnas de la tabla de hechos que forman parte de esta dimensión (atributos y niveles de jerarquía). También puedes arrastrar un campo de la lista sobre la dimensión.</div>
             </div>
             <input type="hidden" id="dimRelProject" />
             <input type="hidden" id="dimRelDataset" />
@@ -933,12 +1010,12 @@
         </div>
     </div>
 
-    <script src="js/config.js?v=20261028a"></script>
-    <script src="js/bigquery.js?v=20261028a"></script>
-    <script src="js/provider.js?v=20261028a"></script>
-    <script src="js/semanticModelStore.js?v=20261028a"></script>
-    <script src="js/lkmlSaveBridge.js?v=20261028a"></script>
-    <script src="js/lkmlOpenBridge.js?v=20261028a"></script>
-    <script src="js/semantic_model.js?v=20261028a"></script>
+    <script src="js/config.js?v=20261028b"></script>
+    <script src="js/bigquery.js?v=20261028b"></script>
+    <script src="js/provider.js?v=20261028b"></script>
+    <script src="js/semanticModelStore.js?v=20261028b"></script>
+    <script src="js/lkmlSaveBridge.js?v=20261028b"></script>
+    <script src="js/lkmlOpenBridge.js?v=20261028b"></script>
+    <script src="js/semantic_model.js?v=20261028b"></script>
 </body>
 </html>
