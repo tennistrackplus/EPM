@@ -6,8 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EPM Data Studio · Modelo semántico</title>
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <script src="js/i18n.js?v=20261028h"></script>
-    <script src="js/i18n/en.js?v=20261028h"></script>
+    <script src="js/i18n.js?v=20261029e"></script>
+    <script src="js/i18n/en.js?v=20261029e"></script>
     <link rel="stylesheet" href="css/theme.css">
     <style>
         * {
@@ -607,6 +607,74 @@
             font-size: 12px;
         }
 
+        .fields-card-actions {
+            display: flex;
+            gap: 4px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+
+        .measure-conds {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: 4px;
+        }
+
+        .measure-cond-row {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+        }
+
+        .measure-cond-row select,
+        .measure-cond-row input {
+            min-width: 0;
+            font-size: 12px;
+            padding: 4px;
+        }
+
+        .measure-cond-row .mc-col { flex: 1 1 35%; }
+        .measure-cond-row .mc-op { flex: 0 0 74px; }
+        .measure-cond-row .mc-vals { flex: 1 1 45%; }
+
+        #modalMeasureFormula {
+            width: 100%;
+            box-sizing: border-box;
+            font-family: Consolas, "Courier New", monospace;
+            font-size: 12px;
+            padding: 6px;
+        }
+
+        .measure-ref-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin: 4px 0;
+        }
+
+        .measure-ref-chips button {
+            border: 1px solid #cbd5e1;
+            background: #f8fafc;
+            border-radius: 10px;
+            padding: 1px 8px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+
+        .measure-formula-msg {
+            font-size: 11px;
+            min-height: 14px;
+            margin-top: 4px;
+        }
+
+        .measure-formula-msg.err { color: #dc2626; }
+        .measure-formula-msg.ok { color: #0e9c71; }
+
+        .field-row.field-virtual .field-name {
+            color: #0075ff;
+        }
+
         .field-row.field-selected {
             background: #e0ecff;
         }
@@ -946,6 +1014,10 @@
         <div class="card fields-card" id="fieldsCard" style="display: none;">
             <div class="card-header">
                 <span class="card-title">Campos</span>
+                <div class="fields-card-actions">
+                    <button type="button" class="btn-secondary btn-sm" id="btnNewCalcMeasure" title="Fórmula sobre otras medidas: [Ingresos] - [Gastos]">+ Medida calculada</button>
+                    <button type="button" class="btn-secondary btn-sm" id="btnNewFilteredMeasure" title="Una medida solo donde se cumplen unas condiciones: Importe con Escenario = REAL">+ Medida filtrada</button>
+                </div>
             </div>
 
             <div id="fieldsList" data-no-i18n class="fields-list">
@@ -985,7 +1057,30 @@
                 <label>Alias</label>
                 <input type="text" id="modalMeasureAlias" />
             </div>
-            <div class="form-group">
+            <!-- Medida filtrada: medida base + condiciones -->
+            <div id="measureFilteredSection" style="display:none;">
+                <div class="form-group">
+                    <label>Medida base</label>
+                    <select id="modalMeasureBase" data-no-i18n></select>
+                </div>
+                <div class="form-group">
+                    <label>Solo donde…</label>
+                    <div id="modalMeasureConds" class="measure-conds" data-no-i18n></div>
+                    <button type="button" class="btn-secondary btn-sm" id="btnAddMeasureCond">+ Condición</button>
+                    <div class="display-hint">Columnas de la tabla de hechos. Varios valores separados por comas. Las condiciones se cumplen todas a la vez.</div>
+                </div>
+            </div>
+            <!-- Medida calculada: fórmula sobre otras medidas -->
+            <div id="measureCalcSection" style="display:none;">
+                <div class="form-group">
+                    <label>Fórmula</label>
+                    <textarea id="modalMeasureFormula" rows="3" spellcheck="false" placeholder="[Ingresos] - [Gastos]" data-no-i18n></textarea>
+                    <div id="modalMeasureRefs" class="measure-ref-chips" data-no-i18n></div>
+                    <div class="display-hint">Medidas entre corchetes, + − × / y paréntesis. Funciones: DIVIDIR(a; b), SI(condición; a; b), ABS(x), REDONDEAR(x; decimales). Dividir entre cero da vacío, no error. Se calcula después de sumar, también en subtotales.</div>
+                    <div id="modalMeasureFormulaMsg" class="measure-formula-msg"></div>
+                </div>
+            </div>
+            <div class="form-group" id="modalMeasureAggGroup">
                 <label>Agregación</label>
                 <select id="modalMeasureAgg">
                     <option value="SUM">SUM</option>
@@ -1093,12 +1188,13 @@
         </div>
     </div>
 
-    <script src="js/config.js?v=20261028h"></script>
-    <script src="js/bigquery.js?v=20261028h"></script>
-    <script src="js/provider.js?v=20261028h"></script>
-    <script src="js/semanticModelStore.js?v=20261028h"></script>
-    <script src="js/lkmlSaveBridge.js?v=20261028h"></script>
-    <script src="js/lkmlOpenBridge.js?v=20261028h"></script>
-    <script src="js/semantic_model.js?v=20261028h"></script>
+    <script src="js/config.js?v=20261029e"></script>
+    <script src="js/bigquery.js?v=20261029e"></script>
+    <script src="js/provider.js?v=20261029e"></script>
+    <script src="js/semanticModelStore.js?v=20261029e"></script>
+    <script src="js/lkmlSaveBridge.js?v=20261029e"></script>
+    <script src="js/lkmlOpenBridge.js?v=20261029e"></script>
+    <script src="js/calcFormula.js?v=20261029e"></script>
+    <script src="js/semantic_model.js?v=20261029e"></script>
 </body>
 </html>
