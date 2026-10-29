@@ -2098,6 +2098,7 @@ const TaskPaneApp = {
         // dimensión con valores): no se abre el FilterModal para ella.
         if (zoneId === "filters" && !isMeasure) {
             tag.addEventListener("dblclick", async () => {
+                clearTimeout(this._tagClickTimer); this._tagClickTimer = null; // sin abrir propiedades
                 if (typeof FilterModal === "undefined" || !FilterModal.open) return;
 
                 const result = await FilterModal.open({
@@ -2130,6 +2131,7 @@ const TaskPaneApp = {
             tag.addEventListener("dblclick", (e) => {
                 if (e.target.closest(".dropped-tag-remove")) return;
                 e.stopPropagation();
+                clearTimeout(this._tagClickTimer); this._tagClickTimer = null; // sin abrir propiedades
                 this.openFilterForAxisField(entry);
             });
         }
@@ -2155,10 +2157,20 @@ const TaskPaneApp = {
 
         // Clic (simple) sobre el campo: abre/actualiza el panel "Opciones de
         // campo" con los controles de ESE campo (medida o dimensión).
+        // Si el campo tiene doble clic (filtro), el clic simple espera un
+        // instante: si llega el segundo clic, se cancela y solo se abre el
+        // filtro (antes se abrían las dos cosas y el panel parpadeaba).
         tag.classList.add("clickable-for-options");
+        const hasDblClick = !isMeasure && (zoneId === "filters" || zoneId === "rows" || zoneId === "columns");
         tag.addEventListener("click", (e) => {
             if (e.target.closest(".dropped-tag-remove")) return;
-            this.selectFieldForOptions(zoneId, entry);
+            if (!hasDblClick) { this.selectFieldForOptions(zoneId, entry); return; }
+            if (e.detail > 1) return; // segundo clic de un doble clic
+            clearTimeout(this._tagClickTimer);
+            this._tagClickTimer = setTimeout(() => {
+                this._tagClickTimer = null;
+                this.selectFieldForOptions(zoneId, entry);
+            }, 250);
         });
 
         // Las medidas de Filas/Columnas se agrupan en su propia caja
@@ -2609,9 +2621,12 @@ const TaskPaneApp = {
     setFieldOptionsPanelOpen(open) {
         const container = document.querySelector(".taskpane-container");
         const btn = document.getElementById("btnFieldOptions");
+        const wasOpen = !!(container && container.classList.contains("field-options-open"));
         if (container) container.classList.toggle("field-options-open", open);
-        // Más ancho con las propiedades del campo a la vista; normal al cerrarlas
-        if (window.dracoSetTaskpaneWidth) window.dracoSetTaskpaneWidth(open ? "wide" : "normal");
+        // Más ancho con las propiedades del campo a la vista; normal al
+        // cerrarlas. Solo cuando cambia: pedirlo en cada clic hacía que el
+        // panel pareciera cerrarse y volver a abrirse.
+        if (wasOpen !== !!open && window.dracoSetTaskpaneWidth) window.dracoSetTaskpaneWidth(open ? "wide" : "normal");
         if (btn) btn.classList.toggle("toggle-active", open);
         if (!open) this.selectedFieldForOptions = null;
         this.updateRibbonToggleLabel("BtnOpcionesCampo", "Opciones de campo", open);
@@ -2641,19 +2656,27 @@ const TaskPaneApp = {
     },
 
     async selectFieldForOptions(zoneId, entry) {
+        const prev = this.selectedFieldForOptions;
+        const same = prev && prev.zoneId === zoneId && prev.dimension === entry.dimension && prev.name === entry.name;
         this.selectedFieldForOptions = { zoneId, dimension: entry.dimension, name: entry.name, isHierarchy: entry.isHierarchy };
+        // El mismo campo con el panel ya abierto: no se rehace nada
+        if (same && this.isFieldOptionsPanelOpen && this.isFieldOptionsPanelOpen()) return;
         this.setFieldOptionsPanelOpen(true);
         await this.renderFieldOptionsBody(zoneId, entry);
     },
 
     async renderFieldOptionsBody(zoneId, entry) {
-        const body = document.getElementById("fieldOptionsBody");
-        if (!body) return;
+        const target = document.getElementById("fieldOptionsBody");
+        if (!target) return;
+        // El contenido se monta aparte y se sustituye de una vez (con un
+        // fundido corto): antes se vaciaba el panel y se iba rellenando
+        // mientras se leían los niveles, con un parpadeo visible.
+        const token = (this._foRenderToken = (this._foRenderToken || 0) + 1);
+        const body = document.createElement("div");
+        body.className = "field-options-content";
 
         const isMeasure = String(entry.dimension).toUpperCase() === "MEASURE";
         const options = this.getFieldOptions(zoneId, entry);
-
-        body.innerHTML = "";
 
         const nameEl = document.createElement("div");
         nameEl.className = "field-options-field-name";
@@ -2669,8 +2692,6 @@ const TaskPaneApp = {
             // completa, solo tendrían sentido por atributo individual).
             const levelsBox = document.createElement("div");
             levelsBox.className = "field-options-group";
-            levelsBox.innerHTML = `<div class="field-options-section-title">Jerarquía</div>
-                <div class="field-options-empty" id="fieldOptionsLevelsLoading">Cargando niveles…</div>`;
             body.appendChild(levelsBox);
 
             try {
@@ -2678,11 +2699,15 @@ const TaskPaneApp = {
                 this.renderHierarchyLevelControls(levelsBox, zoneId, entry, options, levels);
             } catch (err) {
                 console.error("Error al leer los niveles de la jerarquía:", err);
-                levelsBox.querySelector("#fieldOptionsLevelsLoading").innerText = "No se pudieron cargar los niveles.";
+                levelsBox.innerHTML = `<div class="field-options-section-title">Jerarquía</div>
+                    <div class="field-options-empty">No se pudieron cargar los niveles.</div>`;
             }
         } else {
             body.appendChild(this.buildDimensionOptionsForm(zoneId, entry, options));
         }
+
+        if (token !== this._foRenderToken) return; // ya se ha pedido otro campo
+        target.replaceChildren(body);
     },
 
     /**

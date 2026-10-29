@@ -517,24 +517,14 @@
         };
 
         // Niveles de la jerarquía que se consultan y se pintan: los marcados
-        // en «Mostrar niveles» y, si hay «Expandir hasta nivel», solo hasta
-        // ese nivel. null = todos.
+        // en «Mostrar niveles» (null = todos). «Expandir hasta nivel» NO
+        // quita niveles: se consulta todo y, al pintar, la jerarquía sale
+        // contraída en ese nivel (ver dracoExpandToLevelCollapse en commands.js).
         const visibleLevelsFor = (dimension, name) => {
             const opts = (fieldOptions || {})[`${zoneId}|${dimension}|${name}`] || {};
-            let vis = Array.isArray(opts.visibleLevels) ? opts.visibleLevels.map(Number) : null;
-            const upTo = Number(opts.expandToLevel);
-            if (opts.expandToLevel !== null && opts.expandToLevel !== undefined && opts.expandToLevel !== "" && Number.isFinite(upTo) && upTo > 0) {
-                const base = vis || [];
-                vis = vis ? base.filter(n => n <= upTo) : null;
-                if (!vis) vis = { upTo };
-            }
-            return vis;
+            return Array.isArray(opts.visibleLevels) ? opts.visibleLevels.map(Number) : null;
         };
-        const levelIsVisible = (visibleLevels, nivel) => {
-            if (!visibleLevels) return true;
-            if (!Array.isArray(visibleLevels)) return nivel <= visibleLevels.upTo;
-            return visibleLevels.includes(nivel);
-        };
+        const levelIsVisible = (visibleLevels, nivel) => !visibleLevels || visibleLevels.includes(nivel);
 
         // ¿Ya está el atributo `name` de `dimension` como campo suelto en esta zona?
         const displayModeOf = (dimension, name) => {

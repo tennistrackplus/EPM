@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-28-jerarquias";
+const DRACO_BUILD = "2026-10-29-diagnostico";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -74,6 +74,7 @@ async function flushDracoLog() {
     DracoLogFlushTimer = null;
     if (DracoLogFlushing) { scheduleDracoLogFlush(); return; }
     if (!DracoLogDirty) return;
+    if (!dracoDiagOn()) return; // solo con Diagnóstico activo (el log sigue en memoria y en la consola)
     DracoLogFlushing = true;
     DracoLogDirty = false;
     const snapshot = DracoLogLines.slice();
@@ -104,6 +105,8 @@ Office.onReady(() => {
     // (la comprobación del XLAM se hace al crear EDIT_REPORT o antes de la
     // primera escritura, nunca al abrir: ver ensureDracoFnMode).
     dracoFnModeFromPlatform();
+    // ¿Diagnóstico activo en este libro? (solo lectura)
+    setTimeout(() => { refreshDracoDiagnosticsFlag(); }, 500);
 });
 
 /**
@@ -132,7 +135,8 @@ async function ensureEditReportSheetFromRibbon() {
                 created = true;
             }
 
-            editSheet.visibility = Excel.SheetVisibility.hidden;
+            // Oculta, salvo con Diagnóstico activo (para poder leer la SQL y el log)
+            if (!dracoDiagOn()) editSheet.visibility = Excel.SheetVisibility.hidden;
             await context.sync();
         });
         if (created) await ensureDracoFnMode(); // XLAM o funciones personalizadas
@@ -424,6 +428,21 @@ const CRLF = "\r\n";
  */
 const DRACO_HIER_TEXT_SUFFIX = "~TXT";
 // Columna de orden de EDIT_REPORT (M/S) con la marca "HIDE": "Solo texto".
+/**
+ * Orden de un campo del eje dinámico (opción «Ordenar» del panel, guardada
+ * en la columna de orden del diseño: "UP", "DOWN", "UP|HIDE"...):
+ * "DESC" si es descendente; "" en cualquier otro caso. Ascendente es el
+ * orden de siempre, así que sin orden o con «Ascendente» el SQL no cambia.
+ */
+function dracoSortDir(v) {
+    return /DOWN/i.test(String(v === null || v === undefined ? "" : v)) ? "DESC" : "";
+}
+
+/** Parte del ORDER BY (DENSE_RANK) de un campo del eje, con su orden. */
+function dracoOrderPart(f) {
+    return dracoCalcOrderPart(f.AttributeName) + (f.Sort === "DESC" ? " DESC" : "");
+}
+
 function dracoIsHiddenMarker(v) {
     return String(v === null || v === undefined ? "" : v).toUpperCase().indexOf("HIDE") !== -1;
 }
@@ -543,6 +562,7 @@ function draco_perfMark(reportId, phase, tPrev) {
     const line = `${busyStepLabel(reportId, phase)}: ${(now - tPrev).toFixed(0)} ms`;
     console.log(`[Draco][perf] ${line}`);
     DracoPerfLog.push(line);
+    if (dracoDiagOn()) dracoLog("[tiempo] " + line);
     return now;
 }
 
@@ -1033,7 +1053,9 @@ function loadRows(editReportGrid) {
                 // Columna R de EDIT_REPORT: "X" = generar subtotal para este
                 // campo (ver buildConfigSetsWithSubtotals). No se usa en
                 // absoluto si NINGÚN campo del informe tiene esta marca.
-                Subtotal: String(cellValue(editReportGrid, R, 18)).trim().toUpperCase() === "X"
+                Subtotal: String(cellValue(editReportGrid, R, 18)).trim().toUpperCase() === "X",
+                // Columna S: orden del campo ("UP"/"DOWN", ver dracoSortDir)
+                Sort: dracoSortDir(cellValue(editReportGrid, R, 19))
             });
         }
 
@@ -1079,7 +1101,9 @@ function loadColumns(editReportGrid) {
                 Hidden: hiddenCol,
                 // Columna L de EDIT_REPORT: "X" = generar subtotal para este
                 // campo (ver buildConfigSetsWithSubtotals).
-                Subtotal: String(cellValue(editReportGrid, R, 12)).trim().toUpperCase() === "X"
+                Subtotal: String(cellValue(editReportGrid, R, 12)).trim().toUpperCase() === "X",
+                // Columna M: orden del campo ("UP"/"DOWN", ver dracoSortDir)
+                Sort: dracoSortDir(cellValue(editReportGrid, R, 13))
             });
         }
 
@@ -2333,8 +2357,78 @@ function isDracoNullLiteral(text) {
  * se escriben vacías (así además se borra lo que dejaron versiones anteriores).
  */
 function draco_debugCell(value) {
-    const on = typeof DracoConfig !== "undefined" && DracoConfig.debugWorkbookCells === true;
-    return on ? value : "";
+    return dracoDiagOn() ? value : "";
+}
+
+/* ---------------------------------------------------------------------
+ * DIAGNÓSTICO (cinta ▸ Diagnóstico): activa/desactiva, POR LIBRO, la
+ * escritura en EDIT_REPORT de la SQL ejecutada (X1), los resultados (Y1),
+ * los avisos de planificación (W1/Z1) y el log con tiempos por fase
+ * (columna AA). El estado se guarda en EDIT_REPORT!AB1 ("X" = activo);
+ * DracoConfig.debugWorkbookCells = true lo fuerza siempre (como antes).
+ * Al desactivarlo se borran esas celdas (auditoría F-15: no deben viajar
+ * dentro del libro al compartirlo) y EDIT_REPORT vuelve a ocultarse.
+ * --------------------------------------------------------------------- */
+const DRACO_DIAG_CELL = "AB1";
+let DracoDiagnostics = false;
+
+function dracoDiagOn() {
+    return DracoDiagnostics || (typeof DracoConfig !== "undefined" && DracoConfig.debugWorkbookCells === true);
+}
+
+/** Lee EDIT_REPORT!AB1 (solo lectura). Se llama al empezar cada actualización. */
+async function refreshDracoDiagnosticsFlag() {
+    if (!dracoIsRealExcel()) return DracoDiagnostics;
+    try {
+        await Excel.run(async (context) => {
+            const sh = context.workbook.worksheets.getItemOrNullObject("EDIT_REPORT");
+            sh.load("isNullObject");
+            await context.sync();
+            if (sh.isNullObject) { DracoDiagnostics = false; return; }
+            const c = sh.getRange(DRACO_DIAG_CELL);
+            c.load("values");
+            await context.sync();
+            DracoDiagnostics = String(c.values[0][0]).trim().toUpperCase() === "X";
+        });
+    } catch (e) { /* se queda como estaba */ }
+    return DracoDiagnostics;
+}
+
+async function alternarDiagnostico(event) {
+    try {
+        await ensureEditReportSheetFromRibbon();
+        await refreshDracoDiagnosticsFlag();
+        const on = !DracoDiagnostics;
+        DracoDiagnostics = on;
+        await Excel.run(async (context) => {
+            const sh = context.workbook.worksheets.getItem("EDIT_REPORT");
+            sh.getRange(DRACO_DIAG_CELL).values = [[on ? "X" : ""]];
+            if (on) {
+                // A la vista para leer la SQL, los resultados y el log
+                sh.visibility = Excel.SheetVisibility.visible;
+                sh.getRange("X1").select();
+            } else {
+                ["W1", "X1", "Y1", "Z1"].forEach(a => sh.getRange(a).values = [[""]]);
+                sh.getRange(DRACO_LOG_COL + "1:" + DRACO_LOG_COL + (DRACO_LOG_MAX + 1)).clear(Excel.ClearApplyTo.contents);
+                sh.visibility = Excel.SheetVisibility.hidden;
+            }
+            await context.sync();
+        });
+        if (on) {
+            dracoLog("Diagnóstico ACTIVADO: X1 = SQL, Y1 = resultados, AA = log con tiempos (más reciente arriba)");
+            DracoLogDirty = true;
+            scheduleDracoLogFlush();
+        }
+        if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.setAutoStatus) {
+            TaskPaneApp.setAutoStatus(on
+                ? "Diagnóstico activado: SQL, resultados y tiempos en EDIT_REPORT."
+                : "Diagnóstico desactivado.");
+        }
+    } catch (error) {
+        console.error("Error al cambiar el diagnóstico:", error);
+    } finally {
+        if (event) event.completed();
+    }
 }
 
 function coerceCellLiteral(text) {
@@ -2467,6 +2561,7 @@ async function jsonPaintValues(context, json, reportId) {
  */
 async function actualizarInformeFixedCore(reportIdOverride) {
     await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
+    await refreshDracoDiagnosticsFlag(); // Diagnóstico activo en este libro (EDIT_REPORT!AB1)
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
     beginDracoPerfLog();
@@ -2741,7 +2836,7 @@ function readDracoAxisFields(editReportGrid, isColumnsAxis) {
             // "Solo texto": el texto sustituye al ID oculto que lo precede
             const idPartner = (last && last.type === "attr" && last.hidden && !hidden
                 && last.dim.toUpperCase() === dim.toUpperCase()) ? last : null;
-            fields.push({ type: "attr", dim, attr, hidden, idPartner });
+            fields.push({ type: "attr", dim, attr, hidden, idPartner, sort: dracoSortDir(cellValue(editReportGrid, R, dimCol + 5)) });
         }
         R++;
     }
@@ -2964,7 +3059,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     const orderOf = (flds) => {
         const parts = [];
         flds.forEach(f => {
-            if (f.type === "attr") parts.push(dynNames[f.col]);
+            if (f.type === "attr") parts.push(dynNames[f.col] + (f.sort === "DESC" ? " DESC" : ""));
             // La jerarquía de textos ("ID y texto") no ordena: va por sus IDs.
             if (f.type === "hier" && !f.hostField) f.levels.forEach((l, i) => {
                 if (i > 0) parts.push(nullFirst(dynNames[l.col]));
@@ -4242,21 +4337,37 @@ function configSetTuplesWithSubtotals(relGrid) {
 
     const colsAxisFields = ReportState.Columns.map(c => dracoAxisCol(relGrid, c));
     const rowsAxisFields = ReportState.Rows.map(r => dracoAxisCol(relGrid, r));
+    const colsSet = new Set(colsAxisFields);
+    const rowsSet = new Set(rowsAxisFields);
 
-    const extraTuples = [];
+    // Cada eje aporta sus «partes»: las combinaciones de sus niveles que ya
+    // salen en las tuplas base (con jerarquía: hojas y nodos) más, por cada
+    // campo marcado con subtotal, el prefijo de ese eje hasta el campo. Las
+    // tuplas finales son todas las combinaciones de partes de un eje con
+    // partes del otro. Así un subtotal se cruza con los nodos de la
+    // jerarquía del otro eje y con los subtotales del otro eje (total x
+    // total). Antes la tupla extra llevaba el otro eje entero, solo el nivel
+    // más bajo: los nodos de la jerarquía y el cruce de totales salían sin
+    // valor.
+    const partsOf = (axisSet, axisFields, axisState) => {
+        const seen = new Set(), out = [];
+        const push = (part) => { const k = part.join("\u241F"); if (!seen.has(k)) { seen.add(k); out.push(part); } };
+        baseTuples.forEach(t => push(t.filter(c => axisSet.has(c))));
+        axisState.forEach((f, idx) => { if (f.Subtotal) push(axisFields.slice(0, idx)); });
+        return out.length ? out : [[]];
+    };
+    const colsParts = partsOf(colsSet, colsAxisFields, ReportState.Columns);
+    const rowsParts = partsOf(rowsSet, rowsAxisFields, ReportState.Rows);
 
-    ReportState.Columns.forEach((c, idx) => {
-        if (c.Subtotal) {
-            extraTuples.push([...colsAxisFields.slice(0, idx), ...rowsAxisFields]);
-        }
-    });
-    ReportState.Rows.forEach((r, idx) => {
-        if (r.Subtotal) {
-            extraTuples.push([...colsAxisFields, ...rowsAxisFields.slice(0, idx)]);
-        }
-    });
+    const all = [...baseTuples];
+    const keys = new Set(all.map(t => t.join("\u241F")));
+    colsParts.forEach(cp => rowsParts.forEach(rp => {
+        const t = [...cp, ...rp];
+        const k = t.join("\u241F");
+        if (!keys.has(k)) { keys.add(k); all.push(t); }
+    }));
 
-    return [...baseTuples, ...extraTuples];
+    return all;
 }
 
 /**
@@ -4282,8 +4393,8 @@ function buildDenseRankExpression(orderParts, alias) {
 function buildFinalSelect() {
     let sql = "SELECT" + CRLF + CRLF;
 
-    sql += buildDenseRankExpression(ReportState.Columns.filter(c => c.Hierarchy > 0).map(c => c.AttributeName), "ROW_ID") + "," + CRLF + CRLF;
-    sql += buildDenseRankExpression(ReportState.Rows.filter(r => r.Hierarchy > 0).map(r => r.AttributeName), "COLUMN_ID");
+    sql += buildDenseRankExpression(ReportState.Columns.filter(c => c.Hierarchy > 0).map(dracoOrderPart), "ROW_ID") + "," + CRLF + CRLF;
+    sql += buildDenseRankExpression(ReportState.Rows.filter(r => r.Hierarchy > 0).map(dracoOrderPart), "COLUMN_ID");
 
     // Campos de Columnas, de Filas y una columna por medida (antes:
     // "IMPORTE" fijo). Con lista común para que un eje vacío o un informe
@@ -4377,6 +4488,28 @@ function attributeNeedsStringCast(atributesGrid, dimension, attributeName) {
     return UNQUOTED_TYPES.includes(tipo);
 }
 
+/**
+ * Campos de un eje que son NIVELES de una jerarquía (tramo de la misma
+ * dimensión con NIVEL 1,2,3... consecutivo, o la jerarquía de textos de un
+ * «ID y texto»). En ellos GROUPING = 1 significa «nodo de la jerarquía» (sus
+ * niveles inferiores van a NULL y así se pinta el nodo con su sangría), no
+ * «subtotal»: no se etiquetan como 'TOTAL'.
+ */
+function dracoHierarchyLevelFields(fields) {
+    const out = new Set();
+    let i = 0;
+    while (i < fields.length) {
+        let j = i;
+        while (j + 1 < fields.length && fields[j + 1].Dimension === fields[j].Dimension
+            && Number(fields[j + 1].Hierarchy) === Number(fields[j].Hierarchy) + 1
+            && !!fields[j + 1].IsTextCompanion === !!fields[j].IsTextCompanion) j++;
+        if (j > i) for (let k = i; k <= j; k++) out.add(fields[k]);
+        i = j + 1;
+    }
+    fields.forEach(f => { if (f.IsTextCompanion) out.add(f); });
+    return out;
+}
+
 function fieldFinalExpressionWithSubtotal(atributesGrid, field) {
     const flag = subtotalFlagName(field.AttributeName);
     const rawExpr = attributeNeedsStringCast(atributesGrid, field.Dimension, field.AttributeName)
@@ -4395,7 +4528,7 @@ function fieldFinalExpressionWithSubtotal(atributesGrid, field) {
  */
 function buildAxisOrderByWithSubtotals(fields, subtotalsOnTop) {
     if (!fields.some(f => f.Subtotal)) {
-        return fields.filter(f => f.Hierarchy > 0).map(f => f.AttributeName);
+        return fields.filter(f => f.Hierarchy > 0).map(dracoOrderPart);
     }
 
     const topVal = subtotalsOnTop ? 0 : 1;
@@ -4415,7 +4548,7 @@ function buildAxisOrderByWithSubtotals(fields, subtotalsOnTop) {
             // al grupo del campo anterior.
             parts.push(subtotalFlagName(f.AttributeName) + (subtotalsOnTop ? " DESC" : " ASC"));
         }
-        if (f.Hierarchy > 0) parts.push(f.AttributeName);
+        if (f.Hierarchy > 0) parts.push(dracoOrderPart(f));
     });
 
     return parts;
@@ -4434,9 +4567,12 @@ function buildFinalSelectWithSubtotals(atributesGrid, subtotalsOnTop) {
     sql += buildDenseRankExpression(buildAxisOrderByWithSubtotals(ReportState.Columns, subtotalsOnTop), "ROW_ID") + "," + CRLF + CRLF;
     sql += buildDenseRankExpression(buildAxisOrderByWithSubtotals(ReportState.Rows, subtotalsOnTop), "COLUMN_ID");
 
+    // Niveles de jerarquía: tal cual (NULL en los nodos), sin 'TOTAL'
+    const hierCols = dracoHierarchyLevelFields(ReportState.Columns);
+    const hierRows = dracoHierarchyLevelFields(ReportState.Rows);
     const items = [
-        ...ReportState.Columns.map(c => fieldFinalExpressionWithSubtotal(atributesGrid, c)),
-        ...ReportState.Rows.map(r => fieldFinalExpressionWithSubtotal(atributesGrid, r)),
+        ...ReportState.Columns.map(c => hierCols.has(c) ? c.AttributeName : fieldFinalExpressionWithSubtotal(atributesGrid, c)),
+        ...ReportState.Rows.map(r => hierRows.has(r) ? r.AttributeName : fieldFinalExpressionWithSubtotal(atributesGrid, r)),
         ...ReportState.Measures.map(m => m.Name)
     ];
     if (items.length > 0) sql += "," + CRLF + CRLF + items.map(it => "    " + it).join("," + CRLF);
@@ -4898,6 +5034,60 @@ function computeDracoAxisSignature(editReportGrid, dimCol, attrCol, hierCol, cou
     return parts.join("|");
 }
 
+/** Clave de un nodo contraído: profundidad p + valores de las posiciones 1..p del eje. */
+function dracoCollapseKey(V, p) {
+    const parts = [];
+    for (let i = 1; i <= p; i++) parts.push(String(V[i]));
+    return p + "\u00A7" + parts.join("\u241F");
+}
+
+/**
+ * «Expandir hasta nivel» (opciones de campo de una jerarquía): tras una
+ * consulta nueva, la jerarquía sale contraída en ese nivel, como si se
+ * pulsara el «-» de todos sus nodos de ese nivel; después se puede
+ * expandir cada nodo con su «+». Devuelve el conjunto de nodos a contraer
+ * de un eje, o null si ninguna jerarquía del eje tiene ese ajuste.
+ *   zoneId: "rows" | "columns" (zona del panel); plan: computeAxisPaintPlan.
+ */
+function dracoExpandToLevelCollapse(reportId, zoneId, plan, dict, count) {
+    const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
+    const fo = (report && report.design && report.design.fieldOptions) || {};
+    const fields = plan.fieldsReal || [];
+    const companion = plan.companionReal || [];
+    let collapsed = null;
+    Object.keys(fo).forEach(key => {
+        const parts = key.split("|");
+        if (parts[0] !== zoneId || parts.length < 3) return;
+        const opts = fo[key] || {};
+        const upTo = Number(opts.expandToLevel);
+        if (opts.expandToLevel === null || opts.expandToLevel === undefined || opts.expandToLevel === "" || !(upTo > 0)) return;
+        const dim = parts[1].toUpperCase(), hier = parts.slice(2).join("|").toUpperCase();
+        // Nivel efectivo: con niveles ocultos («Mostrar niveles»), cuántos
+        // de los visibles quedan hasta el nivel elegido.
+        const vis = Array.isArray(opts.visibleLevels) ? opts.visibleLevels.map(Number) : null;
+        const n = vis ? vis.filter(x => x <= upTo).length : upTo;
+        const positions = [];
+        for (let i = 1; i <= count; i++) {
+            const f = fields[i];
+            if (!f || companion[i]) continue;
+            if (String(f.dim).toUpperCase() === dim && String(f.jerarquia || "").toUpperCase() === hier) positions.push(i);
+        }
+        if (n < 1 || n >= positions.length) return; // ya se ve todo hasta ese nivel
+        const posN = positions[n - 1];
+        collapsed = collapsed || new Set();
+        for (const V of dict.values()) {
+            let deepest = 0;
+            for (let i = 1; i <= count; i++) {
+                if (companion[i]) continue;
+                if (String(V[i]).toLowerCase().indexOf("null") === 0) break;
+                deepest = i;
+            }
+            if (deepest > posN) collapsed.add(dracoCollapseKey(V, posN));
+        }
+    });
+    return collapsed;
+}
+
 function resetDracoCollapseIfAxisChanged(axis, signature, reportId) {
     const st = getDracoCollapseState(reportId)[axis];
     if (st.signature !== signature) {
@@ -4943,9 +5133,7 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
     items.sort((a, b) => a.oldId - b.oldId);
 
     function prefixKey(item, p) {
-        const parts = [];
-        for (let i = 1; i <= p; i++) parts.push(String(item.V[i]));
-        return p + "\u00A7" + parts.join("\u241F");
+        return dracoCollapseKey(item.V, p);
     }
 
     // Longitud del tramo de JERARQUÍA real (NIVEL ascendente 1,2,3... —
@@ -5348,6 +5536,7 @@ async function repaintAxisIfHiddenIds(axis) {
 
 async function convertAxisStaticFormulas(axis, makeStatic) {
     await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
+    await refreshDracoDiagnosticsFlag(); // Diagnóstico activo en este libro (EDIT_REPORT!AB1)
     const reportId = activeReportIdOrNull();
     const rangeName = axis === "rows" ? dracoRangeNames(reportId).rows : dracoRangeNames(reportId).cols;
     // DracoCollapseState/DracoIndicatorMap usan "rows"/"cols" como clave de
@@ -7008,6 +7197,7 @@ function displayDracoDialogOnce(url, options) {
  */
 async function openMemberRecognitionPicker(addr, located, initialSearch) {
     await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
+    await refreshDracoDiagnosticsFlag(); // Diagnóstico activo en este libro (EDIT_REPORT!AB1)
     const id = ++DracoPickerSeq;
     const tag = "[picker#" + id + "]";
     const t0 = Date.now();
@@ -7912,7 +8102,7 @@ function computeAxisPaintPlan(levels) {
             }
             flagsReal[dimIdx] = flag;
             companionReal[dimIdx] = !!level.isTextCompanion;
-            fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr };
+            fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr, jerarquia: level.jerarquia || "" };
             iauxReal[dimIdx] = null;
             continue;
         }
@@ -7925,7 +8115,7 @@ function computeAxisPaintPlan(levels) {
         }
         flagsReal[dimIdx] = flag;
         companionReal[dimIdx] = !!level.isTextCompanion;
-        fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr };
+        fieldsReal[dimIdx] = { dim: level.dim, attr: level.attr, jerarquia: level.jerarquia || "" };
         iauxReal[dimIdx] = iAux;
 
         // ¿Es el texto que sustituye a un ID oculto?
@@ -7995,6 +8185,9 @@ function draco_suspendScreenUpdating(context) {
 async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
+    // Consulta nueva (no un repintado por +/- con el JSON guardado): ahí se
+    // aplica «Expandir hasta nivel» (ver dracoExpandToLevelCollapse).
+    const freshQuery = DracoLastJsonByReport.get(dracoStateKey(reportId)) !== json;
     DracoLastJsonByReport.set(dracoStateKey(reportId), json); // cache para poder repintar en un toggle +/- sin re-consultar BigQuery
 
     // Se reconstruye entera en cada refresco (no se va acumulando entre
@@ -8243,6 +8436,12 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     resetDracoCollapseIfAxisChanged("rows", rowsSignature, reportId);
     resetDracoCollapseIfAxisChanged("cols", colsSignature, reportId);
     const dracoCollapseState = getDracoCollapseState(reportId);
+    if (freshQuery) {
+        const cr = dracoExpandToLevelCollapse(reportId, "rows", planFilas, rowDict, ReportState.ColumnCount);
+        if (cr) dracoCollapseState.rows.collapsed = cr;
+        const cc = dracoExpandToLevelCollapse(reportId, "columns", planColumnas, colDict, ReportState.RowCount);
+        if (cc) dracoCollapseState.cols.collapsed = cc;
+    }
 
     // "Suprimir ceros en filas/columnas" (propiedades del informe): se quita
     // del diccionario, ANTES de compactar, cualquier ROW_ID/COLUMN_ID cuyo
@@ -9502,6 +9701,7 @@ async function writeIndentRuns(context, sheet, cellsMap) {
  */
 async function actualizarInformeCore(reportIdOverride) {
     await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
+    await refreshDracoDiagnosticsFlag(); // Diagnóstico activo en este libro (EDIT_REPORT!AB1)
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let sql;
     beginDracoPerfLog();
@@ -10072,6 +10272,7 @@ async function runWithConcurrency(items, limit, worker) {
  */
 async function actualizarTodosCore(concurrency) {
     await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
+    await refreshDracoDiagnosticsFlag(); // Diagnóstico activo en este libro (EDIT_REPORT!AB1)
     if (!window.ReportStore) return;
     const reports = window.ReportStore.listReports();
     if (!reports || reports.length === 0) return;
@@ -12135,6 +12336,7 @@ try {
     Office.actions.associate("filtrarValoresSeleccionados", filtrarValoresSeleccionados);
     Office.actions.associate("borrarFiltroCampo", borrarFiltroCampo);
     Office.actions.associate("actualizarTodos", actualizarTodos);
+    Office.actions.associate("alternarDiagnostico", alternarDiagnostico);
     Office.actions.associate("anadirValor", anadirValor);
     Office.actions.associate("anadirFormula", anadirFormula);
     Office.actions.associate("campoTotalesMostrar", campoTotalesMostrar);
