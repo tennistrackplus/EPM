@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Abrir desde bucket</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <script src="js/i18n.js?v=20261029b"></script>
+    <script src="js/i18n/en.js?v=20261029b"></script>
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/lkmlDialog.css">
+    <style>
+        .dialog-body { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+        #pickerStatus { font-size: 11.5px; color: #64748b; margin-top: 6px; min-height: 14px; }
+        #pickerStatus.error { color: #c0392b; }
+        #fileListSection { margin-top: 14px; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+        #state { font-size: 12.5px; color: #666; padding: 8px 0; }
+        #state.error { color: #c0392b; }
+        ul#list {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            overflow-y: auto;
+            flex: 1;
+            border-top: 1px solid #eee;
+        }
+        li.item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 9px 4px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+        }
+        li.item:hover { background: #f6f3fa; }
+        .item-info { min-width: 0; }
+        .item-name {
+            font-size: 12.5px;
+            color: #333;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .item-meta {
+            font-size: 10.5px;
+            color: #999;
+            margin-top: 2px;
+        }
+        .item-btn {
+            flex-shrink: 0;
+            padding: 5px 12px;
+            font-size: 11.5px;
+            border: none;
+            border-radius: 4px;
+            background: #7045A9;
+            color: #fff;
+            cursor: pointer;
+        }
+        .item-btn:disabled { opacity: 0.5; cursor: default; }
+        .item-btn:hover:not(:disabled) { opacity: 0.9; }
+    </style>
+</head>
+<body>
+
+    <div class="dialog-page">
+
+        <div class="dialog-header">
+            <h3>Abrir desde bucket</h3>
+            <span class="dialog-subtitle">Elige el proyecto y el bucket de Google Cloud, y descarga el Excel que quieras abrir</span>
+        </div>
+
+        <div class="dialog-body">
+
+            <label class="lkml-field-label" for="pickerProject">Proyecto de Google Cloud</label>
+            <select class="lkml-select" id="pickerProject">
+                <option value="">Cargando proyectos…</option>
+            </select>
+
+            <label class="lkml-field-label" for="pickerBucket">Bucket</label>
+            <select class="lkml-select" id="pickerBucket" disabled>
+                <option value="">Selecciona primero un proyecto…</option>
+            </select>
+
+            <div id="pickerStatus"></div>
+
+            <div id="fileListSection">
+                <div id="state">Selecciona un bucket para ver sus archivos .xlsx.</div>
+                <ul id="list" data-no-i18n></ul>
+            </div>
+
+        </div>
+
+        <div class="lkml-modal-footer">
+            <button type="button" class="icon-btn" id="closeBtn">Cerrar</button>
+        </div>
+
+    </div>
+
+    <script src="js/config.js?v=20261029b"></script>
+    <script src="js/bigquery.js?v=20261029b"></script>
+    <script src="js/gcsExport.js?v=20261029b"></script>
+    <script src="js/bucketPickerUI.js"></script>
+    <script>
+        function fmtSize(bytes) {
+            const n = Number(bytes) || 0;
+            if (n < 1024) return n + " B";
+            if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
+            return (n / (1024 * 1024)).toFixed(1) + " MB";
+        }
+
+        function fmtDate(iso) {
+            try {
+                return new Date(iso).toLocaleString();
+            } catch (e) {
+                return iso || "";
+            }
+        }
+
+        async function loadList(bucketName) {
+            const stateEl = document.getElementById("state");
+            const listEl = document.getElementById("list");
+
+            if (!bucketName) {
+                stateEl.className = "";
+                stateEl.textContent = "Selecciona un bucket para ver sus archivos .xlsx.";
+                listEl.innerHTML = "";
+                return;
+            }
+
+            stateEl.className = "";
+            stateEl.textContent = "Cargando archivos…";
+            listEl.innerHTML = "";
+
+            try {
+                const items = await GCS.listXlsxObjects();
+                if (!items.length) {
+                    stateEl.textContent = "No hay archivos .xlsx en este bucket todavía.";
+                    return;
+                }
+                stateEl.textContent = "";
+                items.forEach(item => {
+                    const li = document.createElement("li");
+                    li.className = "item";
+
+                    const info = document.createElement("div");
+                    info.className = "item-info";
+                    const name = document.createElement("div");
+                    name.className = "item-name";
+                    name.textContent = item.name;
+                    const meta = document.createElement("div");
+                    meta.className = "item-meta";
+                    meta.textContent = `${fmtSize(item.size)} · ${fmtDate(item.updated)}`;
+                    info.appendChild(name);
+                    info.appendChild(meta);
+
+                    const btn = document.createElement("button");
+                    btn.className = "item-btn";
+                    btn.type = "button";
+                    btn.textContent = "Descargar";
+                    btn.addEventListener("click", async () => {
+                        btn.disabled = true;
+                        btn.textContent = "Descargando…";
+                        try {
+                            await GCS.downloadObjectToBrowser(item.name);
+                            btn.textContent = "Descargado ✓";
+                        } catch (err) {
+                            console.error("Error al descargar del bucket:", err);
+                            btn.textContent = "Error";
+                            alert("No se pudo descargar el archivo: " + (err.message || err));
+                        } finally {
+                            setTimeout(() => {
+                                btn.disabled = false;
+                                btn.textContent = "Descargar";
+                            }, 2000);
+                        }
+                    });
+
+                    li.appendChild(info);
+                    li.appendChild(btn);
+                    listEl.appendChild(li);
+                });
+            } catch (err) {
+                console.error("Error al listar el bucket:", err);
+                stateEl.className = "error";
+                stateEl.textContent = err.message || String(err);
+            }
+        }
+
+        async function init() {
+            // SEGURIDAD: el token ya no viaja por la URL del diálogo. El
+            // diálogo puede no compartir localStorage con quien lo abrió,
+            // así que se pide la sesión vigente por mensajería (Dialog API
+            // de Office: messageParent/messageChild) antes de comprobar la
+            // conexión. Si no hay padre o no responde a tiempo, sigue igual
+            // y isConnected() dará simplemente "no conectado".
+            if (window.BQ) {
+                await BQ.requestSessionFromOpener();
+            }
+
+            document.getElementById("closeBtn").addEventListener("click", () => {
+                try {
+                    Office.context.ui.messageParent("close");
+                } catch (e) {
+                    window.close();
+                }
+            });
+
+            const picker = BucketPickerUI.mount({
+                projectSelect: document.getElementById("pickerProject"),
+                bucketSelect: document.getElementById("pickerBucket"),
+                statusEl: document.getElementById("pickerStatus"),
+                onBucketChange: loadList
+            });
+            picker.init();
+        }
+
+        if (typeof Office !== "undefined") {
+            Office.onReady(init);
+        } else {
+            document.addEventListener("DOMContentLoaded", init);
+        }
+    </script>
+</body>
+</html>
