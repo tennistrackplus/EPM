@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-29-miembros-calc";
+const DRACO_BUILD = "2026-10-29-calc-bigquery";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -1381,7 +1381,9 @@ function buildDracoCalcCtes(relGrid, measuresGrid, atributesGrid, withSubtotals)
                 if (c === A) return dracoSqlString(calc.name) + " AS " + c;
                 if (c === flagA) return "0 AS " + c;
                 if (measureCols.indexOf(c) !== -1) {
-                    if (!isMember) return "NULL AS " + c;
+                    // NULL con el MISMO tipo que la columna (BigQuery no admite un
+                    // NULL sin tipo frente a una columna de texto o número en UNION ALL)
+                    if (!isMember) return "MIN(CASE WHEN FALSE THEN s." + c + " END) AS " + c;
                     const expr = window.DracoCalc.toSql(calc.ast, (r) => {
                         const vis = "SUM(CASE WHEN " + (hasH ? "s.DRC_SRC = 'P' AND " : "") + memberCond(r) + " THEN s." + c + " END)";
                         if (!hasH) return "COALESCE(" + vis + ", 0)";
@@ -1401,7 +1403,10 @@ function buildDracoCalcCtes(relGrid, measuresGrid, atributesGrid, withSubtotals)
             const having = (isMember && calc.refs.length)
                 ? "HAVING COUNT(CASE WHEN CAST(s." + A + " AS " + STR + ") IN (" + calc.refs.map(r => dracoSqlString(r)).join(", ") + ") THEN 1 END) > 0"
                 : "";
-            return "    SELECT " + cols.join(", ") + ", NULL AS " + S + ", " + ord + " AS " + O + CRLF
+            // DRC_S (valor original del atributo, para ordenar): NULL del mismo
+            // tipo que el atributo. Un «NULL» suelto lo toma BigQuery como INT64 y
+            // fallaba con «Column N in UNION ALL has incompatible types: STRING, INT64».
+            return "    SELECT " + cols.join(", ") + ", MIN(CASE WHEN FALSE THEN s." + A + " END) AS " + S + ", " + ord + " AS " + O + CRLF
                 + "    FROM " + src + " s" + CRLF
                 + "    WHERE " + where.join(" AND ") + CRLF
                 + (groupCols.length ? "    GROUP BY " + groupCols.map(c => "s." + c).join(", ") + CRLF : "")
