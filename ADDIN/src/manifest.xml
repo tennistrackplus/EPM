@@ -6,7 +6,7 @@
     xsi:type="TaskPaneApp">
 
   <Id>b7e1a4d2-3c9f-4a2e-9b1a-1234567890ab</Id>
-  <Version>1.0.0.6</Version>
+  <Version>1.0.0.7</Version>
   <ProviderName>Draco BI</ProviderName>
   <DefaultLocale>es-ES</DefaultLocale>
 
@@ -779,184 +779,134 @@
 
           <ExtensionPoint xsi:type="ContextMenu">
 
+            <!-- Clic derecho en una celda: tres submenús de primer nivel (un
+                 add-in solo puede añadir submenús, de un nivel, al final del
+                 menú; el texto es fijo, así que el estado actual se ve en
+                 las propiedades del campo del panel). -->
             <OfficeMenu id="ContextMenuCell">
 
-              <Control xsi:type="Menu" id="DracoContextMenuGroup">
-
-                <Label resid="TabLabel"/>
-
+              <Control xsi:type="Menu" id="DracoCtxMostrar">
+                <Label resid="CtxMostrarLabel"/>
                 <Supertip>
-                  <Title resid="TabLabel"/>
-                  <Description resid="DistribuirValoresButtonTooltip"/>
+                  <Title resid="CtxMostrarLabel"/>
+                  <Description resid="CtxMostrarTip"/>
                 </Supertip>
-
                 <Icon>
-                  <bt:Image size="16" resid="DistribuirValores16"/>
-                  <bt:Image size="32" resid="DistribuirValores32"/>
-                  <bt:Image size="80" resid="DistribuirValores80"/>
+                  <bt:Image size="16" resid="Opciones16"/>
+                  <bt:Image size="32" resid="Opciones32"/>
+                  <bt:Image size="80" resid="Opciones80"/>
                 </Icon>
-
                 <Items>
-
-                  <Item id="AnadirValorContextItem">
-                    <Label resid="AnadirValorButtonLabel"/>
+                  <Item id="CtxMostrarIDItem">
+                    <Label resid="CtxIDLabel"/>
                     <Supertip>
-                      <Title resid="AnadirValorButtonLabel"/>
-                      <Description resid="AnadirValorButtonTooltip"/>
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="AnadirValor16"/>
-                      <bt:Image size="32" resid="AnadirValor32"/>
-                      <bt:Image size="80" resid="AnadirValor80"/>
-                    </Icon>
-                    <Action xsi:type="ExecuteFunction">
-                      <FunctionName>anadirValor</FunctionName>
-                    </Action>
-                  </Item>
-
-                  <Item id="AnadirFormulaContextItem">
-                    <Label resid="AnadirFormulaButtonLabel"/>
-                    <Supertip>
-                      <Title resid="AnadirFormulaButtonLabel"/>
-                      <Description resid="AnadirFormulaButtonTooltip"/>
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="AnadirFormula16"/>
-                      <bt:Image size="32" resid="AnadirFormula32"/>
-                      <bt:Image size="80" resid="AnadirFormula80"/>
-                    </Icon>
-                    <Action xsi:type="ExecuteFunction">
-                      <FunctionName>anadirFormula</FunctionName>
-                    </Action>
-                  </Item>
-
-                  <Item id="DistribuirValoresContextItem">
-
-                    <Label resid="DistribuirValoresButtonLabel"/>
-
-                    <Supertip>
-                      <Title resid="DistribuirValoresButtonLabel"/>
-                      <Description resid="DistribuirValoresButtonTooltip"/>
-                    </Supertip>
-
-                    <Icon>
-                      <bt:Image size="16" resid="DistribuirValores16"/>
-                      <bt:Image size="32" resid="DistribuirValores32"/>
-                      <bt:Image size="80" resid="DistribuirValores80"/>
-                    </Icon>
-
-                    <Action xsi:type="ExecuteFunction">
-                      <FunctionName>abrirDistribuirValores</FunctionName>
-                    </Action>
-
-                  </Item>
-
-                  <Item id="FiltrarValoresSeleccionadosContextItem">
-
-                    <Label resid="FiltrarValoresSelLabel"/>
-
-                    <Supertip>
-                      <Title resid="FiltrarValoresSelLabel"/>
-                      <Description resid="FiltrarValoresSelTooltip"/>
-                    </Supertip>
-
-                    <Icon>
-                      <bt:Image size="16" resid="AnadirFiltro16"/>
-                      <bt:Image size="32" resid="AnadirFiltro32"/>
-                      <bt:Image size="80" resid="AnadirFiltro80"/>
-                    </Icon>
-
-                    <Action xsi:type="ExecuteFunction">
-                      <FunctionName>filtrarValoresSeleccionados</FunctionName>
-                    </Action>
-
-                  </Item>
-
-                  <Item id="campoTotalesMostrarContextItem">
-                    <Label resid="campoTotalesMostrarLabel"/>
-                    <Supertip>
-                      <Title resid="campoTotalesMostrarLabel"/>
-                      <Description resid="campoTotalesMostrarTip"/>
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="AnadirFiltro16"/>
-                      <bt:Image size="32" resid="AnadirFiltro32"/>
-                      <bt:Image size="80" resid="AnadirFiltro80"/>
-                    </Icon>
-                    <Action xsi:type="ExecuteFunction">
-                      <FunctionName>campoTotalesMostrar</FunctionName>
-                    </Action>
-                  </Item>
-
-                  <Item id="campoTotalesOcultarContextItem">
-                    <Label resid="campoTotalesOcultarLabel"/>
-                    <Supertip>
-                      <Title resid="campoTotalesOcultarLabel"/>
-                      <Description resid="campoTotalesOcultarTip"/>
-                    </Supertip>
-                    <Icon>
-                      <bt:Image size="16" resid="AnadirFiltro16"/>
-                      <bt:Image size="32" resid="AnadirFiltro32"/>
-                      <bt:Image size="80" resid="AnadirFiltro80"/>
-                    </Icon>
-                    <Action xsi:type="ExecuteFunction">
-                      <FunctionName>campoTotalesOcultar</FunctionName>
-                    </Action>
-                  </Item>
-
-                  <Item id="campoMostrarIDContextItem">
-                    <Label resid="campoMostrarIDLabel"/>
-                    <Supertip>
-                      <Title resid="campoMostrarIDLabel"/>
+                      <Title resid="CtxIDLabel"/>
                       <Description resid="campoMostrarIDTip"/>
                     </Supertip>
                     <Icon>
-                      <bt:Image size="16" resid="AnadirFiltro16"/>
-                      <bt:Image size="32" resid="AnadirFiltro32"/>
-                      <bt:Image size="80" resid="AnadirFiltro80"/>
+                      <bt:Image size="16" resid="Opciones16"/>
+                      <bt:Image size="32" resid="Opciones32"/>
+                      <bt:Image size="80" resid="Opciones80"/>
                     </Icon>
                     <Action xsi:type="ExecuteFunction">
                       <FunctionName>campoMostrarID</FunctionName>
                     </Action>
                   </Item>
-
-                  <Item id="campoMostrarIDTextoContextItem">
-                    <Label resid="campoMostrarIDTextoLabel"/>
+                  <Item id="CtxMostrarIDTextoItem">
+                    <Label resid="CtxIDTextoLabel"/>
                     <Supertip>
-                      <Title resid="campoMostrarIDTextoLabel"/>
+                      <Title resid="CtxIDTextoLabel"/>
                       <Description resid="campoMostrarIDTextoTip"/>
                     </Supertip>
                     <Icon>
-                      <bt:Image size="16" resid="AnadirFiltro16"/>
-                      <bt:Image size="32" resid="AnadirFiltro32"/>
-                      <bt:Image size="80" resid="AnadirFiltro80"/>
+                      <bt:Image size="16" resid="Opciones16"/>
+                      <bt:Image size="32" resid="Opciones32"/>
+                      <bt:Image size="80" resid="Opciones80"/>
                     </Icon>
                     <Action xsi:type="ExecuteFunction">
                       <FunctionName>campoMostrarIDTexto</FunctionName>
                     </Action>
                   </Item>
-
-                  <Item id="campoMostrarTextoContextItem">
-                    <Label resid="campoMostrarTextoLabel"/>
+                  <Item id="CtxMostrarTextoItem">
+                    <Label resid="CtxTextoLabel"/>
                     <Supertip>
-                      <Title resid="campoMostrarTextoLabel"/>
+                      <Title resid="CtxTextoLabel"/>
                       <Description resid="campoMostrarTextoTip"/>
                     </Supertip>
                     <Icon>
-                      <bt:Image size="16" resid="AnadirFiltro16"/>
-                      <bt:Image size="32" resid="AnadirFiltro32"/>
-                      <bt:Image size="80" resid="AnadirFiltro80"/>
+                      <bt:Image size="16" resid="Opciones16"/>
+                      <bt:Image size="32" resid="Opciones32"/>
+                      <bt:Image size="80" resid="Opciones80"/>
                     </Icon>
                     <Action xsi:type="ExecuteFunction">
                       <FunctionName>campoMostrarTexto</FunctionName>
                     </Action>
                   </Item>
+                </Items>
+              </Control>
 
-                  <Item id="campoOpcionesContextItem">
-                    <Label resid="campoOpcionesLabel"/>
+              <Control xsi:type="Menu" id="DracoCtxTotales">
+                <Label resid="CtxTotalesLabel"/>
+                <Supertip>
+                  <Title resid="CtxTotalesLabel"/>
+                  <Description resid="CtxTotalesTip"/>
+                </Supertip>
+                <Icon>
+                  <bt:Image size="16" resid="Opciones16"/>
+                  <bt:Image size="32" resid="Opciones32"/>
+                  <bt:Image size="80" resid="Opciones80"/>
+                </Icon>
+                <Items>
+                  <Item id="CtxTotalesMostrarItem">
+                    <Label resid="CtxTotMostrarLabel"/>
                     <Supertip>
-                      <Title resid="campoOpcionesLabel"/>
-                      <Description resid="campoOpcionesTip"/>
+                      <Title resid="CtxTotMostrarLabel"/>
+                      <Description resid="campoTotalesMostrarTip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="Opciones16"/>
+                      <bt:Image size="32" resid="Opciones32"/>
+                      <bt:Image size="80" resid="Opciones80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>campoTotalesMostrar</FunctionName>
+                    </Action>
+                  </Item>
+                  <Item id="CtxTotalesOcultarItem">
+                    <Label resid="CtxTotOcultarLabel"/>
+                    <Supertip>
+                      <Title resid="CtxTotOcultarLabel"/>
+                      <Description resid="campoTotalesOcultarTip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="Opciones16"/>
+                      <bt:Image size="32" resid="Opciones32"/>
+                      <bt:Image size="80" resid="Opciones80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>campoTotalesOcultar</FunctionName>
+                    </Action>
+                  </Item>
+                </Items>
+              </Control>
+
+              <Control xsi:type="Menu" id="DracoCtxFiltro">
+                <Label resid="CtxFiltroLabel"/>
+                <Supertip>
+                  <Title resid="CtxFiltroLabel"/>
+                  <Description resid="CtxFiltroTip"/>
+                </Supertip>
+                <Icon>
+                  <bt:Image size="16" resid="AnadirFiltro16"/>
+                  <bt:Image size="32" resid="AnadirFiltro32"/>
+                  <bt:Image size="80" resid="AnadirFiltro80"/>
+                </Icon>
+                <Items>
+                  <Item id="CtxBorrarFiltroItem">
+                    <Label resid="CtxBorrarFiltroLabel"/>
+                    <Supertip>
+                      <Title resid="CtxBorrarFiltroLabel"/>
+                      <Description resid="CtxBorrarFiltroTip"/>
                     </Supertip>
                     <Icon>
                       <bt:Image size="16" resid="AnadirFiltro16"/>
@@ -964,12 +914,25 @@
                       <bt:Image size="80" resid="AnadirFiltro80"/>
                     </Icon>
                     <Action xsi:type="ExecuteFunction">
-                      <FunctionName>campoOpciones</FunctionName>
+                      <FunctionName>borrarFiltroCampo</FunctionName>
                     </Action>
                   </Item>
-
+                  <Item id="CtxFiltrarValoresItem">
+                    <Label resid="FiltrarValoresSelLabel"/>
+                    <Supertip>
+                      <Title resid="FiltrarValoresSelLabel"/>
+                      <Description resid="FiltrarValoresSelTooltip"/>
+                    </Supertip>
+                    <Icon>
+                      <bt:Image size="16" resid="AnadirFiltro16"/>
+                      <bt:Image size="32" resid="AnadirFiltro32"/>
+                      <bt:Image size="80" resid="AnadirFiltro80"/>
+                    </Icon>
+                    <Action xsi:type="ExecuteFunction">
+                      <FunctionName>filtrarValoresSeleccionados</FunctionName>
+                    </Action>
+                  </Item>
                 </Items>
-
               </Control>
 
             </OfficeMenu>
@@ -1253,6 +1216,15 @@
       <bt:ShortStrings>
 
         <bt:String id="FunctionsNamespace" DefaultValue="DRACO"/>
+        <bt:String id="CtxMostrarLabel" DefaultValue="Draco · Mostrar"><bt:Override Locale="en-US" Value="Draco · Show"/></bt:String>
+        <bt:String id="CtxTotalesLabel" DefaultValue="Draco · Totales"><bt:Override Locale="en-US" Value="Draco · Totals"/></bt:String>
+        <bt:String id="CtxFiltroLabel" DefaultValue="Draco · Filtro"><bt:Override Locale="en-US" Value="Draco · Filter"/></bt:String>
+        <bt:String id="CtxIDLabel" DefaultValue="ID"><bt:Override Locale="en-US" Value="ID"/></bt:String>
+        <bt:String id="CtxIDTextoLabel" DefaultValue="ID y descripción"><bt:Override Locale="en-US" Value="ID and description"/></bt:String>
+        <bt:String id="CtxTextoLabel" DefaultValue="Descripción"><bt:Override Locale="en-US" Value="Description"/></bt:String>
+        <bt:String id="CtxTotMostrarLabel" DefaultValue="Mostrar"><bt:Override Locale="en-US" Value="Show"/></bt:String>
+        <bt:String id="CtxTotOcultarLabel" DefaultValue="Ocultar"><bt:Override Locale="en-US" Value="Hide"/></bt:String>
+        <bt:String id="CtxBorrarFiltroLabel" DefaultValue="Borrar filtro"><bt:Override Locale="en-US" Value="Clear filter"/></bt:String>
         <bt:String id="ActualizarTodosButtonLabel" DefaultValue="Actualizar todos"><bt:Override Locale="en-US" Value="Refresh all"/></bt:String>
         <bt:String id="AnadirValorButtonLabel" DefaultValue="Añadir valor"><bt:Override Locale="en-US" Value="Add value"/></bt:String>
         <bt:String id="AnadirFormulaButtonLabel" DefaultValue="Añadir fórmula"><bt:Override Locale="en-US" Value="Add formula"/></bt:String>
@@ -1392,6 +1364,10 @@
           id="AcercaDeItemTooltip"
           DefaultValue="Información sobre Draco BI (próximamente)"><bt:Override Locale="en-US" Value="About Draco BI (coming soon)"/></bt:String>
 
+        <bt:String id="CtxMostrarTip" DefaultValue="Cómo se muestra el campo de la celda: ID, descripción o los dos"><bt:Override Locale="en-US" Value="How the cell field is shown: ID, description or both"/></bt:String>
+        <bt:String id="CtxTotalesTip" DefaultValue="Muestra u oculta los subtotales del campo de la celda"><bt:Override Locale="en-US" Value="Shows or hides the subtotals of the cell field"/></bt:String>
+        <bt:String id="CtxFiltroTip" DefaultValue="Filtros del informe a partir de la celda seleccionada"><bt:Override Locale="en-US" Value="Report filters from the selected cell"/></bt:String>
+        <bt:String id="CtxBorrarFiltroTip" DefaultValue="Quita de Filtros el filtro de la dimensión de la celda seleccionada"><bt:Override Locale="en-US" Value="Removes the filter of the selected cell dimension from Filters"/></bt:String>
         <bt:String id="ActualizarTodosButtonTooltip" DefaultValue="Actualiza todos los informes del libro."><bt:Override Locale="en-US" Value="Refreshes all the reports in the workbook."/></bt:String>
         <bt:String id="AnadirValorButtonTooltip" DefaultValue="Abre el buscador de miembros en la celda seleccionada (igual que el doble clic). También en Excel online."><bt:Override Locale="en-US" Value="Opens the member search for the selected cell (same as double-click). Also in Excel online."/></bt:String>
         <bt:String id="AnadirFormulaButtonTooltip" DefaultValue="Añade o edita una línea calculada (EPM_FORMULA) en la celda seleccionada de un eje Estático."><bt:Override Locale="en-US" Value="Adds or edits a calculated line (EPM_FORMULA) in the selected cell of a Static axis."/></bt:String>
