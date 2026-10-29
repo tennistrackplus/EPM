@@ -164,7 +164,7 @@ const TaskPaneApp = {
         hierarchyNodesOnTop: true,
         overwriteFormats: true,
         overwriteStaticFormats: false,
-        autoFitColumns: true,
+        autoFitColumns: false,
         planningReport: false
     },
 
@@ -253,6 +253,18 @@ const TaskPaneApp = {
         const zone = target.axis === "columns" ? "columns" : "rows";
         const list = this.listForZone(zone) || [];
         const up = (x) => String(x || "").toUpperCase();
+
+        // Borrar filtro: elimina de la zona Filtros los filtros de la
+        // dimensión de la celda (cualquier atributo o jerarquía de esa dimensión).
+        if (action === "filter:clear") {
+            const hits = this.state.filters.filter(f => up(f.dimension) === up(target.dim));
+            if (!hits.length) { this.setAutoStatus("Este campo no tiene filtro."); return; }
+            this.state.filters = this.state.filters.filter(f => hits.indexOf(f) === -1);
+            this.rerenderFiltersZone();
+            this.scheduleAutoUpdate();
+            this.setAutoStatus("Filtro de " + target.dim + " borrado.");
+            return;
+        }
         const sameDim = list.filter(e => up(e.dimension) === up(target.dim));
         let entry = sameDim.find(e => e.isHierarchy && up(e.name) === up(target.attr))
             || sameDim.find(e => !e.isHierarchy && up(e.name) === up(target.attr))
@@ -279,8 +291,16 @@ const TaskPaneApp = {
         }
     },
 
-    scheduleAutoUpdate() {
+    /**
+     * Autoguardado del diseño + actualización de datos (700 ms después del
+     * último cambio). opts.saveOnly: el cambio no altera el informe (p. ej.
+     * soltar un campo en Filtros sin valor todavía): solo se guarda el
+     * diseño, sin consultar ni repintar. Si mientras tanto llega otro cambio
+     * que sí lo altera, se actualiza igualmente.
+     */
+    scheduleAutoUpdate(opts) {
         if (!this.currentReportId) return; // sin informe activo todavía: nada que guardar
+        if (!(opts && opts.saveOnly)) this.autoNeedsRefresh = true;
         this.setAutoStatus("Cambios pendientes…");
         if (this.autoRefreshTimer) clearTimeout(this.autoRefreshTimer);
         this.autoRefreshTimer = setTimeout(() => this.runAutoSaveAndRefresh(), 700);
@@ -293,10 +313,18 @@ const TaskPaneApp = {
             return;
         }
         this.isAutoRefreshing = true;
+        const needRefresh = !!this.autoNeedsRefresh;
+        this.autoNeedsRefresh = false;
 
         try {
             this.setAutoStatus("Guardando…");
             await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
+
+            if (!needRefresh) {
+                // Cambio que no altera el informe: guardado, sin actualizar
+                this.setAutoStatus("");
+                return;
+            }
 
             if (this.isRefreshPaused()) {
                 // Pausa activa (botón de pausa marcado): se guarda el diseño
@@ -328,7 +356,7 @@ const TaskPaneApp = {
             this.isAutoRefreshing = false;
             if (this.autoRefreshQueued) {
                 this.autoRefreshQueued = false;
-                this.scheduleAutoUpdate();
+                this.scheduleAutoUpdate({ saveOnly: true }); // conserva si hacía falta actualizar
             }
         }
     },
@@ -1393,7 +1421,7 @@ const TaskPaneApp = {
                 hierarchyNodesOnTop: true,
                 overwriteFormats: true,
                 overwriteStaticFormats: false,
-                autoFitColumns: true,
+                autoFitColumns: false,
                 planningReport: false
             });
             RangeAxis.loadFromAddresses("", "", "");
@@ -1917,7 +1945,7 @@ const TaskPaneApp = {
         });
         list.length = 0;
         list.push(...newList);
-        this.scheduleAutoUpdate();
+        this.scheduleAutoUpdate({ saveOnly: zoneId === "filters" }); // el orden de los filtros no cambia el informe
     },
 
     /* -------------------------------------------------------------
@@ -1962,9 +1990,9 @@ const TaskPaneApp = {
         this.renderTag(container, zoneId, entry);
 
         // Un filtro recién soltado aún no tiene valor (se ignora en el WHERE
-        // hasta que se elija uno), pero añadir/quitar campos de Filas o
-        // Columnas sí cambia el informe de inmediato: autoguardar+actualizar.
-        this.scheduleAutoUpdate();
+        // hasta que se elija uno): el informe no cambia, solo se guarda el
+        // diseño. Añadir campos a Filas o Columnas sí lo cambia: actualizar.
+        this.scheduleAutoUpdate({ saveOnly: zoneId === "filters" && !entry.filter });
     },
 
     removeFromState(zoneId, data) {
@@ -1991,7 +2019,8 @@ const TaskPaneApp = {
         this.reconcileTextColumns();
         this.refreshRangeLabels();
 
-        this.scheduleAutoUpdate();
+        // Quitar de Filtros un filtro sin valor no cambia el informe
+        this.scheduleAutoUpdate({ saveOnly: zoneId === "filters" && !!removed && !removed.filter });
     },
 
     listForZone(zoneId) {
@@ -2877,9 +2906,12 @@ const TaskPaneApp = {
         // todavía para construir el SQL.
         wrap.innerHTML = `
             <div class="field-options-section-title">General</div>
-            <label class="field-options-checkbox-row">
-                <input type="checkbox" id="optShowTotals" ${options.showTotals ? "checked" : ""}>
-                <span>Subtotales</span>
+            <label class="field-options-field-block">
+                <span class="field-options-field-label">Subtotales</span>
+                <select id="optShowTotals">
+                    <option value="0" ${options.showTotals ? "" : "selected"}>Ocultar</option>
+                    <option value="1" ${options.showTotals ? "selected" : ""}>Mostrar</option>
+                </select>
             </label>
             <label class="field-options-field-block">
                 <span class="field-options-field-label">Ordenar</span>
@@ -2893,7 +2925,7 @@ const TaskPaneApp = {
 
         const persist = () => {
             const current = this.getFieldOptions(zoneId, entry);
-            current.showTotals = wrap.querySelector("#optShowTotals").checked;
+            current.showTotals = wrap.querySelector("#optShowTotals").value === "1";
             current.sortOrder = wrap.querySelector("#optSortOrder").value;
             this.setFieldOptions(zoneId, entry, current);
             this.scheduleAutoUpdate();
@@ -2919,8 +2951,14 @@ const TaskPaneApp = {
             return;
         }
 
-        const displayBlock = this.buildDisplayModeBlock(zoneId, entry, options);
-        if (displayBlock) container.appendChild(displayBlock);
+        // «Mostrar como» en una jerarquía solo si ya tiene textos por nivel
+        // (el selector de texto por nivel está oculto de momento en el modelo)
+        const hInfo = window.ReportStore && window.ReportStore.getDisplayTextInfo
+            ? window.ReportStore.getDisplayTextInfo(this.currentReportId, entry.dimension, entry.name, true) : null;
+        if (hInfo && hInfo.available) {
+            const displayBlock = this.buildDisplayModeBlock(zoneId, entry, options);
+            if (displayBlock) container.appendChild(displayBlock);
+        }
 
         const expandLabel = document.createElement("label");
         expandLabel.className = "field-options-field-block";
@@ -3074,14 +3112,17 @@ const TaskPaneApp = {
                 <div id="optExcDims" style="display:flex; flex-direction:column; gap:3px; max-height:180px; overflow-y:auto;"></div>
             </div>
             <div class="field-options-section-title">Planificación</div>
-            <label class="field-options-checkbox-row">
-                <input type="checkbox" id="optPlanificable" ${options.planificable ? "checked" : ""}>
-                <span>Planificable</span>
+            <label class="field-options-field-block">
+                <span class="field-options-field-label">Planificable</span>
+                <select id="optPlanificable"><option value="0" ${options.planificable ? "" : "selected"}>No</option><option value="1" ${options.planificable ? "selected" : ""}>Sí</option></select>
             </label>
             <div id="optPlanificableSection" style="display:${options.planificable ? "block" : "none"}; margin-top:6px;">
-                <label class="field-options-checkbox-row">
-                    <input type="checkbox" id="optDimensionsBehaviorCustom" ${options.dimensionsBehaviorCustom ? "checked" : ""}>
-                    <span>Personalizar criterio de dimensiones para esta medida</span>
+                <label class="field-options-field-block">
+                    <span class="field-options-field-label">Criterio de dimensiones</span>
+                    <select id="optDimensionsBehaviorCustom">
+                        <option value="0" ${options.dimensionsBehaviorCustom ? "" : "selected"}>El del informe</option>
+                        <option value="1" ${options.dimensionsBehaviorCustom ? "selected" : ""}>Personalizado para esta medida</option>
+                    </select>
                 </label>
                 <div style="font-size:10px; color:#605e5c; margin:4px 0 6px;">
                     Si no se marca, usa el criterio global del informe
@@ -3112,8 +3153,8 @@ const TaskPaneApp = {
             delete current.decimalSeparator;
             delete current.thousandsSeparator;
             delete current.factor;
-            current.planificable = wrap.querySelector("#optPlanificable").checked;
-            current.dimensionsBehaviorCustom = wrap.querySelector("#optDimensionsBehaviorCustom").checked;
+            current.planificable = wrap.querySelector("#optPlanificable").value === "1";
+            current.dimensionsBehaviorCustom = wrap.querySelector("#optDimensionsBehaviorCustom").value === "1";
 
             const dimensionsBehavior = {};
             wrap.querySelectorAll("#optDimensionsBehaviorContainer .dim-behavior-row").forEach(row => {
@@ -3147,7 +3188,7 @@ const TaskPaneApp = {
 
         // "Planificable" despliega/oculta la sección de personalización.
         wrap.querySelector("#optPlanificable").addEventListener("change", (e) => {
-            wrap.querySelector("#optPlanificableSection").style.display = e.target.checked ? "block" : "none";
+            wrap.querySelector("#optPlanificableSection").style.display = e.target.value === "1" ? "block" : "none";
         });
 
         // "Personalizar..." despliega/oculta y rellena la lista de
@@ -3155,8 +3196,8 @@ const TaskPaneApp = {
         // informe: buildDimensionBehaviorRow).
         const dimsContainer = wrap.querySelector("#optDimensionsBehaviorContainer");
         wrap.querySelector("#optDimensionsBehaviorCustom").addEventListener("change", async (e) => {
-            dimsContainer.style.display = e.target.checked ? "flex" : "none";
-            if (e.target.checked) await this.fillDimensionsBehaviorContainer(dimsContainer, options.dimensionsBehavior || {});
+            dimsContainer.style.display = e.target.value === "1" ? "flex" : "none";
+            if (e.target.value === "1") await this.fillDimensionsBehaviorContainer(dimsContainer, options.dimensionsBehavior || {});
         });
 
         if (options.dimensionsBehaviorCustom) {

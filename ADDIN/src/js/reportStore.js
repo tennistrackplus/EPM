@@ -46,7 +46,7 @@
         hierarchyNodesOnTop: true,
         overwriteFormats: true,
         overwriteStaticFormats: false,
-        autoFitColumns: true,
+        autoFitColumns: false,
         planningReport: false
     };
 
@@ -516,9 +516,24 @@
             return [subtotal, order];
         };
 
+        // Niveles de la jerarquía que se consultan y se pintan: los marcados
+        // en «Mostrar niveles» y, si hay «Expandir hasta nivel», solo hasta
+        // ese nivel. null = todos.
         const visibleLevelsFor = (dimension, name) => {
             const opts = (fieldOptions || {})[`${zoneId}|${dimension}|${name}`] || {};
-            return Array.isArray(opts.visibleLevels) ? opts.visibleLevels : null;
+            let vis = Array.isArray(opts.visibleLevels) ? opts.visibleLevels.map(Number) : null;
+            const upTo = Number(opts.expandToLevel);
+            if (opts.expandToLevel !== null && opts.expandToLevel !== undefined && opts.expandToLevel !== "" && Number.isFinite(upTo) && upTo > 0) {
+                const base = vis || [];
+                vis = vis ? base.filter(n => n <= upTo) : null;
+                if (!vis) vis = { upTo };
+            }
+            return vis;
+        };
+        const levelIsVisible = (visibleLevels, nivel) => {
+            if (!visibleLevels) return true;
+            if (!Array.isArray(visibleLevels)) return nivel <= visibleLevels.upTo;
+            return visibleLevels.includes(nivel);
         };
 
         // ¿Ya está el atributo `name` de `dimension` como campo suelto en esta zona?
@@ -536,29 +551,40 @@
             if (item.isHierarchy && existsHierarchy(hierGrid, item.dimension, item.name)) {
                 const visibleLevels = visibleLevelsFor(item.dimension, item.name);
                 const lastRow = lastRowInColumnValues(hierGrid, 4);
-                const niveles = [];
-                const hostStart = out.length;
+                // Niveles de la jerarquía, en orden, con los ocultos fuera.
+                const defs = [];
                 for (let R = 2; R <= lastRow; R++) {
                     if (String(cellValue(hierGrid, R, 4)).toUpperCase() === item.dimension.toUpperCase()
                         && String(cellValue(hierGrid, R, 2)).toUpperCase() === item.name.toUpperCase()) {
                         const nivel = Number(cellValue(hierGrid, R, 3));
-                        if (visibleLevels && !visibleLevels.includes(nivel)) continue;
-                        niveles.push(nivel);
-                        out.push([
-                            cellValue(hierGrid, R, 4), // DIMENSION
-                            cellValue(hierGrid, R, 5), // ATRIBUTO
-                            cellValue(hierGrid, R, 3), // NIVEL
-                            cellValue(hierGrid, R, 2), // JERARQUIA
-                            "", ""                     // subtotal/orden: no aplica a jerarquías
-                        ]);
+                        if (!levelIsVisible(visibleLevels, nivel)) continue;
+                        defs.push({ nivel, dim: cellValue(hierGrid, R, 4), attr: cellValue(hierGrid, R, 5), hier: cellValue(hierGrid, R, 2) });
                     }
                 }
+                defs.sort((a, b) => a.nivel - b.nivel);
+                // Se renumeran 1, 2, 3... SIN huecos: el motor solo reconoce
+                // una jerarquía si sus niveles son consecutivos (ver
+                // pushHierarchyRunLengths en commands.js). Quitar niveles da
+                // así lo mismo que una jerarquía creada sin ellos (antes, con
+                // un hueco, los niveles se pintaban como campos sueltos).
+                const niveles = defs.map(d => d.nivel); // nº original (para los textos)
+                const hostStart = out.length;
+                defs.forEach((d, i) => {
+                    out.push([
+                        d.dim,        // DIMENSION
+                        d.attr,       // ATRIBUTO
+                        i + 1,        // NIVEL (consecutivo)
+                        d.hier,       // JERARQUIA
+                        "", ""        // subtotal/orden: no aplica a jerarquías
+                    ]);
+                });
                 // "ID y texto": segunda jerarquía con los textos de cada nivel.
                 const texts = wantsIdText(item.dimension, item.name)
-                    ? _hierarchyTextAttributes(_dimensionField(model, item.dimension), item.name, visibleLevels) : null;
+                    ? _hierarchyTextAttributes(_dimensionField(model, item.dimension), item.name,
+                        niveles.length ? niveles : null) : null;
                 if (texts && niveles.every(n => texts[n])) {
-                    niveles.forEach(n => {
-                        out.push([item.dimension, texts[n], n, item.name + TEXT_SUFFIX, "", ""]);
+                    niveles.forEach((n, i) => {
+                        out.push([item.dimension, texts[n], i + 1, item.name + TEXT_SUFFIX, "", ""]);
                     });
                     // "Solo texto": los niveles de ID se consultan pero no se pintan.
                     if (displayModeOf(item.dimension, item.name) === "TEXT") {

@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-28-diseno";
+const DRACO_BUILD = "2026-10-28-jerarquias";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -5055,7 +5055,7 @@ function getDracoReportProperties() {
         hierarchyNodesOnTop: true,
         overwriteFormats: true,
         overwriteStaticFormats: false,
-        autoFitColumns: true,
+        autoFitColumns: false,
         planningReport: false
     };
     try {
@@ -8798,14 +8798,33 @@ async function applyDracoTotalHighlight(context, sheet, filasCells, columnasCell
 
     if (totalRows.size === 0 && totalCols.size === 0) return;
 
+    // Antes: una llamada por celda (cabeceras y valores de cada fila/columna
+    // de total; en una jerarquía grande, miles). Ahora se rellenan tramos:
+    // cabeceras por columna/fila y, en los valores, cada fila (o columna) de
+    // total de lado a lado del bloque de valores, juntando las contiguas.
+    const fill = (fmt) => { fmt.fill.color = TOTAL_FILL; };
+    const headerRects = [];
+    const byCol = new Map();
     for (const cell of headerCells) {
-        sheet.getRangeByIndexes(cell.row - 1, cell.col - 1, 1, 1).format.fill.color = TOTAL_FILL;
+        if (!byCol.has(cell.col)) byCol.set(cell.col, []);
+        byCol.get(cell.col).push(cell.row);
     }
+    byCol.forEach((rows, col) => dracoRuns(rows).forEach(run =>
+        headerRects.push({ r: run.start - 1, c: col - 1, h: run.end - run.start + 1, w: 1 })));
+    dracoFormatRects(sheet, headerRects, fill);
 
+    let minR = Infinity, maxR = -Infinity, minC = Infinity, maxC = -Infinity;
     for (const cell of factCells.values()) {
-        if (totalRows.has(cell.row) || totalCols.has(cell.col)) {
-            sheet.getRangeByIndexes(cell.row - 1, cell.col - 1, 1, 1).format.fill.color = TOTAL_FILL;
-        }
+        if (cell.row < minR) minR = cell.row; if (cell.row > maxR) maxR = cell.row;
+        if (cell.col < minC) minC = cell.col; if (cell.col > maxC) maxC = cell.col;
+    }
+    if (minR !== Infinity) {
+        const factRects = [];
+        dracoRuns(Array.from(totalRows).filter(r => r >= minR && r <= maxR)).forEach(run =>
+            factRects.push({ r: run.start - 1, c: minC - 1, h: run.end - run.start + 1, w: maxC - minC + 1 }));
+        dracoRuns(Array.from(totalCols).filter(c => c >= minC && c <= maxC)).forEach(run =>
+            factRects.push({ r: minR - 1, c: run.start - 1, h: maxR - minR + 1, w: run.end - run.start + 1 }));
+        dracoFormatRects(sheet, factRects, fill);
     }
 
     // deferSync=true (ver jsonTo3MatricesCore): se deja en cola, el
@@ -8839,6 +8858,69 @@ function dracoColorForLevel(fieldBase1, indent) {
     return DRACO_LEVEL_PALETTE[idx];
 }
 
+/* ---------------------------------------------------------------------
+ * Formato de muchos rectángulos con pocas llamadas (rendimiento)
+ * ---------------------------------------------------------------------
+ * Una jerarquía alterna nivel fila a fila: el formato por tramos contiguos
+ * daba una llamada por fila (600 filas = 600 x 5 propiedades). Con
+ * RangeAreas (worksheet.getRanges("A1:A3,A5,..."), ExcelApi 1.9) se aplica
+ * el mismo formato a muchos rectángulos en una sola llamada. Las
+ * direcciones van en lotes cortos (DRACO_AREAS_MAX_CHARS) por prudencia
+ * con el límite de longitud. Sin RangeAreas (Excel antiguo o Tablas Draco
+ * en Planning) se aplica rectángulo a rectángulo, como antes.
+ * rects: [{ r, c, h, w }] 0-based. apply(format) fija las propiedades.
+ * --------------------------------------------------------------------- */
+const DRACO_AREAS_MAX_CHARS = 250;
+let DracoAreasSupported = null;
+
+function dracoAreasSupported(sheet) {
+    if (DracoAreasSupported === null) {
+        try {
+            DracoAreasSupported = dracoIsRealExcel()
+                && !!Office.context.requirements.isSetSupported("ExcelApi", "1.9");
+        } catch (e) { DracoAreasSupported = false; }
+    }
+    return DracoAreasSupported && typeof sheet.getRanges === "function";
+}
+
+function dracoRectA1(x) {
+    const a = dracoColumnLetter(x.c + 1) + (x.r + 1);
+    if (x.h === 1 && x.w === 1) return a;
+    return a + ":" + dracoColumnLetter(x.c + x.w) + (x.r + x.h);
+}
+
+function dracoFormatRects(sheet, rects, apply) {
+    if (!rects.length) return 0;
+    if (!dracoAreasSupported(sheet)) {
+        rects.forEach(x => apply(sheet.getRangeByIndexes(x.r, x.c, x.h, x.w).format));
+        return rects.length;
+    }
+    let ops = 0, batch = [], len = 0;
+    const flush = () => {
+        if (!batch.length) return;
+        apply(sheet.getRanges(batch.join(",")).format);
+        ops++; batch = []; len = 0;
+    };
+    rects.forEach(x => {
+        const a = dracoRectA1(x);
+        if (batch.length && len + a.length + 1 > DRACO_AREAS_MAX_CHARS) flush();
+        batch.push(a); len += a.length + 1;
+    });
+    flush();
+    return ops;
+}
+
+/** Une en rectángulos los tramos contiguos de una lista de índices 1-based (ordenados o no). */
+function dracoRuns(indexes) {
+    const v = Array.from(new Set(indexes)).sort((a, b) => a - b);
+    const out = [];
+    for (let i = 0; i < v.length; i++) {
+        if (out.length && v[i] === out[out.length - 1].end + 1) out[out.length - 1].end = v[i];
+        else out.push({ start: v[i], end: v[i] });
+    }
+    return out;
+}
+
 /**
  * Aplica indentLevel + color de relleno/texto + fuente a un bloque de
  * celdas ya escrito (filasCells o columnasCells), agrupando en tramos
@@ -8864,40 +8946,30 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
         groups.get(g).push(c);
     }
 
-    let runCount = 0; // instrumentación: nº de range.format aplicados (ver draco_perfMark)
+    // Todas las celdas de una misma columna (o fila) y la misma sangría
+    // llevan el mismo formato: se juntan sus tramos y se aplican de una vez
+    // (dracoFormatRects). Antes: una llamada por tramo contiguo, que en una
+    // jerarquía es casi una por fila.
+    let runCount = 0; // instrumentación: nº de llamadas de formato (ver draco_perfMark)
     for (const [g, list] of groups) {
-        list.sort((a, b) => a[runKeyName] - b[runKeyName]);
         const fieldBase1 = g - fieldOffset; // 1-based: posición del campo en el eje
-
-        let runStart = 0;
-        for (let k = 1; k <= list.length; k++) {
-            const endOfRun = k === list.length
-                || list[k][runKeyName] !== list[k - 1][runKeyName] + 1
-                || list[k].indent !== list[k - 1].indent;
-
-            if (endOfRun) {
-                const first = list[runStart];
-                const last = list[k - 1];
-                const style = dracoColorForLevel(fieldBase1, first.indent);
-
-                let range;
-                if (axis === "col") {
-                    const numRows = last.row - first.row + 1;
-                    range = sheet.getRangeByIndexes(first.row - 1, g - 1, numRows, 1);
-                } else {
-                    const numCols = last.col - first.col + 1;
-                    range = sheet.getRangeByIndexes(g - 1, first.col - 1, 1, numCols);
-                }
-
-                range.format.indentLevel = first.indent;
-                range.format.font.name = DRACO_FONT_NAME;
-                range.format.font.size = DRACO_FONT_SIZE;
-                range.format.fill.color = style.fill;
-                range.format.font.color = style.font;
-                runCount++;
-
-                runStart = k;
-            }
+        const byIndent = new Map();
+        for (const c of list) {
+            if (!byIndent.has(c.indent)) byIndent.set(c.indent, []);
+            byIndent.get(c.indent).push(c[runKeyName]);
+        }
+        for (const [indent, positions] of byIndent) {
+            const style = dracoColorForLevel(fieldBase1, indent);
+            const rects = dracoRuns(positions).map(run => axis === "col"
+                ? { r: run.start - 1, c: g - 1, h: run.end - run.start + 1, w: 1 }
+                : { r: g - 1, c: run.start - 1, h: 1, w: run.end - run.start + 1 });
+            runCount += dracoFormatRects(sheet, rects, (fmt) => {
+                fmt.indentLevel = indent;
+                fmt.font.name = DRACO_FONT_NAME;
+                fmt.font.size = DRACO_FONT_SIZE;
+                fmt.fill.color = style.fill;
+                fmt.font.color = style.font;
+            });
         }
     }
 
@@ -11629,6 +11701,12 @@ async function campoMostrarTexto(event) {
     catch (error) { console.error("Error en campoMostrarTexto:", error); }
     finally { if (event) event.completed(); }
 }
+/** Clic derecho ▸ Draco · Filtro ▸ Borrar filtro: quita de Filtros el filtro de la dimensión de la celda. */
+async function borrarFiltroCampo(event) {
+    try { await dracoFieldActionFromCell("filter:clear"); }
+    catch (error) { console.error("Error en borrarFiltroCampo:", error); }
+    finally { if (event) event.completed(); }
+}
 async function campoOpciones(event) {
     try { await dracoFieldActionFromCell("options"); }
     catch (error) { console.error("Error en campoOpciones:", error); }
@@ -12055,6 +12133,7 @@ try {
     Office.actions.associate("abrirDistribuirValores", abrirDistribuirValores);
     Office.actions.associate("abrirAnadirFiltro", abrirAnadirFiltro);
     Office.actions.associate("filtrarValoresSeleccionados", filtrarValoresSeleccionados);
+    Office.actions.associate("borrarFiltroCampo", borrarFiltroCampo);
     Office.actions.associate("actualizarTodos", actualizarTodos);
     Office.actions.associate("anadirValor", anadirValor);
     Office.actions.associate("anadirFormula", anadirFormula);
