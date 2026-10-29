@@ -725,3 +725,27 @@ body {
 .field-options-group .field-options-empty {
     font-weight: 400;
 }
+
+/* Contenido del panel de opciones: se sustituye de una vez con un fundido
+   corto (ver TaskPaneApp.renderFieldOptionsBody). */
+.field-options-content {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    animation: dracoFoFade 0.16s ease-out;
+}
+
+@keyframes dracoFoFade {
+    from { opacity: 0; transform: translateY(3px); }
+    to { opacity: 1; transform: none; }
+}
+
+/* Apertura/cierre del panel algo más suave */
+.field-options-panel {
+    transition: width 0.24s cubic-bezier(0.2, 0, 0, 1), min-width 0.24s cubic-bezier(0.2, 0, 0, 1), opacity 0.2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .field-options-content { animation: none; }
+    .field-options-panel { transition: none; }
+}
