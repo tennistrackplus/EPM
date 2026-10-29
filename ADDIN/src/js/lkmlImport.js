@@ -128,14 +128,25 @@
             const typeM = blk.body.match(/#\s*tipo de origen:\s*(\S+)/);
             const sqlM = blk.body.match(/sql:\s*\$\{TABLE\}\.([a-zA-Z0-9_]+)\s*;;/);
             const fieldName = sqlM ? sqlM[1] : blk.name;
+            // Atributo calculado de Draco (ver lkmlExport)
+            let calc = null;
+            const calcM = blk.body.match(/#\s*draco-atributo:\s*([A-Za-z0-9+\/=]+)/);
+            if (calcM) {
+                try {
+                    const d = JSON.parse(decodeURIComponent(escape(atob(calcM[1]))));
+                    if (d && d.name === fieldName && typeof d.expression === "string") calc = d.expression;
+                } catch (e) { /* comentario dañado: atributo normal */ }
+            }
 
-            return {
+            const out = {
                 name: fieldName,
                 alias: blk.name && blk.name !== fieldName ? blk.name : fieldName,
                 dataType: typeM ? typeM[1] : "",
                 isKey: isKey,
                 enabled: true
             };
+            if (calc !== null) { out.calc = true; out.expression = calc; out.isKey = false; }
+            return out;
 
         });
 
@@ -281,6 +292,20 @@
                 // Dimensión de la tabla de hechos (sin JOIN): marca explícita o,
                 // en ficheros antiguos, vista sobre la propia tabla de hechos sin join.
                 const factDimM = v.body.match(/#\s*draco:\s*dimension de hechos:\s*(\S+)/);
+                // Miembros calculados del modelo (ver lkmlExport)
+                let calcMembers = {};
+                const calcM = v.body.match(/#\s*draco-calculos:\s*([A-Za-z0-9+\/=]+)/);
+                if (calcM) {
+                    try {
+                        const d = JSON.parse(decodeURIComponent(escape(atob(calcM[1]))));
+                        if (d && typeof d === "object" && !Array.isArray(d)) {
+                            Object.keys(d).forEach(k => {
+                                if (Array.isArray(d[k])) calcMembers[String(k).toUpperCase()] = d[k]
+                                    .filter(c => c && c.mode !== "position" && typeof c.expr === "string" && typeof c.name === "string");
+                            });
+                        }
+                    } catch (e) { calcMembers = {}; }
+                }
                 const sameAsFact = !join && relTable.table && relTable.table === fact.table
                     && relTable.dataset === fact.dataset && relTable.project === fact.project;
                 const onFact = !!factDimM || sameAsFact;
@@ -294,7 +319,8 @@
                     relTable: onFact ? "" : relTable.table,
                     attributes: attributes,
                     hierarchies: hierarchies,
-                    textAttribute: textM ? textM[1] : ""
+                    textAttribute: textM ? textM[1] : "",
+                    calcMembers
                 };
 
             });

@@ -119,6 +119,10 @@
             // Dimensión sobre la tabla de hechos (sin JOIN): se marca para
             // recuperarla igual al importar (nombre exacto de la columna).
             if (!dim.relTable) lines.push(`  # draco: dimension de hechos: ${dim.name}`);
+            // Miembros calculados del modelo (OIBDA = [Ingresos] - [Gastos]...), en base64
+            if (dim.calcMembers && Object.keys(dim.calcMembers).length) {
+                lines.push(`  # draco-calculos: ${btoa(unescape(encodeURIComponent(JSON.stringify(dim.calcMembers))))}`);
+            }
             lines.push("");
 
             if (attributes.length > 0) {
@@ -129,6 +133,10 @@
                     lines.push(`  dimension: ${attrId} {`);
                     if (a.isKey) lines.push("    primary_key: yes");
                     if (a.dataType) lines.push(`    # tipo de origen: ${a.dataType}`);
+                    if (a.calc) {
+                        // Atributo calculado de Draco: la fórmula va en base64 y se recupera al importar
+                        lines.push(`    # draco-atributo: ${btoa(unescape(encodeURIComponent(JSON.stringify({ name: a.name, expression: a.expression || "" }))))}`);
+                    }
                     lines.push(`    sql: \${TABLE}.${a.name} ;;`);
                     lines.push("  }");
                     lines.push("");

@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-29-medidas-calc";
+const DRACO_BUILD = "2026-10-29-miembros-calc";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -1161,18 +1161,36 @@ function attachDracoCalcs() {
     if (!window.DracoCalc) return;
 
     let fieldOptions = {};
+    let modelFields = [];
     try {
         const report = (window.ReportStore && ReportState.ReportId !== null && ReportState.ReportId !== undefined)
             ? window.ReportStore.getReport(ReportState.ReportId) : null;
         fieldOptions = (report && report.design && report.design.fieldOptions) || {};
+        // Miembros calculados DEL MODELO (dimensión.calcMembers[ATRIBUTO]):
+        // salen en todos los informes del modelo, como los del informe.
+        const sms = window.SemanticModelStore;
+        const mName = (report && report.semanticModelName) || (sms && sms.getActiveModelName && sms.getActiveModelName()) || "";
+        const model = mName && sms && sms.getModel ? sms.getModel(mName) : null;
+        modelFields = (model && model.fields) || [];
     } catch (e) { fieldOptions = {}; }
+
+    // Cálculos de un atributo: los del modelo («por miembro») y los del
+    // informe; si coinciden de nombre, manda el del informe.
+    const calcsFor = (dim, attr) => {
+        const own = window.DracoCalc.getCalcs(fieldOptions, dim, attr);
+        const f = modelFields.find(x => x && x.type === "DIMENSION" && String(x.name).toUpperCase() === String(dim).toUpperCase());
+        const fromModel = ((f && f.calcMembers) || {})[String(attr).toUpperCase()] || [];
+        if (!fromModel.length) return own;
+        const ownNames = new Set(own.map(c => String(c.name).trim().toUpperCase()));
+        return fromModel.filter(c => c && c.mode !== "position" && !ownNames.has(String(c.name).trim().toUpperCase())).concat(own);
+    };
 
     const seen = new Set();
     const collect = (fields, axis) => {
         fields.forEach((fld, idx) => {
             const k = String(fld.AttributeName).toUpperCase();
             if (seen.has(k)) return; // mismo atributo dos veces: solo el primero
-            const calcs = window.DracoCalc.getCalcs(fieldOptions, fld.Dimension, fld.AttributeName)
+            const calcs = calcsFor(fld.Dimension, fld.AttributeName)
                 .map(c => {
                     const a = window.DracoCalc.analyze(c.expr, c.mode);
                     return a.ok ? Object.assign({}, c, { ast: a.ast, refs: a.refs }) : null;
@@ -1217,6 +1235,7 @@ function dracoCalcOrderPart(part) {
  * Requiere ReportState cargado (loadReportDefinition + applyFilterMeasuresToDynamicReport).
  */
 function buildDracoKpiParts(relGrid, measuresGrid, atributesGrid) {
+    dracoIndexCalcAttrs(atributesGrid); // atributos calculados del modelo
     const dims = [...ReportState.Columns, ...ReportState.Rows];
     if (dims.length) throw new Error("Un KPI no lleva campos en Filas ni en Columnas: quítalos y deja solo la medida y los filtros.");
     if (ReportState.Measures.length !== 1) throw new Error(ReportState.Measures.length ? "Un KPI tiene UNA sola medida: deja solo una en «Filtros»." : "Añade la medida del KPI: arrástrala a «Filtros».");
@@ -1265,6 +1284,19 @@ function buildDracoKpiParts(relGrid, measuresGrid, atributesGrid) {
  *     DRC_S_i guarda el valor original (orden) y DRC_O_i la posición del
  *     cálculo (0 = miembro real).
  */
+/** Atributos de los niveles inferiores al del cálculo, si su atributo es un nivel de jerarquía del eje. */
+function dracoCalcDeeperLevels(spec) {
+    const fields = (spec.axis === "Columns" ? ReportState.Columns : ReportState.Rows) || [];
+    const me = fields[spec.idx];
+    if (!me) return [];
+    const lvl = Number(me.Hierarchy) || 0;
+    const next = fields[spec.idx + 1];
+    // ¿Es jerarquía? El siguiente campo es de la misma dimensión y del nivel siguiente
+    if (!next || String(next.Dimension).toUpperCase() !== String(me.Dimension).toUpperCase() || Number(next.Hierarchy) !== lvl + 1) return [];
+    return fields.filter((f, k) => k !== spec.idx && String(f.Dimension).toUpperCase() === String(me.Dimension).toUpperCase()
+        && Number(f.Hierarchy) > lvl).map(f => f.AttributeName);
+}
+
 function buildDracoCalcCtes(relGrid, measuresGrid, atributesGrid, withSubtotals) {
     const specs = ReportState.Calcs || [];
     if (specs.length === 0) return null;
@@ -1307,7 +1339,7 @@ function buildDracoCalcCtes(relGrid, measuresGrid, atributesGrid, withSubtotals)
             }
             const tipo = getAttributeType(atributesGrid, spec.dim, A);
             const lits = memberRefs.map(r => UNQUOTED_TYPES.includes(tipo) && !isNaN(Number(r)) ? String(Number(r)) : dracoSqlString(r));
-            conds.push(getTableAlias(relGrid, spec.dim) + "." + A + " IN (" + lits.join(", ") + ")");
+            conds.push(dracoCol(relGrid, spec.dim, A) + " IN (" + lits.join(", ") + ")");
 
             sql += "," + CRLF + "DRC_HID_" + i + " AS (" + CRLF
                 + (withSubtotals ? buildSelectWithSubtotals(measuresGrid, relGrid) : buildSelect(measuresGrid, relGrid)) + CRLF
@@ -1361,6 +1393,10 @@ function buildDracoCalcCtes(relGrid, measuresGrid, atributesGrid, withSubtotals)
                 return "s." + c + " AS " + c;
             });
             const where = ["s." + A + " IS NOT NULL"];
+            // A es un nivel de una jerarquía: el cálculo es un nodo SIN hijos
+            // (solo filas donde los niveles inferiores van a NULL). Si no, se
+            // calculaba también para cada combinación de niveles inferiores.
+            dracoCalcDeeperLevels(spec).forEach(d => where.push("s." + d + " IS NULL"));
             if (!isMember && hasH) where.push("s.DRC_SRC = 'P'");
             const having = (isMember && calc.refs.length)
                 ? "HAVING COUNT(CASE WHEN CAST(s." + A + " AS " + STR + ") IN (" + calc.refs.map(r => dracoSqlString(r)).join(", ") + ") THEN 1 END) > 0"
@@ -1563,7 +1599,7 @@ function dracoJoinForDimension(relGrid, dimension) {
 function dracoExcRef(relGrid, exc) {
     const cols = [], joins = [];
     exc.dims.forEach(d => {
-        const c = getTableAlias(relGrid, d.dim) + "." + d.attr;
+        const c = dracoCol(relGrid, d.dim, d.attr);
         if (cols.indexOf(c) === -1) cols.push(c);
         if (!dimensionIsUsed(d.dim)) {
             const j = dracoJoinForDimension(relGrid, d.dim);
@@ -1874,14 +1910,14 @@ function buildSelectBase(relGrid, rowsDefs, colDefs, measureField, scale, excCol
     for (const v of rowsDefs) {
         const key = (v.Dimension + "|" + v.AttributeName).toUpperCase();
         if (!dict.has(key)) {
-            dict.set(key, getTableAlias(relGrid, v.Dimension) + "." + v.AttributeName);
+            dict.set(key, dracoColSel(relGrid, v.Dimension, v.AttributeName));
         }
     }
 
     for (const v of colDefs) {
         const key = (v.Dimension + "|" + v.AttributeName).toUpperCase();
         if (!dict.has(key)) {
-            dict.set(key, getTableAlias(relGrid, v.Dimension) + "." + v.AttributeName);
+            dict.set(key, dracoColSel(relGrid, v.Dimension, v.AttributeName));
         }
     }
 
@@ -1988,7 +2024,7 @@ function buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs) {
     const dict = new Map();
 
     for (const v of colDefs) {
-        const campo = getTableAlias(relGrid, v.Dimension) + "." + v.AttributeName;
+        const campo = dracoCol(relGrid, v.Dimension, v.AttributeName);
         const key = (campo + "|" + v.Value).toUpperCase();
         if (!dict.has(key)) {
             dict.set(key, campo + "=" + sqlValue(atributesGrid, v.Dimension, v.AttributeName, v.Value));
@@ -1996,7 +2032,7 @@ function buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs) {
     }
 
     for (const v of rowsDefs) {
-        const campo = getTableAlias(relGrid, v.Dimension) + "." + v.AttributeName;
+        const campo = dracoCol(relGrid, v.Dimension, v.AttributeName);
         const key = (campo + "|" + v.Value).toUpperCase();
         if (!dict.has(key)) {
             dict.set(key, campo + "=" + sqlValue(atributesGrid, v.Dimension, v.AttributeName, v.Value));
@@ -2026,14 +2062,14 @@ function buildGroupByBase(relGrid, rowsDefs, colDefs, excCols) {
     for (const v of rowsDefs) {
         const key = (v.Dimension + "|" + v.AttributeName).toUpperCase();
         if (!dict.has(key)) {
-            dict.set(key, getTableAlias(relGrid, v.Dimension) + "." + v.AttributeName);
+            dict.set(key, dracoCol(relGrid, v.Dimension, v.AttributeName));
         }
     }
 
     for (const v of colDefs) {
         const key = (v.Dimension + "|" + v.AttributeName).toUpperCase();
         if (!dict.has(key)) {
-            dict.set(key, getTableAlias(relGrid, v.Dimension) + "." + v.AttributeName);
+            dict.set(key, dracoCol(relGrid, v.Dimension, v.AttributeName));
         }
     }
 
@@ -2092,6 +2128,7 @@ function buildIdArray(atributesGrid, defs, idFieldName) {
 }
 
 async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid) {
+    dracoIndexCalcAttrs(atributesGrid); // atributos calculados del modelo
     const rowsDefsRaw = await readRowDefinitions(context, editReportGrid, csvGrid);
     const colDefsRaw = await readColumnDefinitions(context, editReportGrid, csvGrid);
 
@@ -2847,6 +2884,7 @@ function readDracoAxisFields(editReportGrid, isColumnsAxis) {
 }
 
 async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid, reportId) {
+    dracoIndexCalcAttrs(atributesGrid); // atributos calculados del modelo
     const rowsStatic = String(cellValue(editReportGrid, 12, 8)).trim().toUpperCase() === "X";
     const staticIsRows = rowsStatic;               // si no, el estático es Columnas
     const dynamicIsColumns = staticIsRows;
@@ -2932,7 +2970,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     const selectCols = new Map();
     const addCol = (dim, attr) => {
         const key = (dim + "|" + attr).toUpperCase();
-        if (!selectCols.has(key)) selectCols.set(key, getTableAlias(relGrid, dim) + "." + attr);
+        if (!selectCols.has(key)) selectCols.set(key, { sel: dracoColSel(relGrid, dim, attr), grp: dracoCol(relGrid, dim, attr) });
     };
     lines.forEach(l => l.defs.forEach(d => addCol(d.Dimension, d.AttributeName)));
     dynCols.forEach(a => addCol(a.dim, a.attr));
@@ -2945,7 +2983,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     if (!lines.some(l => l.defs.length === 0)) {
         const seen = new Set();
         lines.forEach(l => l.defs.forEach(d => {
-            const c = getTableAlias(relGrid, d.Dimension) + "." + d.AttributeName + "=" + sqlValue(atributesGrid, d.Dimension, d.AttributeName, d.Value);
+            const c = dracoCol(relGrid, d.Dimension, d.AttributeName) + "=" + sqlValue(atributesGrid, d.Dimension, d.AttributeName, d.Value);
             if (!seen.has(c.toUpperCase())) { seen.add(c.toUpperCase()); prune.push(c); }
         }));
     }
@@ -2966,12 +3004,12 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
 
     let sql = "WITH BASE AS (" + CRLF + CRLF;
     sql += "SELECT" + CRLF;
-    sql += [...selectCols.values(), ...rCols.map((c, j) => c + " AS DRC_R_" + j), ...measureCols.map(m => dracoScaled("SUM(" + m.arg + ")", m.scale) + " AS " + m.alias)]
+    sql += [...[...selectCols.values()].map(c => c.sel), ...rCols.map((c, j) => c + " AS DRC_R_" + j), ...measureCols.map(m => dracoScaled("SUM(" + m.arg + ")", m.scale) + " AS " + m.alias)]
         .map(x => "    " + x).join("," + CRLF) + CRLF + CRLF;
     sql += buildFrom(measuresGrid, measureCols.length ? measureCols[0].name : null, relGrid) + CRLF + CRLF;
     sql += buildJoins(relGrid) + rJoins.join("") + CRLF + CRLF;
     if (where.length) sql += "WHERE" + CRLF + where.join(CRLF + "AND ") + CRLF + CRLF;
-    if (selectCols.size || rCols.length) sql += "GROUP BY" + CRLF + [...selectCols.values(), ...rCols].map(x => "    " + x).join("," + CRLF) + CRLF;
+    if (selectCols.size || rCols.length) sql += "GROUP BY" + CRLF + [...[...selectCols.values()].map(c => c.grp), ...rCols].map(x => "    " + x).join("," + CRLF) + CRLF;
     sql += ")," + CRLF + CRLF;
 
     const mSel = measureCols.map(m => m.alias);
@@ -3886,13 +3924,13 @@ function buildSelect(measuresGrid, relGrid) {
 
     for (const c of ReportState.Columns) {
         if (!first) sql += "," + CRLF;
-        sql += "    " + dracoAxisCol(relGrid, c) + (c.SqlAttr ? " AS " + c.AttributeName : "");
+        sql += "    " + dracoAxisCol(relGrid, c) + ((c.SqlAttr || dracoIsCalcAttr(c.Dimension, c.AttributeName)) ? " AS " + c.AttributeName : "");
         first = false;
     }
 
     for (const r of ReportState.Rows) {
         if (!first) sql += "," + CRLF;
-        sql += "    " + dracoAxisCol(relGrid, r) + (r.SqlAttr ? " AS " + r.AttributeName : "");
+        sql += "    " + dracoAxisCol(relGrid, r) + ((r.SqlAttr || dracoIsCalcAttr(r.Dimension, r.AttributeName)) ? " AS " + r.AttributeName : "");
         first = false;
     }
 
@@ -4013,7 +4051,7 @@ function buildRangeCondition(atributesGrid, dimension, attributeName, campo, fro
  * modo "values" se genera "=" / "<>", igual que antes.
  */
 function buildSimpleFilterCondition(atributesGrid, relGrid, dimension, attributeName, filter) {
-    const campo = getTableAlias(relGrid, dimension) + "." + attributeName;
+    const campo = dracoCol(relGrid, dimension, attributeName);
 
     if (filter.mode === "list") {
         return buildListFilterCondition(atributesGrid, dimension, attributeName, campo, filter);
@@ -4426,13 +4464,14 @@ function configSetTuplesWithSubtotals(relGrid) {
     const colsParts = partsOf(colsSet, colsAxisFields, ReportState.Columns);
     const rowsParts = partsOf(rowsSet, rowsAxisFields, ReportState.Rows);
 
-    const all = [...baseTuples];
-    const keys = new Set(all.map(t => t.join("\u241F")));
-    colsParts.forEach(cp => rowsParts.forEach(rp => {
-        const t = [...cp, ...rp];
-        const k = t.join("\u241F");
-        if (!keys.has(k)) { keys.add(k); all.push(t); }
-    }));
+    // Mismo conjunto de columnas = misma tupla aunque vengan en otro orden
+    // (si no, GROUPING SETS repetiría filas).
+    const setKey = (t) => [...t].sort().join("\u241F");
+    const all = [];
+    const keys = new Set();
+    const push = (t) => { const k = setKey(t); if (!keys.has(k)) { keys.add(k); all.push(t); } };
+    baseTuples.forEach(push);
+    colsParts.forEach(cp => rowsParts.forEach(rp => push([...cp, ...rp])));
 
     return all;
 }
@@ -4741,7 +4780,46 @@ function buildDracoExcReportData(relGrid, measuresGrid, atributesGrid, withSubto
 
 /* Columna física de un campo de los ejes: su atributo real (SqlAttr si se le ha dado otro nombre, ver dracoDedupAxisNames). */
 function dracoAxisCol(relGrid, f) {
-    return getTableAlias(relGrid, f.Dimension) + "." + (f.SqlAttr || f.AttributeName);
+    return dracoCol(relGrid, f.Dimension, f.SqlAttr || f.AttributeName);
+}
+
+/* ---------------------------------------------------------------------
+ * ATRIBUTOS CALCULADOS (columna EXPRESSION de MODEL_ATRIBUTES, ver
+ * DracoAttrFormula en calcFormula.js): donde antes se escribía
+ * «alias.COLUMNA» se escribe la expresión con las columnas de su tabla
+ * (CONCAT(CAST(f.SOC AS STRING), ...)) en SELECT, GROUP BY, WHERE y
+ * condiciones. En el SELECT lleva « AS ATRIBUTO» (dracoColSel) para que
+ * el resto de la consulta lo use por su nombre. Los atributos normales
+ * generan exactamente el mismo SQL que antes.
+ * dracoIndexCalcAttrs(atributesGrid) se llama al empezar cada consulta.
+ * --------------------------------------------------------------------- */
+let DracoCalcAttrs = new Map();
+
+function dracoIndexCalcAttrs(atributesGrid) {
+    const m = new Map();
+    if (atributesGrid) {
+        const last = lastRowInColumnValues(atributesGrid, 2);
+        for (let R = 2; R <= last; R++) {
+            const expr = String(cellValue(atributesGrid, R, 12) || "").trim();
+            if (expr) m.set((String(cellValue(atributesGrid, R, 2)) + "|" + String(cellValue(atributesGrid, R, 3))).toUpperCase(), expr);
+        }
+    }
+    DracoCalcAttrs = m;
+}
+
+function dracoIsCalcAttr(dim, attr) {
+    return DracoCalcAttrs.has((String(dim) + "|" + String(attr)).toUpperCase());
+}
+
+function dracoCol(relGrid, dim, attr) {
+    const alias = getTableAlias(relGrid, dim);
+    const expr = DracoCalcAttrs.get((String(dim) + "|" + String(attr)).toUpperCase());
+    if (!expr) return alias + "." + attr;
+    return "(" + window.DracoAttrFormula.toSql(expr, c => alias + "." + c, Provider.key()) + ")";
+}
+
+function dracoColSel(relGrid, dim, attr) {
+    return dracoCol(relGrid, dim, attr) + (dracoIsCalcAttr(dim, attr) ? " AS " + attr : "");
 }
 /**
  * Dos campos de los ejes con el MISMO nombre de atributo (p. ej. ACCOUNT.DESCRIPTION y COMPANY.DESCRIPTION) darían
@@ -4766,6 +4844,7 @@ function dracoDedupAxisNames() {
 }
 
 function buildSQL(relGrid, measuresGrid, atributesGrid, subtotalsOnTop) {
+    dracoIndexCalcAttrs(atributesGrid); // atributos calculados del modelo
     dracoDedupAxisNames();
     if (ReportState.Rows.length === 0 && ReportState.Columns.length === 0 && ReportState.Measures.length === 0) {
         throw new Error("Añade al menos un campo a Filas o Columnas.");

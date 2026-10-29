@@ -114,9 +114,12 @@ async function runHierarchyPreview() {
         return;
     }
 
+    // Validación: cada nivel es una columna o, si es un atributo calculado,
+    // «expresión AS COLUMNA» generada por DracoAttrFormula (lista cerrada).
     const fieldList = levels.map(l => l.field).join(", ");
+    const selectList = levels.map(l => l.select || l.field).join(", ");
     const sql = Provider.limit(
-        "SELECT DISTINCT " + fieldList + " FROM " + Provider.qualify(project, dataset, table) +
+        "SELECT DISTINCT " + selectList + " FROM " + Provider.qualify(project, dataset, table) +
         " ORDER BY " + fieldList, 500);
 
     try {

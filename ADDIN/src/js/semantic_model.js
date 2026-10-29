@@ -151,6 +151,7 @@ function initEvents() {
     document.getElementById("btnNewCalcMeasure").addEventListener("click", () => createVirtualMeasure("CALC"));
     document.getElementById("btnNewFilteredMeasure").addEventListener("click", () => createVirtualMeasure("FILTERED"));
     document.getElementById("btnAddMeasureCond").addEventListener("click", () => addMeasureCondRow({}));
+    document.getElementById("btnAddCalcAttr").addEventListener("click", () => openCalcAttrDialog(fieldsState[currentConfigFieldIndex], null));
     document.getElementById("modalMeasureFormula").addEventListener("input", validateMeasureFormulaUI);
 
     document.getElementById("btnCloseMeasureModal").addEventListener("click",()=>{
@@ -330,8 +331,15 @@ function previewCurrentHierarchy() {
 
     const levels = hierEditState.levels.map(l => {
         const attr = (field.attributes || []).find(a => a.name === l.attribute);
+        let select = l.attribute;
+        if (attr && attr.calc && attr.expression && window.DracoAttrFormula) {
+            // Atributo calculado: su expresión, con el nombre del atributo como alias
+            try { select = window.DracoAttrFormula.toSql(attr.expression, c => c, Provider.key ? Provider.key() : "bigquery") + " AS " + attr.name; }
+            catch (e) { select = l.attribute; }
+        }
         return {
             field: l.attribute,
+            select,
             label: attr ? (attr.alias || attr.name) : l.attribute
         };
     });
@@ -901,7 +909,9 @@ async function fetchFactFields(isModelLoad = false) {
                     hierarchies: (saved && saved.hierarchies) || [],
                     // Atributo de texto (descripción) de la clave, "" = ninguno.
                     // El modo "ID / ID y texto" se elige por campo en el informe.
-                    textAttribute: (saved && saved.textAttribute) || ""
+                    textAttribute: (saved && saved.textAttribute) || "",
+                    // Miembros calculados del modelo por atributo (ver openModelCalcMembers)
+                    calcMembers: (saved && saved.calcMembers) || {}
                 };
             });
 
@@ -1165,6 +1175,7 @@ async function fetchDimensionAttributes(forceRefetch = false) {
 
             const existingAttrsMap = new Map((field.attributes || []).map(a => [a.name, a]));
 
+            const calcAttrs = (field.attributes || []).filter(a => a.calc);
             field.attributes = fields.map((attr, idx) => {
                 const existing = existingAttrsMap.get(attr.name);
                 if (existing && !forceRefetch) {
@@ -1177,6 +1188,12 @@ async function fetchDimensionAttributes(forceRefetch = false) {
                     isKey: idx === 0,
                     enabled: true
                 };
+            });
+            // Atributos calculados: se conservan si sus columnas siguen en la tabla
+            const colSet = new Set(field.attributes.map(a => a.name.toUpperCase()));
+            calcAttrs.forEach(a => {
+                const cols = window.DracoAttrFormula ? window.DracoAttrFormula.columns(a.expression) : [];
+                if (cols.every(c => colSet.has(String(c).toUpperCase())) && !colSet.has(a.name.toUpperCase())) field.attributes.push(a);
             });
 
             // Si la tabla de dimensión ha cambiado, limpiamos de las jerarquías
@@ -1238,7 +1255,19 @@ function renderAttributesTable(attributes) {
 
         const fieldNameDiv = document.createElement("div");
         fieldNameDiv.className = "field-name";
-        fieldNameDiv.textContent = attr.name;
+        if (attr.calc) {
+            // Atributo calculado: «ƒx NOMBRE = fórmula»; clic para editarlo
+            row.classList.add("calc-attr-row");
+            const b = document.createElement("span");
+            b.className = "calc-attr-badge";
+            b.textContent = "\u0192x";
+            fieldNameDiv.appendChild(b);
+            fieldNameDiv.appendChild(document.createTextNode(attr.name + " = " + (attr.expression || "")));
+            fieldNameDiv.title = "Clic para editar la fórmula";
+            fieldNameDiv.addEventListener("click", (e) => { e.stopPropagation(); openCalcAttrDialog(fieldsState[currentConfigFieldIndex], attr); });
+        } else {
+            fieldNameDiv.textContent = attr.name;
+        }
 
         fieldInfo.appendChild(aliasInput);
         fieldInfo.appendChild(fieldNameDiv);
@@ -1249,6 +1278,7 @@ function renderAttributesTable(attributes) {
         keyRadio.type = "radio";
         keyRadio.name = "dimKeyGroup";
         keyRadio.checked = !!attr.isKey;
+        keyRadio.disabled = !!attr.calc; // un atributo calculado no puede ser la clave
         keyRadio.addEventListener("click", (e) => e.stopPropagation());
         keyRadio.addEventListener("change", () => updateAttrKey(idx));
         const keySpan = document.createElement("span");
@@ -1276,10 +1306,36 @@ function renderAttributesTable(attributes) {
         row.appendChild(keyLabel);
         row.appendChild(textLabel);
 
+        // Miembros calculados DEL MODELO para este atributo (p. ej. OIBDA =
+        // [Ingresos] - [Gastos] en CUENTA.NIVEL1): salen en todos los informes.
+        if (!attr.calc && window.DracoCalcEditor && field) {
+            const n = ((field.calcMembers || {})[String(attr.name).toUpperCase()] || []).length;
+            const fxBtn = document.createElement("button");
+            fxBtn.type = "button";
+            fxBtn.className = "attr-remove-btn attr-fx-btn" + (n ? " has-calcs" : "");
+            fxBtn.textContent = n ? "\u0192x " + n : "\u0192x";
+            fxBtn.title = n ? `${n} miembro(s) calculado(s) en el modelo` : "Miembros calculados del modelo (p. ej. OIBDA = [Ingresos] - [Gastos])";
+            fxBtn.addEventListener("click", (e) => { e.stopPropagation(); openModelCalcMembers(field, attr.name); });
+            row.appendChild(fxBtn);
+        }
+
         // Dimensión de la tabla de hechos: se puede sacar una columna del
         // grupo (vuelve a la lista de campos como campo suelto). La columna
         // propia de la dimensión no se puede quitar.
-        if (isFactGroup(field) && attr.name !== field.name) {
+        if (attr.calc) {
+            const rm = document.createElement("button");
+            rm.type = "button";
+            rm.className = "attr-remove-btn";
+            rm.title = "Eliminar el atributo calculado";
+            rm.textContent = "\u2715";
+            rm.addEventListener("click", (e) => {
+                e.stopPropagation();
+                dropAttributeFromField(field, attr.name);
+                renderAttributesTable(field.attributes);
+                renderHierarchiesList();
+            });
+            row.appendChild(rm);
+        } else if (isFactGroup(field) && attr.name !== field.name) {
             const rm = document.createElement("button");
             rm.type = "button";
             rm.className = "attr-remove-btn";
@@ -1854,6 +1910,149 @@ function saveVirtualMeasureSections(field) {
     field.base = base;
     field.conditions = conds;
     return true;
+}
+
+/* =====================================================================
+ * MIEMBROS CALCULADOS DEL MODELO
+ * Misma ventana «Cálculos» que en el informe (calcDialog.html, vía
+ * DracoCalcEditor.openFor), pero se guardan en la dimensión del modelo:
+ * field.calcMembers[ATRIBUTO] = [cálculos]. El motor los junta con los del
+ * informe (ver attachDracoCalcs en commands.js); se usan los de tipo «por
+ * miembro» y, si el informe tiene uno con el mismo nombre, manda el del informe.
+ * ===================================================================== */
+function openModelCalcMembers(field, attrName) {
+    if (!window.DracoCalcEditor) return;
+    const U = String(attrName).toUpperCase();
+    window.DracoCalcEditor.openFor({
+        dimension: field.name,
+        attribute: attrName,
+        attributes: [attrName],
+        getCalcs: () => ((field.calcMembers || {})[U] || []),
+        saveCalcs: (a, list) => {
+            field.calcMembers = field.calcMembers || {};
+            const k = String(a).toUpperCase();
+            // Solo «por miembro»: los «por posición» dependen de cómo se vea cada informe
+            const clean = (list || []).filter(c => c && c.mode !== "position");
+            if ((list || []).length !== clean.length) showToast("En el modelo solo se guardan los cálculos «por miembro».", "error");
+            if (clean.length) field.calcMembers[k] = clean; else delete field.calcMembers[k];
+            renderAttributesTable(field.attributes);
+        },
+        loadMembers: (a) => loadModelAttrMembers(field, a)
+    });
+}
+
+/** Valores distintos de un atributo, consultando su tabla (para la ventana de cálculos). */
+async function loadModelAttrMembers(field, attrName) {
+    try {
+        const project = field.relProject || document.getElementById("factProject").value;
+        const dataset = field.relDataset || document.getElementById("factDataset").value;
+        const table = field.relTable || document.getElementById("factTable").value;
+        const attr = (field.attributes || []).find(a => a.name === attrName);
+        let expr = attrName;
+        if (attr && attr.calc && window.DracoAttrFormula) expr = window.DracoAttrFormula.toSql(attr.expression, c => c, Provider.key ? Provider.key() : "bigquery");
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(attrName)) throw new Error("Nombre de atributo no válido.");
+        const sql = Provider.limit("SELECT DISTINCT " + expr + " AS V FROM " + Provider.qualify(project, dataset, table) + " ORDER BY 1", 5000);
+        const { rows } = await Provider.runQuery(sql, project, dataset);
+        const members = Array.from(new Set((rows || []).map(r => r.V !== undefined ? r.V : r.v).filter(v => v !== null && v !== undefined).map(String)));
+        return { members, visible: null, error: null };
+    } catch (e) {
+        return { members: [], visible: null, error: (e && e.message) || String(e) };
+    }
+}
+
+/* =====================================================================
+ * ATRIBUTOS CALCULADOS (columnas nuevas de una dimensión calculadas con
+ * otras columnas de SU tabla; ver DracoAttrFormula en calcFormula.js)
+ * ===================================================================== */
+function openCalcAttrDialog(field, attr) {
+    if (!field) return;
+    const cols = (field.attributes || []).filter(a => !a.calc).map(a => a.name);
+    const back = document.createElement("div");
+    back.className = "sm-dialog-backdrop";
+    const box = document.createElement("div");
+    box.className = "sm-dialog";
+    box.style.maxWidth = "420px";
+    const h = document.createElement("h3");
+    h.textContent = attr ? "Editar atributo calculado" : "Nuevo atributo calculado";
+    const name = document.createElement("input");
+    name.type = "text"; name.placeholder = "Nombre (p. ej. SOC_CECO)"; name.value = attr ? attr.name : "";
+    if (attr) name.disabled = true; // el nombre se usa en jerarquías e informes
+    const fx = document.createElement("textarea");
+    fx.rows = 3; fx.spellcheck = false; fx.placeholder = 'CONCATENAR([SOC]; "-"; [CECO])';
+    fx.value = attr ? attr.expression || "" : "";
+    const chips = document.createElement("div");
+    chips.className = "measure-ref-chips";
+    cols.forEach(c => {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = c;
+        b.addEventListener("click", () => {
+            const a = fx.selectionStart != null ? fx.selectionStart : fx.value.length;
+            const z = fx.selectionEnd != null ? fx.selectionEnd : fx.value.length;
+            fx.value = fx.value.slice(0, a) + "[" + c + "]" + fx.value.slice(z);
+            fx.focus(); validate();
+        });
+        chips.appendChild(b);
+    });
+    const hint = document.createElement("div");
+    hint.className = "display-hint";
+    hint.textContent = "Columnas entre corchetes y textos entre comillas. Texto: CONCATENAR(a; b; …) o a & b, IZQUIERDA(t; n), DERECHA(t; n), "
+        + "EXTRAE(t; inicio; n), MAYUS, MINUS, ESPACIOS, SUSTITUIR(t; buscar; poner), LARGO. Número: REDONDEAR, TRUNCAR, ABS. "
+        + "Fecha: AÑO, MES, TRIMESTRE, DIA, INICIO_MES, INICIO_AÑO, TEXTO_FECHA(f; \"AAAA-MM\"). SI(condición; a; b). "
+        + "Grupos: AGRUPAR([CUENTA]; \"60*,61*\"; \"Personal\"; \"62*\"; \"Servicios\"; \"Otros\") y TRAMOS([IMPORTE]; 1000; 5000).";
+    const msg = document.createElement("div");
+    msg.className = "measure-formula-msg";
+    const actions = document.createElement("div");
+    actions.className = "sm-dialog-actions";
+    const cancel = document.createElement("button");
+    cancel.type = "button"; cancel.className = "btn-secondary btn-sm"; cancel.textContent = "Cancelar";
+    const ok = document.createElement("button");
+    ok.type = "button"; ok.className = "btn-primary btn-sm"; ok.textContent = attr ? "Guardar" : "Crear";
+    actions.append(cancel, ok);
+    box.append(h, name, fx, chips, hint, msg, actions);
+    back.appendChild(box);
+    document.body.appendChild(back);
+    (attr ? fx : name).focus();
+
+    const taken = new Set((field.attributes || []).filter(a => a !== attr).map(a => a.name.toUpperCase()));
+    function validate() {
+        let err = "";
+        const n = name.value.trim(), e = fx.value.trim();
+        if (!n) err = "Pon un nombre.";
+        else if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(n)) err = "Nombre: solo letras, números y _ (sin espacios ni acentos).";
+        else if (taken.has(n.toUpperCase())) err = "Ya hay un atributo con ese nombre.";
+        else if (!e) err = "Escribe la fórmula.";
+        else {
+            try {
+                window.DracoAttrFormula.toSql(e, c => c, "bigquery");
+                const unknown = window.DracoAttrFormula.columns(e).filter(c => !cols.some(x => x.toUpperCase() === c.toUpperCase()));
+                if (unknown.length) err = "Columnas que no están en esta tabla: " + unknown.join(", ");
+            } catch (ex) { err = ex.message; }
+        }
+        msg.className = "measure-formula-msg " + (err ? "err" : "ok");
+        msg.textContent = err || "Fórmula correcta.";
+        ok.disabled = !!err;
+        return !err;
+    }
+    name.addEventListener("input", validate);
+    fx.addEventListener("input", validate);
+    cancel.addEventListener("click", () => back.remove());
+    back.addEventListener("keydown", (e) => { if (e.key === "Escape") back.remove(); });
+    ok.addEventListener("click", () => {
+        if (!validate()) return;
+        const expression = fx.value.trim();
+        const dataType = window.DracoAttrFormula.resultType(expression);
+        if (attr) {
+            attr.expression = expression;
+            attr.dataType = dataType;
+        } else {
+            field.attributes = field.attributes || [];
+            field.attributes.push({ name: name.value.trim(), alias: name.value.trim(), dataType, isKey: false, enabled: true, calc: true, expression });
+        }
+        back.remove();
+        renderAttributesTable(field.attributes);
+        renderHierarchiesList();
+    });
+    validate();
 }
 
 /* ---------- cambios sin guardar (aviso al ir a «Editar informes») ---------- */

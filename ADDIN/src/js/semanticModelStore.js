@@ -195,6 +195,22 @@
         return rows;
     }
 
+    /*
+     * Atributo calculado (a.calc + a.expression, ver DracoAttrFormula en
+     * calcFormula.js): DIM_FIELD lleva la expresión SQL con las columnas SIN
+     * alias de tabla (para las consultas de valores de una sola tabla:
+     * excelService.buildAttributeSQL, vista previa de jerarquías) y la
+     * columna EXPRESSION la fórmula original, que commands.js traduce con
+     * el alias de la tabla en cada informe (dracoCol).
+     */
+    function calcAttrBareSQL(a) {
+        if (!a || !a.calc || !a.expression || !window.DracoAttrFormula) return a ? a.name : "";
+        try {
+            const dialect = (typeof Provider !== "undefined" && Provider.key) ? Provider.key() : "bigquery";
+            return window.DracoAttrFormula.toSql(a.expression, c => c, dialect);
+        } catch (e) { return a.name; }
+    }
+
     function buildAttributeRows(modelName, fact, fields) {
         fact = fact || {};
         const rows = [];
@@ -206,8 +222,8 @@
                     rows.push([
                         idx + 1, f.name, a.name,
                         f.relProject || fact.project, f.relDataset || fact.dataset, f.relTable || fact.table,
-                        a.name, a.alias === a.name ? "" : a.alias, a.dataType,
-                        a.isKey ? "X" : "", modelName
+                        a.calc ? calcAttrBareSQL(a) : a.name, a.alias === a.name ? "" : a.alias, a.dataType,
+                        a.isKey ? "X" : "", modelName, a.calc ? (a.expression || "") : ""
                     ]);
                 });
             } else {
@@ -234,7 +250,7 @@
                         fila++, hier.name, levelIdx + 1, f.name,
                         attr ? (attr.alias || attr.name) : lvl.attribute,
                         f.relProject || fact.project, f.relDataset || fact.dataset, f.relTable || fact.table,
-                        lvl.attribute, modelName
+                        attr && attr.calc ? calcAttrBareSQL(attr) : lvl.attribute, modelName
                     ]);
                 });
             });
@@ -247,7 +263,7 @@
         MODEL_RELATIONSHIP: ["FILA", "DIMENSION", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_FIELD", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "JOIN TYPE", "MODEL_NAME"],
         MODEL_DIMENSION: ["FILA", "DIMENSION", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_FIELD", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "MODEL_NAME"],
         MODEL_MEASURES: ["FILA", "MEASURE", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_FIELD", "AGGREGATION", "FORMAT", "MODEL_NAME", "DEFINITION"],
-        MODEL_ATRIBUTES: ["FILA", "DIMENSION", "ATRIBUTE", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "DISPLAY_NAME", "DATA_TYPE", "IS_KEY", "MODEL_NAME"],
+        MODEL_ATRIBUTES: ["FILA", "DIMENSION", "ATRIBUTE", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "DISPLAY_NAME", "DATA_TYPE", "IS_KEY", "MODEL_NAME", "EXPRESSION"],
         MODEL_HIER: ["FILA", "HIERARCHY", "NIVEL", "DIMENSION", "ATRIBUTO", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "MODEL_NAME"]
     };
 

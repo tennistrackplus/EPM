@@ -28,11 +28,34 @@
                 app.setAutoStatus && app.setAutoStatus("Crea o selecciona un informe antes de definir cálculos.");
                 return;
             }
+            this.openFor({
+                dimension, attribute, attributes,
+                getCalcs: (a) => window.DracoCalc.getCalcs(app.state.fieldOptions, dimension, a),
+                saveCalcs: (a, list) => {
+                    const key = window.DracoCalc.key(dimension, a);
+                    if (Array.isArray(list) && list.length) app.state.fieldOptions[key] = list;
+                    else delete app.state.fieldOptions[key];
+                    if (typeof app.refreshCalcBadges === "function") app.refreshCalcBadges();
+                    app.scheduleAutoUpdate();
+                },
+                loadMembers: (a) => this.loadMembers(app, dimension, a)
+            });
+        },
+
+        /**
+         * Misma ventana para otros sitios. opts: { dimension, attribute,
+         * attributes, getCalcs(attr), saveCalcs(attr, lista), loadMembers(attr) }.
+         * El editor del modelo semántico la usa para los miembros calculados
+         * DEL MODELO (los que salen en todos los informes).
+         */
+        openFor(opts) {
+            if (!window.DracoCalc) return;
+            const dimension = opts.dimension, attribute = opts.attribute;
             if (this.dialog) { try { this.dialog.close(); } catch (e) { /* ya cerrado */ } this.dialog = null; }
 
-            const attrs = attribute ? [attribute] : (attributes || []).slice();
+            const attrs = attribute ? [attribute] : (opts.attributes || []).slice();
             const calcs = {};
-            attrs.forEach(a => { calcs[a] = window.DracoCalc.getCalcs(app.state.fieldOptions, dimension, a); });
+            attrs.forEach(a => { calcs[a] = opts.getCalcs(a) || []; });
 
             const url = new URL("calcDialog.html", window.location.href).href;
             Office.context.ui.displayDialogAsync(url, { height: 72, width: 60, displayInIframe: false }, (res) => {
@@ -53,15 +76,11 @@
                         return;
                     }
                     if (p.type === "requestMembers") {
-                        reply(Object.assign({ type: "members", attr: p.attr }, await this.loadMembers(app, dimension, p.attr)));
+                        reply(Object.assign({ type: "members", attr: p.attr }, await opts.loadMembers(p.attr)));
                         return;
                     }
                     if (p.type === "save") {
-                        const key = window.DracoCalc.key(dimension, p.attr);
-                        if (Array.isArray(p.calcs) && p.calcs.length) app.state.fieldOptions[key] = p.calcs;
-                        else delete app.state.fieldOptions[key];
-                        if (typeof app.refreshCalcBadges === "function") app.refreshCalcBadges();
-                        app.scheduleAutoUpdate();
+                        opts.saveCalcs(p.attr, Array.isArray(p.calcs) ? p.calcs : []);
                         return;
                     }
                     if (p.type === "close") {
@@ -75,7 +94,7 @@
 
         async loadMembers(app, dimension, attribute) {
             let visible = null;
-            const f = (app.state.filters || []).find(x =>
+            const f = ((app && app.state && app.state.filters) || []).find(x =>
                 String(x.dimension).toUpperCase() === String(dimension).toUpperCase()
                 && String(x.realAttribute || x.name).toUpperCase() === String(attribute).toUpperCase());
             if (f && f.filter) {
