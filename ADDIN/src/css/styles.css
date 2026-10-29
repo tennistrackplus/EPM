@@ -500,17 +500,18 @@ body {
 .field-options-body {
     flex: 1;
     overflow-y: auto;
-    padding: 10px;
+    padding: 12px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
     min-width: 210px;
 }
 
 .field-options-empty {
     color: var(--text-muted);
-    font-size: var(--fs-sm);
-    padding: 6px 2px;
+    font-size: var(--fs-xs);
+    line-height: 1.35;
+    padding: 0 2px;
 }
 
 .field-options-field-name {
@@ -518,12 +519,17 @@ body {
     font-size: var(--fs-sm);
     color: var(--brand-primary);
     word-break: break-word;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Cada bloque: título de sección + controles uno debajo de otro, todos a
+   ancho completo y alineados a la izquierda. */
 .field-options-group {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 10px;
+    text-align: left;
 }
 
 .field-options-group label {
@@ -532,7 +538,7 @@ body {
     font-weight: 600;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
 }
 
 .field-options-group select,
@@ -540,34 +546,48 @@ body {
 .field-options-group input[type="number"] {
     padding: 5px 6px;
     font-size: var(--fs-sm);
+    font-weight: 400;
     border: 1px solid var(--border-default);
     border-radius: var(--radius-sm);
     background: var(--surface-card);
+    color: var(--text-primary);
     width: 100%;
+    height: 30px;
+    box-sizing: border-box;
 }
 
+/* Casilla + texto EN LA MISMA LÍNEA (listas de niveles, dimensiones...).
+   Antes la regla genérica de arriba (label en columna) ganaba y ponía la
+   casilla encima del texto, centrada. */
+.field-options-group label.field-options-checkbox-row,
 .field-options-checkbox-row {
     display: flex;
+    flex-direction: row;
     align-items: center;
-    gap: 6px;
+    justify-content: flex-start;
+    gap: 8px;
     font-size: var(--fs-sm);
+    font-weight: 400;
     color: var(--text-primary);
     cursor: pointer;
+    text-align: left;
 }
 
-.field-options-checkbox-row input {
+.field-options-checkbox-row input[type="checkbox"] {
     accent-color: var(--brand-primary);
     cursor: pointer;
-    flex-shrink: 0;
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    margin: 0;
 }
 
-/* Bloque "etiqueta arriba / control abajo" para selects fuera de un
-   checkbox (p.ej. "Ordenar", "Expandir hasta nivel"): antes el <label>
-   envolvía directamente el texto + el <select>, quedando descuadrado. */
+/* Bloque "etiqueta arriba / control abajo" (Subtotales, Ordenar, Mostrar
+   como, Expandir hasta nivel...). */
 .field-options-field-block {
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 4px;
 }
 
 .field-options-field-label {
@@ -576,11 +596,13 @@ body {
     font-weight: 600;
 }
 
-/* Filas de "Mostrar niveles": el texto (p.ej. "Nivel 2 — REGION") ya no
-   se parte en 2 líneas centradas dentro del cuadro; se trunca con "…" y
-   el título completo queda disponible como tooltip. */
 .field-options-level-row {
-    align-items: center;
+    padding: 3px 4px;
+    border-radius: 4px;
+}
+
+.field-options-level-row:hover {
+    background: var(--surface-card);
 }
 
 .field-options-level-text {
@@ -588,28 +610,29 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+    flex: 1 1 auto;
 }
 
 .field-options-levels {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    max-height: 120px;
+    gap: 1px;
+    max-height: 180px;
     overflow-y: auto;
     overflow-x: hidden;
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
-    padding: 6px;
+    padding: 4px;
     background: var(--surface-sunken);
 }
 
 .field-options-section-title {
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 700;
     color: var(--text-muted);
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    margin-top: 2px;
+    margin-top: 4px;
 }
 
 .dropped-tag.clickable-for-options {
@@ -696,4 +719,9 @@ body {
     font-size: 10.5px;
     text-transform: none;
     letter-spacing: 0;
+}
+
+/* Texto de ayuda dentro de un bloque con etiqueta: sin negrita */
+.field-options-group .field-options-empty {
+    font-weight: 400;
 }
