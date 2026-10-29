@@ -19,6 +19,20 @@ const DracoConfig = {
     // libro; ponerlo a true solo para diagnosticar un problema.
     // ---------------------------------------------------------
     debugWorkbookCells: false,
+
+    // ---------------------------------------------------------
+    // PRUEBA: ¿qué hace que Excel salte a la pestaña Inicio al actualizar?
+    //   busyIndicatorInSheet: false -> el «Actualizando…» no se dibuja en
+    //     la hoja (sin forma); solo queda el estado del panel.
+    //   suspendScreenUpdating: false -> no se congela el repintado de la
+    //     pantalla durante la actualización (puede parpadear más).
+    //   manualCalculation: false -> no se pasa el cálculo a manual mientras
+    //     se pinta (puede ir más lento con muchas fórmulas).
+    // Cambiar UNO cada vez, actualizar y ver si deja de saltar.
+    // ---------------------------------------------------------
+    busyIndicatorInSheet: true,
+    suspendScreenUpdating: true,
+    manualCalculation: true,
     // ---------------------------------------------------------
     // BigQuery (Google OAuth 2.0)
     // ---------------------------------------------------------

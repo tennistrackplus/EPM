@@ -147,6 +147,11 @@ function initEvents() {
 
 
     document.getElementById("btnSaveMeasureModal").addEventListener("click", saveMeasureModal);
+    // Medidas calculadas / filtradas del modelo
+    document.getElementById("btnNewCalcMeasure").addEventListener("click", () => createVirtualMeasure("CALC"));
+    document.getElementById("btnNewFilteredMeasure").addEventListener("click", () => createVirtualMeasure("FILTERED"));
+    document.getElementById("btnAddMeasureCond").addEventListener("click", () => addMeasureCondRow({}));
+    document.getElementById("modalMeasureFormula").addEventListener("input", validateMeasureFormulaUI);
 
     document.getElementById("btnCloseMeasureModal").addEventListener("click",()=>{
 
@@ -901,9 +906,14 @@ async function fetchFactFields(isModelLoad = false) {
             });
 
             // Grupos guardados (dimensiones de la tabla de hechos cuyo nombre
-            // no es una columna): se añaden tras las columnas.
+            // no es una columna) y medidas calculadas / filtradas: se añaden
+            // tras las columnas.
             if (isModelLoad) {
                 const colNames = new Set(fieldsState.map(f => f.name));
+                Object.keys(savedByName).forEach(n => {
+                    const v = savedByName[n];
+                    if (!colNames.has(n) && isVirtualMeasure(v)) fieldsState.push(Object.assign({}, v));
+                });
                 Object.keys(savedByName).forEach(n => {
                     const g = savedByName[n];
                     if (colNames.has(n) || g.type !== "DIMENSION" || g.relTable) return;
@@ -1005,14 +1015,16 @@ function renderFieldsTable() {
 
         const fieldNameDiv = document.createElement("div");
         fieldNameDiv.className = "field-name";
+        const virtualMeasure = isVirtualMeasure(field);
         fieldNameDiv.textContent = group
             ? `${field.name} · ${(field.attributes || []).filter(a => a.name !== field.name).length || (field.attributes || []).length} campos`
-            : field.name;
+            : virtualMeasure ? `${field.name} · ${field.measureKind === "CALC" ? "calculada" : "filtrada"}` : field.name;
+        if (virtualMeasure) row.classList.add("field-virtual");
 
         fieldInfo.appendChild(aliasInput);
         fieldInfo.appendChild(fieldNameDiv);
 
-        if (owner || group) typeSelect.disabled = true;
+        if (owner || group || virtualMeasure) typeSelect.disabled = true;
         if (owner) enableInput.disabled = true;
 
         row.appendChild(enableInput);
@@ -1068,10 +1080,12 @@ function openConfigModal(index) {
     }
 
     if (field.type === "MEASURE") {
-        document.getElementById("modalMeasureFieldName").textContent = field.name;
+        document.getElementById("modalMeasureFieldName").textContent = field.name + (isVirtualMeasure(field)
+            ? (field.measureKind === "CALC" ? "  (calculada)" : "  (filtrada)") : "");
         document.getElementById("modalMeasureAlias").value = field.alias;
         document.getElementById("modalMeasureAgg").value = field.aggregation;
         document.getElementById("modalMeasureFormat").value = field.format;
+        openVirtualMeasureSections(field);
         document.getElementById("measureModal").style.display = "block";
     } else {
         document.getElementById("modalDimFieldName").textContent = field.name;
@@ -1110,6 +1124,7 @@ function openConfigModal(index) {
 }
 
 function saveMeasureModal() {
+    if (currentConfigFieldIndex !== null && !saveVirtualMeasureSections(fieldsState[currentConfigFieldIndex])) return; // errores a la vista
     if (currentConfigFieldIndex !== null) {
         fieldsState[currentConfigFieldIndex].alias = document.getElementById("modalMeasureAlias").value;
         fieldsState[currentConfigFieldIndex].aggregation = document.getElementById("modalMeasureAgg").value;
@@ -1528,9 +1543,16 @@ function openSmContextMenu(e, idx) {
         items.push(["Propiedades…", () => openConfigModal(fieldsState.indexOf(groups[0]))]);
         items.push([`Desagrupar ${groups[0].name}`, () => ungroup(groups[0])]);
     }
+    const vms = selected.filter(f => isVirtualMeasure(f));
+    if (vms.length === 1 && selected.length === 1) {
+        items.push(["Propiedades…", () => openConfigModal(fieldsState.indexOf(vms[0]))]);
+        items.push([`Eliminar ${vms[0].name}`, () => deleteVirtualMeasure(vms[0])]);
+    }
     if (!items.length) {
         items.push(["Selecciona campos sueltos (Ctrl o Mayús + clic) para agrupar", null]);
     }
+    items.push(["Nueva medida calculada…", () => createVirtualMeasure("CALC")]);
+    items.push(["Nueva medida filtrada…", () => createVirtualMeasure("FILTERED")]);
 
     const menu = document.createElement("div");
     menu.id = "smCtxMenu";
@@ -1628,6 +1650,210 @@ async function askGroupName(columns) {
         buttons: [{ label: "Cancelar", value: null }, { label: "Agrupar", value: "ok", primary: true }]
     });
     if (name) createGroup(name, columns);
+}
+
+/* =====================================================================
+ * MEDIDAS CALCULADAS Y FILTRADAS DEL MODELO
+ *   - Calculada: fórmula sobre otras medidas ([Ingresos] - [Gastos],
+ *     DIVIDIR([Margen]; [Ventas])...). Se calcula después de sumar.
+ *   - Filtrada: una medida base solo donde se cumplen condiciones sobre
+ *     columnas de la tabla de hechos (Importe con ESCENARIO = REAL).
+ * Son campos de fieldsState que no son columnas (measureKind CALC /
+ * FILTERED); el SQL lo genera commands.js (dracoMeasureAggSQL).
+ * ===================================================================== */
+
+function isVirtualMeasure(f) {
+    return !!f && f.type === "MEASURE" && (f.measureKind === "CALC" || f.measureKind === "FILTERED");
+}
+
+function baseMeasures() {
+    return fieldsState.filter(f => f.type === "MEASURE" && !isVirtualMeasure(f));
+}
+
+async function createVirtualMeasure(kind) {
+    const taken = new Set(fieldsState.map(f => f.name.toUpperCase()));
+    const name = await smDialog({
+        title: kind === "CALC" ? "Nueva medida calculada" : "Nueva medida filtrada",
+        text: kind === "CALC" ? "Fórmula sobre otras medidas, p. ej. OIBDA = [Ingresos] - [Gastos]." : "Una medida solo donde se cumplen unas condiciones, p. ej. Importe con Escenario = REAL.",
+        input: {
+            value: kind === "CALC" ? "MEDIDA_CALC" : "MEDIDA_FILTRADA",
+            placeholder: "Nombre de la medida",
+            validate: (v) => {
+                if (!v) return "Pon un nombre.";
+                if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(v)) return "Solo letras, números y _ (sin espacios ni acentos), sin empezar por número.";
+                if (taken.has(v.toUpperCase())) return "Ya hay un campo con ese nombre.";
+                return "";
+            }
+        },
+        buttons: [{ label: "Cancelar", value: null }, { label: "Crear", value: "ok", primary: true }]
+    });
+    if (!name) return;
+    const base = baseMeasures()[0];
+    fieldsState.push({
+        name, alias: name, type: "MEASURE", enabled: true, dataType: "NUMERIC",
+        measureKind: kind, formula: "", base: kind === "FILTERED" && base ? base.name : "",
+        conditions: [], aggregation: (base && base.aggregation) || "SUM", format: (base && base.format) || "Auto",
+        relProject: "", relDataset: "", relTable: "", attributes: [], hierarchies: [], textAttribute: ""
+    });
+    renderFieldsTable();
+    openConfigModal(fieldsState.length - 1);
+}
+
+async function deleteVirtualMeasure(field) {
+    const users = fieldsState.filter(f => isVirtualMeasure(f) && f !== field
+        && ((f.measureKind === "CALC" && window.DracoMeasureFormula.refs(f.formula).some(r => r.toUpperCase() === field.name.toUpperCase()))
+            || (f.measureKind === "FILTERED" && String(f.base).toUpperCase() === field.name.toUpperCase())));
+    const ok = await smDialog({
+        title: `Eliminar ${field.name}`,
+        text: users.length ? `La usan: ${users.map(u => u.name).join(", ")}. Dejarán de funcionar hasta que las corrijas.` : "Se quita del modelo al guardarlo.",
+        buttons: [{ label: "Cancelar", value: null }, { label: "Eliminar", value: "del", primary: true }]
+    });
+    if (ok !== "del") return;
+    fieldsState.splice(fieldsState.indexOf(field), 1);
+    smSelection.clear();
+    renderFieldsTable();
+}
+
+function openVirtualMeasureSections(field) {
+    const kind = isVirtualMeasure(field) ? field.measureKind : "";
+    document.getElementById("measureFilteredSection").style.display = kind === "FILTERED" ? "" : "none";
+    document.getElementById("measureCalcSection").style.display = kind === "CALC" ? "" : "none";
+    // Una calculada no se agrega: cada medida de la fórmula lleva la suya
+    document.getElementById("modalMeasureAggGroup").style.display = kind === "CALC" ? "none" : "";
+
+    if (kind === "FILTERED") {
+        const sel = document.getElementById("modalMeasureBase");
+        sel.innerHTML = "";
+        baseMeasures().forEach(m => {
+            const o = document.createElement("option");
+            o.value = m.name; o.textContent = m.alias && m.alias !== m.name ? `${m.alias} (${m.name})` : m.name;
+            sel.appendChild(o);
+        });
+        sel.value = field.base || (baseMeasures()[0] || {}).name || "";
+        const box = document.getElementById("modalMeasureConds");
+        box.innerHTML = "";
+        (field.conditions && field.conditions.length ? field.conditions : [{}]).forEach(addMeasureCondRow);
+    }
+    if (kind === "CALC") {
+        document.getElementById("modalMeasureFormula").value = field.formula || "";
+        const chips = document.getElementById("modalMeasureRefs");
+        chips.innerHTML = "";
+        fieldsState.filter(f => f.type === "MEASURE" && f.enabled && f !== field).forEach(m => {
+            const b = document.createElement("button");
+            b.type = "button";
+            b.textContent = m.name;
+            b.title = "Insertar [" + m.name + "]";
+            b.addEventListener("click", () => insertIntoFormula("[" + m.name + "]"));
+            chips.appendChild(b);
+        });
+        validateMeasureFormulaUI();
+    }
+}
+
+function insertIntoFormula(text) {
+    const ta = document.getElementById("modalMeasureFormula");
+    const a = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
+    const b = ta.selectionEnd != null ? ta.selectionEnd : ta.value.length;
+    ta.value = ta.value.slice(0, a) + text + ta.value.slice(b);
+    ta.focus();
+    ta.setSelectionRange(a + text.length, a + text.length);
+    validateMeasureFormulaUI();
+}
+
+/** Columnas de la tabla de hechos para las condiciones (no virtuales). */
+function factColumnsForConditions() {
+    return fieldsState.filter(f => !isVirtualMeasure(f) && !f.isGroup);
+}
+
+function addMeasureCondRow(c) {
+    const box = document.getElementById("modalMeasureConds");
+    const row = document.createElement("div");
+    row.className = "measure-cond-row";
+    const col = document.createElement("select");
+    col.className = "mc-col";
+    factColumnsForConditions().forEach(f => {
+        const o = document.createElement("option");
+        o.value = f.name; o.textContent = f.name;
+        col.appendChild(o);
+    });
+    if (c.column) col.value = c.column;
+    const op = document.createElement("select");
+    op.className = "mc-op";
+    [["IN", "es"], ["NOT_IN", "no es"]].forEach(([v, t]) => {
+        const o = document.createElement("option"); o.value = v; o.textContent = t; op.appendChild(o);
+    });
+    op.value = c.op === "NOT_IN" ? "NOT_IN" : "IN";
+    const vals = document.createElement("input");
+    vals.type = "text";
+    vals.className = "mc-vals";
+    vals.placeholder = "REAL, BUDGET";
+    vals.value = (c.values || []).join(", ");
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "attr-remove-btn";
+    rm.textContent = "\u2715";
+    rm.title = "Quitar condición";
+    rm.addEventListener("click", () => row.remove());
+    row.append(col, op, vals, rm);
+    box.appendChild(row);
+}
+
+/** Comprueba la fórmula (sintaxis, medidas existentes, sin ciclos). Devuelve el error o "". */
+function checkMeasureFormula(field, formula) {
+    const byName = new Map(fieldsState.filter(f => f.type === "MEASURE" && f.enabled).map(f => [f.name.toUpperCase(), f]));
+    const visit = (f, stack) => {
+        const key = f.name.toUpperCase();
+        if (stack.indexOf(key) !== -1) throw new Error("La fórmula se usa a sí misma: " + stack.concat(key).join(" → "));
+        const isSelf = key === String(field.name).toUpperCase();
+        if (!isSelf && f.measureKind !== "CALC") return;
+        // La medida que se está editando usa la fórmula del cuadro, no la guardada
+        window.DracoMeasureFormula.toSql(isSelf ? formula : f.formula, (ref) => {
+            const m = byName.get(String(ref).toUpperCase());
+            if (!m) throw new Error(`No hay ninguna medida «${ref}» (o está deshabilitada).`);
+            visit(m, stack.concat(key));
+            return "1";
+        });
+    };
+    try { visit(field, []); return ""; }
+    catch (e) { return e.message || String(e); }
+}
+
+function validateMeasureFormulaUI() {
+    const field = fieldsState[currentConfigFieldIndex];
+    const msg = document.getElementById("modalMeasureFormulaMsg");
+    if (!field || !msg) return "";
+    const formula = document.getElementById("modalMeasureFormula").value.trim();
+    const err = formula ? checkMeasureFormula(field, formula) : "Escribe la fórmula.";
+    msg.className = "measure-formula-msg " + (err ? "err" : "ok");
+    msg.textContent = err || "Fórmula correcta.";
+    return err;
+}
+
+/** Guarda lo propio de una medida calculada/filtrada. false = hay errores. */
+function saveVirtualMeasureSections(field) {
+    if (!isVirtualMeasure(field)) return true;
+    if (field.measureKind === "CALC") {
+        const err = validateMeasureFormulaUI();
+        if (err) { showToast(err, "error"); return false; }
+        field.formula = document.getElementById("modalMeasureFormula").value.trim();
+        return true;
+    }
+    const base = document.getElementById("modalMeasureBase").value;
+    const conds = [...document.querySelectorAll("#modalMeasureConds .measure-cond-row")].map(r => {
+        const column = r.querySelector(".mc-col").value;
+        const colField = fieldsState.find(f => f.name === column);
+        return {
+            column,
+            dataType: colField ? colField.dataType : "STRING",
+            op: r.querySelector(".mc-op").value,
+            values: r.querySelector(".mc-vals").value.split(",").map(v => v.trim()).filter(v => v !== "")
+        };
+    }).filter(c => c.column && c.values.length);
+    if (!base) { showToast("Elige la medida base.", "error"); return false; }
+    if (!conds.length) { showToast("Añade al menos una condición con valores.", "error"); return false; }
+    field.base = base;
+    field.conditions = conds;
+    return true;
 }
 
 /* ---------- cambios sin guardar (aviso al ir a «Editar informes») ---------- */

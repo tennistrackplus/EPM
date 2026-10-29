@@ -179,12 +179,17 @@
         const rows = [];
         (fields || []).forEach((f, idx) => {
             if (!f.enabled || f.type !== "MEASURE") return;
+            // DEFINITION: medidas del modelo que no son una columna (calculadas
+            // y filtradas, ver commands.js dracoMeasureAggSQL); vacío en las normales.
+            const def = (f.measureKind === "CALC" || f.measureKind === "FILTERED")
+                ? JSON.stringify({ kind: f.measureKind, formula: f.formula || "", base: f.base || "", conditions: f.conditions || [] })
+                : "";
             rows.push([
                 idx + 1, f.name,
                 // FACT_TABLE / FACT_FIELD: la medida es una columna de la tabla
                 // de hechos (por defecto con su mismo nombre).
                 fact.project, fact.dataset, f.table || fact.table, f.field || f.name,
-                f.aggregation, f.format, modelName
+                f.aggregation, f.format, modelName, def
             ]);
         });
         return rows;
@@ -241,7 +246,7 @@
         MODEL_FACT: ["MODEL_NAME", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE"],
         MODEL_RELATIONSHIP: ["FILA", "DIMENSION", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_FIELD", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "JOIN TYPE", "MODEL_NAME"],
         MODEL_DIMENSION: ["FILA", "DIMENSION", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_FIELD", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "MODEL_NAME"],
-        MODEL_MEASURES: ["FILA", "MEASURE", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_FIELD", "AGGREGATION", "FORMAT", "MODEL_NAME"],
+        MODEL_MEASURES: ["FILA", "MEASURE", "FACT_PROJECT", "FACT_DATASET", "FACT_TABLE", "FACT_FIELD", "AGGREGATION", "FORMAT", "MODEL_NAME", "DEFINITION"],
         MODEL_ATRIBUTES: ["FILA", "DIMENSION", "ATRIBUTE", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "DISPLAY_NAME", "DATA_TYPE", "IS_KEY", "MODEL_NAME"],
         MODEL_HIER: ["FILA", "HIERARCHY", "NIVEL", "DIMENSION", "ATRIBUTO", "DIM_PROJECT", "DIM_DATASET", "DIM_TABLE", "DIM_FIELD", "MODEL_NAME"]
     };

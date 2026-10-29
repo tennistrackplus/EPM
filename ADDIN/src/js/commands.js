@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-29-diagnostico";
+const DRACO_BUILD = "2026-10-29-medidas-calc";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -590,6 +590,8 @@ let DracoCalcModePrevMode = null;
 async function draco_beginManualCalculation() {
     DracoCalcModeDepth++;
     if (DracoCalcModeDepth > 1) return; // ya en manual por una llamada exterior (p.ej. "Actualizar todos")
+    // Prueba del salto a la pestaña Inicio (ver config.js): sin pasar a manual
+    if (typeof DracoConfig !== "undefined" && DracoConfig.manualCalculation === false) { DracoCalcModePrevMode = null; return; }
     try {
         await Excel.run(async (context) => {
             const app = context.workbook.application;
@@ -1230,7 +1232,7 @@ function buildDracoKpiParts(relGrid, measuresGrid, atributesGrid) {
         scale: m.Scale || 1,
         fmtKind: m.FmtKind || "",
         decimals: m.FmtDecimals,
-        field: "f." + field,
+        field: dracoMeasureArgSQL(measuresGrid, m.Name), // "f.CAMPO" o CASE WHEN de una medida filtrada
         from: buildFrom(measuresGrid, m.Name, relGrid),
         joins: buildJoins(relGrid),
         conds: buildFilterConditions(atributesGrid, relGrid),
@@ -1889,7 +1891,8 @@ function buildSelectBase(relGrid, rowsDefs, colDefs, measureField, scale, excCol
     }
     // agregación de excepción: dimensiones de referencia (DRC_R_j)
     (excCols || []).forEach((c, j) => { sql += "    " + c + " AS DRC_R_" + j + "," + CRLF; });
-    sql += "    " + dracoScaled("SUM(f." + (measureField || "") + ")", scale) + " AS IMPORTE";
+    // measureField: "f.CAMPO" o la expresión de una medida filtrada (ver dracoMeasureArgSQL)
+    sql += "    " + dracoScaled("SUM(" + (measureField || "") + ")", scale) + " AS IMPORTE";
 
     return sql;
 }
@@ -2125,8 +2128,7 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
         || (ReportState.FilterMeasureNames && ReportState.FilterMeasureNames[0])
         || (ReportState.Measures[0] && ReportState.Measures[0].Name);
     const measureRow = measureName ? buscarMedida(measuresGrid, measureName) : 0;
-    const measureField = (measureRow && String(cellValue(measuresGrid, measureRow, 6)).trim())
-        || measureName;
+    const measureField = measureRow ? dracoMeasureArgSQL(measuresGrid, measureName) : "f." + measureName;
 
     const rowIdsArray = buildIdArray(atributesGrid, rowsDefs, "ROW_ID");
     const columnIdsArray = buildIdArray(atributesGrid, colDefs, "COLUMN_ID");
@@ -2910,7 +2912,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     const measureCols = neededMeasures.map((name, k) => {
         const R = buscarMedida(measuresGrid, name);
         if (R === 0) throw new Error(`La medida «${name}» no está en el modelo semántico.`);
-        return { name, alias: "M_" + (k + 1), field: String(cellValue(measuresGrid, R, 6)).trim(), scale: dracoMeasureScale(name) };
+        return { name, alias: "M_" + (k + 1), field: String(cellValue(measuresGrid, R, 6)).trim(), arg: dracoMeasureArgSQL(measuresGrid, name), scale: dracoMeasureScale(name) };
     });
 
     const plan = {
@@ -2964,7 +2966,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
 
     let sql = "WITH BASE AS (" + CRLF + CRLF;
     sql += "SELECT" + CRLF;
-    sql += [...selectCols.values(), ...rCols.map((c, j) => c + " AS DRC_R_" + j), ...measureCols.map(m => dracoScaled("SUM(f." + m.field + ")", m.scale) + " AS " + m.alias)]
+    sql += [...selectCols.values(), ...rCols.map((c, j) => c + " AS DRC_R_" + j), ...measureCols.map(m => dracoScaled("SUM(" + m.arg + ")", m.scale) + " AS " + m.alias)]
         .map(x => "    " + x).join("," + CRLF) + CRLF + CRLF;
     sql += buildFrom(measuresGrid, measureCols.length ? measureCols[0].name : null, relGrid) + CRLF + CRLF;
     sql += buildJoins(relGrid) + rJoins.join("") + CRLF + CRLF;
@@ -3796,18 +3798,83 @@ async function autofitDracoHybrid(reportId, plan) {
 function getMeasureSQL(measuresGrid, measureName, aggregationOverride, scale) {
     const R = buscarMedida(measuresGrid, measureName);
     if (R === 0) return "";
-    const aggregation = String(cellValue(measuresGrid, R, 7)).trim(); // G: AGGREGATION
-    const field = String(cellValue(measuresGrid, R, 6)).trim();       // F: FACT_FIELD
-    // Override de Opciones de campo, si no la del modelo. Si la del modelo
-    // es una de las conocidas se pasa por el mismo mapeo (así
-    // COUNT_DISTINCT, que el editor del modelo permite elegir, genera
-    // COUNT(DISTINCT ...) en vez de un "COUNT_DISTINCT(...)" inválido);
-    // cualquier otra se deja tal cual, como siempre.
-    const effective = normalizeDracoAggregation(aggregationOverride) || normalizeDracoAggregation(aggregation);
-    if (effective) {
-        return dracoScaled(DRACO_SQL_AGGREGATIONS[effective]("f." + field), scale) + " AS " + measureName;
-    }
-    return dracoScaled(aggregation + "(f." + field + ")", scale) + " AS " + measureName;
+    return dracoScaled(dracoMeasureAggSQL(measuresGrid, measureName, aggregationOverride), scale) + " AS " + measureName;
+}
+
+/* ---------------------------------------------------------------------
+ * MEDIDAS DEL MODELO QUE NO SON UNA COLUMNA (columna DEFINITION de
+ * MODEL_MEASURES, ver semanticModelStore.buildMeasureRows):
+ *   - FILTRADA: la agregación de otra medida, solo donde se cumplen unas
+ *     condiciones sobre columnas de la tabla de hechos:
+ *       SUM(CASE WHEN f.ESCENARIO IN ('REAL') THEN f.IMPORTE END)
+ *     Una sola pasada por la tabla de hechos, sin subconsultas.
+ *   - CALCULADA: fórmula sobre otras medidas (DracoMeasureFormula), que se
+ *     calcula DESPUÉS de agregar, dentro del mismo SELECT:
+ *       (SUM(f.ING)) - (SUM(f.GAS)),  (SUM(f.M)) / NULLIF(SUM(f.V), 0)
+ *     Así es el ratio de las sumas, también en subtotales y jerarquías.
+ * Las medidas normales generan exactamente el mismo SQL que antes.
+ * --------------------------------------------------------------------- */
+function dracoMeasureDef(measuresGrid, R) {
+    const raw = String(cellValue(measuresGrid, R, 10) || "").trim();
+    if (!raw) return null;
+    try { const d = JSON.parse(raw); return d && (d.kind === "CALC" || d.kind === "FILTERED") ? d : null; }
+    catch (e) { return null; }
+}
+
+function dracoAggOf(aggregationOverride, modelAgg, argSql) {
+    const effective = normalizeDracoAggregation(aggregationOverride) || normalizeDracoAggregation(modelAgg);
+    // Si la del modelo es una de las conocidas se pasa por el mismo mapeo
+    // (COUNT_DISTINCT -> COUNT(DISTINCT ...)); cualquier otra tal cual.
+    return effective ? DRACO_SQL_AGGREGATIONS[effective](argSql) : (modelAgg + "(" + argSql + ")");
+}
+
+const DRACO_IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** Condición SQL de una medida filtrada: f.COL IN (...) [AND ...]. */
+function dracoFilteredCondSQL(conditions) {
+    const parts = (conditions || []).map(c => {
+        const col = String(c.column || "").trim();
+        if (!DRACO_IDENT_RE.test(col)) throw new Error(`Columna no válida en una medida filtrada: «${col}».`);
+        const vals = (c.values || []).map(v => String(v)).filter(v => v !== "");
+        if (!vals.length) throw new Error(`La condición sobre «${col}» de una medida filtrada no tiene valores.`);
+        const numeric = /^(INT|INT64|INTEGER|NUMERIC|BIGNUMERIC|FLOAT|FLOAT64|DECIMAL|NUMBER|DOUBLE|BIGINT|SMALLINT)/i.test(String(c.dataType || ""));
+        const lit = vals.map(v => (numeric && /^-?\d+(\.\d+)?$/.test(v)) ? v : "'" + v.replace(/'/g, "''") + "'").join(", ");
+        return "f." + col + (c.op === "NOT_IN" ? " NOT IN (" : " IN (") + lit + ")";
+    });
+    if (!parts.length) throw new Error("Una medida filtrada necesita al menos una condición.");
+    return parts.join(" AND ");
+}
+
+/**
+ * Argumento a agregar de una medida normal o FILTRADA ("f.CAMPO" o
+ * "CASE WHEN ... THEN f.CAMPO END"), para los modos que agregan en dos
+ * pasos (Híbrido, Fijo, KPI). Una CALCULADA no tiene un único argumento:
+ * de momento solo se usa en informes dinámicos.
+ */
+function dracoMeasureArgSQL(measuresGrid, name) {
+    const R = buscarMedida(measuresGrid, name);
+    if (R === 0) throw new Error(`La medida «${name}» no está en el modelo semántico.`);
+    const def = dracoMeasureDef(measuresGrid, R);
+    if (!def) return "f." + String(cellValue(measuresGrid, R, 6)).trim();
+    if (def.kind === "CALC") throw new Error(`«${name}» es una medida calculada: de momento solo se puede usar en informes dinámicos (sin ejes Estáticos).`);
+    const Rb = buscarMedida(measuresGrid, def.base);
+    if (Rb === 0 || dracoMeasureDef(measuresGrid, Rb)) throw new Error(`La medida base de «${name}» («${def.base}») no es una medida normal del modelo.`);
+    return "CASE WHEN " + dracoFilteredCondSQL(def.conditions) + " THEN f." + String(cellValue(measuresGrid, Rb, 6)).trim() + " END";
+}
+
+/** Expresión AGREGADA de una medida (sin escala ni alias). */
+function dracoMeasureAggSQL(measuresGrid, name, aggregationOverride, stack) {
+    stack = stack || [];
+    const key = String(name).toUpperCase();
+    if (stack.indexOf(key) !== -1) throw new Error(`La medida «${name}» se usa a sí misma en su fórmula (${stack.concat(key).join(" → ")}).`);
+    const R = buscarMedida(measuresGrid, name);
+    if (R === 0) throw new Error(`La medida «${name}» no está en el modelo semántico.`);
+    const modelAgg = String(cellValue(measuresGrid, R, 7)).trim();
+    const def = dracoMeasureDef(measuresGrid, R);
+    if (!def) return dracoAggOf(aggregationOverride, modelAgg, "f." + String(cellValue(measuresGrid, R, 6)).trim());
+    if (def.kind === "FILTERED") return dracoAggOf(aggregationOverride, modelAgg, dracoMeasureArgSQL(measuresGrid, name));
+    // CALCULADA: cada [Medida] es su expresión agregada (con su propia agregación)
+    return window.DracoMeasureFormula.toSql(def.formula, (ref) => dracoMeasureAggSQL(measuresGrid, ref, null, stack.concat(key)));
 }
 
 /**
@@ -8173,6 +8240,8 @@ async function jsonTo3Matrices(context, json, reportId) {
 // una escritura real (clear/.values=/.format...); los que solo cargan
 // datos para leerlos no lo necesitan y se dejan tal cual.
 function draco_suspendScreenUpdating(context) {
+    // Prueba del salto a la pestaña Inicio (ver config.js)
+    if (typeof DracoConfig !== "undefined" && DracoConfig.suspendScreenUpdating === false) return;
     try {
         context.application.suspendScreenUpdatingUntilNextSync();
     } catch (e) {
@@ -12182,26 +12251,53 @@ async function pegarInforme(event) {
         // Hoja activa AHORA MISMO: si hay Shared Runtime se reutiliza
         // captureActiveEditContext (además dejar EDIT_REPORT!D1/E1 al día,
         // por si algo más los necesita); si no, se lee directo con Excel.run.
-        let activeSheetName = "";
+        let activeSheetName = "", anchorAddress = "";
         if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.captureActiveEditContext) {
             const editContext = await TaskPaneApp.captureActiveEditContext();
             activeSheetName = editContext ? editContext.activeSheetName : "";
+            anchorAddress = editContext ? editContext.selectedCellAddress : "";
         }
-        if (!activeSheetName) {
+        if (!activeSheetName || !anchorAddress) {
             await Excel.run(async (context) => {
                 const activeSheet = context.workbook.worksheets.getActiveWorksheet();
                 activeSheet.load("name");
+                const cell = context.workbook.getActiveCell();
+                cell.load("address");
                 await context.sync();
                 activeSheetName = activeSheet.name;
+                anchorAddress = cell.address.split("!").pop().split(":")[0];
             });
         }
 
-        const pasted = await window.ReportStore.pasteReportFromClipboard(activeSheetName);
+        // La celda activa es la esquina superior izquierda del informe pegado
+        const pasted = await window.ReportStore.pasteReportFromClipboard(activeSheetName, anchorAddress);
         if (!pasted) {
             alert("No se pudo pegar el informe.");
             return;
         }
-        console.log(`[Draco] Informe "${pasted.name}" pegado en "${activeSheetName}" (id ${pasted.id}).`);
+        console.log(`[Draco] Informe "${pasted.name}" pegado en "${activeSheetName}"!${anchorAddress} (id ${pasted.id}).`);
+
+        // Ejes Estáticos: sus celdas (EPM_VALUE / EPM_FORMULA) se copian a la
+        // nueva posición; copyFrom ajusta las referencias relativas de las
+        // fórmulas igual que copiar y pegar en Excel.
+        const copies = pasted.__staticCopies || [];
+        if (copies.length) try {
+            await Excel.run(async (context) => {
+                DracoSuppressChangeEvents = true;
+                try {
+                    const to = context.workbook.worksheets.getItem(activeSheetName);
+                    copies.forEach(cp => {
+                        const from = context.workbook.worksheets.getItem(cp.fromSheet).getRange(cp.from);
+                        to.getRange(cp.to).copyFrom(from, Excel.RangeCopyType.all);
+                    });
+                    await context.sync();
+                } finally {
+                    DracoSuppressChangeEvents = false;
+                }
+            });
+        } catch (e) {
+            console.warn("[Draco] Pegar informe: no se pudieron copiar los ejes Estáticos:", e);
+        }
 
         if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.populateReportSelector) {
             // populateReportSelector() relee el informe ACTIVO de

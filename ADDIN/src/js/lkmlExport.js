@@ -75,6 +75,20 @@
             if (!measureName) return;
 
             lines.push(`  measure: ${measureName} {`);
+            if (m.measureKind === "CALC" || m.measureKind === "FILTERED") {
+                // Medida calculada / filtrada de Draco: la definición va en
+                // un comentario (en base64, sin llaves que confundan al
+                // lector) y se recupera tal cual al importar.
+                const def = JSON.stringify({ name: m.name, alias: m.alias, measureKind: m.measureKind, formula: m.formula || "",
+                    base: m.base || "", conditions: m.conditions || [], aggregation: m.aggregation, format: m.format });
+                lines.push(`    type: number`);
+                lines.push(`    sql: 0 ;;`);
+                lines.push(`    # draco-medida: ${btoa(unescape(encodeURIComponent(def)))}`);
+                if (m.format) lines.push(`    value_format_name: ${sanitize(m.format)}`);
+                lines.push("  }");
+                lines.push("");
+                return;
+            }
             lines.push(`    type: ${sanitize(m.aggregation) || "sum"}`);
             lines.push(`    sql: \${TABLE}.${m.name} ;;`);
             if (m.format) lines.push(`    value_format_name: ${sanitize(m.format)}`);

@@ -228,3 +228,124 @@
         tokenize, parse, analyze, refs, toSql, toExcel, numberFormat
     };
 })();
+
+/* ==========================================================
+ * DracoMeasureFormula — fórmulas de MEDIDAS CALCULADAS del modelo
+ * semántico (p. ej. [Ingresos] - [Gastos], DIVIDIR([Margen]; [Ventas])).
+ * ----------------------------------------------------------
+ * Lista cerrada (nada de SQL libre): números, [Medida], + - * /,
+ * paréntesis, comparaciones (= <> < > <= >=) dentro de SI, y las
+ * funciones DIVIDIR(a; b), SI(cond; a; b), ABS(x), REDONDEAR(x; n)
+ * (también en inglés: DIVIDE, IF, ROUND). Separador de argumentos «;»
+ * (también «,» si no va entre dos cifras: 1,5 es un número).
+ * toSql(formula, resolve): resolve(nombre) devuelve la expresión SQL ya
+ * AGREGADA de cada medida referenciada, así la fórmula se calcula después
+ * de agregar (el ratio de las sumas, también en subtotales). La misma
+ * traducción vale para BigQuery y Snowflake.
+ * ========================================================== */
+(function () {
+    "use strict";
+
+    const FUNCS = {
+        DIVIDIR: "DIV", DIVIDE: "DIV", SI: "IF", IF: "IF", ABS: "ABS", REDONDEAR: "ROUND", ROUND: "ROUND"
+    };
+
+    function tokenize(src) {
+        const s = String(src || ""), out = [];
+        let i = 0;
+        while (i < s.length) {
+            const c = s[i];
+            if (/\s/.test(c)) { i++; continue; }
+            if (c === "[") {
+                const j = s.indexOf("]", i + 1);
+                if (j === -1) throw new Error("Falta cerrar un corchete «]».");
+                const name = s.slice(i + 1, j).trim();
+                if (!name) throw new Error("Hay unos corchetes vacíos «[]».");
+                out.push({ t: "ref", v: name }); i = j + 1; continue;
+            }
+            const num = /^\d+(?:[.,]\d+)?/.exec(s.slice(i));
+            if (num) { out.push({ t: "num", v: num[0].replace(",", ".") }); i += num[0].length; continue; }
+            const id = /^[A-Za-zÁÉÍÓÚÑáéíóúñ_]+/.exec(s.slice(i));
+            if (id) {
+                const f = FUNCS[id[0].toUpperCase()];
+                if (!f) throw new Error(`«${id[0]}» no es una función permitida (DIVIDIR, SI, ABS, REDONDEAR). Las medidas van entre corchetes: [${id[0]}].`);
+                out.push({ t: "fn", v: f }); i += id[0].length; continue;
+            }
+            const two = s.slice(i, i + 2);
+            if (two === "<=" || two === ">=" || two === "<>") { out.push({ t: "cmp", v: two }); i += 2; continue; }
+            if ("<>=".indexOf(c) !== -1) { out.push({ t: "cmp", v: c }); i++; continue; }
+            if ("+-*/".indexOf(c) !== -1) { out.push({ t: "op", v: c }); i++; continue; }
+            if (c === "(" || c === ")") { out.push({ t: c }); i++; continue; }
+            if (c === ";" || c === ",") { out.push({ t: "sep" }); i++; continue; }
+            throw new Error(`Carácter no permitido: «${c}».`);
+        }
+        return out;
+    }
+
+    /** Traduce a SQL. resolve(nombre) -> expresión SQL agregada de esa medida. */
+    function toSql(formula, resolve) {
+        const tk = tokenize(formula);
+        if (!tk.length) throw new Error("La fórmula está vacía.");
+        let p = 0;
+        const peek = () => tk[p], next = () => tk[p++];
+        const expect = (t, msg) => { const x = next(); if (!x || x.t !== t) throw new Error(msg); return x; };
+
+        function cmp() {
+            const a = add();
+            const x = peek();
+            if (x && x.t === "cmp") { next(); return "(" + a + " " + x.v + " " + add() + ")"; }
+            return a;
+        }
+        function add() {
+            let a = mul();
+            while (peek() && peek().t === "op" && (peek().v === "+" || peek().v === "-")) { const o = next().v; a = a + " " + o + " " + mul(); }
+            return a;
+        }
+        function mul() {
+            let a = un();
+            while (peek() && peek().t === "op" && (peek().v === "*" || peek().v === "/")) {
+                const o = next().v; const b = un();
+                // «/» también es división segura: sin error si el divisor es 0
+                a = o === "/" ? "(" + a + ") / NULLIF(" + b + ", 0)" : a + " * " + b;
+            }
+            return a;
+        }
+        function un() {
+            const x = peek();
+            if (x && x.t === "op" && (x.v === "-" || x.v === "+")) { next(); return (x.v === "-" ? "-" : "") + un(); }
+            return prim();
+        }
+        function args(n0, n1) {
+            expect("(", "Falta «(» después de la función.");
+            const list = [cmp()];
+            while (peek() && peek().t === "sep") { next(); list.push(cmp()); }
+            expect(")", "Falta cerrar un paréntesis «)».");
+            if (list.length < n0 || list.length > n1) throw new Error("Número de argumentos incorrecto en una función.");
+            return list;
+        }
+        function prim() {
+            const x = next();
+            if (!x) throw new Error("La fórmula está incompleta.");
+            if (x.t === "num") return x.v;
+            if (x.t === "ref") return "(" + resolve(x.v) + ")";
+            if (x.t === "(") { const e = cmp(); expect(")", "Falta cerrar un paréntesis «)»."); return "(" + e + ")"; }
+            if (x.t === "fn") {
+                if (x.v === "DIV") { const a = args(2, 2); return "((" + a[0] + ") / NULLIF(" + a[1] + ", 0))"; }
+                if (x.v === "IF") { const a = args(3, 3); return "(CASE WHEN " + a[0] + " THEN " + a[1] + " ELSE " + a[2] + " END)"; }
+                if (x.v === "ABS") { const a = args(1, 1); return "ABS(" + a[0] + ")"; }
+                if (x.v === "ROUND") { const a = args(1, 2); return "ROUND(" + a[0] + (a[1] !== undefined ? ", " + a[1] : "") + ")"; }
+            }
+            throw new Error("La fórmula tiene algo fuera de lugar cerca de «" + (x.v || x.t) + "».");
+        }
+        const sql = cmp();
+        if (p < tk.length) throw new Error("La fórmula tiene algo de más cerca de «" + (tk[p].v || tk[p].t) + "».");
+        return sql;
+    }
+
+    /** Medidas referenciadas ([Nombre]) en una fórmula. */
+    function refs(formula) {
+        try { return tokenize(formula).filter(t => t.t === "ref").map(t => t.v); } catch (e) { return []; }
+    }
+
+    window.DracoMeasureFormula = { tokenize, toSql, refs };
+})();

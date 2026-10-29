@@ -1337,6 +1337,16 @@ const TaskPaneApp = {
         const report = (this.currentReportId && window.ReportStore) ? window.ReportStore.getReport(this.currentReportId) : null;
         let modelName = report ? (report.semanticModelName || "") : "";
 
+        // Sin informe todavía: sin modelo elegido y sin poder elegirlo (el
+        // modelo es del informe; se elige después de crearlo).
+        if (!report) {
+            select.value = "";
+            select.disabled = true;
+            select.title = "Crea un informe para elegir su modelo semántico";
+            return;
+        }
+        select.title = "";
+
         // Un único modelo semántico disponible: se asigna por defecto.
         if (!modelName && models.length === 1 && report && window.ReportStore) {
             modelName = models[0];
@@ -1468,6 +1478,12 @@ const TaskPaneApp = {
             const report = (this.currentReportId && window.ReportStore)
                 ? window.ReportStore.getReport(this.currentReportId) : null;
             const modelName = report ? (report.semanticModelName || "") : "";
+
+            // Sin informe: no se muestra ningún modelo (ni el activo global)
+            if (!report) {
+                container.innerHTML = "<div style='color: #605e5c; padding: 4px;'>Pulsa «+ Informe» para empezar.</div>";
+                return;
+            }
 
             const result = await window.ExcelService.readDim2Data(modelName || undefined);
 
@@ -1650,7 +1666,10 @@ const TaskPaneApp = {
                 // "Σ Medidas" (no se compara su posición con las tags de
                 // dimensiones sueltas del mismo eje); el resto de campos se
                 // reordena entre sí, directamente en la dropzone.
-                const container = this.isMeasureField(dragged.data)
+                // En Filtros no hay caja «Σ Medidas»: antes, al pasar una
+                // medida de Filtros por su propia zona, se creaba una caja
+                // allí y se quedaba vacía al llevarla a Filas/Columnas.
+                const container = (this.isMeasureField(dragged.data) && (zoneId === "rows" || zoneId === "columns"))
                     ? this.ensureMeasureGroup(dropzoneContent, zoneId)
                     : dropzoneContent;
                 const afterElement = this.getDragAfterElement(container, e.clientY);
@@ -1851,10 +1870,9 @@ const TaskPaneApp = {
         if (sourceTag) {
             sourceTag.remove();
             this.removeFromState(sourceZone, data);
-            if (sourceZone === "rows" || sourceZone === "columns") {
-                const sourceContent = document.querySelector(`.zone-card[data-zone="${sourceZone}"] .dropzone-content`);
-                if (sourceContent) this.cleanupMeasureGroup(sourceContent);
-            }
+            // Caja «Σ Medidas» vacía en la zona de origen (sea cual sea): fuera
+            const sourceContent = document.querySelector(`.zone-card[data-zone="${sourceZone}"] .dropzone-content`);
+            if (sourceContent) this.cleanupMeasureGroup(sourceContent);
         }
 
         this.addField(targetContent, zoneId, data);
@@ -2121,7 +2139,7 @@ const TaskPaneApp = {
             e.stopPropagation();
             tag.remove();
             this.removeFromState(zoneId, { dim: entry.dimension, name: entry.name });
-            if (zoneId === "rows" || zoneId === "columns") this.cleanupMeasureGroup(container);
+            this.cleanupMeasureGroup(container);
         });
 
         // Doble clic en una dimensión de Filas/Columnas: filtro sobre ella

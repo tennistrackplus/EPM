@@ -287,7 +287,13 @@
                 columns: design.columns || [],
                 rowsStatic: !!design.rowsStatic,
                 colsStatic: !!design.colsStatic,
-                fieldOptions: design.fieldOptions || {}
+                fieldOptions: design.fieldOptions || {},
+                // Posición de los ejes (rangos de Filas y Columnas) y hoja de
+                // origen: al pegar se recolocan respecto a la celda activa y,
+                // si un eje es Estático, se copian sus celdas.
+                rrAddress: design.rrAddress || "",
+                rcAddress: design.rcAddress || "",
+                sourceSheet: design.resultSheetName || ""
             },
             reportProperties: Object.assign({}, DEFAULT_REPORT_PROPERTIES, report.reportProperties || {})
         };
@@ -303,11 +309,54 @@
      * createReport/addReport). Devuelve el informe recién creado, o null
      * si no había nada copiado.
      */
-    async function pasteReportFromClipboard(resultSheetName) {
+    /* ---- direcciones A1 (para recolocar los ejes al pegar) ---- */
+    function _colToNum(c) { let n = 0; for (const ch of c.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64); return n; }
+    function _numToCol(n) { let s = ""; while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+    function _parseA1(a) {
+        const m = /^\$?([A-Za-z]{1,3})\$?(\d+)$/.exec(String(a || "").trim());
+        return m ? { col: _colToNum(m[1]), row: Number(m[2]) } : null;
+    }
+    function _rangeTopLeft(addr) { return addr ? _parseA1(String(addr).split("!").pop().split(":")[0]) : null; }
+    function _shiftRange(addr, dRow, dCol) {
+        if (!addr) return "";
+        return String(addr).split("!").pop().split(":").map(part => {
+            const p = _parseA1(part);
+            return p ? _numToCol(Math.max(1, p.col + dCol)) + Math.max(1, p.row + dRow) : part;
+        }).join(":");
+    }
+
+    /**
+     * Pega el informe copiado. anchorAddress: celda activa al pegar (p. ej.
+     * "H20"). Los ejes se recolocan con el MISMO desplazamiento: la esquina
+     * superior izquierda del informe copiado (fila de Columnas, columna de
+     * Filas) pasa a esa celda, y Filas/Columnas conservan su posición
+     * relativa y su tamaño. Antes no se copiaban los rangos y el informe
+     * pegado no sabía dónde pintarse ni dónde leer sus ejes Estáticos.
+     * Devuelve el informe con __staticCopies: [{ fromSheet, from, to }] con
+     * los ejes Estáticos cuyas celdas hay que copiar (lo hace commands.js).
+     */
+    async function pasteReportFromClipboard(resultSheetName, anchorAddress) {
         const clip = getReportClipboard();
         if (!clip) return null;
 
         const report = await createReport(clip.semanticModelName || "", resultSheetName);
+
+        const d0 = clip.design || {};
+        const rrTL = _rangeTopLeft(d0.rrAddress), rcTL = _rangeTopLeft(d0.rcAddress);
+        const anchor = _parseA1(anchorAddress);
+        let rrAddress = d0.rrAddress || "", rcAddress = d0.rcAddress || "";
+        const staticCopies = [];
+        if (anchor && (rrTL || rcTL)) {
+            const top = Math.min(rrTL ? rrTL.row : Infinity, rcTL ? rcTL.row : Infinity);
+            const left = Math.min(rrTL ? rrTL.col : Infinity, rcTL ? rcTL.col : Infinity);
+            const dRow = anchor.row - top, dCol = anchor.col - left;
+            rrAddress = _shiftRange(d0.rrAddress, dRow, dCol);
+            rcAddress = _shiftRange(d0.rcAddress, dRow, dCol);
+        }
+        if (d0.sourceSheet) {
+            if (d0.rowsStatic && d0.rrAddress && rrAddress) staticCopies.push({ fromSheet: d0.sourceSheet, from: d0.rrAddress, to: rrAddress });
+            if (d0.colsStatic && d0.rcAddress && rcAddress) staticCopies.push({ fromSheet: d0.sourceSheet, from: d0.rcAddress, to: rcAddress });
+        }
 
         // saveDesign ya expande jerarquías (expandedRows/expandedCols) a
         // partir de filters/rows/columns/fieldOptions -mismo camino que
@@ -320,7 +369,9 @@
             columns: clip.design.columns,
             rowsStatic: clip.design.rowsStatic,
             colsStatic: clip.design.colsStatic,
-            fieldOptions: clip.design.fieldOptions
+            fieldOptions: clip.design.fieldOptions,
+            rrAddress,
+            rcAddress
         });
 
         // Propiedades del informe (subtotales, jerarquía arriba, suprimir
@@ -331,7 +382,9 @@
         delete props.reportName;
         await saveReportProperties(report.id, props);
 
-        return getReport(report.id);
+        const out = getReport(report.id);
+        if (out) out.__staticCopies = staticCopies;
+        return out;
     }
 
     async function deleteReport(reportId) {

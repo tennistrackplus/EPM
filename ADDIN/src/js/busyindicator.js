@@ -61,6 +61,13 @@
     let label = "Actualizando";
     let sheetName = null; // hoja donde se creó el shape (se fija en show())
 
+    // DracoConfig.busyIndicatorInSheet = false: sin forma en la hoja (prueba
+    // del salto de pestaña, ver config.js). show/hide siguen llevando la
+    // cuenta para que todo lo demás funcione igual.
+    function inSheet() {
+        return !(typeof DracoConfig !== "undefined" && DracoConfig.busyIndicatorInSheet === false);
+    }
+
     function frameText() {
         return `${FRAMES[frameIdx]}  ${label}…`;
     }
@@ -162,6 +169,7 @@
         refCount++;
         if (customLabel) label = customLabel;
         if (refCount > 1) return; // ya lo estaba mostrando otra llamada
+        if (!inSheet()) return;   // sin forma en la hoja
 
         try {
             await Excel.run(async (context) => {
@@ -185,6 +193,7 @@
     async function hide() {
         refCount = Math.max(0, refCount - 1);
         if (refCount > 0) return;
+        if (!inSheet() && !sheetName) return; // no se llegó a crear forma
 
         const elapsed = Date.now() - shownAt;
         if (elapsed < MIN_VISIBLE_MS) {
@@ -220,6 +229,7 @@
     async function update(text) {
         if (refCount <= 0 || !text) return;
         label = text;
+        if (!sheetName) return; // sin forma en la hoja
         try {
             await Excel.run(async (context) => {
                 const shape = await findShape(context);

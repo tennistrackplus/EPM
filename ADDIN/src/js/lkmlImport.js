@@ -88,6 +88,22 @@
 
         return findBlocks(body, "measure").map(blk => {
 
+            // Medida calculada / filtrada de Draco (ver lkmlExport)
+            const defM = blk.body.match(/#\s*draco-medida:\s*([A-Za-z0-9+\/=]+)/);
+            if (defM) {
+                try {
+                    const d = JSON.parse(decodeURIComponent(escape(atob(defM[1]))));
+                    if (d && (d.measureKind === "CALC" || d.measureKind === "FILTERED") && /^[A-Za-z_][A-Za-z0-9_]*$/.test(d.name || "")) {
+                        return {
+                            enabled: true, type: "MEASURE", name: d.name, alias: d.alias || d.name, dataType: "NUMERIC",
+                            measureKind: d.measureKind, formula: String(d.formula || ""), base: String(d.base || ""),
+                            conditions: Array.isArray(d.conditions) ? d.conditions : [],
+                            aggregation: d.aggregation || "SUM", format: d.format || "Auto"
+                        };
+                    }
+                } catch (e) { /* comentario dañado: se trata como medida normal */ }
+            }
+
             const typeM = blk.body.match(/type:\s*([a-zA-Z0-9_]+)/);
             const sqlM = blk.body.match(/sql:\s*\$\{TABLE\}\.([a-zA-Z0-9_]+)\s*;;/);
             const fmtM = blk.body.match(/value_format_name:\s*([a-zA-Z0-9_]+)/);
