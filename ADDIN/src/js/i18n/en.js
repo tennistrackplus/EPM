@@ -640,3 +640,35 @@ DracoI18n.register("en", {
     "Selecciona una celda de Filas/Columnas de un informe Draco.": "Select a Rows/Columns cell of a Draco report.",
     "Excel no acepta la fórmula: {e}": "Excel does not accept the formula: {e}"
 });
+
+// ---- Grupos del modelo semántico, cambios sin guardar y cabecera de informes
+DracoI18n.register("en", {
+    "+ Informe": "+ Report",
+    "Propiedades del campo": "Field properties",
+    "Agrupar en una dimensión…": "Group into a dimension…",
+    "Añadir al grupo {g}": "Add to group {g}",
+    "Quitar del grupo": "Remove from group",
+    "Propiedades…": "Properties…",
+    "Desagrupar {g}": "Ungroup {g}",
+    "Selecciona campos sueltos (Ctrl o Mayús + clic) para agrupar": "Select loose fields (Ctrl or Shift + click) to group",
+    "Agrupar en una dimensión": "Group into a dimension",
+    "Agrupar": "Group",
+    "Nombre de la dimensión": "Dimension name",
+    "Pon un nombre.": "Enter a name.",
+    "Solo letras, números y _ (sin espacios ni acentos), sin empezar por número.": "Only letters, digits and _ (no spaces or accents), not starting with a digit.",
+    "Ya hay un campo con ese nombre.": "There is already a field with that name.",
+    "Cambios sin guardar": "Unsaved changes",
+    "Has modificado el modelo semántico y no lo has guardado. Si sales ahora, los informes seguirán usando la versión guardada.": "You have changed the semantic model and not saved it. If you leave now, the reports will keep using the saved version.",
+    "Seguir editando": "Keep editing",
+    "Salir sin guardar": "Leave without saving",
+    "Dimensión de la tabla de hechos. Para añadir columnas, selecciónalas en la lista de campos y usa clic derecho ▸ Añadir al grupo.": "Fact table dimension. To add columns, select them in the field list and use right-click ▸ Add to group.",
+    "Es la tabla de hechos: para crear una dimensión con sus columnas, selecciónalas en la lista y usa clic derecho ▸ Agrupar.": "This is the fact table: to create a dimension from its columns, select them in the list and use right-click ▸ Group.",
+    "Dimensión {n} creada con {c} campo(s). Ábrela (›) para crear jerarquías.": "Dimension {n} created with {c} field(s). Open it (›) to create hierarchies.",
+    "{c} campo(s) añadido(s) a {g}.": "{c} field(s) added to {g}."
+});
+
+// ---- Clic derecho ▸ Draco · Filtro ▸ Borrar filtro
+DracoI18n.register("en", {
+    "Este campo no tiene filtro.": "This field has no filter.",
+    "Filtro de {d} borrado.": "Filter of {d} cleared."
+});
