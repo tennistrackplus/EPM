@@ -7,6 +7,8 @@
 
     <!-- Librería JavaScript de Microsoft Office (Requerida en el HEAD) -->
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <script src="js/i18n.js?v=20261029b"></script>
+    <script src="js/i18n/en.js?v=20261029b"></script>
 
     <link rel="stylesheet" href="css/theme.css">
     <link rel="stylesheet" href="css/styles.css">
@@ -1076,6 +1078,177 @@
             user-select: none;
         }
 
+        .dim-source-switch {
+            display: flex;
+            gap: 14px;
+            margin: 2px 0 8px;
+            font-size: 12px;
+        }
+
+        .dim-source-switch label {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            cursor: pointer;
+        }
+
+        .dim-fact-add {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 6px;
+        }
+
+        .dim-fact-add select {
+            flex: 1 1 140px;
+            min-width: 0;
+            font-size: 12px;
+        }
+
+        .field-row.field-selected {
+            background: #e0ecff;
+        }
+
+        .field-row.field-group-row .field-name {
+            color: #0e9c71;
+            font-weight: 600;
+        }
+
+        .sm-ctx-menu {
+            position: fixed;
+            z-index: 6000;
+            min-width: 190px;
+            background: #fff;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            box-shadow: 0 6px 18px rgba(15, 23, 42, .18);
+            padding: 4px 0;
+            font-size: 12px;
+        }
+
+        .sm-ctx-menu button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            border: 0;
+            background: none;
+            padding: 6px 12px;
+            cursor: pointer;
+            color: #1e293b;
+        }
+
+        .sm-ctx-menu button:hover {
+            background: #eef2ff;
+        }
+
+        .sm-ctx-menu .sm-ctx-sep {
+            height: 1px;
+            background: #e2e8f0;
+            margin: 4px 0;
+        }
+
+        .sm-dialog-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 6100;
+            background: rgba(15, 23, 42, .35);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+        }
+
+        .sm-dialog {
+            background: #fff;
+            border-radius: 8px;
+            width: 100%;
+            max-width: 340px;
+            padding: 16px;
+            box-shadow: 0 10px 30px rgba(15, 23, 42, .25);
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            font-size: 13px;
+        }
+
+        .sm-dialog h3 {
+            margin: 0;
+            font-size: 15px;
+        }
+
+        .sm-dialog input {
+            padding: 6px 8px;
+            font-size: 13px;
+        }
+
+        .sm-dialog-err {
+            color: #dc2626;
+            font-size: 11px;
+            min-height: 14px;
+        }
+
+        .sm-dialog-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .field-row.field-grouped {
+            padding-left: 22px;
+            height: 28px;
+            background: #f8fafc;
+            opacity: .85;
+        }
+
+        .field-row.field-grouped .field-name::before {
+            content: "\21B3  ";
+        }
+
+        .field-row.drop-target {
+            outline: 2px dashed #0e9c71;
+            outline-offset: -2px;
+            background: #ecfdf5;
+        }
+
+        .field-group-badge {
+            flex: 0 0 auto;
+            font-size: 10px;
+            color: #0e9c71;
+            border: 1px solid #a7f3d0;
+            border-radius: 8px;
+            padding: 0 6px;
+            white-space: nowrap;
+        }
+
+        .attr-remove-btn {
+            border: none;
+            background: transparent;
+            color: #94a3b8;
+            cursor: pointer;
+            font-size: 12px;
+            padding: 0 4px;
+        }
+
+        .attr-remove-btn:hover {
+            color: #dc2626;
+        }
+
+        .display-hint {
+            margin-top: 3px;
+            font-size: 10px;
+            color: #64748b;
+            line-height: 1.35;
+        }
+
+        .hierarchy-level-text-select {
+            flex: 0 0 auto;
+            width: 110px;
+            padding: 2px 4px;
+            font-size: 10px;
+        }
+
         .hierarchy-attr-chip {
             background: #ffffff;
             border: 1px solid #cbd5e1;
@@ -1201,6 +1374,74 @@
             word-break: break-word;
         }
 
+        .report-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            gap: 6px;
+            padding: 10px 12px 2px 12px;
+            flex-wrap: nowrap;
+        }
+
+        .report-toolbar .report-selector {
+            flex: 1 1 auto;
+            min-width: 0;
+            max-width: none;
+            height: 30px;
+            padding: 0 6px;
+            font-weight: 600;
+            font-size: var(--fs-md, 14px);
+            border: 1px solid transparent;
+            border-radius: 6px;
+            background: transparent;
+            text-overflow: ellipsis;
+        }
+
+        .report-toolbar .report-selector:hover,
+        .report-toolbar .report-selector:focus {
+            border-color: #cbd5e1;
+            background: #fff;
+        }
+
+        .report-toolbar .report-add-btn {
+            flex: 0 0 auto;
+            height: 28px;
+            padding: 0 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 28px;
+            white-space: nowrap;
+            box-shadow: none;
+            outline: none;
+        }
+
+        .report-toolbar .report-add-btn:focus-visible {
+            outline: 2px solid #93c5fd;
+            outline-offset: 1px;
+        }
+
+        .report-toolbar-icons {
+            flex: 0 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding-left: 4px;
+            margin-left: 2px;
+            border-left: 1px solid #e2e8f0;
+        }
+
+        .report-auto-status {
+            min-height: 14px;
+            padding: 0 14px 4px 14px;
+            font-size: var(--fs-sm, 11px);
+            color: #7045A9;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
         .app-toast.visible {
             opacity: 1;
             transform: translateY(0);
@@ -1224,19 +1465,15 @@
     <div id="view-informes" class="epm-page-view epm-page-view--active">
     <div class="taskpane-container">
 
-        <!-- Barra de herramientas de la vista -->
-        <div class="view-toolbar">
-            <select id="reportSelector" title="Informe" style="font-weight:600; font-size: var(--fs-md, 14px); border:1px solid transparent; background:transparent; max-width: 160px;">
+        <!-- Barra de herramientas de la vista: informe, «+ Informe» y 3 iconos.
+             «Actualizar todos» está en la cinta; «Distribuir valores» y
+             «Guardar en bucket» también (cinta y clic derecho). -->
+        <div class="view-toolbar report-toolbar">
+            <select id="reportSelector" class="report-selector" title="Informe">
                 <option value="">— Sin informes —</option>
             </select>
-            <div style="display:flex; align-items:center; gap:6px;">
-                <span id="autoStatus" style="font-size: var(--fs-sm, 11px); color:#7045A9; min-width: 90px;"></span>
-                <button id="btnAddReport" class="btn-primary" style="padding:6px 14px; font-size: var(--fs-sm);">Añadir informe</button>
-                <button id="btnRefreshAll" class="icon-button" title="Refrescar todos los informes">
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M8 2.5a5.5 5.5 0 100 11 5.5 5.5 0 004.86-2.93.75.75 0 10-1.32-.71A4 4 0 118 4v1.75L10.5 3.5 8 1.25V2.5z"/>
-                    </svg>
-                </button>
+            <button id="btnAddReport" class="btn-primary report-add-btn" title="Añadir informe">+ Informe</button>
+            <div class="report-toolbar-icons">
                 <button id="btnPauseRefresh" class="icon-button" title="Pausar actualización de datos" aria-pressed="false">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                         <rect x="4" y="3" width="3" height="10" rx="1"/>
@@ -1248,24 +1485,14 @@
                         <path d="M8 4.75a.75.75 0 01.75.75v3.19l2.22 1.28a.75.75 0 01-.75 1.3l-2.6-1.5a.75.75 0 01-.37-.65V5.5A.75.75 0 018 4.75zM8 1a7 7 0 100 14A7 7 0 008 1z"/>
                     </svg>
                 </button>
-                <button id="btnFieldOptions" class="icon-button" title="Opciones de campo">
+                <button id="btnFieldOptions" class="icon-button" title="Propiedades del campo">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                         <path d="M6 2h4v2H6V2zM2 6h4v2H2V6zm6 0h6v2H8V6zM2 10h8v2H2v-2zm10 0h2v2h-2v-2z"/>
                     </svg>
                 </button>
-                <button id="btnDistribuirValores" class="icon-button" title="Distribuir valores">
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M8 1a1 1 0 011 1v2.09a1 1 0 01-2 0V2a1 1 0 011-1zM3 9a1 1 0 011 1v4a1 1 0 01-2 0v-4a1 1 0 011-1zm5-1.5a1 1 0 011 1V14a1 1 0 01-2 0V8.5a1 1 0 011-1zm5 3a1 1 0 011 1v2.5a1 1 0 01-2 0V11.5a1 1 0 011-1zM4.22 5.64a1 1 0 010 1.42L2.9 8.38a1 1 0 11-1.42-1.42L2.8 5.64a1 1 0 011.42 0zm7.56 0a1 1 0 011.42 0l1.32 1.32a1 1 0 11-1.42 1.42l-1.32-1.32a1 1 0 010-1.42z"/>
-                    </svg>
-                </button>
-                <button id="btnSaveToBucket" class="icon-button" title="Guardar Excel en bucket de Cloud Storage">
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                        <path d="M4.5 12.5a3 3 0 01-.4-5.98 4 4 0 017.79-1.29A3.5 3.5 0 0111.5 12H10a.5.5 0 010-1h1.5a2.5 2.5 0 00.3-4.98.5.5 0 01-.42-.44 3 3 0 00-5.9.94.5.5 0 01-.45.49A2 2 0 004.5 11.5H6a.5.5 0 010 1H4.5z"/>
-                        <path d="M8 6.5a.5.5 0 01.5.5v3.79l1.15-1.15a.5.5 0 11.7.71l-2 2a.5.5 0 01-.7 0l-2-2a.5.5 0 11.7-.71L7.5 10.8V7a.5.5 0 01.5-.5z"/>
-                    </svg>
-                </button>
             </div>
         </div>
+        <div id="autoStatus" class="report-auto-status" aria-live="polite"></div>
 
         <!-- Layout Principal -->
         <div class="taskpane-body">
@@ -1281,7 +1508,7 @@
                     </svg>
                     <input type="text" id="fieldSearch" placeholder="Buscar campo..." autocomplete="off">
                 </div>
-                <div id="availableFieldsContainer" class="fields-tree">
+                <div id="availableFieldsContainer" data-no-i18n class="fields-tree">
                     <!-- Se rellena dinámicamente -->
                 </div>
             </section>
@@ -1297,32 +1524,6 @@
                                 <path d="M1.5 1.5A.5.5 0 012 1h12a.5.5 0 01.354.854L9.5 6.707V13.5a.5.5 0 01-.757.429l-2-1.25A.5.5 0 016.5 12.25V6.707L1.146 1.854A.5.5 0 011.5 1.5z"/>
                             </svg>
                             <span>Filtros</span>
-                        </div>
-                    </div>
-                    <div class="dropzone-content"></div>
-                </div>
-
-                <!-- Zona Filas -->
-                <div class="zone-card" data-zone="rows">
-                    <div class="zone-header">
-                        <div class="zone-title-group">
-                            <svg class="zone-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                                <path d="M2 3h12a1 1 0 011 1v2a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1zm0 6h12a1 1 0 011 1v2a1 1 0 01-1 1H2a1 1 0 01-1-1v-2a1 1 0 011-1z"/>
-                            </svg>
-                            <span>Filas</span>
-                        </div>
-                        <label class="asymmetric-checkbox" title="Estático / Dinámico">
-                            <input type="checkbox" id="chkAsymmetricRows">
-                            <span id="lblStaticRows">Dinámico</span>
-                        </label>
-                    </div>
-                    <div class="range-control">
-                        <span class="range-address" id="lblRRango">(sin definir)</span>
-                        <div class="range-arrows">
-                            <button type="button" id="btnRRUp" class="icon-button" title="Mover arriba">⬆</button>
-                            <button type="button" id="btnRRDown" class="icon-button" title="Mover abajo">⬇</button>
-                            <button type="button" id="btnRRLeft" class="icon-button" title="Mover izquierda">⬅</button>
-                            <button type="button" id="btnRRRight" class="icon-button" title="Mover derecha">➡</button>
                         </div>
                     </div>
                     <div class="dropzone-content"></div>
@@ -1349,6 +1550,32 @@
                             <button type="button" id="btnRCDown" class="icon-button" title="Mover abajo">⬇</button>
                             <button type="button" id="btnRCLeft" class="icon-button" title="Mover izquierda">⬅</button>
                             <button type="button" id="btnRCRight" class="icon-button" title="Mover derecha">➡</button>
+                        </div>
+                    </div>
+                    <div class="dropzone-content"></div>
+                </div>
+
+                <!-- Zona Filas -->
+                <div class="zone-card" data-zone="rows">
+                    <div class="zone-header">
+                        <div class="zone-title-group">
+                            <svg class="zone-icon" width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                                <path d="M2 3h12a1 1 0 011 1v2a1 1 0 01-1 1H2a1 1 0 01-1-1V4a1 1 0 011-1zm0 6h12a1 1 0 011 1v2a1 1 0 01-1 1H2a1 1 0 01-1-1v-2a1 1 0 011-1z"/>
+                            </svg>
+                            <span>Filas</span>
+                        </div>
+                        <label class="asymmetric-checkbox" title="Estático / Dinámico">
+                            <input type="checkbox" id="chkAsymmetricRows">
+                            <span id="lblStaticRows">Dinámico</span>
+                        </label>
+                    </div>
+                    <div class="range-control">
+                        <span class="range-address" id="lblRRango">(sin definir)</span>
+                        <div class="range-arrows">
+                            <button type="button" id="btnRRUp" class="icon-button" title="Mover arriba">⬆</button>
+                            <button type="button" id="btnRRDown" class="icon-button" title="Mover abajo">⬇</button>
+                            <button type="button" id="btnRRLeft" class="icon-button" title="Mover izquierda">⬅</button>
+                            <button type="button" id="btnRRRight" class="icon-button" title="Mover derecha">➡</button>
                         </div>
                     </div>
                     <div class="dropzone-content"></div>
@@ -1470,7 +1697,7 @@
                                     <th class="dv-num">Nuevo valor</th>
                                 </tr>
                             </thead>
-                            <tbody id="dvPreviewBody"></tbody>
+                            <tbody id="dvPreviewBody" data-no-i18n></tbody>
                         </table>
                     </div>
                     <div class="dv-preview-footer">
@@ -1670,7 +1897,7 @@
                             <div class="connector-card" data-provider="bigquery">
                                 <div class="connector-info">
                                     <div class="connector-icon">
-                                        <img src="https://www.vectorlogo.zone/logos/google_bigquery/google_bigquery-icon.svg" alt="BigQuery">
+                                        <img src="assets/datasource-db.svg" alt="BigQuery">
                                     </div>
                                     <div class="connector-details">
                                         <h3>BigQuery</h3>
@@ -1680,6 +1907,20 @@
                             </div>
                             <!-- Campos específicos de BigQuery (acordeón bajo la propia opción) -->
                             <div class="provider-config-panel" id="bigqueryConfigPanel">
+                                <label for="bqAuthMode" style="margin-top:10px;">Autenticación con Google</label>
+                                <select id="bqAuthMode">
+                                    <option value="token">OAuth del cliente (token en el navegador)</option>
+                                    <option value="backend">Servicio de autenticación del cliente (recomendado)</option>
+                                </select>
+                                <div id="bqAuthTokenFields">
+                                    <input type="text" id="bqOAuthClientId" style="margin-top:6px;" placeholder="OAuth Client ID (xxxx.apps.googleusercontent.com)" autocomplete="off">
+                                    <span class="hint">Client ID de tipo "Aplicación web" creado en el proyecto de Google Cloud del cliente. La sesión dura 1 hora.</span>
+                                </div>
+                                <div id="bqAuthBackendFields" style="display:none;">
+                                    <input type="text" id="bqAuthBrokerUrl" style="margin-top:6px;" placeholder="https://draco-auth-xxxx.run.app" autocomplete="off">
+                                    <span class="hint">URL del servicio de autenticación desplegado por el cliente (AUTH-BROKER). El secreto de OAuth no sale de ese servicio y la sesión se renueva sola.</span>
+                                </div>
+
                                 <label for="bqBillingProject">Id. del proyecto de facturación (opcional)</label>
                                 <input type="text" id="bqBillingProject" placeholder="Ejemplo: MyBillingProject">
                                 <span class="hint">Si se deja vacío, se factura sobre el proyecto de los datos consultados.</span>
@@ -1699,109 +1940,6 @@
                                 <input type="password" id="bqRepoToken" style="margin-top:6px;" placeholder="Personal Access Token (solo repos privados)" autocomplete="off">
                                 <span class="hint">Dónde se guardan/versionan las definiciones del modelo semántico (equivalente a un proyecto LookML). El token solo hace falta para repositorios privados; se usa para listar y leer los ficheros .lkml, igual que la "deploy key"/PAT de Looker.</span>
                             </div>
-                        </div>
-
-                        <!-- Snowflake -->
-                        <div class="connector-item">
-                            <div class="connector-card" data-provider="snowflake">
-                                <div class="connector-info">
-                                    <div class="connector-icon">
-                                        <img src="https://app.eu.peliqan.io/img/db/snowflake.svg" alt="Snowflake">
-                                    </div>
-                                    <div class="connector-details">
-                                        <h3>Snowflake</h3>
-                                        <span>Cloud Data Platform</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <!-- Campos específicos de Snowflake (acordeón bajo la propia opción) -->
-                            <div class="provider-config-panel" id="snowflakeConfigPanel">
-                                <label for="sfAccount">Identificador de cuenta Snowflake</label>
-                                <input type="text" id="sfAccount" placeholder="ej. xy12345.eu-west-1 u orgname-accountname">
-                                <label for="sfWarehouse" style="margin-top:10px;">Warehouse</label>
-                                <input type="text" id="sfWarehouse" placeholder="ej. COMPUTE_WH">
-                                <label for="sfDatabase" style="margin-top:10px;">Base de datos</label>
-                                <input type="text" id="sfDatabase" placeholder="DRACO">
-                                <label for="sfRole" style="margin-top:10px;">Rol (opcional)</label>
-                                <input type="text" id="sfRole" placeholder="ej. SYSADMIN">
-                            </div>
-                        </div>
-
-                        <!-- Amazon -->
-                        <div class="connector-item">
-                        <div class="connector-card" data-provider="amazon">
-                            <div class="connector-info">
-                                <div class="connector-icon">
-                                    <img src="https://www.vectorlogo.zone/logos/amazon_aws/amazon_aws-icon.svg" alt="AWS">
-                                </div>
-                                <div class="connector-details">
-                                    <h3>Amazon</h3>
-                                    <span>AWS Redshift / S3</span>
-                                </div>
-                            </div>
-                            <span class="tag-soon">Próximamente</span>
-                        </div>
-                        </div>
-                        <!-- Microsoft Fabric -->
-                        <div class="connector-item">
-                            <div class="connector-card" data-provider="fabric">
-                                <div class="connector-info">
-                                    <div class="connector-icon">
-                                        <img src="https://community.fabric.microsoft.com/html/assets/fabric-expo-icon.svg" alt="Microsoft Fabric">
-                                    </div>
-                                    <div class="connector-details">
-                                        <h3>Microsoft Fabric</h3>
-                                        <span>Lakehouse / Warehouse (OneLake)</span>
-                                    </div>
-                                </div>
-                            </div>
-                            <!-- Campos específicos de Fabric (acordeón bajo la propia opción) -->
-                            <div class="provider-config-panel" id="fabricConfigPanel">
-                                <label for="fbServer">SQL endpoint del workspace (opcional)</label>
-                                <input type="text" id="fbServer" placeholder="xxxx.datawarehouse.fabric.microsoft.com">
-                                <span class="hint">En Fabric: abre un Lakehouse (su punto de conexión SQL) o un Warehouse → Configuración → Cadena de conexión SQL. Es la misma para todos los items del workspace; puedes pegar la cadena completa. Solo hace falta para consultar Lakehouse/Warehouse por SQL; para abrir modelos semánticos puedes dejarlo vacío.</span>
-                                <label for="fbDefaultItem" style="margin-top:10px;">Lakehouse / Warehouse por defecto (opcional)</label>
-                                <input type="text" id="fbDefaultItem" placeholder="ej. Draco_LH">
-                                <span class="hint">Solo como contexto inicial de la conexión. En el modelo semántico eliges el item de cada tabla, así que puedes mezclar Lakehouses y Warehouses del mismo workspace.</span>
-                                <label for="fbGatewayUrl" style="margin-top:10px;">URL de gateway propia (opcional)</label>
-                                <input type="text" id="fbGatewayUrl" placeholder="https://gateway.miempresa.com">
-                                <span class="hint">Solo si tu equipo de IT ha desplegado su propio gateway de Draco. Déjalo vacío para usar el gateway de Draco.</span>
-                                <label for="fbTenant" style="margin-top:10px;">Tenant de Microsoft Entra ID (opcional)</label>
-                                <input type="text" id="fbTenant" placeholder="ej. contoso.onmicrosoft.com o Id. de inquilino">
-                                <span class="hint">Déjalo vacío para iniciar sesión con cualquier cuenta de trabajo.</span>
-                            </div>
-                        </div>
-
-                        <!-- SAP Datasphere -->
-                        <div class="connector-item">
-                        <div class="connector-card" data-provider="datasphere">
-                            <div class="connector-info">
-                                <div class="connector-icon">
-                                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg" alt="SAP Datasphere">
-                                </div>
-                                <div class="connector-details">
-                                    <h3>SAP Datasphere</h3>
-                                    <span>SAP Business Warehouse</span>
-                                </div>
-                            </div>
-                            <span class="tag-soon">Próximamente</span>
-                        </div>
-                        </div>
-
-                        <!-- CDS de S4 -->
-                        <div class="connector-item">
-                        <div class="connector-card" data-provider="s4cds">
-                            <div class="connector-info">
-                                <div class="connector-icon">
-                                    <img src="https://upload.wikimedia.org/wikipedia/commons/5/59/SAP_2011_logo.svg" alt="SAP S/4HANA CDS">
-                                </div>
-                                <div class="connector-details">
-                                    <h3>CDS de S4</h3>
-                                    <span>SAP S/4HANA CDS Views</span>
-                                </div>
-                            </div>
-                            <span class="tag-soon">Próximamente</span>
-                        </div>
                         </div>
 
                     </div>
@@ -1863,7 +2001,7 @@
                 </div>
                 <input type="hidden" id="factProject" />
                 <input type="hidden" id="factDataset" />
-                <input type="hidden" id="factTable" />
+                <input type="hidden" id="factTable" data-no-i18n />
             </div>
         </div>
 
@@ -1873,7 +2011,7 @@
                 <span class="card-title">Campos</span>
             </div>
 
-            <div id="fieldsList" class="fields-list">
+            <div id="fieldsList" data-no-i18n class="fields-list">
                 <!-- Se rellena dinámicamente desde semantic_model.js -->
             </div>
         </div>
@@ -1946,6 +2084,7 @@
                 <label>Alias</label>
                 <input type="text" id="modalDimAlias" />
             </div>
+            <div id="dimTableSelector">
             <h4>Tabla de atributos</h4>
             <div class="card-header" style="margin-bottom:6px;">
                 <div class="sap-search-input-group" style="flex:1;">
@@ -1954,13 +2093,15 @@
                 </div>
                 <span class="eye-icon" id="btnViewDimData" title="Ver datos (SELECT * LIMIT 500)" style="margin-left:6px;">👁</span>
             </div>
+            </div>
+            <div id="dimGroupHint" class="display-hint" style="display:none; margin-bottom:8px;">Dimensión de la tabla de hechos. Para añadir columnas, selecciónalas en la lista de campos y usa clic derecho ▸ Añadir al grupo.</div>
             <input type="hidden" id="dimRelProject" />
             <input type="hidden" id="dimRelDataset" />
-            <input type="hidden" id="dimRelTable" />
+            <input type="hidden" id="dimRelTable" data-no-i18n />
 
             <div id="attributesContainer" style="display:none; margin-top:15px;">
                 <h4>Atributos</h4>
-                <div id="attributesList" class="fields-list">
+                <div id="attributesList" data-no-i18n class="fields-list">
                     <!-- Se rellena dinámicamente -->
                 </div>
             </div>
@@ -1970,7 +2111,7 @@
                     <h4 style="margin:0;">Jerarquías</h4>
                     <button type="button" class="icon-btn" id="btnAddHierarchy" title="Nueva jerarquía">+</button>
                 </div>
-                <div id="hierarchiesList" class="hierarchies-list">
+                <div id="hierarchiesList" data-no-i18n class="hierarchies-list">
                     <!-- Se rellena dinámicamente -->
                 </div>
             </div>
@@ -2000,11 +2141,11 @@
             <div class="hierarchy-editor">
                 <div class="hierarchy-pool-col">
                     <div class="hierarchy-col-label">Atributos disponibles</div>
-                    <div id="hierarchyPoolList" class="hierarchy-pool-list"></div>
+                    <div id="hierarchyPoolList" data-no-i18n class="hierarchy-pool-list"></div>
                 </div>
                 <div class="hierarchy-levels-col">
                     <div class="hierarchy-col-label">Nivel superior → inferior</div>
-                    <div id="hierarchyLevelsList" class="hierarchy-levels-list"></div>
+                    <div id="hierarchyLevelsList" data-no-i18n class="hierarchy-levels-list"></div>
                 </div>
             </div>
 
@@ -2018,40 +2159,75 @@
     
     </div>
 
-    <script src="js/config.js?v=2"></script>
-    <script src="js/bigquery.js"></script>
-    <script src="js/gcsExport.js"></script>
+    <script src="js/config.js?v=20261029b"></script>
+    <script src="js/bigquery.js?v=20261029b"></script>
+    <script src="js/google-auth.js?v=20261029b"></script>
+    <script src="js/gcsExport.js?v=20261029b"></script>
     <script src="js/gcsSaveBridge.js"></script>
-    <script src="js/snowflake.js"></script>
-    <script src="js/fabric.js?v=2"></script>
-    <script src="js/provider.js"></script>
-    <script src="js/connections.js"></script>
-    <script src="js/semanticModelStore.js?v=2"></script>
-    <script src="js/powerBiQuery.js?v=6"></script>
-    <script src="js/lkmlSaveBridge.js"></script>
-    <script src="js/lkmlOpenBridge.js"></script>
-    <script src="js/reportStore.js?v=2"></script>
+    <script src="js/provider.js?v=20261029b"></script>
+    <script src="js/connections.js?v=20261029b"></script>
+    <script src="js/gitSession.js?v=20261029b"></script>
+    <script src="js/semanticModelStore.js?v=20261029b"></script>
+    <script src="js/lkmlSaveBridge.js?v=20261029b"></script>
+    <script src="js/lkmlOpenBridge.js?v=20261029b"></script>
+    <script src="js/reportStore.js?v=20261029b"></script>
     <script src="js/filterRangeStore.js"></script>
-    <script src="js/excelService.js?v=3"></script>
-    <script src="js/busyindicator.js"></script>
+    <script src="js/excelService.js?v=20261029b"></script>
+    <script src="js/busyindicator.js?v=20261029b"></script>
     <script src="js/filterModal.js"></script>
     <script src="js/distributeValues.js"></script>
+    <script src="js/variablesStore.js?v=20261029b"></script>
     <script src="js/calcFormula.js?v=2"></script>
-    <script src="js/commands.js?v=8"></script>
-    <script src="js/taskpane.js?v=5"></script>
+    <script src="js/commands.js?v=20261029b"></script>
+    <script src="js/taskpane.js?v=20261029b"></script>
+    <script src="js/epmFormulaPanel.js?v=20261029b"></script>
+    <!-- Funciones personalizadas DRACO.EPM_VALUE / DRACO.EPM_FORMULA (runtime compartido) -->
+    <script src="js/functions.js?v=20261029b"></script>
     <script src="js/calcEditor.js?v=2"></script>
-    <script src="js/login.js"></script>
-    <script src="js/semantic_model.js?v=3"></script>
+    <script src="js/login.js?v=20261029b"></script>
+    <script src="js/semantic_model.js?v=20261029b"></script>
 
     <script>
         // Conmutador entre las 3 vistas de nivel superior (fusionadas aquí
         // por el requisito de Shared Runtime de "un solo task pane").
         // Llamado desde mostrarVistaInformes/mostrarVistaConexion/
         // mostrarVistaEditarModelo en commands.js, tras Office.addin.showAsTaskpane().
-        window.mostrarVistaEpm = function (viewId) {
+        /*
+         * Ancho del panel (Office.extensionLifeCycle.taskpane.setWidth, solo
+         * en las versiones de Excel que lo admiten; en el resto no hace nada).
+         * "normal" al abrir para que se vea la cabecera completa; "wide" con
+         * las propiedades del campo a la vista.
+         */
+        window.dracoSetTaskpaneWidth = function (size) {
+            const px = size === "wide" ? 720 : 480;
+            try {
+                const tp = Office.extensionLifeCycle && Office.extensionLifeCycle.taskpane;
+                if (tp && typeof tp.setWidth === "function") tp.setWidth(px);
+            } catch (e) { /* host sin la API */ }
+        };
+        Office.onReady(() => { setTimeout(() => window.dracoSetTaskpaneWidth("normal"), 200); });
+
+        window.mostrarVistaEpm = async function (viewId, opts) {
+            const current = document.querySelector(".epm-page-view--active");
+            // Saliendo del modelo semántico con cambios sin guardar: avisar.
+            if (viewId !== "view-modelo" && current && current.id === "view-modelo" && !(opts && opts.force)
+                && window.SemanticModelEditor && window.SemanticModelEditor.isDirty()) {
+                const leave = await window.SemanticModelEditor.confirmLeave();
+                if (!leave) return;
+            }
             document.querySelectorAll(".epm-page-view").forEach((el) => {
                 el.classList.toggle("epm-page-view--active", el.id === viewId);
             });
+
+            // Editar informes: recargar los campos de dimensiones por si el
+            // modelo semántico ha cambiado.
+            if (viewId === "view-informes" && typeof TaskPaneApp !== "undefined" && typeof TaskPaneApp.refreshSemanticFields === "function") {
+                TaskPaneApp.refreshSemanticFields();
+            }
+            if (window.dracoSetTaskpaneWidth) {
+                const wide = viewId === "view-informes" && document.querySelector(".taskpane-container.field-options-open");
+                window.dracoSetTaskpaneWidth(wide ? "wide" : "normal");
+            }
 
             // "Al mostrar esta vista, refresca su estado" — antes cada vista
             // era una página aparte que se recargaba entera cada vez que se

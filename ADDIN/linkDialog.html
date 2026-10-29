@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>Crear informe vinculado</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <script src="js/i18n.js?v=20261029b"></script>
+    <script src="js/i18n/en.js?v=20261029b"></script>
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/modal.css">
+    <style>
+        /* Misma estructura que variablesDialog.html / filterDialog.html: ventana propia. */
+        html, body {
+            margin: 0; padding: 0; height: 100%;
+            font-family: var(--font-family, 'Segoe UI', Arial, sans-serif);
+            background: var(--surface-card, #fff); color: var(--text-primary, #1A2233);
+            display: flex; flex-direction: column; font-size: var(--fs-base, 12.5px);
+        }
+        .dialog-header {
+            padding: 14px 18px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-sunken);
+            display: flex; justify-content: space-between; align-items: center; flex-shrink: 0;
+        }
+        .dialog-header h1 { font-size: var(--fs-lg, 15px); margin: 0; font-weight: 700; }
+        .icon-x { background: none; border: none; cursor: pointer; color: var(--text-muted); width: 28px; height: 28px; border-radius: var(--radius-sm); font-size: 18px; line-height: 1; padding: 0; }
+        .icon-x:hover { background: var(--gray-100); color: var(--text-primary); }
+        .dialog-body { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+        .section-title { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); margin: 0 0 6px; }
+        select { width: 100%; font: inherit; padding: 7px 9px; border: 1px solid var(--border-default, #CBD2DC); border-radius: var(--radius-sm, 6px); background: var(--surface-card, #fff); color: inherit; }
+        .axis { display: flex; flex-direction: column; gap: 8px; }
+        .axis label { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md, 8px); cursor: pointer; }
+        .axis label:hover { border-color: var(--brand-primary); }
+        .axis input { margin-top: 2px; accent-color: var(--brand-primary); }
+        .axis b { display: block; margin-bottom: 2px; }
+        .axis small { color: var(--text-muted); }
+        .axis label.off { opacity: .5; cursor: not-allowed; }
+        .hint { font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.45; }
+        .dialog-footer {
+            padding: 12px 18px; border-top: 1px solid var(--border-subtle); background: var(--surface-sunken);
+            display: flex; justify-content: flex-end; align-items: center; gap: 8px; flex-shrink: 0;
+        }
+        .msg { margin-right: auto; font-size: var(--fs-sm); color: var(--color-danger); }
+        .empty { color: var(--text-muted); font-size: var(--fs-sm); }
+    </style>
+</head>
+<body>
+    <div class="dialog-header">
+        <h1>Crear informe vinculado</h1>
+        <button class="icon-x" id="btnX" title="Cerrar" aria-label="Cerrar">×</button>
+    </div>
+    <div class="dialog-body">
+        <div>
+            <div class="section-title">Informe principal</div>
+            <select id="selMain"></select>
+            <div class="empty" id="noReports" hidden>Todavía no hay ningún informe que pueda ser principal. Crea primero un informe.</div>
+        </div>
+        <div>
+            <div class="section-title">Eje que comparte con el principal</div>
+            <div class="axis">
+                <label id="lblRows"><input type="radio" name="axis" value="rows" checked>
+                    <span><b>Filas</b><small>Mismas filas que el principal. Se pinta a su derecha, sin repetir las cabeceras de fila.</small></span></label>
+                <label id="lblCols"><input type="radio" name="axis" value="cols">
+                    <span><b>Columnas</b><small>Mismas columnas que el principal. Se pinta debajo, sin repetir las cabeceras de columna.</small></span></label>
+            </div>
+        </div>
+        <div class="hint" id="axisNote" hidden></div>
+        <div class="hint">
+            Los filtros del botón «Añadir filtro» y las variables se toman siempre del principal.
+            Las medidas, el otro eje y los filtros de diseño (por ejemplo, el año) son propios del vinculado.
+            Al refrescar cualquiera de los dos, se refrescan ambos.
+        </div>
+    </div>
+    <div class="dialog-footer">
+        <span class="msg" id="msg"></span>
+        <button class="btn btn-secondary" id="btnCancel">Cancelar</button>
+        <button class="btn btn-primary" id="btnCreate">Crear vinculado</button>
+    </div>
+    <script>
+        (function () {
+            let reports = [];
+            const $ = (id) => document.getElementById(id);
+            const send = (o) => { try { Office.context.ui.messageParent(JSON.stringify(o)); } catch (e) { console.error(e); } };
+            const esc = (t) => String(t == null ? "" : t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+
+            // Si el principal ya tiene vinculados, todos comparten el mismo eje: se fija.
+            function syncAxis() {
+                const r = reports.find(x => String(x.id) === $("selMain").value);
+                const lock = r && r.lockedAxis;
+                [["rows", "lblRows"], ["cols", "lblCols"]].forEach(([v, id]) => {
+                    const lbl = $(id), inp = lbl.querySelector("input");
+                    const off = !!lock && lock !== v;
+                    inp.disabled = off; lbl.classList.toggle("off", off);
+                    if (lock === v) inp.checked = true;
+                });
+                $("axisNote").hidden = !lock;
+                if (lock) $("axisNote").textContent = `«${r.name}» ya tiene ${r.linkedCount} vinculado(s) por ${lock === "cols" ? "columnas" : "filas"}: el nuevo se vincula por el mismo eje.`;
+            }
+
+            function init(p) {
+                reports = p.reports || [];
+                const sel = $("selMain");
+                sel.innerHTML = reports.map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join("");
+                if (p.active !== null && p.active !== undefined && reports.some(r => r.id === p.active)) sel.value = String(p.active);
+                $("noReports").hidden = reports.length > 0;
+                sel.hidden = reports.length === 0;
+                $("btnCreate").disabled = reports.length === 0;
+                syncAxis();
+            }
+
+            Office.onReady(() => {
+                Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg) => {
+                    let p; try { p = JSON.parse(arg.message); } catch (e) { return; }
+                    if (p.type === "init") init(p);
+                    else if (p.type === "error") { $("msg").textContent = p.message || "No se pudo crear el informe vinculado."; $("btnCreate").disabled = false; }
+                });
+                $("selMain").addEventListener("change", syncAxis);
+                $("btnCreate").addEventListener("click", () => {
+                    const axis = (document.querySelector("input[name=axis]:checked") || {}).value || "rows";
+                    $("msg").textContent = ""; $("btnCreate").disabled = true;
+                    send({ type: "create", mainId: $("selMain").value, axis });
+                });
+                $("btnCancel").addEventListener("click", () => send({ type: "close" }));
+                $("btnX").addEventListener("click", () => send({ type: "close" }));
+                send({ type: "ready" });
+            });
+        })();
+    </script>
+</body>
+</html>

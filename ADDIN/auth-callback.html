@@ -6,6 +6,8 @@
     <title>EPM Data Studio · Autenticación</title>
     <!-- Script de Office necesario para comunicar la ventana emergente con el TaskPane -->
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <script src="js/i18n.js?v=20261029b"></script>
+    <script src="js/i18n/en.js?v=20261029b"></script>
     <link rel="stylesheet" href="css/theme.css">
     <style>
         body {
@@ -89,6 +91,12 @@
             const accessToken = params.get("access_token");
             const expiresIn = params.get("expires_in");
             const error = params.get("error");
+            const state = params.get("state");
+            const session = params.get("session");   // solo modo backend (servicio de autenticación)
+            const scope = params.get("scope");       // permisos concedidos (lectura/escritura)
+
+            // Se borra el fragmento de la URL para que el token no quede en el historial.
+            try { history.replaceState(null, "", window.location.pathname); } catch (e) { /* noop */ }
 
             let payload = null;
 
@@ -97,13 +105,17 @@
                     status: "success",
                     provider: "bigquery",
                     token: accessToken,
-                    expiresIn: expiresIn
+                    expiresIn: expiresIn,
+                    state: state,
+                    session: session,
+                    scope: scope
                 });
             } else if (error) {
                 payload = JSON.stringify({
                     status: "error",
                     provider: "bigquery",
-                    error: error
+                    error: error,
+                    state: state
                 });
             }
 
@@ -112,8 +124,12 @@
                 if (typeof Office !== "undefined" && Office.context && Office.context.ui && typeof Office.context.ui.messageParent === "function") {
                     Office.context.ui.messageParent(payload);
                 } else if (window.opener) {
-                    // Respaldo si se abrió mediante un navegador web estándar
-                    window.opener.postMessage(payload, "*");
+                    // Respaldo si se abrió mediante un navegador web estándar.
+                    // SEGURIDAD: se usa el origen exacto de esta misma página
+                    // (nunca "*") para que el token no pueda ser leído por
+                    // cualquier ventana que consiga referenciarse como
+                    // "opener" desde otro origen.
+                    window.opener.postMessage(payload, window.location.origin);
                     window.close();
                 }
             }
