@@ -708,3 +708,23 @@ DracoI18n.register("en", {
     "Se quita del modelo al guardarlo.": "It is removed from the model when you save it.",
     "Eliminar {n}": "Delete {n}"
 });
+
+// ---- Atributos calculados
+DracoI18n.register("en", {
+    "+ Atributo calculado": "+ Calculated attribute",
+    "Nuevo atributo calculado": "New calculated attribute",
+    "Editar atributo calculado": "Edit calculated attribute",
+    "Nombre (p. ej. SOC_CECO)": "Name (e.g. SOC_CECO)",
+    "Clic para editar la fórmula": "Click to edit the formula",
+    "Eliminar el atributo calculado": "Delete the calculated attribute",
+    "Ya hay un atributo con ese nombre.": "There is already an attribute with that name.",
+    "Nombre: solo letras, números y _ (sin espacios ni acentos).": "Name: only letters, digits and _ (no spaces or accents).",
+    "Columnas que no están en esta tabla: {c}": "Columns not in this table: {c}"
+});
+
+// ---- Miembros calculados del modelo
+DracoI18n.register("en", {
+    "{n} miembro(s) calculado(s) en el modelo": "{n} calculated member(s) in the model",
+    "Miembros calculados del modelo (p. ej. OIBDA = [Ingresos] - [Gastos])": "Model calculated members (e.g. OIBDA = [Ingresos] - [Gastos])",
+    "En el modelo solo se guardan los cálculos «por miembro».": "Only “per member” calculations are saved in the model."
+});
