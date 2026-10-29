@@ -672,3 +672,39 @@ DracoI18n.register("en", {
     "Este campo no tiene filtro.": "This field has no filter.",
     "Filtro de {d} borrado.": "Filter of {d} cleared."
 });
+
+// ---- Diagnóstico (cinta)
+DracoI18n.register("en", {
+    "Diagnóstico activado: SQL, resultados y tiempos en EDIT_REPORT.": "Diagnostics on: SQL, results and timings in EDIT_REPORT.",
+    "Diagnóstico desactivado.": "Diagnostics off."
+});
+
+// ---- Medidas calculadas y filtradas del modelo semántico
+DracoI18n.register("en", {
+    "+ Medida calculada": "+ Calculated measure",
+    "+ Medida filtrada": "+ Filtered measure",
+    "Medida base": "Base measure",
+    "Solo donde…": "Only where…",
+    "+ Condición": "+ Condition",
+    "Fórmula": "Formula",
+    "es": "is",
+    "no es": "is not",
+    "Quitar condición": "Remove condition",
+    "Columnas de la tabla de hechos. Varios valores separados por comas. Las condiciones se cumplen todas a la vez.": "Fact table columns. Several values separated by commas. All conditions must be met.",
+    "Medidas entre corchetes, + − × / y paréntesis. Funciones: DIVIDIR(a; b), SI(condición; a; b), ABS(x), REDONDEAR(x; decimales). Dividir entre cero da vacío, no error. Se calcula después de sumar, también en subtotales.": "Measures in brackets, + − × / and parentheses. Functions: DIVIDIR(a; b), SI(condition; a; b), ABS(x), REDONDEAR(x; decimals). Dividing by zero gives blank, not an error. It is calculated after aggregating, also in subtotals.",
+    "Nueva medida calculada": "New calculated measure",
+    "Nueva medida filtrada": "New filtered measure",
+    "Nueva medida calculada…": "New calculated measure…",
+    "Nueva medida filtrada…": "New filtered measure…",
+    "Fórmula sobre otras medidas, p. ej. OIBDA = [Ingresos] - [Gastos].": "Formula over other measures, e.g. OIBDA = [Ingresos] - [Gastos].",
+    "Una medida solo donde se cumplen unas condiciones, p. ej. Importe con Escenario = REAL.": "A measure only where some conditions are met, e.g. Amount with Scenario = REAL.",
+    "Nombre de la medida": "Measure name",
+    "Crear": "Create",
+    "Eliminar": "Delete",
+    "Fórmula correcta.": "Formula OK.",
+    "Escribe la fórmula.": "Write the formula.",
+    "Elige la medida base.": "Choose the base measure.",
+    "Añade al menos una condición con valores.": "Add at least one condition with values.",
+    "Se quita del modelo al guardarlo.": "It is removed from the model when you save it.",
+    "Eliminar {n}": "Delete {n}"
+});
