@@ -213,7 +213,23 @@ const FilterModal = {
                     return null; // null = error, distinto de "sin resultados" ([])
                 }
                 const json = await window.ExcelService.executeSQL(sql);
-                return loadJsonTree(json);
+                const items = loadJsonTree(json);
+                // Cálculos entre miembros (del informe y del modelo, p. ej.
+                // OIBDA = [Ingresos] - [Gastos]): se ofrecen como un miembro más
+                // al final de la lista. Si se filtra, el cálculo solo sale
+                // cuando está elegido (ver dracoCalcAllowedByFilters).
+                try {
+                    if (!fieldData.isHierarchy && typeof window.dracoCalcsForAttr === "function") {
+                        const reportId = (typeof TaskPaneApp !== "undefined") ? TaskPaneApp.currentReportId : null;
+                        const attr = (items[0] && items[0].attribute) || fieldData.name;
+                        const have = new Set(items.map(i => String(i.value).toUpperCase()));
+                        window.dracoCalcsForAttr(reportId, fieldData.dim, fieldData.name).forEach(c => {
+                            const n = String(c.name || "").trim();
+                            if (n && !have.has(n.toUpperCase())) items.push({ text: n, attribute: attr, value: n });
+                        });
+                    }
+                } catch (e) { console.warn("FilterModal: no se pudieron añadir los cálculos:", e); }
+                return items;
             })();
             // Si displayDialogAsync fallara (ver más abajo) antes de que llegue
             // "ready", nadie más leería el resultado/error de itemsPromise —

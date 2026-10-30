@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-29-calc-bigquery";
+const DRACO_BUILD = "2026-10-29-calc-filtro";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -1155,35 +1155,61 @@ function applyDracoRuntimeFilters() {
  * taskpane, que se pinta en filas físicas; "Rows" = zona Columnas).
  * Solo se usan en el flujo Dinámico.
  * ------------------------------------------------------------------- */
+/**
+ * Cálculos entre miembros de un atributo para un informe: los del MODELO
+ * (dimensión.calcMembers[ATRIBUTO], solo «por miembro») y los del INFORME
+ * (design.fieldOptions); si coinciden de nombre, manda el del informe.
+ * También lo usa el selector de filtro (FilterModal) para ofrecerlos como
+ * un miembro más.
+ */
+function dracoCalcsForAttr(reportId, dim, attr) {
+    if (!window.DracoCalc) return [];
+    let fieldOptions = {}, modelFields = [];
+    try {
+        const report = (window.ReportStore && reportId !== null && reportId !== undefined) ? window.ReportStore.getReport(reportId) : null;
+        fieldOptions = (report && report.design && report.design.fieldOptions) || {};
+        const sms = window.SemanticModelStore;
+        const mName = (report && report.semanticModelName) || (sms && sms.getActiveModelName && sms.getActiveModelName()) || "";
+        const model = mName && sms && sms.getModel ? sms.getModel(mName) : null;
+        modelFields = (model && model.fields) || [];
+    } catch (e) { /* sin informe o sin modelo */ }
+    const own = window.DracoCalc.getCalcs(fieldOptions, dim, attr);
+    const f = modelFields.find(x => x && x.type === "DIMENSION" && String(x.name).toUpperCase() === String(dim).toUpperCase());
+    const fromModel = ((f && f.calcMembers) || {})[String(attr).toUpperCase()] || [];
+    if (!fromModel.length) return own;
+    const ownNames = new Set(own.map(c => String(c.name).trim().toUpperCase()));
+    return fromModel.filter(c => c && c.mode !== "position" && !ownNames.has(String(c.name).trim().toUpperCase())).concat(own);
+}
+window.dracoCalcsForAttr = dracoCalcsForAttr;
+
+/**
+ * ¿Se muestra el cálculo «calcName» con los filtros del informe sobre ese
+ * atributo? Sin filtro: sí. Con un filtro de lista que incluye valores:
+ * solo si el cálculo está entre los elegidos (el selector de filtro lo
+ * ofrece como un miembro más). Si está entre los excluidos: no.
+ */
+function dracoCalcAllowedByFilters(dim, attr, calcName) {
+    const U = (x) => String(x === null || x === undefined ? "" : x).trim().toUpperCase();
+    const name = U(calcName);
+    const fs = (ReportState.Filters || []).filter(f => U(f.Dimension) === U(dim) && U(f.AttributeName) === U(attr) && String(f.Value).trim() !== "");
+    for (const f of fs) {
+        const filter = parseStoredFilterValue(f.Value);
+        if (!filter) continue;
+        const inc = (filter.values || []).map(U);
+        const exc = (filter.excludeValues || []).map(U);
+        if (exc.indexOf(name) !== -1) return false;
+        if (filter.mode === "values" && filter.include === false) { if (inc.indexOf(name) !== -1) return false; continue; }
+        if (inc.length && inc.indexOf(name) === -1) return false;
+    }
+    return true;
+}
+
 function attachDracoCalcs() {
     ReportState.Calcs = [];
     ReportState.CalcOrder = {};
     if (!window.DracoCalc) return;
 
-    let fieldOptions = {};
-    let modelFields = [];
-    try {
-        const report = (window.ReportStore && ReportState.ReportId !== null && ReportState.ReportId !== undefined)
-            ? window.ReportStore.getReport(ReportState.ReportId) : null;
-        fieldOptions = (report && report.design && report.design.fieldOptions) || {};
-        // Miembros calculados DEL MODELO (dimensión.calcMembers[ATRIBUTO]):
-        // salen en todos los informes del modelo, como los del informe.
-        const sms = window.SemanticModelStore;
-        const mName = (report && report.semanticModelName) || (sms && sms.getActiveModelName && sms.getActiveModelName()) || "";
-        const model = mName && sms && sms.getModel ? sms.getModel(mName) : null;
-        modelFields = (model && model.fields) || [];
-    } catch (e) { fieldOptions = {}; }
-
-    // Cálculos de un atributo: los del modelo («por miembro») y los del
-    // informe; si coinciden de nombre, manda el del informe.
-    const calcsFor = (dim, attr) => {
-        const own = window.DracoCalc.getCalcs(fieldOptions, dim, attr);
-        const f = modelFields.find(x => x && x.type === "DIMENSION" && String(x.name).toUpperCase() === String(dim).toUpperCase());
-        const fromModel = ((f && f.calcMembers) || {})[String(attr).toUpperCase()] || [];
-        if (!fromModel.length) return own;
-        const ownNames = new Set(own.map(c => String(c.name).trim().toUpperCase()));
-        return fromModel.filter(c => c && c.mode !== "position" && !ownNames.has(String(c.name).trim().toUpperCase())).concat(own);
-    };
+    const calcsFor = (dim, attr) => dracoCalcsForAttr(ReportState.ReportId, dim, attr);
 
     const seen = new Set();
     const collect = (fields, axis) => {
@@ -1195,7 +1221,8 @@ function attachDracoCalcs() {
                     const a = window.DracoCalc.analyze(c.expr, c.mode);
                     return a.ok ? Object.assign({}, c, { ast: a.ast, refs: a.refs }) : null;
                 })
-                .filter(Boolean);
+                .filter(Boolean)
+                .filter(c => dracoCalcAllowedByFilters(fld.Dimension, fld.AttributeName, c.name));
             if (calcs.length === 0) return;
             seen.add(k);
             ReportState.Calcs.push({ dim: fld.Dimension, attr: fld.AttributeName, axis, idx, calcs });
