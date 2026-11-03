@@ -155,6 +155,19 @@
             flex-shrink: 0;
         }
 
+        /* Árbol de miembros (jerarquías) */
+        .modal-item-row { white-space: nowrap; }
+        .modal-item-row label { overflow: hidden; text-overflow: ellipsis; }
+        .tree-caret {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 16px; height: 16px; flex-shrink: 0;
+            cursor: pointer; color: var(--text-muted); font-size: 11px;
+            border-radius: var(--radius-sm); user-select: none;
+        }
+        .tree-caret:hover { background: var(--gray-100); color: var(--text-primary); }
+        .tree-caret.leaf { cursor: default; }
+        .tree-caret.leaf:hover { background: none; }
+
         .loading, .error { padding: 14px; color: var(--text-muted); }
         .error { color: var(--color-danger); }
     </style>
@@ -173,9 +186,23 @@
         <div class="dialog-main">
             <div id="filterValuesPanel" class="filter-panel">
                 <div class="modal-toolbar">
-                    <input type="text" id="modalSearchInput" placeholder="Buscar en la lista..." autocomplete="off">
+                    <input type="text" id="modalSearchInput" placeholder="Buscar por ID o texto..." autocomplete="off">
                     <button type="button" id="btnSelectAllVisible" class="link-btn">Todo</button>
                     <button type="button" id="btnClearSelection" class="link-btn">Ninguno</button>
+                </div>
+
+                <div class="filter-condition-row">
+                    <div id="displayModeBox" style="display:none;">
+                        <div id="displayModeTabs" class="segmented-control compact" role="tablist" title="Qué se muestra de cada valor (el filtro se aplica siempre por ID)">
+                            <button type="button" class="segmented-option" data-display="ID">ID</button>
+                            <button type="button" class="segmented-option" data-display="TEXT">Texto</button>
+                            <button type="button" class="segmented-option active" data-display="ID_TEXT">ID y texto</button>
+                        </div>
+                    </div>
+                    <div id="treeButtons" style="display:none; margin-left:auto;">
+                        <button type="button" id="btnExpandAll" class="link-btn">⊞ Expandir todo</button>
+                        <button type="button" id="btnCollapseAll" class="link-btn">⊟ Contraer todo</button>
+                    </div>
                 </div>
 
                 <div class="filter-condition-row">
@@ -240,6 +267,6 @@
         <button id="btnApplyModal" class="btn-primary">Aceptar</button>
     </div>
 
-    <script src="js/filterDialog.js"></script>
+    <script src="js/filterDialog.js?v=20261103a"></script>
 </body>
 </html>
