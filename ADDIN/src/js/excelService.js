@@ -151,6 +151,130 @@ function buildHierarchySQL(hierGrid, dimension, hierarchy) {
 }
 
 /* ---------------------------------------------------------------------
+ * Consulta de valores para el FILTRO con su texto (ID / Texto / ID y texto)
+ * ---------------------------------------------------------------------
+ * Igual que buildAttributeSQL/buildHierarchySQL, pero añade detrás de cada
+ * columna de ID la columna de texto que define el modelo semántico
+ * (dimensión: textAttribute de su clave; jerarquía: levels[i].textAttribute),
+ * con alias __draco_txt_N. El filtro se sigue construyendo SIEMPRE por ID:
+ * el texto solo se usa para mostrar y buscar en el diálogo.
+ * Devuelve { sql, levels:[{ attribute, idCol, txtCol }] } (txtCol = -1 si
+ * ese nivel no tiene texto) o null si no existe el campo.
+ * ------------------------------------------------------------------- */
+
+function svcUp(v) {
+    return String(v === null || v === undefined ? "" : v).trim().toUpperCase();
+}
+
+function svcActiveDimensionField(dimension) {
+    try {
+        const store = window.SemanticModelStore;
+        const name = store.getActiveModelName();
+        const model = name ? store.getModel(name) : null;
+        if (!model || !Array.isArray(model.fields)) return null;
+        return model.fields.find(f => f.enabled && f.type === "DIMENSION" && svcUp(f.name) === svcUp(dimension)) || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+// DIM_FIELD (expresión SQL) de un atributo, leído de MODEL_ATRIBUTES.
+function svcAttributeDimField(atribGrid, dimension, attributeName) {
+    const lastRow = lastRowInColumnValues(atribGrid, 1);
+    for (let R = 2; R <= lastRow; R++) {
+        if (svcUp(cellValue(atribGrid, R, 2)) === svcUp(dimension)
+            && svcUp(cellValue(atribGrid, R, 3)) === svcUp(attributeName)) {
+            return String(cellValue(atribGrid, R, 7) || "").trim();
+        }
+    }
+    return "";
+}
+
+// Atributo de texto de un atributo: el textAttribute de la dimensión si es
+// su clave; si no, el de algún nivel de jerarquía que use ese atributo.
+function svcTextAttributeFor(field, attrName) {
+    if (!field) return "";
+    const attrs = field.attributes || [];
+    const attr = attrs.find(a => svcUp(a.name) === svcUp(attrName));
+    if (attr && attr.isKey && field.textAttribute && svcUp(field.textAttribute) !== svcUp(attrName)) {
+        return field.textAttribute;
+    }
+    for (const h of (field.hierarchies || [])) {
+        for (const l of (h.levels || [])) {
+            if (svcUp(l.attribute) === svcUp(attrName) && l.textAttribute && svcUp(l.textAttribute) !== svcUp(attrName)) {
+                return l.textAttribute;
+            }
+        }
+    }
+    return "";
+}
+
+function svcBuildIdTextSQL(project, dataset, table, idFields, txtFields) {
+    const select = [];
+    const levels = [];
+    idFields.forEach((idf, i) => {
+        const lvl = { idCol: select.length, txtCol: -1, attribute: idf };
+        select.push("    " + idf);
+        if (txtFields[i]) {
+            lvl.txtCol = select.length;
+            select.push("    " + txtFields[i] + " AS __draco_txt_" + (i + 1));
+        }
+        levels.push(lvl);
+    });
+    const sql = "SELECT DISTINCT" + SVC_CRLF
+        + select.join("," + SVC_CRLF) + SVC_CRLF
+        + "FROM " + Provider.qualify(project, dataset, table) + SVC_CRLF
+        + "ORDER BY" + SVC_CRLF
+        + idFields.map(f => "    " + f).join("," + SVC_CRLF);
+    return { sql, levels };
+}
+
+function buildAttributeQueryWithText(atribGrid, dimension, attributeName) {
+    const lastRow = lastRowInColumnValues(atribGrid, 1);
+    let project = "", dataset = "", table = "", field = "";
+    for (let R = 2; R <= lastRow; R++) {
+        if (svcUp(cellValue(atribGrid, R, 2)) === svcUp(dimension)
+            && svcUp(cellValue(atribGrid, R, 3)) === svcUp(attributeName)) {
+            project = cellValue(atribGrid, R, 4);
+            dataset = cellValue(atribGrid, R, 5);
+            table = cellValue(atribGrid, R, 6);
+            field = cellValue(atribGrid, R, 7);
+            break;
+        }
+    }
+    const dimField = svcActiveDimensionField(dimension);
+    const textAttr = svcTextAttributeFor(dimField, attributeName);
+    const textField = textAttr ? svcAttributeDimField(atribGrid, dimension, textAttr) : "";
+    return svcBuildIdTextSQL(project, dataset, table, [field], [textField]);
+}
+
+function buildHierarchyQueryWithText(hierGrid, atribGrid, dimension, hierarchy) {
+    const lastRow = lastRowInColumnValues(hierGrid, 1);
+    const fields = [];
+    let project = "", dataset = "", table = "";
+    for (let R = 2; R <= lastRow; R++) {
+        if (svcUp(cellValue(hierGrid, R, 4)) === svcUp(dimension)
+            && svcUp(cellValue(hierGrid, R, 2)) === svcUp(hierarchy)) {
+            fields.push(cellValue(hierGrid, R, 9));
+            project = cellValue(hierGrid, R, 6);
+            dataset = cellValue(hierGrid, R, 7);
+            table = cellValue(hierGrid, R, 8);
+        }
+    }
+    const dimField = svcActiveDimensionField(dimension);
+    const hier = dimField ? (dimField.hierarchies || []).find(h => svcUp(h.name) === svcUp(hierarchy)) : null;
+    const txtFields = fields.map((f, i) => {
+        const lvl = hier && hier.levels ? hier.levels[i] : null;
+        if (!lvl) return "";
+        const textAttr = (lvl.textAttribute && svcUp(lvl.textAttribute) !== svcUp(lvl.attribute))
+            ? lvl.textAttribute
+            : svcTextAttributeFor(dimField, lvl.attribute);
+        return textAttr ? svcAttributeDimField(atribGrid, dimension, textAttr) : "";
+    });
+    return svcBuildIdTextSQL(project, dataset, table, fields, txtFields);
+}
+
+/* ---------------------------------------------------------------------
  * ExecuteSQL (idéntico al usado en commands.js)
  * ------------------------------------------------------------------- */
 
@@ -395,6 +519,25 @@ const ExcelService = {
             return buildHierarchySQL(hierGrid, dimension, name);
         }
         return "";
+    },
+
+    /**
+     * Como buildFilterValuesSQL, pero con las columnas de texto del modelo
+     * (ver buildAttributeQueryWithText / buildHierarchyQueryWithText).
+     * Lo usa el diálogo de filtro (FilterModal) para el selector
+     * ID / Texto / ID y texto. Devuelve null si no existe el campo.
+     */
+    async buildFilterValuesQuery(dimension, name) {
+        const atribGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+        const hierGrid = await window.SemanticModelStore.getModelGrid("MODEL_HIER");
+
+        if (existsAttribute(atribGrid, dimension, name)) {
+            return buildAttributeQueryWithText(atribGrid, dimension, name);
+        }
+        if (existsHierarchy(hierGrid, dimension, name)) {
+            return buildHierarchyQueryWithText(hierGrid, atribGrid, dimension, name);
+        }
+        return null;
     },
 
     /**

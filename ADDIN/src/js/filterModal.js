@@ -41,47 +41,97 @@
  * ========================================================================== */
 
 /**
- * Traducción de LoadJson: separa los nombres de campo ("name":"...") y los
- * valores ("v":"...") del JSON crudo de BigQuery, y construye una lista
- * "en árbol" (indentada) deduplicando cada nivel frente al valor anterior,
- * igual que hacía el bucle de Ultimos()/Valores() en VBA.
+ * Lee la respuesta de BigQuery (jobs.query) como { names, rows }, donde
+ * rows es un array de filas y cada fila un array de valores (string o null).
+ * ANTES se buscaba el literal "v":"..." con una expresión regular, que se
+ * saltaba los {"v": null}: en las jerarquías irregulares (niveles inferiores
+ * a NULL) eso desalineaba las columnas y el árbol volvía a pintarse desde el
+ * nivel 1. Si el texto no es JSON válido se usa una lectura por expresión
+ * regular que SÍ cuenta los null.
  */
-function loadJsonTree(json) {
-    const fieldMatches = [...json.matchAll(/"name":\s*"([^"]+)"/g)];
-    const campos = fieldMatches.map(m => m[1]);
+function parseBqRows(json) {
+    const text = String(json || "");
+    try {
+        const p = JSON.parse(text);
+        const names = ((p && p.schema && p.schema.fields) || []).map(f => f.name);
+        const rows = ((p && p.rows) || []).map(r => (r.f || []).map(c => {
+            const v = c ? c.v : null;
+            return (v === null || v === undefined) ? null : String(v);
+        }));
+        return { names, rows };
+    } catch (e) { /* no es JSON: lectura por regex */ }
 
-    if (campos.length === 0) return [];
+    const names = [...text.matchAll(/"name":\s*"([^"]+)"/g)].map(m => m[1]);
+    const values = [...text.matchAll(/"v":\s*(null|"((?:[^"\\]|\\.)*)")/g)].map(m => {
+        if (m[1] === "null") return null;
+        try { return JSON.parse('"' + m[2] + '"'); } catch (e2) { return m[2]; }
+    });
+    const rows = [];
+    const n = names.length;
+    if (n > 0) {
+        for (let i = 0; i + n <= values.length; i += n) rows.push(values.slice(i, i + n));
+    }
+    return { names, rows };
+}
 
-    const ultimos = campos.map(() => "");
-    const valores = campos.map(() => "");
+/**
+ * Construye el árbol de miembros (deduplicado por RUTA, no por "valor
+ * anterior") y lo devuelve aplanado en orden de recorrido en profundidad:
+ * [{ attribute, value, depth, label? }]. Un NULL en un nivel corta la rama:
+ * ni se pinta ese nivel ni los siguientes (jerarquías irregulares).
+ * layout.levels: [{ idCol, txtCol, attribute }] (txtCol -1 = sin texto).
+ */
+function buildMemberTree(parsed, layout) {
+    const names = parsed.names || [];
+    const levels = (layout && layout.levels) || names.map((nm, i) => ({ idCol: i, txtCol: -1, attribute: nm }));
+    const root = { children: new Map() };
 
-    const valueMatches = [...json.matchAll(/"v":\s*"([^"]*)"/g)];
-
-    const items = [];
-    let nivel = 0;
-
-    for (const m of valueMatches) {
-        valores[nivel] = m[1];
-        nivel++;
-
-        if (nivel > campos.length - 1) {
-            for (let i = 0; i < campos.length; i++) {
-                if (valores[i] !== ultimos[i]) {
-                    items.push({
-                        text: " ".repeat(i * 4) + valores[i],
-                        attribute: campos[i],
-                        value: valores[i]
-                    });
-
-                    ultimos[i] = valores[i];
-                    for (let j = i + 1; j < campos.length; j++) ultimos[j] = "";
-                }
+    for (const row of (parsed.rows || [])) {
+        let node = root;
+        for (let i = 0; i < levels.length; i++) {
+            const L = levels[i];
+            const raw = row[L.idCol];
+            if (raw === null || raw === undefined || String(raw) === "") break;
+            const v = String(raw);
+            let child = node.children.get(v);
+            if (!child) {
+                child = {
+                    attribute: names[L.idCol] || L.attribute,
+                    value: v,
+                    label: null,
+                    depth: i,
+                    children: new Map()
+                };
+                node.children.set(v, child);
             }
-            nivel = 0;
+            if (L.txtCol >= 0 && child.label === null) {
+                const t = row[L.txtCol];
+                if (t !== null && t !== undefined && String(t) !== "") child.label = String(t);
+            }
+            node = child;
         }
     }
 
-    return items;
+    const out = [];
+    const walk = (node) => {
+        node.children.forEach(ch => {
+            const item = { attribute: ch.attribute, value: ch.value, depth: ch.depth };
+            if (ch.label !== null) item.label = ch.label;
+            out.push(item);
+            walk(ch);
+        });
+    };
+    walk(root);
+    return out;
+}
+
+/**
+ * Compatibilidad (la usa calcEditor.js): lista {text, attribute, value,
+ * depth} con el texto sangrado como antes, ya sin el fallo de los NULL.
+ */
+function loadJsonTree(json) {
+    return buildMemberTree(parseBqRows(json), null)
+        .map(it => Object.assign({ text: " ".repeat(it.depth * 4) + it.value }, it));
 }
 
 /**
@@ -207,13 +257,15 @@ const FilterModal = {
             // TANTO el diálogo (mensaje "ready") COMO los datos (lo que
             // termine último de los dos).
             const itemsPromise = (async () => {
-                const sql = await window.ExcelService.buildFilterValuesSQL(fieldData.dim, fieldData.name);
-                if (!sql) {
+                // Con columnas de texto (selector ID / Texto / ID y texto del
+                // diálogo); el filtro se sigue guardando por ID.
+                const query = await window.ExcelService.buildFilterValuesQuery(fieldData.dim, fieldData.name);
+                if (!query || !query.sql) {
                     console.error("FilterModal: no se ha encontrado el atributo o jerarquía.", fieldData);
                     return null; // null = error, distinto de "sin resultados" ([])
                 }
-                const json = await window.ExcelService.executeSQL(sql);
-                const items = loadJsonTree(json);
+                const json = await window.ExcelService.executeSQL(query.sql);
+                const items = buildMemberTree(parseBqRows(json), query);
                 // Cálculos entre miembros (del informe y del modelo, p. ej.
                 // OIBDA = [Ingresos] - [Gastos]): se ofrecen como un miembro más
                 // al final de la lista. Si se filtra, el cálculo solo sale
@@ -225,7 +277,7 @@ const FilterModal = {
                         const have = new Set(items.map(i => String(i.value).toUpperCase()));
                         window.dracoCalcsForAttr(reportId, fieldData.dim, fieldData.name).forEach(c => {
                             const n = String(c.name || "").trim();
-                            if (n && !have.has(n.toUpperCase())) items.push({ text: n, attribute: attr, value: n });
+                            if (n && !have.has(n.toUpperCase())) items.push({ attribute: attr, value: n, depth: 0, calc: true });
                         });
                     }
                 } catch (e) { console.warn("FilterModal: no se pudieron añadir los cálculos:", e); }

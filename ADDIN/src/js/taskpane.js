@@ -1542,6 +1542,9 @@ const TaskPaneApp = {
                 container.appendChild(group);
             });
             this.refreshCalcBadges();
+            // Si había una búsqueda escrita, se vuelve a aplicar al recargar.
+            const fieldSearch = document.getElementById("fieldSearch");
+            if (fieldSearch && fieldSearch.value) this.filterFields(fieldSearch.value);
         } catch (err) {
             console.error("Error al cargar dimensiones:", err);
             container.innerHTML = `<div style='color: #a80000; padding: 4px;'>❌ Error: ${draco_escapeHtml(err.message || err)}</div>`;
@@ -1625,11 +1628,27 @@ const TaskPaneApp = {
         return div;
     },
 
+    // Buscador de campos: solo quedan las dimensiones con algún atributo o
+    // jerarquía que coincida (antes se veían todas las cabeceras, aunque
+    // no tuvieran nada). Mientras se busca, las dimensiones contraídas se
+    // abren para ver lo encontrado; al vaciar la búsqueda se respeta otra
+    // vez el contraído (antes el display:flex en línea lo anulaba).
     filterFields(query) {
-        const q = query.toLowerCase();
-        document.querySelectorAll(".field-item").forEach(item => {
-            const label = item.querySelector(".field-label").innerText.toLowerCase();
-            item.style.display = label.includes(q) ? "flex" : "none";
+        const q = String(query || "").trim().toLowerCase();
+        const container = document.getElementById("availableFieldsContainer");
+        if (!container) return;
+        container.querySelectorAll(".dimension-group").forEach(group => {
+            let matches = 0;
+            group.querySelectorAll(":scope > .field-item").forEach(item => {
+                const labelEl = item.querySelector(".field-label");
+                const label = (labelEl ? labelEl.textContent : "").toLowerCase();
+                const ok = q === "" || label.includes(q);
+                item.classList.toggle("search-hidden", !ok);
+                item.style.display = "";
+                if (ok) matches++;
+            });
+            group.classList.toggle("search-hidden", q !== "" && matches === 0);
+            group.classList.toggle("search-active", q !== "");
         });
     },
 

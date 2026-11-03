@@ -1759,9 +1759,17 @@ function getAttributeType(atributesGrid, dimension, attribute) {
     return "STRING";
 }
 
+// Tipos numéricos (BigQuery, Snowflake, Databricks...) que van sin comillas.
+// Antes solo se miraba "INTEGER": con un modelo importado de LookML el tipo
+// llega como "INT64" y salía periodo='1' -> «No matching signature for
+// operator = for argument types: INT64, STRING».
+const DRACO_SQL_NUMERIC_TYPE_RE = /^(INT|INT64|INTEGER|NUMERIC|BIGNUMERIC|FLOAT|FLOAT64|DECIMAL|NUMBER|DOUBLE|BIGINT|SMALLINT|TINYINT|BYTEINT|REAL)\b/i;
+
 function sqlValue(atributesGrid, dimension, atributo, valor) {
-    if (getAttributeType(atributesGrid, dimension, atributo) === "INTEGER") {
-        return valor;
+    const tipo = getAttributeType(atributesGrid, dimension, atributo);
+    const txt = String(valor === null || valor === undefined ? "" : valor).trim();
+    if (DRACO_SQL_NUMERIC_TYPE_RE.test(tipo) && txt !== "" && !isNaN(Number(txt))) {
+        return String(Number(txt));
     }
     return "'" + String(valor).replace(/'/g, "''") + "'";
 }
@@ -2588,6 +2596,36 @@ async function alternarDiagnostico(event) {
     } finally {
         if (event) event.completed();
     }
+}
+
+/**
+ * Miembros de dimensión (ejes Filas/Columnas): a diferencia de los valores
+ * de medida, un ID como "000" o "0010203101" es TEXTO. coerceCellLiteral lo
+ * convertía a Number (0 / 10203101): en pantalla se perdían los ceros y, en
+ * los ejes Estáticos, la fórmula EPM_VALUE se guardaba con "0" y el refresco
+ * filtraba version_id='0' (sin datos). Solo se convierte a número lo que
+ * Excel guarda sin cambiarlo (sin ceros a la izquierda y con ≤15 dígitos).
+ */
+function dracoIsCanonicalNumber(t) {
+    return /^-?(0|[1-9]\d{0,14})(\.\d+)?$/.test(String(t).trim());
+}
+
+// Valor canónico del miembro (argumento "valor" de EPM_VALUE y writeback).
+function dracoMemberValue(text) {
+    if (isDracoNullLiteral(text)) return "";
+    const t = String(text);
+    return dracoIsCanonicalNumber(t) ? Number(t) : t;
+}
+
+// Literal a escribir en la celda del eje: igual que dracoMemberValue, pero
+// un texto numérico que Excel alteraría va con apóstrofo (se ve "000").
+function coerceMemberLiteral(text) {
+    if (isDracoNullLiteral(text)) return "";
+    const t = String(text);
+    if (t.trim() !== "" && !isNaN(t)) {
+        return dracoIsCanonicalNumber(t) ? Number(t) : "'" + t;
+    }
+    return draco_neutralizeFormula(t);
 }
 
 function coerceCellLiteral(text) {
@@ -7320,28 +7358,33 @@ async function ensureDracoRowsClickLoggerRegistered() {
  * ventana/contexto y no puede acceder a nada del taskpane directamente.
  */
 function parseMemberJsonTree(json) {
-    const fieldMatches = [...json.matchAll(/"name":\s*"([^"]+)"/g)];
-    const campos = fieldMatches.map((m) => m[1]);
+    // Lectura con JSON.parse: la versión con regex se saltaba los {"v": null}
+    // y, en jerarquías irregulares, desalineaba las columnas (el árbol se
+    // volvía a pintar desde el nivel 1). Un NULL corta la rama.
+    const text = String(json || "");
+    let campos = [], rows = [];
+    try {
+        const p = JSON.parse(text);
+        campos = ((p && p.schema && p.schema.fields) || []).map(f => f.name);
+        rows = ((p && p.rows) || []).map(r => (r.f || []).map(c => (c && c.v !== null && c.v !== undefined) ? String(c.v) : null));
+    } catch (e) {
+        campos = [...text.matchAll(/"name":\s*"([^"]+)"/g)].map(m => m[1]);
+        const vals = [...text.matchAll(/"v":\s*(null|"((?:[^"\\]|\\.)*)")/g)].map(m => (m[1] === "null" ? null : m[2]));
+        for (let i = 0; campos.length && i + campos.length <= vals.length; i += campos.length) rows.push(vals.slice(i, i + campos.length));
+    }
     if (campos.length === 0) return [];
 
-    const ultimos = campos.map(() => "");
-    const valores = campos.map(() => "");
-    const valueMatches = [...json.matchAll(/"v":\s*"([^"]*)"/g)];
-
     const items = [];
-    let nivel = 0;
-
-    for (const m of valueMatches) {
-        valores[nivel] = m[1];
-        nivel++;
-        if (nivel > campos.length - 1) {
-            for (let i = 0; i < campos.length; i++) {
-                if (valores[i] !== ultimos[i]) {
-                    items.push({ text: " ".repeat(i * 4) + valores[i], attribute: campos[i], value: valores[i] });
-                }
-            }
-            for (let i = 0; i < campos.length; i++) ultimos[i] = valores[i];
-            nivel = 0;
+    const seen = new Set();
+    for (const row of rows) {
+        let path = "";
+        for (let i = 0; i < campos.length; i++) {
+            const v = row[i];
+            if (v === null || v === undefined || v === "") break;
+            path += "\u0001" + v;
+            if (seen.has(path)) continue;
+            seen.add(path);
+            items.push({ text: " ".repeat(i * 4) + v, attribute: campos[i], value: v });
         }
     }
     return items;
@@ -8462,6 +8505,66 @@ function draco_suspendScreenUpdating(context) {
     }
 }
 
+/**
+ * Campo DIMENSION del modelo semántico del informe (o del activo).
+ */
+function dracoModelDimField(reportId, dim) {
+    try {
+        const report = (window.ReportStore && reportId !== null && reportId !== undefined) ? window.ReportStore.getReport(reportId) : null;
+        const sms = window.SemanticModelStore;
+        const mName = (report && report.semanticModelName) || (sms && sms.getActiveModelName && sms.getActiveModelName()) || "";
+        const model = mName && sms && sms.getModel ? sms.getModel(mName) : null;
+        const up = (v) => String(v === null || v === undefined ? "" : v).trim().toUpperCase();
+        return ((model && model.fields) || []).find(f => f && f.type === "DIMENSION" && up(f.name) === up(dim)) || null;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Atributo ID al que acompaña el atributo de TEXTO «attr» de la dimensión:
+ * la clave si «attr» es el texto de la clave; el nivel de jerarquía cuyo
+ * texto es «attr». Devuelve [] si «attr» no es un texto. (Puede haber varios
+ * candidatos si el mismo texto se usa en varias jerarquías.)
+ */
+function dracoIdAttrsForTextAttr(dimField, attr) {
+    if (!dimField) return [];
+    const up = (v) => String(v === null || v === undefined ? "" : v).trim().toUpperCase();
+    const out = [];
+    if (dimField.textAttribute && up(dimField.textAttribute) === up(attr)) {
+        const key = (dimField.attributes || []).find(a => a.isKey);
+        if (key) out.push(key.name);
+    }
+    (dimField.hierarchies || []).forEach(h => (h.levels || []).forEach(l => {
+        if (l.textAttribute && up(l.textAttribute) === up(attr) && !out.some(x => up(x) === up(l.attribute))) out.push(l.attribute);
+    }));
+    return out;
+}
+
+/**
+ * Para cada posición de texto de un eje en «ID y texto» (texto plano detrás
+ * de la clave, o nivel de la jerarquía de textos), la posición del ID al que
+ * acompaña. Lo usa «Filtro: valores seleccionados» para filtrar SIEMPRE por
+ * ID aunque se haya hecho clic en la columna de texto. («Solo texto» ya
+ * lleva el ID en idPartnerReal.)
+ */
+function dracoComputeTextIdPartners(plan, reportId) {
+    const out = [];
+    const F = plan.fieldsReal, C = plan.companionReal, FL = plan.flagsReal;
+    const up = (v) => String(v === null || v === undefined ? "" : v).trim().toUpperCase();
+    for (let i = 1; i <= plan.dimCount; i++) {
+        if (!F[i] || plan.idPartnerReal[i]) continue;
+        const idAttrs = dracoIdAttrsForTextAttr(dracoModelDimField(reportId, F[i].dim), F[i].attr).map(up);
+        if (!idAttrs.length && !C[i]) continue;
+        for (let k = i - 1; k >= 1; k--) {
+            if (!F[k] || C[k] || up(F[k].dim) !== up(F[i].dim)) continue;
+            const sameLevel = C[i] ? FL[k] === FL[i] : true;
+            if (sameLevel && (C[i] || idAttrs.includes(up(F[k].attr)))) { out[i] = k; break; }
+        }
+    }
+    return out;
+}
+
 async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     let tPerf = performance.now(); // instrumentación de tiempos, ver draco_perfMark
@@ -8592,6 +8695,11 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
 
     const planFilas = computeAxisPaintPlan(levelsFilas);
     const planColumnas = computeAxisPaintPlan(levelsColumnas);
+    let textIdFilas = [], textIdColumnas = [];
+    try {
+        textIdFilas = dracoComputeTextIdPartners(planFilas, reportId);
+        textIdColumnas = dracoComputeTextIdPartners(planColumnas, reportId);
+    } catch (e) { console.warn("[Draco] No se pudieron emparejar textos con su ID:", e); }
 
     // Ancla de cada eje (EDIT_REPORT!H10 = Filas, N10 = Columnas). El
     // taskpane (RangeAxis.addressOf) deja la dirección VACÍA cuando el eje
@@ -8965,13 +9073,14 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
-                const text = coerceCellLiteral(V[i]);
+                const text = coerceMemberLiteral(V[i]);
                 // Eje Estático: se escribe como fórmula EPM_VALUE editable
                 // (mismo formato que lee el flujo Fijo), no como texto plano.
+                // El valor va SIN convertir a número (conserva "000").
                 const pI = planFilas.idPartnerReal[i];
                 const cellVal = rowsStatic
-                    ? (pI ? buildEpmValueFormula(fieldsFilas[pI].dim, fieldsFilas[pI].attr, coerceCellLiteral(V[pI]), text)
-                          : buildEpmValueFormula(fieldsFilas[i].dim, fieldsFilas[i].attr, text))
+                    ? (pI ? buildEpmValueFormula(fieldsFilas[pI].dim, fieldsFilas[pI].attr, dracoMemberValue(V[pI]), dracoMemberValue(V[i]))
+                          : buildEpmValueFormula(fieldsFilas[i].dim, fieldsFilas[i].attr, dracoMemberValue(V[i])))
                     : text;
                 // Sobrescribe si ya había una entrada (mismo comportamiento que
                 // el bucle secuencial original: el último nivel no-nulo gana).
@@ -8988,9 +9097,16 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
                     // Valor canónico (antes de Excel) para el writeback —
                     // ver DracoAxisCrossValues. Mismas coordenadas físicas
                     // que la celda que se acaba de pintar.
-                    axisCrossValues.set(row + "_" + col, pI
-                        ? { dim: fieldsFilas[pI].dim, attr: fieldsFilas[pI].attr, value: coerceCellLiteral(V[pI]) }
-                        : { dim: fieldsFilas[i].dim, attr: fieldsFilas[i].attr, value: text });
+                    const crossEntry = pI
+                        ? { dim: fieldsFilas[pI].dim, attr: fieldsFilas[pI].attr, value: dracoMemberValue(V[pI]) }
+                        : { dim: fieldsFilas[i].dim, attr: fieldsFilas[i].attr, value: dracoMemberValue(V[i]) };
+                    // Columna de texto en «ID y texto»: ID al que acompaña (para filtrar por ID).
+                    const tI = textIdFilas[i];
+                    if (!pI && tI && !isDracoNullLiteral(V[tI])) {
+                        crossEntry.idAttr = fieldsFilas[tI].attr;
+                        crossEntry.idValue = dracoMemberValue(V[tI]);
+                    }
+                    axisCrossValues.set(row + "_" + col, crossEntry);
                 }
             }
         }
@@ -9060,11 +9176,11 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
 
             if (String(V[i]).toLowerCase().indexOf("null") !== 0) {
                 const indent = flag === 1 ? 0 : Math.max(0, flag - 1);
-                const text = coerceCellLiteral(V[i]);
+                const text = coerceMemberLiteral(V[i]);
                 const pI = planColumnas.idPartnerReal[i];
                 const cellVal = colsStatic
-                    ? (pI ? buildEpmValueFormula(fieldsColumnas[pI].dim, fieldsColumnas[pI].attr, coerceCellLiteral(V[pI]), text)
-                          : buildEpmValueFormula(fieldsColumnas[i].dim, fieldsColumnas[i].attr, text))
+                    ? (pI ? buildEpmValueFormula(fieldsColumnas[pI].dim, fieldsColumnas[pI].attr, dracoMemberValue(V[pI]), dracoMemberValue(V[i]))
+                          : buildEpmValueFormula(fieldsColumnas[i].dim, fieldsColumnas[i].attr, dracoMemberValue(V[i])))
                     : text;
                 // Ver comentario equivalente en el bloque de FILAS: text puede
                 // ser un Number (dimensión INTEGER) y no tiene .trim().
@@ -9076,9 +9192,15 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
                     // Valor canónico (antes de Excel) para el writeback —
                     // ver DracoAxisCrossValues. Mismas coordenadas físicas
                     // que la celda que se acaba de pintar.
-                    axisCrossValues.set(row + "_" + col, pI
-                        ? { dim: fieldsColumnas[pI].dim, attr: fieldsColumnas[pI].attr, value: coerceCellLiteral(V[pI]) }
-                        : { dim: fieldsColumnas[i].dim, attr: fieldsColumnas[i].attr, value: text });
+                    const crossEntry = pI
+                        ? { dim: fieldsColumnas[pI].dim, attr: fieldsColumnas[pI].attr, value: dracoMemberValue(V[pI]) }
+                        : { dim: fieldsColumnas[i].dim, attr: fieldsColumnas[i].attr, value: dracoMemberValue(V[i]) };
+                    const tI = textIdColumnas[i];
+                    if (!pI && tI && !isDracoNullLiteral(V[tI])) {
+                        crossEntry.idAttr = fieldsColumnas[tI].attr;
+                        crossEntry.idValue = dracoMemberValue(V[tI]);
+                    }
+                    axisCrossValues.set(row + "_" + col, crossEntry);
                 }
             }
         }
@@ -12079,15 +12201,66 @@ async function filtrarValoresSeleccionados(event) {
             reportId = located.reportId;
 
             const fieldCache = new Map();
+            // Valores canónicos del último pintado (ejes dinámicos): dan el ID
+            // aunque la celda muestre el texto (modos «Texto» e «ID y texto»).
+            const crossCache = DracoAxisCrossValues.get(located.reportId) || null;
+            // Ejes estáticos: fórmulas EPM_VALUE de la línea completa del eje,
+            // para encontrar el ID que acompaña a una columna de texto.
+            let axisRange = null;
+            const hasStaticText = sel.formulas.some(row => row.some(fx => typeof fx === "string" && /EPM_VALUE\s*\(/i.test(fx)));
+            if (hasStaticText && located.rangeName) {
+                try {
+                    let nm = context.workbook.names.getItemOrNullObject(located.rangeName);
+                    await context.sync();
+                    if (nm.isNullObject) { nm = sheet.names.getItemOrNullObject(located.rangeName); await context.sync(); }
+                    if (!nm.isNullObject) {
+                        axisRange = nm.getRange();
+                        axisRange.load(["formulas", "rowIndex", "columnIndex", "rowCount", "columnCount"]);
+                        await context.sync();
+                    }
+                } catch (e) { axisRange = null; }
+            }
+            const up = (x) => String(x === null || x === undefined ? "" : x).trim().toUpperCase();
+            // EPM_VALUE de texto en eje estático -> {attr, value} de su ID (misma línea del eje).
+            const staticIdFor = (absRow, absCol, dim, textAttr) => {
+                const idAttrs = dracoIdAttrsForTextAttr(dracoModelDimField(located.reportId, dim), textAttr).map(up);
+                if (!idAttrs.length || !axisRange) return null;
+                const lineCells = [];
+                if (located.axis === "rows") {
+                    const lr = absRow - axisRange.rowIndex;
+                    if (lr < 0 || lr >= axisRange.rowCount) return null;
+                    for (let k = 0; k < axisRange.columnCount; k++) lineCells.push(axisRange.formulas[lr][k]);
+                } else {
+                    const lc = absCol - axisRange.columnIndex;
+                    if (lc < 0 || lc >= axisRange.columnCount) return null;
+                    for (let k = 0; k < axisRange.rowCount; k++) lineCells.push(axisRange.formulas[k][lc]);
+                }
+                for (const fx of lineCells) {
+                    if (typeof fx !== "string" || !/EPM_VALUE\s*\(/i.test(fx)) continue;
+                    const a = parseEpmValueArgs(fx);
+                    if (a && a.length >= 3 && up(a[0]) === up(dim) && idAttrs.includes(up(a[1]))) return { attr: a[1], value: a[2] };
+                }
+                return null;
+            };
+
             for (let r = 0; r < sel.rowCount; r++) {
                 for (let c = 0; c < sel.columnCount; c++) {
                     const value = sel.values[r][c];
                     if (value === "" || value === null || value === undefined) continue;
                     let dim, attr, v = value;
+                    const absRow = sel.rowIndex + r, absCol = sel.columnIndex + c; // 0-based
                     const fx = sel.formulas[r][c];
                     const args = (typeof fx === "string" && /^=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i.test(fx)) ? parseEpmValueArgs(fx) : null;
+                    const cached = (!args && crossCache) ? crossCache.get((absRow + 1) + "_" + (absCol + 1)) : null;
                     if (args && args.length >= 3) {
                         dim = args[0]; attr = args[1]; v = args[2];
+                        // Columna de texto («ID y texto»): se filtra por su ID.
+                        const id = staticIdFor(absRow, absCol, dim, attr);
+                        if (id) { attr = id.attr; v = id.value; }
+                    } else if (cached && cached.dim) {
+                        dim = cached.dim;
+                        if (cached.idAttr) { attr = cached.idAttr; v = cached.idValue; }
+                        else { attr = cached.attr; v = cached.value; }
                     } else {
                         const level = located.axis === "rows" ? located.level + c : located.level + r;
                         const key = level + "|" + indents[r][c];
