@@ -62,12 +62,6 @@
                         await window.SemanticModelStore.saveModel(payload.modelName, payload.model);
                         await window.SemanticModelStore.setActiveModelName(payload.modelName);
 
-                        dialog.close();
-
-                        if (typeof onImported === "function") {
-                            onImported(payload.modelName);
-                        }
-
                     } catch (err) {
                         console.error("Error al guardar el modelo semántico importado:", err);
                         // Avisamos al diálogo del error para que el usuario lo vea y
@@ -77,6 +71,20 @@
                         } catch (e2) {
                             console.error("Además, no se ha podido avisar al diálogo del error:", e2);
                             dialog.close();
+                        }
+                        return;
+                    }
+
+                    dialog.close();
+
+                    // Fuera del try anterior: un fallo al refrescar la UI no debe
+                    // tratarse como "no se ha podido guardar" (el diálogo ya está
+                    // cerrado y el aviso se perdía sin que el usuario viera nada).
+                    if (typeof onImported === "function") {
+                        try {
+                            await onImported(payload.modelName);
+                        } catch (uiErr) {
+                            console.error("Modelo importado, pero falló el refresco del panel:", uiErr);
                         }
                     }
 

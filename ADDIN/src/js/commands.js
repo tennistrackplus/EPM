@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-29-calc-filtro";
+const DRACO_BUILD = "2026-10-29-fijo-calc";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -162,7 +162,21 @@ function abrirModeloSemantico(event) {
             // y, cuando el usuario elige un fichero y confirma, guarda el
             // modelo importado en SemanticModelStore desde este mismo runtime
             // de comandos (que sí tiene acceso a Office.context.document.settings).
-            window.LkmlOpenBridge.openOpenLkmlDialog();
+            // Tras guardar, se muestra el panel en "Editar modelo semántico"
+            // y se refresca: el selector de modelos solo se rellena al cargar
+            // el panel, así que sin esto el modelo importado no aparecía
+            // (parecía que "no hacía nada").
+            window.LkmlOpenBridge.openOpenLkmlDialog(async (modelName) => {
+                try {
+                    await Office.addin.showAsTaskpane();
+                } catch (e) {
+                    console.warn("[Draco] No se ha podido mostrar el panel tras importar el .lkml:", e);
+                }
+                if (window.mostrarVistaEpm) await window.mostrarVistaEpm("view-modelo");
+                if (typeof window.dracoOnLkmlModelImported === "function") {
+                    await window.dracoOnLkmlModelImported(modelName);
+                }
+            });
         });
     } catch (error) {
         console.error("Error al abrir el diálogo de apertura de modelo semántico:", error);
@@ -2129,7 +2143,11 @@ function indentBlock(text, prefix) {
  * las condiciones de cada grupo con AND, y genera un único STRUCT por
  * ROW_ID/COLUMN_ID en vez de un SELECT completo contra BASE/BASE_ROW.
  */
-function buildIdArray(atributesGrid, defs, idFieldName) {
+function buildIdArray(atributesGrid, defs, idFieldName, fallbackId) {
+    // Eje sin dimensiones (solo la medida): todas las filas de BASE van al
+    // mismo ID. Antes salía «UNNEST([ ]) WHERE COND» y BigQuery fallaba con
+    // «Unrecognized name: COND».
+    if (!defs.length) return "[" + (Number(fallbackId) || 1) + "]";
     const dict = new Map();
 
     for (const v of defs) {
@@ -2199,8 +2217,19 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     const measureRow = measureName ? buscarMedida(measuresGrid, measureName) : 0;
     const measureField = measureRow ? dracoMeasureArgSQL(measuresGrid, measureName) : "f." + measureName;
 
-    const rowIdsArray = buildIdArray(atributesGrid, rowsDefs, "ROW_ID");
-    const columnIdsArray = buildIdArray(atributesGrid, colDefs, "COLUMN_ID");
+    // Líneas de los ejes Estáticos que son un CÁLCULO entre miembros (p. ej.
+    // MARGEN = [Ingresos] - [Gastos] en NIVEL1): se sustituyen por líneas
+    // ocultas de los miembros que usa la fórmula y se calculan al final.
+    const rowCalc = dracoExpandStaticCalcLines(rowsDefs, "row");
+    const colCalc = dracoExpandStaticCalcLines(colDefs, "col");
+    rowsDefs.length = 0; rowsDefs.push(...rowCalc.defs);
+    colDefs.length = 0; colDefs.push(...colCalc.defs);
+
+    // ID de un eje sin dimensiones: la celda de la medida o el ancla del eje
+    const rowFallback = rowsDefsRaw.some(isMeasureDef) ? measureDef.R : parseAddress(cellValue(editReportGrid, 10, 8)).row;
+    const colFallback = colDefsRaw.some(isMeasureDef) ? measureDef.R : parseAddress(cellValue(editReportGrid, 10, 14)).col;
+    const rowIdsArray = buildIdArray(atributesGrid, rowsDefs, "ROW_ID", rowFallback);
+    const columnIdsArray = buildIdArray(atributesGrid, colDefs, "COLUMN_ID", colFallback);
 
     // Filtros del informe (zona "Filtros") + filtros "bloqueados" (Añadir
     // filtro, tanto los de ESTE informe como los globales de "Todos los
@@ -2249,6 +2278,7 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
 
     // ---- SELECT final: cruce ROW_ID x COLUMN_ID + agregación ----
     // (con agregación de excepción: suma por celda y dimensiones de referencia y, encima, la excepción)
+    const finalStart = sql.length;
     if (exc) sql += "SELECT" + CRLF + "    ROW_ID," + CRLF + "    COLUMN_ID," + CRLF + "    " + exc.agg + "(IMPORTE) AS IMPORTE" + CRLF + "FROM (" + CRLF;
     sql += "SELECT" + CRLF;
     sql += "    ROW_ID," + CRLF;
@@ -2263,9 +2293,67 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
         sql += ") X" + CRLF;
     }
     sql += "GROUP BY ROW_ID, COLUMN_ID" + CRLF;
+
+    // Líneas calculadas: el resultado anterior pasa a ser AGG y se añade una
+    // fila por cálculo, a partir de las líneas ocultas (IDs negativos).
+    const calcLines = rowCalc.lines.concat(colCalc.lines);
+    if (calcLines.length) {
+        const head = sql.slice(0, finalStart).replace(/\s+$/, "");
+        const finalSel = sql.slice(finalStart);
+        sql = head + "," + CRLF + CRLF + "AGG AS (" + CRLF + finalSel + ")" + CRLF + CRLF;
+        sql += "SELECT ROW_ID, COLUMN_ID, IMPORTE FROM AGG WHERE ROW_ID > 0 AND COLUMN_ID > 0" + CRLF;
+        calcLines.forEach(l => {
+            const byRow = l.axis === "row";
+            const idCol = byRow ? "ROW_ID" : "COLUMN_ID", other = byRow ? "COLUMN_ID" : "ROW_ID";
+            const expr = window.DracoCalc.toSql(l.ast, (ref) => {
+                const sid = l.terms[String(ref).trim().toUpperCase()];
+                return "COALESCE(SUM(CASE WHEN " + idCol + " = " + sid + " THEN IMPORTE END), 0)";
+            });
+            sql += "UNION ALL" + CRLF;
+            sql += "SELECT " + (byRow ? l.id + " AS ROW_ID, COLUMN_ID" : "ROW_ID, " + l.id + " AS COLUMN_ID")
+                + ", " + expr + " AS IMPORTE FROM AGG WHERE " + other + " > 0 GROUP BY " + other + CRLF;
+        });
+    }
     sql += "ORDER BY ROW_ID, COLUMN_ID";
 
     return sql;
+}
+
+/**
+ * Ejes Estáticos (modo Fijo): una línea cuyo valor es el nombre de un
+ * cálculo entre miembros de ese atributo (del informe o del modelo) no es
+ * un miembro real. Se cambia por una línea OCULTA (ID negativo) por cada
+ * miembro de la fórmula, con las mismas condiciones del resto de la línea,
+ * y se devuelve { defs, lines } para calcularla al final (ver buildSQLFixed).
+ */
+function dracoExpandStaticCalcLines(defs, axis) {
+    const out = [], lines = [];
+    if (!window.DracoCalc || typeof dracoCalcsForAttr !== "function") return { defs: defs.slice(), lines };
+    const groups = new Map();
+    defs.forEach(d => { const k = String(d.R); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(d); });
+    let nextSid = -1;
+    for (const [, group] of groups) {
+        let calc = null, calcDef = null;
+        for (const d of group) {
+            const c = dracoCalcsForAttr(ReportState.ReportId, d.Dimension, d.AttributeName)
+                .find(x => x && x.mode !== "position" && String(x.name).trim().toUpperCase() === String(d.Value).trim().toUpperCase());
+            if (c) { calc = c; calcDef = d; break; }
+        }
+        if (!calc) { out.push(...group); continue; }
+        const a = window.DracoCalc.analyze(calc.expr, "member");
+        if (!a.ok) throw new Error(`El cálculo «${calc.name}» tiene un error: ${a.error}`);
+        const terms = {};
+        a.refs.forEach(ref => {
+            const key = String(ref).trim().toUpperCase();
+            if (terms[key] !== undefined) return;
+            const sid = nextSid--;
+            terms[key] = sid;
+            group.forEach(d => out.push(Object.assign({}, d, { R: sid }, d === calcDef ? { Value: String(ref).trim() } : {})));
+        });
+        lines.push({ axis, id: calcDef.R, ast: a.ast, terms });
+    }
+    // IDs negativos distintos por eje
+    return { defs: out, lines };
 }
 
 /* ---------------------------------------------------------------------
@@ -7339,6 +7427,18 @@ async function loadDracoPickerItems(located, tag) {
             let json = await window.ExcelService.executeSQL(sql);
             if (typeof json !== "string") json = JSON.stringify(json);
             const items = parseMemberJsonTree(json);
+            // Cálculos entre miembros de ese atributo (del informe y del modelo):
+            // se pueden elegir como una línea más del eje Estático.
+            try {
+                const have = new Set(items.map(i => String(i.value).toUpperCase()));
+                const attrName = (items[0] && items[0].attribute) || located.attr;
+                dracoCalcsForAttr(located.reportId, located.dim, located.attr)
+                    .filter(c => c && c.mode !== "position")
+                    .forEach(c => {
+                        const n = String(c.name || "").trim();
+                        if (n && !have.has(n.toUpperCase())) items.push({ text: n, attribute: attrName, value: n });
+                    });
+            } catch (e) { /* sin cálculos */ }
             dracoLog(tag, "consulta OK en " + (Date.now() - t1) + " ms | respuesta " + json.length + " chars | " + items.length + " items");
             DracoPickerItemsCache.set(key, { at: Date.now(), items });
             return items;

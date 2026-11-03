@@ -218,28 +218,42 @@ function initEvents() {
  */
 function openLkmlDialogFromTaskpane() {
 
-    window.LkmlOpenBridge.openOpenLkmlDialog((modelName) => {
-
-        // El diálogo ya ha leído el .lkml, generado el modelo semántico y
-        // LkmlOpenBridge lo ha guardado en SemanticModelStore: aquí solo
-        // hace falta refrescar este taskpane para que se vea seleccionado.
-        creatingModel = false;
-        restoreModelSelector();
-        loadSemanticModels();
-
-        const select = document.getElementById("semanticModelSelect");
-
-        if (select) {
-            select.value = modelName;
-        }
-
-        loadModel(modelName);
-
-        showToast(`Modelo semántico "${modelName}" importado desde LookML.`, "success");
-
-    });
+    window.LkmlOpenBridge.openOpenLkmlDialog(onLkmlModelImported);
 
 }
+
+/**
+ * Tras importar un .lkml (desde el ribbon o desde el taskpane): el diálogo
+ * ya ha leído el fichero y LkmlOpenBridge ha guardado el modelo en
+ * SemanticModelStore; aquí se refresca el selector de modelos (que solo se
+ * rellena al cargar el panel) y se carga el modelo importado.
+ * Expuesta en window para que la use también abrirModeloSemantico()
+ * (commands.js), que corre en el mismo runtime compartido.
+ */
+async function onLkmlModelImported(modelName) {
+
+    creatingModel = false;
+    restoreModelSelector();
+    loadSemanticModels();
+
+    const select = document.getElementById("semanticModelSelect");
+
+    if (select) {
+        select.value = modelName;
+    }
+
+    showToast(`Modelo semántico "${modelName}" importado desde LookML.`, "success");
+
+    try {
+        await loadModel(modelName);
+    } catch (err) {
+        console.error("Modelo importado, pero no se ha podido cargar en el panel:", err);
+        showToast(`Modelo "${modelName}" importado, pero no se ha podido cargar: ${err.message}`, "error");
+    }
+
+}
+
+window.dracoOnLkmlModelImported = onLkmlModelImported;
 
 /**
  * Abre el diálogo independiente "Guardar modelo semántico (.lkml)"
