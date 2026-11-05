@@ -29,6 +29,10 @@ const LoginApp = {
         this.bindStaticEvents();
         this.renderList();
         this.setupBrowserMessageListener();
+        // Sesión rechazada por Google en cualquier consulta (ver BQ.onSessionExpired): lista al día
+        window.addEventListener("draco-session-expired", () => this.renderList({ skipValidate: true }));
+        // Al volver al panel/Excel se revisa el estado (el token pudo caducar mientras tanto)
+        document.addEventListener("visibilitychange", () => { if (!document.hidden) this.renderList(); });
     },
 
     // =====================================================================
@@ -120,8 +124,10 @@ const LoginApp = {
     // =====================================================================
     // Vista LISTA
     // =====================================================================
-    renderList() {
+    renderList(opts) {
         const container = document.getElementById("connectionsContainer");
+        if (!container) return;
+        this.scheduleExpiryCheck();
         const connections = Connections.list();
         const activeId = Connections.getActiveId();
 
@@ -158,6 +164,24 @@ const LoginApp = {
                     </div>
                 </div>`;
         }).join("");
+
+        // «Conectado» solo miraba la hora de caducidad guardada: se comprueba
+        // también contra Google (como mucho una vez por minuto). Si el token
+        // ya no vale, se cierra la sesión y la tarjeta pasa a «Conectar».
+        if (!(opts && opts.skipValidate) && activeId && Provider.isConnected() && window.BQ && BQ.validateSession) {
+            BQ.validateSession(60000).then(ok => {
+                if (!ok) this.renderList({ skipValidate: true });
+            });
+        }
+    },
+
+    /** Repinta la lista justo cuando caduca el token (pasa a «Conectar» sin tener que salir y entrar). */
+    scheduleExpiryCheck() {
+        if (this._expiryTimer) { clearTimeout(this._expiryTimer); this._expiryTimer = null; }
+        const at = (window.BQ && BQ.getExpiresAt) ? BQ.getExpiresAt() : 0;
+        if (!at || !Provider.isConnected()) return;
+        const ms = Math.min(at - Date.now() + 1000, 2147483000);
+        if (ms > 0) this._expiryTimer = setTimeout(() => this.renderList({ skipValidate: true }), ms);
     },
 
     buildSubtitle(conn) {
@@ -208,9 +232,11 @@ const LoginApp = {
             return;
         }
 
-        if (Provider.isConnected()) {
+        // Antes bastaba con la hora de caducidad guardada: con el token ya
+        // rechazado por Google decía «ya tienes sesión» y no dejaba conectar.
+        if (Provider.isConnected() && (!(window.BQ && BQ.validateSession) || await BQ.validateSession())) {
             this.showAlert(`Ya tienes una sesión activa de ${this.getProviderDisplayName(conn.provider)}.`);
-            this.renderList();
+            this.renderList({ skipValidate: true });
             return;
         }
 
@@ -505,8 +531,14 @@ const LoginApp = {
     }
 };
 
+// taskpane.html (mostrarVistaEpm) y commands.js usan window.LoginApp para
+// repintar la lista al entrar en la pestaña Conexión: con «const» no existía
+// en window y esa comprobación no se hacía nunca.
+window.LoginApp = LoginApp;
+
 // Inicialización garantizada tras la definición del objeto LoginApp
 if (typeof Office !== "undefined") {
+
     Office.onReady(() => {
         LoginApp.init();
     });

@@ -361,7 +361,8 @@ async function executeSQLBigQuery(sql) {
     const token = BQ.getToken();
 
     if (!token) {
-        throw new Error("No hay una sesión activa de BigQuery. Inicia sesión en el panel primero.");
+        if (BQ.onSessionExpired) BQ.onSessionExpired("no-token");
+        throw new Error("No hay una sesión activa de BigQuery. Conéctate en la pestaña Conexión.");
     }
 
     const projectId = BQ.jobProjectFor(sql);
@@ -384,6 +385,10 @@ async function executeSQLBigQuery(sql) {
     });
     let text = await response.text();
 
+    if (BQ.isAuthError && BQ.isAuthError(response.status, text)) {
+        BQ.onSessionExpired("query");
+        throw BQ.authExpiredError();
+    }
     if (!response.ok) {
         throw new Error("Error de BigQuery (" + response.status + "): " + text);
     }
@@ -418,6 +423,10 @@ async function executeSQLBigQuery(sql) {
         );
         text = await response.text();
 
+        if (BQ.isAuthError && BQ.isAuthError(response.status, text)) {
+            BQ.onSessionExpired("query");
+            throw BQ.authExpiredError();
+        }
         if (!response.ok) {
             throw new Error("Error de BigQuery (" + response.status + "): " + text);
         }

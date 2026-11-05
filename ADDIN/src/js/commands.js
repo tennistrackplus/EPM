@@ -2509,7 +2509,8 @@ async function executeSQL(sql, billingProjectId) {
     const token = BQ.getToken();
 
     if (!token) {
-        throw new Error("No hay una sesión activa de BigQuery. Inicia sesión en el panel primero.");
+        if (BQ.onSessionExpired) BQ.onSessionExpired("no-token");
+        throw new Error("No hay una sesión activa de BigQuery. Conéctate en la pestaña Conexión.");
     }
 
     const projectId = BQ.jobProjectFor(sql, billingProjectId);
@@ -2527,8 +2528,48 @@ async function executeSQL(sql, billingProjectId) {
         body: body
     });
 
-    return await response.text();
+    const text = await response.text();
+    // Token rechazado por Google (caducado/revocado): antes se devolvía el
+    // JSON del error tal cual, el informe no pintaba nada y no se avisaba.
+    if (BQ.isAuthError && BQ.isAuthError(response.status, text)) {
+        BQ.onSessionExpired("query");
+        throw BQ.authExpiredError();
+    }
+    return text;
 }
+
+/**
+ * Aviso de sesión caducada (sessionExpiredBadge.html): mismo patrón que el
+ * de Reconocimiento de miembros (displayDialogAsync, se cierra solo o al
+ * hacer clic). Solo avisa: no toca el panel ni lanza ninguna conexión; es
+ * el usuario quien va a Conexión. Uno cada 30 s como mucho (un «Actualizar
+ * todos» con varios informes no abre varios).
+ */
+let DracoSessionNoticeAt = 0;
+function dracoSessionExpiredNotice(detail) {
+    // Comprobación al entrar en Conexión: la propia pestaña ya lo indica
+    if (detail && detail.source === "validate") return;
+    if (Date.now() - DracoSessionNoticeAt < 30000) return;
+    DracoSessionNoticeAt = Date.now();
+    try {
+        const expired = !(detail && detail.source === "no-token" && !detail.hadToken);
+        const dialogUrl = new URL(`sessionExpiredBadge.html?expired=${expired ? "1" : "0"}`, window.location.href).href;
+        Office.context.ui.displayDialogAsync(dialogUrl, { height: 15, width: 22, displayInIframe: false }, (asyncResult) => {
+            if (asyncResult.status === Office.AsyncResultStatus.Failed) {
+                console.warn("[Draco] No se pudo mostrar el aviso de sesión caducada:", asyncResult.error && asyncResult.error.message);
+                return;
+            }
+            const dialog = asyncResult.value;
+            let closed = false;
+            const closeOnce = () => { if (closed) return; closed = true; try { dialog.close(); } catch (e) { /* ya cerrado */ } };
+            dialog.addEventHandler(Office.EventType.DialogMessageReceived, closeOnce);
+            dialog.addEventHandler(Office.EventType.DialogEventReceived, closeOnce);
+        });
+    } catch (e) {
+        console.warn("[Draco] Error mostrando el aviso de sesión caducada:", e);
+    }
+}
+window.dracoSessionExpiredNotice = dracoSessionExpiredNotice;
 
 /* ---------------------------------------------------------------------
  * JSON_PaintValues
@@ -8612,7 +8653,11 @@ function dracoApplyHierarchyEmptyValues(json, reportId) {
             if (c && c.v !== null && c.v !== undefined && set.has(String(c.v).trim())) { c.v = null; changed++; }
         });
     });
-    return changed ? JSON.stringify(p) : json;
+    // Mismo formato que la respuesta de BigQuery ("v": "x", con espacio tras
+    // los dos puntos): el parser del pintado lee cada valor en una posición
+    // fija (indexOf('"v":') + 5). Con JSON.stringify(p) a secas salía
+    // "v":"x" y todo se desplazaba un carácter ("ull", "DE01\"").
+    return changed ? JSON.stringify(p, null, 2) : json;
 }
 
 async function jsonTo3Matrices(context, json, reportId) {

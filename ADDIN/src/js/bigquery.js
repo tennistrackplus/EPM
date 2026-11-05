@@ -286,6 +286,69 @@ const BQ = {
         return !!this.getToken();
     },
 
+    /* ---------------------------------------------------------
+     * Sesión caducada o rechazada por Google
+     * ---------------------------------------------------------
+     * isConnected() solo mira la hora de caducidad guardada: un token
+     * revocado o caducado antes de tiempo seguía saliendo como «Conectado»
+     * y las consultas fallaban en silencio. Ahora cualquier 401 de las APIs
+     * de Google (o un error UNAUTHENTICATED) cierra la sesión local y avisa
+     * (evento "draco-session-expired" + aviso emergente si el runtime lo
+     * tiene, ver dracoSessionExpiredNotice en commands.js).
+     * ------------------------------------------------------- */
+    isAuthError(status, body) {
+        if (status === 401) return true;
+        const txt = typeof body === "string" ? body : (body ? JSON.stringify(body) : "");
+        return /"status"\s*:\s*"UNAUTHENTICATED"|Invalid Credentials|invalid authentication credentials/i.test(txt);
+    },
+
+    onSessionExpired(source) {
+        const hadToken = !!this._store().getItem(this.TOKEN_KEY)
+            || (() => { try { return !!(this._local() && this._local().getItem(this.TOKEN_KEY)); } catch (e) { return false; } })();
+        this.logout();
+        this._validatedAt = 0;
+        const detail = { source: source || "", hadToken };
+        try { window.dispatchEvent(new CustomEvent("draco-session-expired", { detail })); } catch (e) { /* sin CustomEvent */ }
+        try { if (typeof window.dracoSessionExpiredNotice === "function") window.dracoSessionExpiredNotice(detail); } catch (e) { /* sin aviso */ }
+    },
+
+    /** Error para quien llama tras un 401 (mensaje claro, code AUTH_EXPIRED). */
+    authExpiredError() {
+        const err = new Error("La sesión de BigQuery ha caducado. Vuelve a conectar en la pestaña Conexión.");
+        err.code = "AUTH_EXPIRED";
+        return err;
+    },
+
+    /**
+     * Comprueba contra Google que el token sigue siendo válido (petición
+     * mínima: 1 proyecto). Devuelve true/false; si Google lo rechaza, cierra
+     * la sesión. Con `maxAgeMs` no repite la comprobación si se hizo hace poco.
+     * Un error de red NO se trata como sesión caducada (devuelve true).
+     */
+    async validateSession(maxAgeMs) {
+        const token = this.getToken();
+        if (!token) return false;
+        if (maxAgeMs && this._validatedAt && Date.now() - this._validatedAt < maxAgeMs) return true;
+        try {
+            const r = await fetch(`${this.BASE}/projects?maxResults=1`, { headers: { "Authorization": `Bearer ${token}` } });
+            if (this.isAuthError(r.status, r.status === 401 ? "" : await r.text().catch(() => ""))) {
+                this.onSessionExpired("validate");
+                return false;
+            }
+            this._validatedAt = Date.now();
+            return true;
+        } catch (e) {
+            return true;
+        }
+    },
+
+    /** Hora (ms) a la que caduca el token guardado, o 0. */
+    getExpiresAt() {
+        this._rehydrate();
+        const e = parseInt(this._store().getItem(this.EXPIRES_KEY) || "0", 10);
+        return isNaN(e) ? 0 : e;
+    },
+
     // ---------------------------------------------------------
     // Los diálogos independientes (Office.context.ui.displayDialogAsync,
     // p.ej. bucketBrowser.html / saveBucket.html) se abren en su propia
@@ -355,6 +418,10 @@ const BQ = {
             }
         });
         const data = await response.json().catch(() => ({}));
+        if (this.isAuthError(response.status, data)) {
+            this.onSessionExpired("request");
+            throw this.authExpiredError();
+        }
         if (!response.ok || data.error) {
             const msg = (data.error && data.error.message) || `Error HTTP ${response.status}`;
             const err = new Error(msg);

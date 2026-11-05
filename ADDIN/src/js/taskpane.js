@@ -431,6 +431,15 @@ const TaskPaneApp = {
         return this.undoStacks[k];
     },
 
+    // Acciones deshechas que se pueden rehacer (la [0] es la siguiente a
+    // rehacer). Cualquier acción nueva la vacía, como en Office.
+    redoStack() {
+        if (!this.redoStacks) this.redoStacks = {};
+        const k = String(this.currentReportId);
+        if (!this.redoStacks[k]) this.redoStacks[k] = [];
+        return this.redoStacks[k];
+    },
+
     // Diseño de referencia (el último guardado/cargado) del informe activo.
     undoSetBaseline() {
         if (!this.currentReportId) { this.undoBaseline = null; return; }
@@ -448,6 +457,7 @@ const TaskPaneApp = {
         const stack = this.undoStack();
         stack.unshift({ label: this.undoDescribe(base.design, cur), design: base.design, ts: Date.now() });
         if (stack.length > this.UNDO_MAX) stack.length = this.UNDO_MAX;
+        this.redoStack().length = 0;   // acción nueva: ya no se puede rehacer lo deshecho
         this.undoBaseline = { reportId: String(this.currentReportId), design: cur };
         this.renderUndoButton();
     },
@@ -549,18 +559,49 @@ const TaskPaneApp = {
         return uniq.length <= 2 ? uniq.join(" · ") : `${uniq.slice(0, 2).join(" · ")} (+${uniq.length - 2})`;
     },
 
-    /* ---- deshacer ---- */
+    /* ---- deshacer / rehacer ---- */
+    // Deshace la acción `index` del historial y todas las más recientes.
     async undoTo(index) {
         const stack = this.undoStack();
-        const entry = stack[index];
-        if (!entry || !this.currentReportId || this.undoApplying) return;
+        if (!stack[index] || !this.currentReportId || this.undoApplying) return;
+        const current = this.undoClone(this.collectDesignPayload());
+        const target = stack[index].design;
+        // Cada acción deshecha pasa a Rehacer con el diseño de DESPUÉS de hacerla
+        const undone = stack.splice(0, index + 1);          // [más reciente ... acción index]
+        const redo = this.redoStack();
+        undone.forEach((e, k) => {
+            const after = k === 0 ? current : undone[k - 1].design;
+            redo.unshift({ label: e.label, design: this.undoClone(after), ts: e.ts });
+        });
+        if (redo.length > this.UNDO_MAX) redo.length = this.UNDO_MAX;
+        await this.undoApplyDesign(target, index === 0 ? "Deshaciendo…" : `Deshaciendo ${index + 1} acciones…`, "Deshecho");
+    },
+
+    // Rehace la acción `index` de Rehacer y todas las anteriores a ella.
+    async redoTo(index) {
+        const redo = this.redoStack();
+        if (!redo[index] || !this.currentReportId || this.undoApplying) return;
+        const current = this.undoClone(this.collectDesignPayload());
+        const target = redo[index].design;
+        const redone = redo.splice(0, index + 1);           // [siguiente a rehacer ... acción index]
+        const stack = this.undoStack();
+        redone.forEach((e, k) => {
+            const before = k === 0 ? current : redone[k - 1].design;
+            stack.unshift({ label: e.label, design: this.undoClone(before), ts: e.ts });
+        });
+        if (stack.length > this.UNDO_MAX) stack.length = this.UNDO_MAX;
+        await this.undoApplyDesign(target, index === 0 ? "Rehaciendo…" : `Rehaciendo ${index + 1} acciones…`, "Rehecho");
+    },
+
+    // Restaura un diseño completo (lo usan Deshacer y Rehacer).
+    async undoApplyDesign(design, busyText, doneText) {
         if (this.autoRefreshTimer) { clearTimeout(this.autoRefreshTimer); this.autoRefreshTimer = null; }
         this.undoApplying = true;
-        const target = this.undoClone(entry.design);
+        const target = this.undoClone(design);
         const wasRows = !!this.state.rowsStatic, wasCols = !!this.state.colsStatic;
         try {
-            stack.splice(0, index + 1);
-            this.setAutoStatus(index === 0 ? "Deshaciendo…" : `Deshaciendo ${index + 1} acciones…`);
+            this.renderUndoButton();
+            this.setAutoStatus(busyText);
 
             // Pasar un eje a Estático necesita el eje ya pintado con el diseño
             // al que se vuelve: primero se restaura en Dinámico, se actualiza
@@ -602,41 +643,60 @@ const TaskPaneApp = {
                 await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
             }
 
-            this.setAutoStatus(this.isRefreshPaused() ? "Deshecho (pausado, sin actualizar)" : "Deshecho ✓");
+            this.setAutoStatus(this.isRefreshPaused() ? `${doneText} (pausado, sin actualizar)` : `${doneText} ✓`);
             setTimeout(() => {
                 const el = document.getElementById("autoStatus");
-                if (el && /^Deshecho/.test(el.innerText)) el.innerText = "";
+                if (el && el.innerText.indexOf(doneText) === 0) el.innerText = "";
             }, 2000);
         } catch (err) {
-            console.error("Error al deshacer:", err);
-            this.setAutoStatus("Error al deshacer");
+            console.error("Error al deshacer/rehacer:", err);
+            this.setAutoStatus("Error al " + (doneText === "Rehecho" ? "rehacer" : "deshacer"));
         } finally {
             this.undoApplying = false;
             this.undoSetBaseline();
         }
     },
 
-    /* ---- botón y desplegable ---- */
+    /* ---- botones y desplegables (Deshacer ↶ / Rehacer ↷) ---- */
     renderUndoButton() {
-        const btn = document.getElementById("btnUndo");
-        if (!btn) return;
-        const stack = this.currentReportId ? this.undoStack() : [];
-        btn.disabled = !stack.length;
-        btn.title = stack.length ? `Deshacer: ${stack[0].label}` : "Deshacer (no hay acciones)";
+        const has = !!this.currentReportId;
+        const undo = has ? this.undoStack() : [], redo = has ? this.redoStack() : [];
+        const bU = document.getElementById("btnUndo"), bR = document.getElementById("btnRedo");
+        if (bU) {
+            bU.disabled = !undo.length || !!this.undoApplying;
+            bU.title = undo.length ? `Deshacer: ${undo[0].label}` : "Deshacer (no hay acciones)";
+        }
+        if (bR) {
+            // Solo se ve cuando hay algo deshecho que rehacer: aparece al
+            // deshacer y desaparece al hacer un cambio nuevo (o rehacerlo todo).
+            bR.hidden = !redo.length;
+            bR.disabled = !redo.length || !!this.undoApplying;
+            bR.title = redo.length ? `Rehacer: ${redo[0].label}` : "Rehacer";
+        }
         const menu = document.getElementById("undoMenu");
-        if (menu && !menu.hidden) this.renderUndoMenu();
+        if (menu && !menu.hidden) {
+            if (menu.dataset.kind === "redo" && !redo.length) this.closeUndoMenu();
+            else this.renderUndoMenu(menu.dataset.kind || "undo");
+        }
     },
 
-    renderUndoMenu() {
+    renderUndoMenu(kind) {
         const menu = document.getElementById("undoMenu");
         if (!menu) return;
-        const stack = this.undoStack();
+        const isRedo = kind === "redo";
+        const stack = isRedo ? this.redoStack() : this.undoStack();
+        menu.dataset.kind = isRedo ? "redo" : "undo";
+        menu.classList.toggle("undo-menu--redo", isRedo);
         menu.innerHTML = "";
+        const head = document.createElement("div");
+        head.className = "undo-menu-head";
+        head.textContent = isRedo ? "Rehacer" : "Deshacer";
         const list = document.createElement("div");
         list.className = "undo-menu-list";
         const footer = document.createElement("div");
         footer.className = "undo-menu-footer";
-        const setHint = (n) => { footer.textContent = n ? (n === 1 ? "Deshacer 1 acción" : `Deshacer ${n} acciones`) : "Cancelar"; };
+        const verb = isRedo ? "Rehacer" : "Deshacer";
+        const setHint = (n) => { footer.textContent = n ? (n === 1 ? `${verb} 1 acción` : `${verb} ${n} acciones`) : "Cancelar"; };
         stack.forEach((e, i) => {
             const it = document.createElement("button");
             it.type = "button";
@@ -645,12 +705,12 @@ const TaskPaneApp = {
             const lbl = document.createElement("span"); lbl.className = "undo-menu-label"; lbl.textContent = e.label; lbl.title = e.label;
             const tm = document.createElement("span"); tm.className = "undo-menu-time"; tm.textContent = time;
             it.appendChild(lbl); it.appendChild(tm);
-            // Al pasar el ratón se marcan esa acción y todas las más recientes (se deshacen juntas)
+            // Al pasar el ratón se marcan esa acción y las anteriores de la lista (van juntas)
             it.addEventListener("mouseenter", () => {
                 list.querySelectorAll(".undo-menu-item").forEach((x, j) => x.classList.toggle("undo-hl", j <= i));
                 setHint(i + 1);
             });
-            it.addEventListener("click", () => { this.closeUndoMenu(); this.undoTo(i); });
+            it.addEventListener("click", () => { this.closeUndoMenu(); isRedo ? this.redoTo(i) : this.undoTo(i); });
             list.appendChild(it);
         });
         list.addEventListener("mouseleave", () => {
@@ -658,6 +718,7 @@ const TaskPaneApp = {
             setHint(0);
         });
         setHint(0);
+        menu.appendChild(head);
         menu.appendChild(list);
         menu.appendChild(footer);
     },
@@ -668,15 +729,23 @@ const TaskPaneApp = {
     },
 
     initUndoButton() {
-        const btn = document.getElementById("btnUndo");
         const menu = document.getElementById("undoMenu");
-        if (!btn || !menu || btn.dataset.bound) return;
-        btn.dataset.bound = "1";
-        btn.addEventListener("click", (e) => {
-            e.stopPropagation();
-            if (!this.undoStack().length) return;
-            if (menu.hidden) { this.renderUndoMenu(); menu.hidden = false; } else this.closeUndoMenu();
-        });
+        if (!menu || menu.dataset.bound) return;
+        menu.dataset.bound = "1";
+        const bind = (id, kind) => {
+            const btn = document.getElementById(id);
+            if (!btn) return;
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const stack = kind === "redo" ? this.redoStack() : this.undoStack();
+                if (!stack.length) return;
+                if (!menu.hidden && menu.dataset.kind === kind) { this.closeUndoMenu(); return; }
+                this.renderUndoMenu(kind);
+                menu.hidden = false;
+            });
+        };
+        bind("btnUndo", "undo");
+        bind("btnRedo", "redo");
         document.addEventListener("click", (e) => { if (!menu.hidden && !menu.contains(e.target)) this.closeUndoMenu(); });
         document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.closeUndoMenu(); });
         this.renderUndoButton();
