@@ -8645,19 +8645,73 @@ function dracoApplyHierarchyEmptyValues(json, reportId) {
     const cols = [];
     names.forEach((n, i) => { if (map.has(n)) cols.push([i, map.get(n)]); });
     if (!cols.length || !Array.isArray(p.rows)) return json;
-    let changed = 0;
-    p.rows.forEach(r => {
+
+    // 1) valor vacío -> null (se anota en qué filas y columnas se cambió)
+    const convertedAt = new Map();   // índice de fila -> Set(índices de columna)
+    p.rows.forEach((r, ri) => {
         const f = r && r.f; if (!f) return;
         cols.forEach(([i, set]) => {
             const c = f[i];
-            if (c && c.v !== null && c.v !== undefined && set.has(String(c.v).trim())) { c.v = null; changed++; }
+            if (c && c.v !== null && c.v !== undefined && set.has(String(c.v).trim())) {
+                c.v = null;
+                if (!convertedAt.has(ri)) convertedAt.set(ri, new Set());
+                convertedAt.get(ri).add(i);
+            }
         });
     });
+    if (!convertedAt.size) return json;
+
+    // 2) Con GROUPING SETS, el subtotal de un nodo ya trae null en los niveles
+    //    de debajo. Una fila convertida puede quedar IGUAL que ese subtotal
+    //    pero con otro ROW_ID/COLUMN_ID (el DENSE_RANK se calculó con el
+    //    valor original) y se pintaba dos veces. Con un NULL de verdad las
+    //    dos filas comparten ID y sale una sola línea: aquí se deja igual,
+    //    quitando la fila convertida que repite a otra y renumerando los IDs.
+    const axisAttrs = (list) => (list || []).map(fd => names.indexOf(String(fd.AttributeName || "").toUpperCase())).filter(i => i >= 0);
+    const rowsAttrs = typeof ReportState !== "undefined" ? axisAttrs(ReportState.Rows) : [];
+    const colsAttrs = typeof ReportState !== "undefined" ? axisAttrs(ReportState.Columns) : [];
+    const dedupAxis = (idName, attrIdx) => {
+        const idCol = names.indexOf(idName);
+        if (idCol < 0 || !attrIdx.length) return;
+        const val = (r, i) => (r.f[i] ? r.f[i].v : null);
+        const groups = new Map();   // ID -> { tuple, converted }
+        p.rows.forEach((r, ri) => {
+            const id = String(val(r, idCol));
+            if (!groups.has(id)) groups.set(id, { tuple: JSON.stringify(attrIdx.map(i => val(r, i))), converted: false });
+            const conv = convertedAt.get(ri);
+            if (conv && attrIdx.some(i => conv.has(i))) groups.get(id).converted = true;
+        });
+        const byTuple = new Map();
+        groups.forEach((g, id) => {
+            if (!byTuple.has(g.tuple)) byTuple.set(g.tuple, []);
+            byTuple.get(g.tuple).push(id);
+        });
+        const drop = new Set();
+        byTuple.forEach(ids => {
+            if (ids.length < 2) return;
+            const keep = ids.find(id => !groups.get(id).converted) || ids[0];
+            ids.forEach(id => { if (id !== keep) drop.add(id); });
+        });
+        if (!drop.size) return;
+        p.rows = p.rows.filter(r => !drop.has(String(val(r, idCol))));
+        // IDs consecutivos otra vez (1..n), en el mismo orden
+        const kept = [...new Set(p.rows.map(r => Number(val(r, idCol))))].sort((a, b) => a - b);
+        const renum = new Map(kept.map((id, k) => [String(id), String(k + 1)]));
+        p.rows.forEach(r => { if (r.f[idCol]) r.f[idCol].v = renum.get(String(r.f[idCol].v)); });
+    };
+    if (names.indexOf("ROW_ID") >= 0 || names.indexOf("COLUMN_ID") >= 0) {
+        dedupAxis("ROW_ID", rowsAttrs);
+        dedupAxis("COLUMN_ID", colsAttrs);
+    } else if (names.indexOf("DYN_ID") >= 0) {
+        dedupAxis("DYN_ID", rowsAttrs.concat(colsAttrs));   // híbrido: el eje dinámico
+    }
+    if (p.totalRows !== undefined) p.totalRows = String(p.rows.length);
+
     // Mismo formato que la respuesta de BigQuery ("v": "x", con espacio tras
     // los dos puntos): el parser del pintado lee cada valor en una posición
     // fija (indexOf('"v":') + 5). Con JSON.stringify(p) a secas salía
     // "v":"x" y todo se desplazaba un carácter ("ull", "DE01\"").
-    return changed ? JSON.stringify(p, null, 2) : json;
+    return JSON.stringify(p, null, 2);
 }
 
 async function jsonTo3Matrices(context, json, reportId) {

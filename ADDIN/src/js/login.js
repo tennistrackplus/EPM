@@ -18,7 +18,9 @@ const LoginApp = {
     pendingConnectionId: null, // conexión para la que se está esperando respuesta OAuth
 
     PROVIDER_ICONS: {
-        bigquery: "assets/datasource-db.svg"
+        // Icono oficial de BigQuery (descargado de cloud.google.com/icons y
+        // guardado como assets/bigquery.svg). Si falta, se usa el genérico.
+        bigquery: "assets/bigquery.svg"
     },
 
     init() {
@@ -149,7 +151,7 @@ const LoginApp = {
             return `
                 <div class="conn-card ${isActive ? "active" : ""}" data-id="${conn.id}">
                     <div class="conn-info">
-                        <div class="conn-icon"><img src="${icon}" alt="${this.getProviderDisplayName(conn.provider)}"></div>
+                        <div class="conn-icon"><img src="${icon}" alt="${this.getProviderDisplayName(conn.provider)}" onerror="this.onerror=null;this.src='assets/datasource-db.svg'"></div>
                         <div class="conn-details">
                             <h3>${this.escapeHtml(conn.name)}</h3>
                             <span>${this.escapeHtml(subtitle)}</span>

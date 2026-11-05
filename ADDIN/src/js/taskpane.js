@@ -2380,7 +2380,10 @@ const TaskPaneApp = {
         // Un filtro recién soltado aún no tiene valor (se ignora en el WHERE
         // hasta que se elija uno): el informe no cambia, solo se guarda el
         // diseño. Añadir campos a Filas o Columnas sí lo cambia: actualizar.
-        this.scheduleAutoUpdate({ saveOnly: zoneId === "filters" && !entry.filter });
+        // Una MEDIDA en Filtros no es un filtro: es la medida del informe
+        // (applyFilterMeasuresToDynamicReport en commands.js), así que
+        // también cambia el informe y hay que actualizar.
+        this.scheduleAutoUpdate({ saveOnly: zoneId === "filters" && !entry.filter && !isMeasure });
     },
 
     removeFromState(zoneId, data) {
@@ -2407,8 +2410,9 @@ const TaskPaneApp = {
         this.reconcileTextColumns();
         this.refreshRangeLabels();
 
-        // Quitar de Filtros un filtro sin valor no cambia el informe
-        this.scheduleAutoUpdate({ saveOnly: zoneId === "filters" && !!removed && !removed.filter });
+        // Quitar de Filtros un filtro sin valor no cambia el informe (una
+        // medida sí: era la medida del informe)
+        this.scheduleAutoUpdate({ saveOnly: zoneId === "filters" && !!removed && !removed.filter && !isMeasure });
     },
 
     listForZone(zoneId) {
