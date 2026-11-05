@@ -834,10 +834,11 @@ async function getFormulaGrid(context, sheetName) {
     await context.sync();
 
     if (used.isNullObject) {
-        return { formulas: [], startRow: 0, startCol: 0 };
+        return { formulas: [], startRow: 0, startCol: 0, sheetName };
     }
 
-    return { formulas: used.formulas, startRow: used.rowIndex, startCol: used.columnIndex };
+    // sheetName: las referencias sin hoja de las EPM_VALUE se leen en ESTA hoja
+    return { formulas: used.formulas, startRow: used.rowIndex, startCol: used.columnIndex, sheetName };
 }
 
 // Equivalente a ws.Cells(row1, col1).Value (row1/col1 en base 1, como en VBA)
@@ -1841,110 +1842,189 @@ function replaceAll(text, search) {
 
 
 
-async function getFormulaArgumentValue(context, arg) {
-    arg = String(arg).trim();
+/* ---------------------------------------------------------------------
+ * Lectura de las fórmulas EPM_VALUE de los ejes Estáticos
+ * ---------------------------------------------------------------------
+ * Antes: se quitaban TODOS los ")" y se partía por "," o ";" (rompía textos
+ * con comas, punto y coma o paréntesis), y cada argumento sin comillas se
+ * "evaluaba" con getRange() sobre la hoja ACTIVA y un context.sync por
+ * argumento (muy lento en Excel online, y un argumento de menos —sin
+ * Display— acababa en getRange("undefined") y fallaba).
+ * Ahora:
+ *   - se trocea respetando comillas y paréntesis, venga como EPM_VALUE,
+ *     @EPM_VALUE, DRACO.EPM_VALUE o con otro prefijo del espacio de nombres;
+ *   - un argumento que es una REFERENCIA a celda (B5, $B$5, Hoja!B5,
+ *     'Mi hoja'!B5) se resuelve leyendo el VALOR de esa celda, en la hoja
+ *     del informe (no en la activa) y en UNA sola lectura para todo el eje;
+ *   - no se evalúa nada más: una expresión (CONCAT, &, TEXTO...) no se
+ *     calcula; se avisa en consola y se usa tal cual.
+ * ------------------------------------------------------------------- */
 
-    // Si empieza por comillas, es texto literal
-    if (arg.charAt(0) === '"') {
-        return arg.substring(1, arg.length - 1);
+const DRACO_CELL_REF_RE = /^(?:(?:'((?:[^']|'')+)'|([A-Za-z0-9_.\u00C0-\u024F]+))!)?(\$?[A-Za-z]{1,3}\$?\d{1,7})$/;
+
+// Argumentos de una EPM_VALUE como tokens SIN evaluar:
+// [{kind:"lit"|"num"|"ref"|"empty"|"expr", text, sheet?, addr?}]
+function dracoEpmValueTokens(formula) {
+    const f = String(formula || "");
+    const m = /EPM_VALUE\s*\(/i.exec(f);
+    if (!m) return null;
+    const raw = [];
+    let cur = "", depth = 0, inStr = false;
+    for (let i = m.index + m[0].length; i < f.length; i++) {
+        const ch = f[i];
+        if (inStr) {
+            cur += ch;
+            if (ch === '"') {
+                if (f[i + 1] === '"') { cur += '"'; i++; } else inStr = false;
+            }
+            continue;
+        }
+        if (ch === '"') { inStr = true; cur += ch; continue; }
+        if (ch === "(" || ch === "{") { depth++; cur += ch; continue; }
+        if (ch === ")" || ch === "}") {
+            if (depth === 0) break;          // fin de la llamada a EPM_VALUE
+            depth--; cur += ch; continue;
+        }
+        if (depth === 0 && (ch === "," || ch === ";")) { raw.push(cur); cur = ""; continue; }
+        cur += ch;
     }
-
-    // Si no tiene comillas, es una referencia a una celda
-    const range = context.workbook.worksheets
-        .getActiveWorksheet()
-        .getRange(arg);
-
-    range.load("values");
-
-    await context.sync();
-
-    return range.values[0][0];
+    raw.push(cur);
+    return raw.map(a => {
+        const t = a.trim();
+        if (t === "") return { kind: "empty", text: "" };
+        const lit = /^"((?:[^"]|"")*)"$/.exec(t);
+        if (lit) return { kind: "lit", text: lit[1].replace(/""/g, '"') };
+        if (/^[-+]?\d+(?:[.,]\d+)?$/.test(t)) return { kind: "num", text: t };
+        const ref = DRACO_CELL_REF_RE.exec(t);
+        if (ref) return { kind: "ref", text: t, sheet: ref[1] ? ref[1].replace(/''/g, "'") : (ref[2] || null), addr: ref[3].replace(/\$/g, "") };
+        return { kind: "expr", text: t };
+    });
 }
 
+// Resuelve los tokens de muchas fórmulas a la vez: las referencias se leen
+// en UN context.sync (valor de la celda referida, en `sheetName` si la
+// referencia no lleva hoja). Devuelve un array de arrays de strings.
+async function dracoResolveEpmTokenLists(context, sheetName, tokenLists) {
+    const ranges = new Map();   // "hoja!A1" -> Range
+    tokenLists.forEach(list => (list || []).forEach(tk => {
+        if (tk.kind !== "ref") return;
+        const sh = tk.sheet || sheetName;
+        const key = sh + "!" + tk.addr.toUpperCase();
+        if (ranges.has(key)) return;
+        try {
+            const ws = sh ? context.workbook.worksheets.getItem(sh) : context.workbook.worksheets.getActiveWorksheet();
+            const rg = ws.getRange(tk.addr);
+            rg.load(["values", "text"]);
+            ranges.set(key, rg);
+        } catch (e) {
+            console.warn("[Draco] Referencia no válida en EPM_VALUE:", tk.text, e);
+        }
+    }));
+    if (ranges.size) {
+        try {
+            await context.sync();
+        } catch (e) {
+            // una referencia rota (hoja borrada...) no debe tumbar el refresco: se leen de una en una
+            console.warn("[Draco] Error leyendo las celdas referenciadas por EPM_VALUE; se reintenta una a una.", e);
+            for (const [key, rg0] of Array.from(ranges.entries())) {
+                const [sh, addr] = [key.slice(0, key.lastIndexOf("!")), key.slice(key.lastIndexOf("!") + 1)];
+                try {
+                    const rg = context.workbook.worksheets.getItem(sh).getRange(addr);
+                    rg.load(["values", "text"]);
+                    await context.sync();
+                    ranges.set(key, rg);
+                } catch (e2) {
+                    console.warn("[Draco] No se puede leer la celda", key, e2);
+                    ranges.delete(key);
+                }
+            }
+        }
+    }
+    const refValue = (tk) => {
+        const sh = tk.sheet || sheetName;
+        const rg = ranges.get(sh + "!" + tk.addr.toUpperCase());
+        if (!rg) return "";
+        const v = rg.values && rg.values[0] ? rg.values[0][0] : "";
+        const txt = rg.text && rg.text[0] ? rg.text[0][0] : "";
+        // Número con formato que conserva ceros ("000", "0010203101"): se usa
+        // el texto visible; si no, el valor (sin separadores de miles).
+        if (typeof v === "number" && /^0\d+$/.test(String(txt).trim())) return String(txt).trim();
+        return v === null || v === undefined ? "" : String(v);
+    };
+    return tokenLists.map(list => (list || []).map(tk => {
+        if (tk.kind === "ref") return refValue(tk);
+        if (tk.kind === "expr") {
+            console.warn("[Draco] EPM_VALUE con una expresión como argumento (no se evalúa; se usa tal cual):", tk.text);
+            return tk.text;
+        }
+        return tk.text;
+    }));
+}
+
+// Compatibilidad: un argumento suelto (texto entre comillas o referencia).
+async function getFormulaArgumentValue(context, arg, sheetName) {
+    const tokens = dracoEpmValueTokens("EPM_VALUE(" + String(arg === undefined ? "" : arg) + ")") || [{ kind: "empty", text: "" }];
+    const res = await dracoResolveEpmTokenLists(context, sheetName || null, [tokens.slice(0, 1)]);
+    return res[0][0];
+}
+
+function dracoIsEpmValueFormula(f) {
+    return typeof f === "string" && f.charAt(0) === "=" && /EPM_VALUE\s*\(/i.test(f);
+}
+
+// Lee las EPM_VALUE de un eje Estático: `cells` = [{R, formula}] (R = fila
+// para Filas, columna para Columnas) -> [{R, Dimension, AttributeName, Value, Display}]
+async function dracoReadEpmValueCells(context, csvGrid, cells) {
+    const tokenLists = cells.map(c => dracoEpmValueTokens(c.formula) || []);
+    const resolved = await dracoResolveEpmTokenLists(context, csvGrid.sheetName || null, tokenLists);
+    return cells.map((c, i) => {
+        const a = resolved[i];
+        const value = a[2] !== undefined ? a[2] : "";
+        return {
+            R: c.R,
+            Dimension: a[0] !== undefined ? a[0] : "",
+            AttributeName: a[1] !== undefined ? a[1] : "",
+            Value: value,
+            Display: a[3] !== undefined ? a[3] : value
+        };
+    });
+}
 
 async function readRowDefinitions(context, editReportGrid, csvGrid) {
-    const items = [];
-
     const RRows = parseAddress(cellValue(editReportGrid, 10, 8)); // EDIT_REPORT!H10
 
     const lastRow = lastRowInColumnFormulas(csvGrid, RRows.col);
     const lastCol = RRows.col + ReportState.AttrColumnCount - 1;
+    const cells = [];
 
     for (let R = RRows.row; R <= lastRow; R++) {
         for (let Col = RRows.col; Col <= lastCol; Col++) {
-
             // Solo las EPM_VALUE son condiciones de la línea; una EPM_FORMULA
             // (línea calculada) u otra fórmula del usuario no entra en el SQL.
-            if (cellHasFormula(csvGrid, R, Col) && /EPM_VALUE\s*\(/i.test(String(cellFormula(csvGrid, R, Col)))) {
-
-                let F = String(cellFormula(csvGrid, R, Col));
-
-                // "=EPM_VALUE(", "=@EPM_VALUE(" o "=DRACO.EPM_VALUE(" (función personalizada de Excel online)
-                F = F.replace(/^\s*=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i, "");
-                F = replaceAll(F, ")");
-
-                const V = F.indexOf(";") !== -1
-                    ? F.split(";")
-                    : F.split(",");
-
-                items.push({
-                    R: R,
-                    Dimension: await getFormulaArgumentValue(context, V[0]),
-                    AttributeName: await getFormulaArgumentValue(context, V[1]),
-                    Value: await getFormulaArgumentValue(context, V[2]),
-                    Display: await getFormulaArgumentValue(context, V[3])
-                });
-
-            } else {
-                break;
-            }
+            const F = cellHasFormula(csvGrid, R, Col) ? String(cellFormula(csvGrid, R, Col)) : "";
+            if (dracoIsEpmValueFormula(F)) cells.push({ R, formula: F });
+            else break;
         }
     }
-
-    return items;
+    return dracoReadEpmValueCells(context, csvGrid, cells);
 }
 
 
 async function readColumnDefinitions(context, editReportGrid, csvGrid) {
-    const items = [];
-
     const RCols = parseAddress(cellValue(editReportGrid, 10, 14)); // EDIT_REPORT!N10
 
     const lastCol = lastColInRowFormulas(csvGrid, RCols.row);
     const lastRow = RCols.row + ReportState.AttrRowCount - 1;
+    const cells = [];
 
     for (let Col = RCols.col; Col <= lastCol; Col++) {
         for (let R = RCols.row; R <= lastRow; R++) {
-
-            // Solo las EPM_VALUE son condiciones de la línea; una EPM_FORMULA
-            // (línea calculada) u otra fórmula del usuario no entra en el SQL.
-            if (cellHasFormula(csvGrid, R, Col) && /EPM_VALUE\s*\(/i.test(String(cellFormula(csvGrid, R, Col)))) {
-
-                let F = String(cellFormula(csvGrid, R, Col));
-
-                // "=EPM_VALUE(", "=@EPM_VALUE(" o "=DRACO.EPM_VALUE(" (función personalizada de Excel online)
-                F = F.replace(/^\s*=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i, "");
-                F = replaceAll(F, ")");
-
-                const V = F.indexOf(";") !== -1
-                    ? F.split(";")
-                    : F.split(",");
-
-                items.push({
-                    R: Col,
-                    Dimension: await getFormulaArgumentValue(context, V[0]),
-                    AttributeName: await getFormulaArgumentValue(context, V[1]),
-                    Value: await getFormulaArgumentValue(context, V[2]),
-                    Display: await getFormulaArgumentValue(context, V[3])
-                });
-
-            } else {
-                break;
-            }
+            const F = cellHasFormula(csvGrid, R, Col) ? String(cellFormula(csvGrid, R, Col)) : "";
+            if (dracoIsEpmValueFormula(F)) cells.push({ R: Col, formula: F });
+            else break;
         }
     }
-
-    return items;
+    return dracoReadEpmValueCells(context, csvGrid, cells);
 }
 /* ---------------------------------------------------------------------
  * BuildSelectBase / BuildFrom / BuildJoins / BuildBaseWhere /
@@ -3549,25 +3629,12 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
  * ------------------------------------------------------------------- */
 
 // Argumentos de una fórmula =EPM_VALUE("DIM","ATTR","VALOR","DISPLAY") (sin resolver referencias)
+// Argumentos de una EPM_VALUE como texto (sin comillas). Las referencias a
+// celda quedan como texto ("B5"): donde importe su valor, usar
+// dracoEpmValueTokens + dracoResolveEpmTokenLists.
 function parseEpmValueArgs(formula) {
-    const f = String(formula || "");
-    const m = /EPM_VALUE\s*\(([\s\S]*)\)\s*$/i.exec(f);
-    if (!m) return null;
-    const args = [];
-    let cur = "", inStr = false;
-    const body = m[1];
-    for (let i = 0; i < body.length; i++) {
-        const ch = body[i];
-        if (ch === '"') {
-            if (inStr && body[i + 1] === '"') { cur += '"'; i++; continue; }
-            inStr = !inStr;
-            continue;
-        }
-        if (!inStr && (ch === "," || ch === ";")) { args.push(cur.trim()); cur = ""; continue; }
-        cur += ch;
-    }
-    args.push(cur.trim());
-    return args;
+    const t = dracoEpmValueTokens(formula);
+    return t ? t.map(x => x.text) : null;
 }
 
 // Separa los argumentos de una llamada f(a, b, ...) respetando comillas
@@ -3709,7 +3776,7 @@ async function scanDracoStaticAxis(context, sheet, editReportGrid, axis) {
                 line.cells.push({ row, col, indent: 0 });
                 break;
             }
-            if (!/^\s*=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i.test(a1)) break;
+            if (!/^\s*=\s*@?\s*(?:[A-Za-z0-9_]+\.|_xldudf_[A-Za-z0-9_]*?)?EPM_VALUE\s*\(/i.test(a1)) break;
             const args = parseEpmValueArgs(a1) || [];
             const dim = String(args[0] || "").toUpperCase();
             const attr = String(args[1] || "").toUpperCase();
@@ -3920,6 +3987,7 @@ async function actualizarInformeHybridCore(reportIdOverride) {
         if (built.sql) {
             if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
             json = await executeSQL(built.sql);
+            json = dracoApplyHierarchyEmptyValues(json, reportId);   // «valor vacío» de las jerarquías -> null (solo pintado)
             tPerf = draco_perfMark(reportId, "Híbrido: ejecutando consulta (red)", tPerf);
         }
 
@@ -5894,13 +5962,13 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         const indentLevels = await readIndentLevelsForRange(context, range);
 
         const GLYPH_PREFIX = /^[▸▾]\s+/; // indicador +/- fusionado (solo aplica en eje Dinámico)
-        const EPM_RE = /^=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i;
+        const EPM_RE = /^=\s*@?\s*(?:[A-Za-z0-9_]+\.|_xldudf_[A-Za-z0-9_]*?)?EPM_VALUE\s*\(/i;
         const EPM_VALOR_RE = /EPM_VALUE\s*\(\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"((?:[^"]|"")*)"/i;
         // Solo para la fila/columna MEASURE (ver comentario en
         // buildAxisFieldLevelsTable): su fórmula lleva el Valor (3er
         // argumento) vacío y el nombre real en el Display (4º argumento),
         // al revés que un campo normal.
-        const EPM_MEASURE_RE = /^=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(\s*"MEASURE"/i;
+        const EPM_MEASURE_RE = /^=\s*@?\s*(?:[A-Za-z0-9_]+\.|_xldudf_[A-Za-z0-9_]*?)?EPM_VALUE\s*\(\s*"MEASURE"/i;
         const EPM_DISPLAY_RE = /EPM_VALUE\s*\(\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"(?:[^"]|"")*"\s*,\s*"((?:[^"]|"")*)"/i;
 
         const newFormulas = [];
@@ -6299,7 +6367,7 @@ async function openDracoFilterRangePicker(addr, sheetName, rangeName, meta) {
             return;
         }
         const json = await window.ExcelService.executeSQL(sql);
-        items = parseMemberJsonTree(json);
+        items = parseMemberJsonTree(json, meta.dim);
     } catch (err) {
         console.error("[Draco] Añadir filtro: error cargando los valores del filtro:", err);
         return;
@@ -7357,7 +7425,13 @@ async function ensureDracoRowsClickLoggerRegistered() {
  * del DOM del taskpane: el diálogo del picker se ejecuta en su PROPIA
  * ventana/contexto y no puede acceder a nada del taskpane directamente.
  */
-function parseMemberJsonTree(json) {
+function parseMemberJsonTree(json, dim) {
+    // «Valor vacío» de las jerarquías ("---"): cuenta como NULL (corta la rama)
+    const emptyBy = dim ? dracoHierarchyEmptyTokens(null) : new Map();
+    const isEmptyTok = (col, v) => {
+        const set = emptyBy.get((String(dim) + "|" + String(col)).toUpperCase());
+        return !!(set && set.has(String(v).trim()));
+    };
     // Lectura con JSON.parse: la versión con regex se saltaba los {"v": null}
     // y, en jerarquías irregulares, desalineaba las columnas (el árbol se
     // volvía a pintar desde el nivel 1). Un NULL corta la rama.
@@ -7380,7 +7454,7 @@ function parseMemberJsonTree(json) {
         let path = "";
         for (let i = 0; i < campos.length; i++) {
             const v = row[i];
-            if (v === null || v === undefined || v === "") break;
+            if (v === null || v === undefined || v === "" || isEmptyTok(campos[i], v)) break;
             path += "\u0001" + v;
             if (seen.has(path)) continue;
             seen.add(path);
@@ -7469,7 +7543,7 @@ async function loadDracoPickerItems(located, tag) {
             const t1 = Date.now();
             let json = await window.ExcelService.executeSQL(sql);
             if (typeof json !== "string") json = JSON.stringify(json);
-            const items = parseMemberJsonTree(json);
+            const items = parseMemberJsonTree(json, located.dim);
             // Cálculos entre miembros de ese atributo (del informe y del modelo):
             // se pueden elegir como una línea más del eje Estático.
             try {
@@ -7753,7 +7827,7 @@ async function toggleDracoCollapseAtCell(context, sheetName, targetAddr, flag) {
 
     // Una celda de eje Estático es una fórmula EPM_VALUE (sin glifo +/-).
     const formula = targetRange.formulas[0][0];
-    const isStaticFormula = typeof formula === "string" && /^=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i.test(formula);
+    const isStaticFormula = typeof formula === "string" && /^=\s*@?\s*(?:[A-Za-z0-9_]+\.|_xldudf_[A-Za-z0-9_]*?)?EPM_VALUE\s*\(/i.test(formula);
 
     const key = (targetRange.rowIndex + 1) + "_" + (targetRange.columnIndex + 1);
     const meta = indicatorMap.get(key);
@@ -8468,7 +8542,81 @@ function computeAxisPaintPlan(levels) {
 // comportamiento que antes de que existiera "Refrescar todos"). Se pasa
 // explícito cuando se pinta UN informe concreto que no tiene por qué ser
 // el activo en el taskpane (ver actualizarTodosCore).
+/* ---------------------------------------------------------------------
+ * «Valor vacío» de las jerarquías (modelo semántico: hier.emptyValue, p. ej.
+ * "---"; varios con "|"). NO toca el SQL: al recibir el resultado, en las
+ * columnas de los niveles de esas jerarquías (y sus textos) ese valor se
+ * cambia por null, así que el pintado lo trata EXACTAMENTE como un NULL
+ * (la rama termina en el nivel anterior).
+ * ------------------------------------------------------------------- */
+// "DIM|ATRIBUTO" -> Set(valores) del modelo del informe (o del activo).
+function dracoHierarchyEmptyTokens(reportId) {
+    const byKey = new Map();
+    try {
+        const report = (window.ReportStore && reportId !== null && reportId !== undefined) ? window.ReportStore.getReport(reportId) : null;
+        const sms = window.SemanticModelStore;
+        const mName = (report && report.semanticModelName) || (sms && sms.getActiveModelName && sms.getActiveModelName()) || "";
+        const model = mName && sms && sms.getModel ? sms.getModel(mName) : null;
+        ((model && model.fields) || []).forEach(f => {
+            if (!f || f.type !== "DIMENSION") return;
+            (f.hierarchies || []).forEach(h => {
+                const toks = String(h.emptyValue || "").split("|").map(t => t.trim()).filter(t => t !== "");
+                if (!toks.length) return;
+                (h.levels || []).forEach(l => [l.attribute, l.textAttribute].forEach(a => {
+                    if (!a) return;
+                    const k = (String(f.name) + "|" + String(a)).toUpperCase();
+                    const set = byKey.get(k) || new Set();
+                    toks.forEach(t => set.add(t));
+                    byKey.set(k, set);
+                }));
+            });
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo leer el «valor vacío» de las jerarquías:", e);
+    }
+    return byKey;
+}
+
+// NOMBRE_COLUMNA del resultado -> Set(valores). Con los campos del informe
+// (ReportState) se sabe la dimensión de cada columna; sin ellos, por nombre.
+function dracoEmptyTokensByColumn(reportId) {
+    const byKey = dracoHierarchyEmptyTokens(reportId);
+    const map = new Map();
+    if (!byKey.size) return map;
+    const axis = (typeof ReportState !== "undefined")
+        ? [...(ReportState.Rows || []), ...(ReportState.Columns || [])].filter(fd => fd && fd.Dimension && fd.AttributeName)
+        : [];
+    axis.forEach(fd => {
+        const set = byKey.get((String(fd.Dimension) + "|" + String(fd.SqlAttr || fd.AttributeName)).toUpperCase());
+        if (set) map.set(String(fd.AttributeName).toUpperCase(), set);
+    });
+    if (!axis.length) byKey.forEach((set, k) => map.set(k.slice(k.indexOf("|") + 1), set));
+    return map;
+}
+
+function dracoApplyHierarchyEmptyValues(json, reportId) {
+    if (!json || typeof json !== "string") return json;
+    const map = dracoEmptyTokensByColumn(reportId);
+    if (!map.size) return json;
+    let p;
+    try { p = JSON.parse(json); } catch (e) { return json; }
+    const names = ((p && p.schema && p.schema.fields) || []).map(f => String(f.name || "").toUpperCase());
+    const cols = [];
+    names.forEach((n, i) => { if (map.has(n)) cols.push([i, map.get(n)]); });
+    if (!cols.length || !Array.isArray(p.rows)) return json;
+    let changed = 0;
+    p.rows.forEach(r => {
+        const f = r && r.f; if (!f) return;
+        cols.forEach(([i, set]) => {
+            const c = f[i];
+            if (c && c.v !== null && c.v !== undefined && set.has(String(c.v).trim())) { c.v = null; changed++; }
+        });
+    });
+    return changed ? JSON.stringify(p) : json;
+}
+
 async function jsonTo3Matrices(context, json, reportId) {
+    json = dracoApplyHierarchyEmptyValues(json, reportId);
     DracoSuppressChangeEvents = true; // evita que el reconocimiento de miembros reaccione a este pintado
     try {
         return await jsonTo3MatricesCore(context, json, reportId);
@@ -9565,6 +9713,11 @@ async function writeIndentAndColorRuns(context, sheet, cellsMap, axis, fieldOffs
                 ? { r: run.start - 1, c: g - 1, h: run.end - run.start + 1, w: 1 }
                 : { r: g - 1, c: run.start - 1, h: 1, w: run.end - run.start + 1 });
             runCount += dracoFormatRects(sheet, rects, (fmt) => {
+                // Alineación a la izquierda explícita: con «General» Excel
+                // alinea los números a la derecha, y un miembro numérico (p. ej.
+                // la hoja de una jerarquía: cuenta 7000001) salía al otro lado
+                // de la celda y sin la sangría de su nivel.
+                fmt.horizontalAlignment = Excel.HorizontalAlignment.left;
                 fmt.indentLevel = indent;
                 fmt.font.name = DRACO_FONT_NAME;
                 fmt.font.size = DRACO_FONT_SIZE;
@@ -12188,7 +12341,7 @@ async function filtrarValoresSeleccionados(event) {
         let problem = "";
         await Excel.run(async (context) => {
             const sheet = context.workbook.worksheets.getActiveWorksheet();
-            sheet.load("id");
+            sheet.load(["id", "name"]);
             const sel = context.workbook.getSelectedRange();
             sel.load(["address", "rowIndex", "columnIndex", "rowCount", "columnCount", "values", "formulas"]);
             await context.sync();
@@ -12250,7 +12403,12 @@ async function filtrarValoresSeleccionados(event) {
                     let dim, attr, v = value;
                     const absRow = sel.rowIndex + r, absCol = sel.columnIndex + c; // 0-based
                     const fx = sel.formulas[r][c];
-                    const args = (typeof fx === "string" && /^=\s*@?\s*(?:DRACO\.)?EPM_VALUE\s*\(/i.test(fx)) ? parseEpmValueArgs(fx) : null;
+                    let args = dracoIsEpmValueFormula(fx) ? parseEpmValueArgs(fx) : null;
+                    // Argumentos que son referencias a celda (=EPM_VALUE("V","version_id",B5)): su valor
+                    if (args) {
+                        const toks = dracoEpmValueTokens(fx);
+                        if (toks.some(t => t.kind === "ref")) args = (await dracoResolveEpmTokenLists(context, sheet.name, [toks]))[0];
+                    }
                     const cached = (!args && crossCache) ? crossCache.get((absRow + 1) + "_" + (absCol + 1)) : null;
                     if (args && args.length >= 3) {
                         dim = args[0]; attr = args[1]; v = args[2];

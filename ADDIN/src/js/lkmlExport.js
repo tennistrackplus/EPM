@@ -160,7 +160,8 @@
             // (con su atributo de texto, si lo tiene).
             (dim.hierarchies || []).forEach(hier => {
                 if (!hier.levels || hier.levels.length === 0) return;
-                lines.push(`  # Jerarquía "${hier.name}":`);
+                const ev = hier.emptyValue ? ` (vacío: "${String(hier.emptyValue).replace(/"/g, "'")}")` : "";
+                lines.push(`  # Jerarquía "${hier.name}"${ev}:`);
                 hier.levels.forEach((lvl, i) => {
                     const txt = lvl.textAttribute ? ` | texto: ${lvl.textAttribute}` : "";
                     lines.push(`  #   ${i + 1}. ${lvl.attribute}${txt}`);

@@ -363,7 +363,8 @@ function previewCurrentHierarchy() {
         dataset: field.relDataset,
         table: field.relTable,
         hierarchyName: document.getElementById("hierarchyNameInput").value.trim() || "(sin nombre)",
-        levels: levels
+        levels: levels,
+        emptyValues: ((document.getElementById("hierarchyEmptyValueInput") || {}).value || "").split("|").map(t => t.trim()).filter(t => t !== "")
     };
 
     const relativeUrl = `hierarchyPreview.html?spec=${encodeURIComponent(JSON.stringify(spec))}`;
@@ -2224,18 +2225,21 @@ function openHierarchyEditor(index = null) {
     editingHierarchyIndex = index;
 
     if (index === null) {
-        hierEditState = { name: "", levels: [] };
+        hierEditState = { name: "", levels: [], emptyValue: "" };
         document.getElementById("hierarchyModalTitle").textContent = "Nueva jerarquía";
     } else {
         const existing = field.hierarchies[index];
         hierEditState = {
             name: existing.name,
-            levels: existing.levels.map(l => ({ attribute: l.attribute, textAttribute: l.textAttribute || "" }))
+            levels: existing.levels.map(l => ({ attribute: l.attribute, textAttribute: l.textAttribute || "" })),
+            emptyValue: existing.emptyValue || ""
         };
         document.getElementById("hierarchyModalTitle").textContent = "Editar jerarquía";
     }
 
     document.getElementById("hierarchyNameInput").value = hierEditState.name;
+    const emptyInput = document.getElementById("hierarchyEmptyValueInput");
+    if (emptyInput) emptyInput.value = hierEditState.emptyValue || "";
 
     renderHierarchyEditor();
 
@@ -2522,6 +2526,10 @@ function saveHierarchyEditor() {
             ? { attribute: l.attribute, textAttribute: l.textAttribute }
             : { attribute: l.attribute }))
     };
+    // «Valor vacío» (p. ej. "---"; varios con "|"): en sus niveles cuenta como NULL
+    const emptyInput = document.getElementById("hierarchyEmptyValueInput");
+    const emptyValue = emptyInput ? emptyInput.value.split("|").map(t => t.trim()).filter(t => t !== "").join(" | ") : "";
+    if (emptyValue) hierObj.emptyValue = emptyValue;
 
     if (editingHierarchyIndex === null) {
         field.hierarchies.push(hierObj);

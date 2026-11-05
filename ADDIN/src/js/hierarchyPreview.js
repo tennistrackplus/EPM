@@ -21,16 +21,18 @@ function showHierPreviewError(msg) {
  * un árbol: cada nodo agrupa los valores repetidos de un nivel bajo su
  * padre del nivel anterior.
  */
-function buildHierTree(rows, levels) {
+function buildHierTree(rows, levels, emptyValues) {
     const root = { children: new Map() };
+    const empties = new Set((emptyValues || []).map(t => String(t).trim()));
 
     rows.forEach(row => {
         let node = root;
         for (let i = 0; i < levels.length; i++) {
             const raw = row[levels[i].field];
-            const value = (raw === null || raw === undefined || String(raw).trim() === "")
-                ? "(vacío)"
-                : String(raw);
+            // NULL (o el «valor vacío» de la jerarquía, p. ej. "---"): la rama
+            // termina en el nivel anterior, igual que en los informes.
+            if (raw === null || raw === undefined || empties.has(String(raw).trim())) break;
+            const value = String(raw).trim() === "" ? "(vacío)" : String(raw);
 
             if (!node.children.has(value)) {
                 node.children.set(value, { children: new Map() });
@@ -130,7 +132,7 @@ async function runHierarchyPreview() {
             return;
         }
 
-        const tree = buildHierTree(rows, levels);
+        const tree = buildHierTree(rows, levels, spec.emptyValues);
 
         document.getElementById("previewStatus").style.display = "none";
         const wrapper = document.getElementById("previewTreeWrapper");

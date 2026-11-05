@@ -92,6 +92,7 @@ function buildMemberTree(parsed, layout) {
             const L = levels[i];
             const raw = row[L.idCol];
             if (raw === null || raw === undefined || String(raw) === "") break;
+            if (L.empty && L.empty.has(String(raw).trim())) break;    // «valor vacío» de la jerarquía = NULL
             const v = String(raw);
             let child = node.children.get(v);
             if (!child) {
@@ -106,7 +107,7 @@ function buildMemberTree(parsed, layout) {
             }
             if (L.txtCol >= 0 && child.label === null) {
                 const t = row[L.txtCol];
-                if (t !== null && t !== undefined && String(t) !== "") child.label = String(t);
+                if (t !== null && t !== undefined && String(t) !== "" && !(L.empty && L.empty.has(String(t).trim()))) child.label = String(t);
             }
             node = child;
         }
@@ -264,6 +265,11 @@ const FilterModal = {
                     console.error("FilterModal: no se ha encontrado el atributo o jerarquía.", fieldData);
                     return null; // null = error, distinto de "sin resultados" ([])
                 }
+                // «Valor vacío» de las jerarquías del modelo ("---"): se trata como NULL al construir el árbol
+                try {
+                    const emp = (typeof dracoHierarchyEmptyTokens === "function") ? dracoHierarchyEmptyTokens(null) : new Map();
+                    (query.levels || []).forEach(L => { L.empty = emp.get((String(fieldData.dim) + "|" + String(L.attribute)).toUpperCase()) || null; });
+                } catch (e) { /* sin valor vacío */ }
                 const json = await window.ExcelService.executeSQL(query.sql);
                 const items = buildMemberTree(parseBqRows(json), query);
                 // Cálculos entre miembros (del informe y del modelo, p. ej.

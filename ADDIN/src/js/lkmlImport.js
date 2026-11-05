@@ -155,7 +155,8 @@
     function parseHierarchies(body) {
 
         const hierarchies = [];
-        const re = /#\s*Jerarquía\s*"([^"]+)":\s*\n((?:[ \t]*#\s*\d+\.\s*.+\n?)+)/g;
+        // # Jerarquía "Nombre":   o   # Jerarquía "Nombre" (vacío: "---"):
+        const re = /#\s*Jerarquía\s*"([^"]+)"(?:\s*\(vac[ií]o:\s*"([^"]*)"\))?:\s*\n((?:[ \t]*#\s*\d+\.\s*.+\n?)+)/g;
         let m;
 
         while ((m = re.exec(body)) !== null) {
@@ -165,7 +166,7 @@
             const lvlRe = /#\s*\d+\.\s*(.+)/g;
             let lm;
 
-            while ((lm = lvlRe.exec(m[2])) !== null) {
+            while ((lm = lvlRe.exec(m[3])) !== null) {
                 // "ATRIBUTO" o, en "ID y texto", "ATRIBUTO | texto: ATRIBUTO_TEXTO"
                 const parts = lm[1].split(/\s*\|\s*texto:\s*/);
                 const lvl = { attribute: parts[0].trim() };
@@ -174,7 +175,9 @@
             }
 
             if (levels.length > 0) {
-                hierarchies.push({ name: name, levels: levels });
+                const h = { name: name, levels: levels };
+                if (m[2] && m[2].trim()) h.emptyValue = m[2].trim();
+                hierarchies.push(h);
             }
 
         }

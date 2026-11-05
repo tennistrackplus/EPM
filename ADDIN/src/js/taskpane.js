@@ -318,6 +318,7 @@ const TaskPaneApp = {
 
         try {
             this.setAutoStatus("Guardando…");
+            this.undoRecord();
             await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
 
             if (!needRefresh) {
@@ -408,10 +409,284 @@ const TaskPaneApp = {
     // Guarda el diseño SIN disparar Actualizar() (BigQuery). Se usa al
     // marcar/desmarcar Estático: el propio botón pide explícitamente que
     // eso no dispare un refresco automático.
+    /* -------------------------------------------------------------
+     * DESHACER (botón ↶ junto a «Pausar»): historial de las últimas 15
+     * acciones del informe activo. Antes de cada guardado del diseño se
+     * guarda una copia del diseño anterior con una etiqueta que describe el
+     * cambio (se calcula comparando diseños, así sirve para cualquier acción:
+     * arrastrar, filtros, opciones de campo, clic derecho, Estático...).
+     * Elegir una entrada deshace esa acción y todas las posteriores.
+     * Vive en memoria (por informe): se pierde al cerrar el libro/panel.
+     * ----------------------------------------------------------- */
+    UNDO_MAX: 15,
+
+    undoClone(d) {
+        return JSON.parse(JSON.stringify(d || {}));
+    },
+
+    undoStack() {
+        if (!this.undoStacks) this.undoStacks = {};
+        const k = String(this.currentReportId);
+        if (!this.undoStacks[k]) this.undoStacks[k] = [];
+        return this.undoStacks[k];
+    },
+
+    // Diseño de referencia (el último guardado/cargado) del informe activo.
+    undoSetBaseline() {
+        if (!this.currentReportId) { this.undoBaseline = null; return; }
+        this.undoBaseline = { reportId: String(this.currentReportId), design: this.undoClone(this.collectDesignPayload()) };
+        this.renderUndoButton();
+    },
+
+    // Antes de guardar: si el diseño ha cambiado, apila el anterior.
+    undoRecord() {
+        if (!this.currentReportId || this.undoApplying) return;
+        const cur = this.undoClone(this.collectDesignPayload());
+        const base = this.undoBaseline;
+        if (!base || base.reportId !== String(this.currentReportId)) { this.undoSetBaseline(); return; }
+        if (JSON.stringify(base.design) === JSON.stringify(cur)) return;
+        const stack = this.undoStack();
+        stack.unshift({ label: this.undoDescribe(base.design, cur), design: base.design, ts: Date.now() });
+        if (stack.length > this.UNDO_MAX) stack.length = this.UNDO_MAX;
+        this.undoBaseline = { reportId: String(this.currentReportId), design: cur };
+        this.renderUndoButton();
+    },
+
+    // Tras cargar el diseño de la hoja: si es el mismo informe y ha cambiado
+    // desde fuera del panel, también cuenta como acción; si no, nueva referencia.
+    undoAfterLoad() {
+        if (this.undoApplying) return;
+        const base = this.undoBaseline;
+        if (base && this.currentReportId && base.reportId === String(this.currentReportId)) this.undoRecord();
+        else this.undoSetBaseline();
+    },
+
+    /* ---- descripción del cambio ---- */
+    undoFieldName(e) {
+        return e ? String(e.name || e.dimension || "") : "";
+    },
+
+    undoFilterSummary(f) {
+        const flt = f && f.filter;
+        if (!flt) return "";
+        const vals = [].concat(flt.values || []);
+        const rng = (flt.ranges || []).map(r => (r && (r.from !== undefined || r.to !== undefined)) ? `${r.from ?? ""}–${r.to ?? ""}` : "").filter(Boolean);
+        const all = vals.concat(rng);
+        const exc = [].concat(flt.excludeValues || []);
+        let txt = all.slice(0, 3).join(", ") + (all.length > 3 ? ` (+${all.length - 3})` : "");
+        if (exc.length) txt += (txt ? " " : "") + "excepto " + exc.slice(0, 2).join(", ") + (exc.length > 2 ? "…" : "");
+        return txt;
+    },
+
+    undoDescribe(prev, cur) {
+        const parts = [];
+        const key = e => (String(e.dimension) + "|" + String(e.name) + "|" + (e.isHierarchy ? "H" : "A")).toUpperCase();
+        const idx = list => new Map((list || []).map(e => [key(e), e]));
+        const P = { filters: idx(prev.filters), rows: idx(prev.rows), columns: idx(prev.columns) };
+        const C = { filters: idx(cur.filters), rows: idx(cur.rows), columns: idx(cur.columns) };
+        const zoneName = { rows: "filas", columns: "columnas", filters: "filtros" };
+
+        // Filas / Columnas: añadir, mover, quitar, reordenar
+        // "salió de z" / "entró en z" (un campo puede estar a la vez en Filas y en Filtros)
+        const left = (z, k) => P[z].has(k) && !C[z].has(k);
+        const entered = (z, k) => C[z].has(k) && !P[z].has(k);
+        ["rows", "columns"].forEach(z => {
+            const other = z === "rows" ? "columns" : "rows";
+            C[z].forEach((e, k) => {
+                if (P[z].has(k)) return;
+                if (left(other, k) || left("filters", k)) parts.push(`Mover ${this.undoFieldName(e)} a ${zoneName[z]}`);
+                else parts.push(`Añadir ${this.undoFieldName(e)} a ${zoneName[z]}`);
+            });
+            P[z].forEach((e, k) => {
+                if (!C[z].has(k) && !entered(other, k) && !entered("filters", k)) parts.push(`Quitar ${this.undoFieldName(e)} de ${zoneName[z]}`);
+            });
+            const pk = (prev[z] || []).map(key).filter(k => C[z].has(k));
+            const ck = (cur[z] || []).map(key).filter(k => P[z].has(k));
+            if (pk.length === ck.length && pk.join() !== ck.join()) parts.push(`Reordenar ${zoneName[z]}`);
+        });
+
+        // Filtros
+        C.filters.forEach((e, k) => {
+            const p = P.filters.get(k);
+            const sum = this.undoFilterSummary(e);
+            if (!p) {
+                if (left("rows", k) || left("columns", k)) parts.push(`Mover ${this.undoFieldName(e)} a filtros`);
+                else parts.push(sum ? `Filtrar por: ${this.undoFieldName(e)} ${sum}` : `Añadir filtro: ${this.undoFieldName(e)}`);
+            } else if (JSON.stringify(p.filter || null) !== JSON.stringify(e.filter || null)) {
+                parts.push(sum ? `Filtrar por: ${this.undoFieldName(e)} ${sum}` : `Quitar valores del filtro: ${this.undoFieldName(e)}`);
+            }
+        });
+        P.filters.forEach((e, k) => {
+            if (!C.filters.has(k) && !entered("rows", k) && !entered("columns", k)) parts.push(`Quitar filtro: ${this.undoFieldName(e)}`);
+        });
+
+        // Estático / Dinámico
+        if (!!prev.rowsStatic !== !!cur.rowsStatic) parts.push(cur.rowsStatic ? "Filas: poner en estático" : "Filas: poner en dinámico");
+        if (!!prev.colsStatic !== !!cur.colsStatic) parts.push(cur.colsStatic ? "Columnas: poner en estático" : "Columnas: poner en dinámico");
+
+        // Opciones de campo
+        const po = prev.fieldOptions || {}, co = cur.fieldOptions || {};
+        new Set([...Object.keys(po), ...Object.keys(co)]).forEach(k => {
+            const a = po[k] || {}, b = co[k] || {};
+            if (JSON.stringify(a) === JSON.stringify(b)) return;
+            const name = String(k).split("|")[2] || k;
+            const changed = new Set([...Object.keys(a), ...Object.keys(b)].filter(p => JSON.stringify(a[p]) !== JSON.stringify(b[p])));
+            if (changed.has("showTotals")) parts.push(`${b.showTotals ? "Mostrar" : "Ocultar"} totales: ${name}`);
+            if (changed.has("displayMode")) parts.push(`Mostrar ${({ ID: "ID", TEXT: "texto", ID_TEXT: "ID y texto" })[b.displayMode] || b.displayMode}: ${name}`);
+            if (changed.has("sortOrder")) parts.push(`Ordenar ${name}: ${({ asc: "ascendente", desc: "descendente", none: "sin orden" })[String(b.sortOrder).toLowerCase()] || b.sortOrder}`);
+            if (changed.has("expandToLevel")) parts.push(`Expandir ${name} hasta nivel ${b.expandToLevel ?? "—"}`);
+            if (changed.has("visibleLevels")) parts.push(`Niveles visibles: ${name}`);
+            if (changed.has("aggregation")) parts.push(`Agregación de ${name}: ${b.aggregation || "la del modelo"}`);
+            if (changed.has("numberFormat") || changed.has("decimals")) parts.push(`Formato de ${name}`);
+            const known = ["showTotals", "displayMode", "sortOrder", "expandToLevel", "visibleLevels", "aggregation", "numberFormat", "decimals"];
+            if ([...changed].some(p => known.indexOf(p) === -1)) parts.push(`Opciones de ${name}`);
+        });
+
+        if (prev.rrAddress !== cur.rrAddress || prev.rcAddress !== cur.rcAddress) parts.push("Mover el informe");
+
+        const uniq = [...new Set(parts)];
+        if (!uniq.length) return "Cambio en el diseño";
+        return uniq.length <= 2 ? uniq.join(" · ") : `${uniq.slice(0, 2).join(" · ")} (+${uniq.length - 2})`;
+    },
+
+    /* ---- deshacer ---- */
+    async undoTo(index) {
+        const stack = this.undoStack();
+        const entry = stack[index];
+        if (!entry || !this.currentReportId || this.undoApplying) return;
+        if (this.autoRefreshTimer) { clearTimeout(this.autoRefreshTimer); this.autoRefreshTimer = null; }
+        this.undoApplying = true;
+        const target = this.undoClone(entry.design);
+        const wasRows = !!this.state.rowsStatic, wasCols = !!this.state.colsStatic;
+        try {
+            stack.splice(0, index + 1);
+            this.setAutoStatus(index === 0 ? "Deshaciendo…" : `Deshaciendo ${index + 1} acciones…`);
+
+            // Pasar un eje a Estático necesita el eje ya pintado con el diseño
+            // al que se vuelve: primero se restaura en Dinámico, se actualiza
+            // y luego se convierte (como al marcar la casilla).
+            const toStatic = { rows: !!target.rowsStatic && !wasRows, columns: !!target.colsStatic && !wasCols };
+            const toDynamic = { rows: !target.rowsStatic && wasRows, columns: !target.colsStatic && wasCols };
+            const stage = this.undoClone(target);
+            if (toStatic.rows) stage.rowsStatic = false;
+            if (toStatic.columns) stage.colsStatic = false;
+
+            // Estático -> Dinámico: fórmulas EPM_VALUE a texto antes de repintar
+            for (const ax of ["rows", "columns"]) {
+                if (!toDynamic[ax]) continue;
+                if (ax === "rows") this.state.rowsStatic = false; else this.state.colsStatic = false;
+                await this.applyAxisStaticFormulas(ax, false);
+            }
+
+            await window.ExcelService.saveEditReportDesign(this.currentReportId, stage);
+            await this.loadDesignFromSheet();
+
+            if (!this.isRefreshPaused() && window.ReportActions && typeof window.ReportActions.actualizar === "function") {
+                this.setAutoStatus("Actualizando…");
+                if (window.BusyIndicator) await window.BusyIndicator.show("Actualizando");
+                try { await window.ReportActions.actualizar(); }
+                finally { if (window.BusyIndicator) await window.BusyIndicator.hide(); }
+            }
+
+            // Dinámico -> Estático
+            for (const ax of ["rows", "columns"]) {
+                if (!toStatic[ax]) continue;
+                if (ax === "rows") this.state.rowsStatic = true; else this.state.colsStatic = true;
+                this.updateStaticLabel(ax === "rows" ? "rows" : "cols");
+                this.setZoneLocked(ax, true);
+                const chk = document.getElementById(ax === "rows" ? "chkAsymmetricRows" : "chkAsymmetricCols");
+                if (chk) chk.checked = true;
+                await this.applyAxisStaticFormulas(ax, true);
+            }
+            if (toStatic.rows || toStatic.columns) {
+                await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
+            }
+
+            this.setAutoStatus(this.isRefreshPaused() ? "Deshecho (pausado, sin actualizar)" : "Deshecho ✓");
+            setTimeout(() => {
+                const el = document.getElementById("autoStatus");
+                if (el && /^Deshecho/.test(el.innerText)) el.innerText = "";
+            }, 2000);
+        } catch (err) {
+            console.error("Error al deshacer:", err);
+            this.setAutoStatus("Error al deshacer");
+        } finally {
+            this.undoApplying = false;
+            this.undoSetBaseline();
+        }
+    },
+
+    /* ---- botón y desplegable ---- */
+    renderUndoButton() {
+        const btn = document.getElementById("btnUndo");
+        if (!btn) return;
+        const stack = this.currentReportId ? this.undoStack() : [];
+        btn.disabled = !stack.length;
+        btn.title = stack.length ? `Deshacer: ${stack[0].label}` : "Deshacer (no hay acciones)";
+        const menu = document.getElementById("undoMenu");
+        if (menu && !menu.hidden) this.renderUndoMenu();
+    },
+
+    renderUndoMenu() {
+        const menu = document.getElementById("undoMenu");
+        if (!menu) return;
+        const stack = this.undoStack();
+        menu.innerHTML = "";
+        const list = document.createElement("div");
+        list.className = "undo-menu-list";
+        const footer = document.createElement("div");
+        footer.className = "undo-menu-footer";
+        const setHint = (n) => { footer.textContent = n ? (n === 1 ? "Deshacer 1 acción" : `Deshacer ${n} acciones`) : "Cancelar"; };
+        stack.forEach((e, i) => {
+            const it = document.createElement("button");
+            it.type = "button";
+            it.className = "undo-menu-item";
+            const time = new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            const lbl = document.createElement("span"); lbl.className = "undo-menu-label"; lbl.textContent = e.label; lbl.title = e.label;
+            const tm = document.createElement("span"); tm.className = "undo-menu-time"; tm.textContent = time;
+            it.appendChild(lbl); it.appendChild(tm);
+            // Al pasar el ratón se marcan esa acción y todas las más recientes (se deshacen juntas)
+            it.addEventListener("mouseenter", () => {
+                list.querySelectorAll(".undo-menu-item").forEach((x, j) => x.classList.toggle("undo-hl", j <= i));
+                setHint(i + 1);
+            });
+            it.addEventListener("click", () => { this.closeUndoMenu(); this.undoTo(i); });
+            list.appendChild(it);
+        });
+        list.addEventListener("mouseleave", () => {
+            list.querySelectorAll(".undo-menu-item").forEach(x => x.classList.remove("undo-hl"));
+            setHint(0);
+        });
+        setHint(0);
+        menu.appendChild(list);
+        menu.appendChild(footer);
+    },
+
+    closeUndoMenu() {
+        const menu = document.getElementById("undoMenu");
+        if (menu) menu.hidden = true;
+    },
+
+    initUndoButton() {
+        const btn = document.getElementById("btnUndo");
+        const menu = document.getElementById("undoMenu");
+        if (!btn || !menu || btn.dataset.bound) return;
+        btn.dataset.bound = "1";
+        btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (!this.undoStack().length) return;
+            if (menu.hidden) { this.renderUndoMenu(); menu.hidden = false; } else this.closeUndoMenu();
+        });
+        document.addEventListener("click", (e) => { if (!menu.hidden && !menu.contains(e.target)) this.closeUndoMenu(); });
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.closeUndoMenu(); });
+        this.renderUndoButton();
+    },
+
     async saveDesignOnly() {
         if (!this.currentReportId) return;
         try {
             this.setAutoStatus("Guardando…");
+            this.undoRecord();
             await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
             this.setAutoStatus("Guardado ✓");
             setTimeout(() => {
@@ -636,6 +911,7 @@ const TaskPaneApp = {
         }
         await safeStep("bindEvents", () => this.bindEvents());
         await safeStep("initRefreshPauseButton", () => this.initRefreshPauseButton());
+        await safeStep("initUndoButton", () => this.initUndoButton());
         await safeStep("registerPendingRibbonActionListener", () => this.registerPendingRibbonActionListener());
 
         // Botón del ribbon "Editar informe" (EditarInformeButton -> Show
@@ -1258,6 +1534,8 @@ const TaskPaneApp = {
             this.setZoneLocked("rows", this.state.rowsStatic);
             this.setZoneLocked("columns", this.state.colsStatic);
 
+            this.undoAfterLoad();
+
         } catch (err) {
             console.error("Error cargando el diseño desde EDIT_REPORT:", err);
         }
@@ -1637,18 +1915,22 @@ const TaskPaneApp = {
         const q = String(query || "").trim().toLowerCase();
         const container = document.getElementById("availableFieldsContainer");
         if (!container) return;
+        // Estilos en línea (no depende de styles.css): con búsqueda, los
+        // campos que coinciden se ven aunque su dimensión esté contraída y
+        // las dimensiones sin ninguno se ocultan enteras; sin búsqueda se
+        // limpia todo y vuelve a mandar el contraído de cada dimensión.
         container.querySelectorAll(".dimension-group").forEach(group => {
             let matches = 0;
-            group.querySelectorAll(":scope > .field-item").forEach(item => {
+            Array.from(group.children).forEach(item => {
+                if (!item.classList || !item.classList.contains("field-item")) return;
+                if (q === "") { item.style.display = ""; return; }
                 const labelEl = item.querySelector(".field-label");
-                const label = (labelEl ? labelEl.textContent : "").toLowerCase();
-                const ok = q === "" || label.includes(q);
-                item.classList.toggle("search-hidden", !ok);
-                item.style.display = "";
+                const label = (labelEl ? labelEl.textContent : item.textContent || "").toLowerCase();
+                const ok = label.includes(q);
+                item.style.display = ok ? "flex" : "none";
                 if (ok) matches++;
             });
-            group.classList.toggle("search-hidden", q !== "" && matches === 0);
-            group.classList.toggle("search-active", q !== "");
+            group.style.display = (q !== "" && matches === 0) ? "none" : "";
         });
     },
 

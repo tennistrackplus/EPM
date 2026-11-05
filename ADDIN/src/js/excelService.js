@@ -94,6 +94,10 @@ function existsAttribute(atribGrid, dimension, attributeName) {
     return false;
 }
 
+function svcSelAs(expr, name) {
+    return (!name || String(expr) === String(name)) ? String(expr) : String(expr) + " AS " + name;
+}
+
 function buildAttributeSQL(atribGrid, dimension, attributeName) {
     const lastRow = lastRowInColumnValues(atribGrid, 1);
     let project = "", dataset = "", table = "", field = "";
@@ -209,12 +213,16 @@ function svcTextAttributeFor(field, attrName) {
     return "";
 }
 
-function svcBuildIdTextSQL(project, dataset, table, idFields, txtFields) {
+function svcBuildIdTextSQL(project, dataset, table, idFields, txtFields, idNames) {
     const select = [];
     const levels = [];
+    const orderBy = [];
     idFields.forEach((idf, i) => {
-        const lvl = { idCol: select.length, txtCol: -1, attribute: idf };
-        select.push("    " + idf);
+        const name = (idNames && idNames[i]) || idf;
+        const lvl = { idCol: select.length, txtCol: -1, attribute: name };
+        const sel = svcSelAs(idf, name);
+        select.push("    " + sel);
+        orderBy.push(sel === String(idf) ? idf : name);
         if (txtFields[i]) {
             lvl.txtCol = select.length;
             select.push("    " + txtFields[i] + " AS __draco_txt_" + (i + 1));
@@ -225,7 +233,7 @@ function svcBuildIdTextSQL(project, dataset, table, idFields, txtFields) {
         + select.join("," + SVC_CRLF) + SVC_CRLF
         + "FROM " + Provider.qualify(project, dataset, table) + SVC_CRLF
         + "ORDER BY" + SVC_CRLF
-        + idFields.map(f => "    " + f).join("," + SVC_CRLF);
+        + orderBy.map(f => "    " + f).join("," + SVC_CRLF);
     return { sql, levels };
 }
 
@@ -245,17 +253,18 @@ function buildAttributeQueryWithText(atribGrid, dimension, attributeName) {
     const dimField = svcActiveDimensionField(dimension);
     const textAttr = svcTextAttributeFor(dimField, attributeName);
     const textField = textAttr ? svcAttributeDimField(atribGrid, dimension, textAttr) : "";
-    return svcBuildIdTextSQL(project, dataset, table, [field], [textField]);
+    return svcBuildIdTextSQL(project, dataset, table, [field], [textField], [attributeName]);
 }
 
 function buildHierarchyQueryWithText(hierGrid, atribGrid, dimension, hierarchy) {
     const lastRow = lastRowInColumnValues(hierGrid, 1);
-    const fields = [];
+    const fields = [], names = [];
     let project = "", dataset = "", table = "";
     for (let R = 2; R <= lastRow; R++) {
         if (svcUp(cellValue(hierGrid, R, 4)) === svcUp(dimension)
             && svcUp(cellValue(hierGrid, R, 2)) === svcUp(hierarchy)) {
             fields.push(cellValue(hierGrid, R, 9));
+            names.push(String(cellValue(hierGrid, R, 11) || cellValue(hierGrid, R, 9)));
             project = cellValue(hierGrid, R, 6);
             dataset = cellValue(hierGrid, R, 7);
             table = cellValue(hierGrid, R, 8);
@@ -271,7 +280,7 @@ function buildHierarchyQueryWithText(hierGrid, atribGrid, dimension, hierarchy) 
             : svcTextAttributeFor(dimField, lvl.attribute);
         return textAttr ? svcAttributeDimField(atribGrid, dimension, textAttr) : "";
     });
-    return svcBuildIdTextSQL(project, dataset, table, fields, txtFields);
+    return svcBuildIdTextSQL(project, dataset, table, fields, txtFields, names);
 }
 
 /* ---------------------------------------------------------------------
