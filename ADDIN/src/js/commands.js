@@ -4028,7 +4028,6 @@ async function actualizarInformeHybridCore(reportIdOverride) {
         if (built.sql) {
             if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
             json = await executeSQL(built.sql);
-            json = dracoApplyHierarchyEmptyValues(json, reportId);   // «valor vacío» de las jerarquías -> null (solo pintado)
             tPerf = draco_perfMark(reportId, "Híbrido: ejecutando consulta (red)", tPerf);
         }
 
@@ -5062,27 +5061,72 @@ function dracoAxisCol(relGrid, f) {
  * --------------------------------------------------------------------- */
 let DracoCalcAttrs = new Map();
 
+// «Valor vacío» de las jerarquías del modelo (hier.emptyValue, p. ej. "---";
+// varios con "|"): "DIM|ATRIBUTO" -> [valores]. dracoCol envuelve esas
+// columnas en un CASE que las convierte en NULL DENTRO de REPORT_DATA, así
+// que GROUPING SETS, DENSE_RANK y el pintado las tratan como un NULL de
+// verdad. (Se da por hecho que un nodo con un hijo vacío no tiene otros
+// hijos: así el detalle convertido y el subtotal valen lo mismo.)
+let DracoEmptyVals = new Map();
+
 function dracoIndexCalcAttrs(atributesGrid) {
     const m = new Map();
+    let modelName = "";
     if (atributesGrid) {
         const last = lastRowInColumnValues(atributesGrid, 2);
         for (let R = 2; R <= last; R++) {
             const expr = String(cellValue(atributesGrid, R, 12) || "").trim();
             if (expr) m.set((String(cellValue(atributesGrid, R, 2)) + "|" + String(cellValue(atributesGrid, R, 3))).toUpperCase(), expr);
+            if (!modelName) modelName = String(cellValue(atributesGrid, R, 11) || "").trim();
         }
     }
     DracoCalcAttrs = m;
+    DracoEmptyVals = dracoEmptyValsForModel(modelName);
 }
 
+function dracoEmptyValsForModel(modelName) {
+    const out = new Map();
+    try {
+        const sms = window.SemanticModelStore;
+        const name = modelName || (sms && sms.getActiveModelName && sms.getActiveModelName()) || "";
+        const model = name && sms && sms.getModel ? sms.getModel(name) : null;
+        ((model && model.fields) || []).forEach(f => {
+            if (!f || f.type !== "DIMENSION") return;
+            (f.hierarchies || []).forEach(h => {
+                const toks = String(h.emptyValue || "").split("|").map(t => t.trim()).filter(t => t !== "");
+                if (!toks.length) return;
+                (h.levels || []).forEach(l => [l.attribute, l.textAttribute].forEach(a => {
+                    if (!a) return;
+                    const k = (String(f.name) + "|" + String(a)).toUpperCase();
+                    out.set(k, Array.from(new Set([...(out.get(k) || []), ...toks])));
+                }));
+            });
+        });
+    } catch (e) {
+        console.warn("[Draco] No se pudo leer el «valor vacío» de las jerarquías:", e);
+    }
+    return out;
+}
+
+// true si la columna del atributo no es «alias.COLUMNA» tal cual (atributo
+// calculado o con valor vacío): en el SELECT necesita « AS ATRIBUTO».
 function dracoIsCalcAttr(dim, attr) {
-    return DracoCalcAttrs.has((String(dim) + "|" + String(attr)).toUpperCase());
+    const k = (String(dim) + "|" + String(attr)).toUpperCase();
+    return DracoCalcAttrs.has(k) || DracoEmptyVals.has(k);
 }
 
 function dracoCol(relGrid, dim, attr) {
     const alias = getTableAlias(relGrid, dim);
-    const expr = DracoCalcAttrs.get((String(dim) + "|" + String(attr)).toUpperCase());
-    if (!expr) return alias + "." + attr;
-    return "(" + window.DracoAttrFormula.toSql(expr, c => alias + "." + c, Provider.key()) + ")";
+    const key = (String(dim) + "|" + String(attr)).toUpperCase();
+    const expr = DracoCalcAttrs.get(key);
+    const base = expr
+        ? "(" + window.DracoAttrFormula.toSql(expr, c => alias + "." + c, Provider.key()) + ")"
+        : alias + "." + attr;
+    const toks = DracoEmptyVals.get(key);
+    if (!toks || !toks.length) return base;
+    // valor vacío de la jerarquía -> NULL (p. ej. CASE WHEN d1.CECO IN ('---') THEN NULL ELSE d1.CECO END)
+    const lits = toks.map(t => "'" + String(t).replace(/'/g, "''") + "'").join(", ");
+    return "CASE WHEN " + base + " IN (" + lits + ") THEN NULL ELSE " + base + " END";
 }
 
 function dracoColSel(relGrid, dim, attr) {
@@ -8618,104 +8662,7 @@ function dracoHierarchyEmptyTokens(reportId) {
     return byKey;
 }
 
-// NOMBRE_COLUMNA del resultado -> Set(valores). Con los campos del informe
-// (ReportState) se sabe la dimensión de cada columna; sin ellos, por nombre.
-function dracoEmptyTokensByColumn(reportId) {
-    const byKey = dracoHierarchyEmptyTokens(reportId);
-    const map = new Map();
-    if (!byKey.size) return map;
-    const axis = (typeof ReportState !== "undefined")
-        ? [...(ReportState.Rows || []), ...(ReportState.Columns || [])].filter(fd => fd && fd.Dimension && fd.AttributeName)
-        : [];
-    axis.forEach(fd => {
-        const set = byKey.get((String(fd.Dimension) + "|" + String(fd.SqlAttr || fd.AttributeName)).toUpperCase());
-        if (set) map.set(String(fd.AttributeName).toUpperCase(), set);
-    });
-    if (!axis.length) byKey.forEach((set, k) => map.set(k.slice(k.indexOf("|") + 1), set));
-    return map;
-}
-
-function dracoApplyHierarchyEmptyValues(json, reportId) {
-    if (!json || typeof json !== "string") return json;
-    const map = dracoEmptyTokensByColumn(reportId);
-    if (!map.size) return json;
-    let p;
-    try { p = JSON.parse(json); } catch (e) { return json; }
-    const names = ((p && p.schema && p.schema.fields) || []).map(f => String(f.name || "").toUpperCase());
-    const cols = [];
-    names.forEach((n, i) => { if (map.has(n)) cols.push([i, map.get(n)]); });
-    if (!cols.length || !Array.isArray(p.rows)) return json;
-
-    // 1) valor vacío -> null (se anota en qué filas y columnas se cambió)
-    const convertedAt = new Map();   // índice de fila -> Set(índices de columna)
-    p.rows.forEach((r, ri) => {
-        const f = r && r.f; if (!f) return;
-        cols.forEach(([i, set]) => {
-            const c = f[i];
-            if (c && c.v !== null && c.v !== undefined && set.has(String(c.v).trim())) {
-                c.v = null;
-                if (!convertedAt.has(ri)) convertedAt.set(ri, new Set());
-                convertedAt.get(ri).add(i);
-            }
-        });
-    });
-    if (!convertedAt.size) return json;
-
-    // 2) Con GROUPING SETS, el subtotal de un nodo ya trae null en los niveles
-    //    de debajo. Una fila convertida puede quedar IGUAL que ese subtotal
-    //    pero con otro ROW_ID/COLUMN_ID (el DENSE_RANK se calculó con el
-    //    valor original) y se pintaba dos veces. Con un NULL de verdad las
-    //    dos filas comparten ID y sale una sola línea: aquí se deja igual,
-    //    quitando la fila convertida que repite a otra y renumerando los IDs.
-    const axisAttrs = (list) => (list || []).map(fd => names.indexOf(String(fd.AttributeName || "").toUpperCase())).filter(i => i >= 0);
-    const rowsAttrs = typeof ReportState !== "undefined" ? axisAttrs(ReportState.Rows) : [];
-    const colsAttrs = typeof ReportState !== "undefined" ? axisAttrs(ReportState.Columns) : [];
-    const dedupAxis = (idName, attrIdx) => {
-        const idCol = names.indexOf(idName);
-        if (idCol < 0 || !attrIdx.length) return;
-        const val = (r, i) => (r.f[i] ? r.f[i].v : null);
-        const groups = new Map();   // ID -> { tuple, converted }
-        p.rows.forEach((r, ri) => {
-            const id = String(val(r, idCol));
-            if (!groups.has(id)) groups.set(id, { tuple: JSON.stringify(attrIdx.map(i => val(r, i))), converted: false });
-            const conv = convertedAt.get(ri);
-            if (conv && attrIdx.some(i => conv.has(i))) groups.get(id).converted = true;
-        });
-        const byTuple = new Map();
-        groups.forEach((g, id) => {
-            if (!byTuple.has(g.tuple)) byTuple.set(g.tuple, []);
-            byTuple.get(g.tuple).push(id);
-        });
-        const drop = new Set();
-        byTuple.forEach(ids => {
-            if (ids.length < 2) return;
-            const keep = ids.find(id => !groups.get(id).converted) || ids[0];
-            ids.forEach(id => { if (id !== keep) drop.add(id); });
-        });
-        if (!drop.size) return;
-        p.rows = p.rows.filter(r => !drop.has(String(val(r, idCol))));
-        // IDs consecutivos otra vez (1..n), en el mismo orden
-        const kept = [...new Set(p.rows.map(r => Number(val(r, idCol))))].sort((a, b) => a - b);
-        const renum = new Map(kept.map((id, k) => [String(id), String(k + 1)]));
-        p.rows.forEach(r => { if (r.f[idCol]) r.f[idCol].v = renum.get(String(r.f[idCol].v)); });
-    };
-    if (names.indexOf("ROW_ID") >= 0 || names.indexOf("COLUMN_ID") >= 0) {
-        dedupAxis("ROW_ID", rowsAttrs);
-        dedupAxis("COLUMN_ID", colsAttrs);
-    } else if (names.indexOf("DYN_ID") >= 0) {
-        dedupAxis("DYN_ID", rowsAttrs.concat(colsAttrs));   // híbrido: el eje dinámico
-    }
-    if (p.totalRows !== undefined) p.totalRows = String(p.rows.length);
-
-    // Mismo formato que la respuesta de BigQuery ("v": "x", con espacio tras
-    // los dos puntos): el parser del pintado lee cada valor en una posición
-    // fija (indexOf('"v":') + 5). Con JSON.stringify(p) a secas salía
-    // "v":"x" y todo se desplazaba un carácter ("ull", "DE01\"").
-    return JSON.stringify(p, null, 2);
-}
-
 async function jsonTo3Matrices(context, json, reportId) {
-    json = dracoApplyHierarchyEmptyValues(json, reportId);
     DracoSuppressChangeEvents = true; // evita que el reconocimiento de miembros reaccione a este pintado
     try {
         return await jsonTo3MatricesCore(context, json, reportId);
