@@ -1,0 +1,28 @@
+{
+  "functions": [
+    {
+      "id": "EPM_VALUE",
+      "name": "EPM_VALUE",
+      "description": "Miembro de una dimensión en un eje Estático de un informe Draco. Devuelve el texto a mostrar.",
+      "result": { "type": "string", "dimensionality": "scalar" },
+      "parameters": [
+        { "name": "Dimension", "description": "Dimensión", "type": "any", "dimensionality": "scalar" },
+        { "name": "Atributo", "description": "Atributo", "type": "any", "dimensionality": "scalar" },
+        { "name": "Valor", "description": "Valor (ID) del miembro", "type": "any", "dimensionality": "scalar" },
+        { "name": "Display", "description": "Texto a mostrar", "type": "any", "dimensionality": "scalar", "optional": true }
+      ]
+    },
+    {
+      "id": "EPM_FORMULA",
+      "name": "EPM_FORMULA",
+      "description": "Línea calculada de un eje Estático de un informe Draco. Devuelve el texto de la línea.",
+      "result": { "type": "string", "dimensionality": "scalar" },
+      "parameters": [
+        { "name": "Texto", "description": "Texto de la línea", "type": "any", "dimensionality": "scalar" },
+        { "name": "Formula", "description": "Fórmula de la línea (se copia a cada celda)", "type": "any", "dimensionality": "scalar", "optional": true },
+        { "name": "Formato", "description": "Formato de número", "type": "any", "dimensionality": "scalar", "optional": true },
+        { "name": "Barras", "description": "Barras e iconos", "type": "any", "dimensionality": "scalar", "optional": true }
+      ]
+    }
+  ]
+}
