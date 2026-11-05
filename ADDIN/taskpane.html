@@ -1565,8 +1565,14 @@
     <style>
         /* Deshacer (TaskPaneApp.initUndoButton) */
         .undo-wrap { position: relative; display: inline-flex; }
-        #btnUndo { display: inline-flex; align-items: center; }
-        #btnUndo:disabled { opacity: .4; cursor: default; }
+        #btnUndo, #btnRedo { display: inline-flex; align-items: center; }
+        #btnRedo[hidden] { display: none; }
+        #btnUndo:disabled, #btnRedo:disabled { opacity: .4; cursor: default; }
+        .undo-menu-head {
+            padding: 6px 10px 2px; font-size: 11px; font-weight: 600;
+            color: var(--text-muted, #8a8886); text-transform: uppercase; letter-spacing: .03em;
+        }
+        .undo-menu--redo .undo-menu-label { font-style: italic; }
         .undo-menu {
             position: absolute; top: calc(100% + 4px); right: 0; z-index: 1000;
             width: 260px; max-width: 80vw;
@@ -1606,6 +1612,12 @@
                 <div class="undo-wrap">
                     <button id="btnUndo" class="icon-button" title="Deshacer (no hay acciones)" disabled aria-haspopup="true">
                         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M5.8 3.2a.75.75 0 010 1.06L4.56 5.5H9.5a4.5 4.5 0 010 9H7a.75.75 0 010-1.5h2.5a3 3 0 000-6H4.56l1.24 1.24a.75.75 0 11-1.06 1.06L2.22 6.78a.75.75 0 010-1.06L4.74 3.2a.75.75 0 011.06 0z"/>
+                        </svg>
+                        <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" style="margin-left:1px"><path d="M1 2.5h6L4 6z"/></svg>
+                    </button>
+                    <button id="btnRedo" class="icon-button" title="Rehacer" disabled hidden aria-haspopup="true">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="transform:scaleX(-1)">
                             <path d="M5.8 3.2a.75.75 0 010 1.06L4.56 5.5H9.5a4.5 4.5 0 010 9H7a.75.75 0 010-1.5h2.5a3 3 0 000-6H4.56l1.24 1.24a.75.75 0 11-1.06 1.06L2.22 6.78a.75.75 0 010-1.06L4.74 3.2a.75.75 0 011.06 0z"/>
                         </svg>
                         <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" style="margin-left:1px"><path d="M1 2.5h6L4 6z"/></svg>
@@ -2035,7 +2047,7 @@
                             <div class="connector-card" data-provider="bigquery">
                                 <div class="connector-info">
                                     <div class="connector-icon">
-                                        <img src="assets/datasource-db.svg" alt="BigQuery">
+                                        <img src="assets/bigquery.svg" alt="BigQuery" onerror="this.onerror=null;this.src='assets/datasource-db.svg'">
                                     </div>
                                     <div class="connector-details">
                                         <h3>BigQuery</h3>
@@ -2332,7 +2344,7 @@
     </div>
 
     <script src="js/config.js?v=20261029j"></script>
-    <script src="js/bigquery.js?v=20261029j"></script>
+    <script src="js/bigquery.js?v=20261104e"></script>
     <script src="js/google-auth.js?v=20261029j"></script>
     <script src="js/gcsExport.js?v=20261029j"></script>
     <script src="js/gcsSaveBridge.js"></script>
@@ -2344,19 +2356,19 @@
     <script src="js/lkmlOpenBridge.js?v=20261103a"></script>
     <script src="js/reportStore.js?v=20261029j"></script>
     <script src="js/filterRangeStore.js"></script>
-    <script src="js/excelService.js?v=20261104b"></script>
+    <script src="js/excelService.js?v=20261104e"></script>
     <script src="js/busyindicator.js?v=20261029j"></script>
     <script src="js/filterModal.js?v=20261104b"></script>
     <script src="js/distributeValues.js"></script>
     <script src="js/variablesStore.js?v=20261029j"></script>
     <script src="js/calcFormula.js?v=20261029j"></script>
-    <script src="js/commands.js?v=20261104c"></script>
-    <script src="js/taskpane.js?v=20261104d"></script>
+    <script src="js/commands.js?v=20261105a"></script>
+    <script src="js/taskpane.js?v=20261104k"></script>
     <script src="js/epmFormulaPanel.js?v=20261029j"></script>
     <!-- Funciones personalizadas DRACO.EPM_VALUE / DRACO.EPM_FORMULA (runtime compartido) -->
     <script src="js/functions.js?v=20261029j"></script>
     <script src="js/calcEditor.js?v=20261029j"></script>
-    <script src="js/login.js?v=20261029j"></script>
+    <script src="js/login.js?v=20261104j"></script>
     <script src="js/semantic_model.js?v=20261104b"></script>
 
     <script>
