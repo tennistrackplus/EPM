@@ -11,7 +11,7 @@
     <script src="js/i18n/en.js?v=20261029j"></script>
 
     <link rel="stylesheet" href="css/theme.css">
-    <link rel="stylesheet" href="css/styles.css?v=20261103b">
+    <link rel="stylesheet" href="css/styles.css?v=20261103e">
     <link rel="stylesheet" href="css/modal.css">
     <link rel="stylesheet" href="css/distributeValues.css">
 
@@ -1562,6 +1562,33 @@
         }
     
     </style>
+    <style>
+        /* Deshacer (TaskPaneApp.initUndoButton) */
+        .undo-wrap { position: relative; display: inline-flex; }
+        #btnUndo { display: inline-flex; align-items: center; }
+        #btnUndo:disabled { opacity: .4; cursor: default; }
+        .undo-menu {
+            position: absolute; top: calc(100% + 4px); right: 0; z-index: 1000;
+            width: 260px; max-width: 80vw;
+            background: var(--surface-card, #fff); color: var(--text-primary, #201f1e);
+            border: 1px solid var(--border-subtle, #e1dfdd); border-radius: 6px;
+            box-shadow: 0 6px 18px rgba(0,0,0,.14); overflow: hidden;
+        }
+        .undo-menu[hidden] { display: none; }
+        .undo-menu-list { max-height: 330px; overflow-y: auto; padding: 4px 0; }
+        .undo-menu-item {
+            display: flex; align-items: center; gap: 8px; width: 100%;
+            padding: 6px 10px; border: 0; background: transparent; cursor: pointer;
+            font: inherit; font-size: 12px; text-align: left; color: inherit;
+        }
+        .undo-menu-item.undo-hl { background: var(--surface-sunken, #edebe9); }
+        .undo-menu-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .undo-menu-time { flex-shrink: 0; font-size: 11px; color: var(--text-muted, #8a8886); }
+        .undo-menu-footer {
+            padding: 6px 10px; font-size: 11px; color: var(--text-muted, #8a8886);
+            border-top: 1px solid var(--border-subtle, #e1dfdd); text-align: center;
+        }
+    </style>
 </head>
 <body>
     <div id="view-informes" class="epm-page-view epm-page-view--active">
@@ -1576,6 +1603,15 @@
             </select>
             <button id="btnAddReport" class="btn-primary report-add-btn" title="Añadir informe">+ Informe</button>
             <div class="report-toolbar-icons">
+                <div class="undo-wrap">
+                    <button id="btnUndo" class="icon-button" title="Deshacer (no hay acciones)" disabled aria-haspopup="true">
+                        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M5.8 3.2a.75.75 0 010 1.06L4.56 5.5H9.5a4.5 4.5 0 010 9H7a.75.75 0 010-1.5h2.5a3 3 0 000-6H4.56l1.24 1.24a.75.75 0 11-1.06 1.06L2.22 6.78a.75.75 0 010-1.06L4.74 3.2a.75.75 0 011.06 0z"/>
+                        </svg>
+                        <svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor" style="margin-left:1px"><path d="M1 2.5h6L4 6z"/></svg>
+                    </button>
+                    <div id="undoMenu" class="undo-menu" hidden></div>
+                </div>
                 <button id="btnPauseRefresh" class="icon-button" title="Pausar actualización de datos" aria-pressed="false">
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
                         <rect x="4" y="3" width="3" height="10" rx="1"/>
@@ -2266,6 +2302,12 @@
                 <input type="text" id="hierarchyNameInput" placeholder="Ej. Geografía" />
             </div>
 
+            <div class="form-group">
+                <label for="hierarchyEmptyValueInput" style="margin:0 0 4px;">Valor que equivale a vacío (opcional)</label>
+                <input type="text" id="hierarchyEmptyValueInput" placeholder="Ej. ---   (varios: --- | N/A)" />
+                <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">En los niveles de esta jerarquía, ese texto cuenta como NULL: el nodo no se pinta y la rama termina en el nivel anterior.</div>
+            </div>
+
             <h4 style="margin-top:12px;">Niveles (arrastra los atributos de izquierda a derecha)</h4>
 
             <div class="hierarchy-editor">
@@ -2297,25 +2339,25 @@
     <script src="js/provider.js?v=20261029j"></script>
     <script src="js/connections.js?v=20261029j"></script>
     <script src="js/gitSession.js?v=20261029j"></script>
-    <script src="js/semanticModelStore.js?v=20261029j"></script>
+    <script src="js/semanticModelStore.js?v=20261104b"></script>
     <script src="js/lkmlSaveBridge.js?v=20261029j"></script>
     <script src="js/lkmlOpenBridge.js?v=20261103a"></script>
     <script src="js/reportStore.js?v=20261029j"></script>
     <script src="js/filterRangeStore.js"></script>
-    <script src="js/excelService.js?v=20261103b"></script>
+    <script src="js/excelService.js?v=20261104b"></script>
     <script src="js/busyindicator.js?v=20261029j"></script>
-    <script src="js/filterModal.js?v=20261103b"></script>
+    <script src="js/filterModal.js?v=20261104b"></script>
     <script src="js/distributeValues.js"></script>
     <script src="js/variablesStore.js?v=20261029j"></script>
     <script src="js/calcFormula.js?v=20261029j"></script>
-    <script src="js/commands.js?v=20261103d"></script>
-    <script src="js/taskpane.js?v=20261103b"></script>
+    <script src="js/commands.js?v=20261104c"></script>
+    <script src="js/taskpane.js?v=20261104d"></script>
     <script src="js/epmFormulaPanel.js?v=20261029j"></script>
     <!-- Funciones personalizadas DRACO.EPM_VALUE / DRACO.EPM_FORMULA (runtime compartido) -->
     <script src="js/functions.js?v=20261029j"></script>
     <script src="js/calcEditor.js?v=20261029j"></script>
     <script src="js/login.js?v=20261029j"></script>
-    <script src="js/semantic_model.js?v=20261103a"></script>
+    <script src="js/semantic_model.js?v=20261104b"></script>
 
     <script>
         // Conmutador entre las 3 vistas de nivel superior (fusionadas aquí

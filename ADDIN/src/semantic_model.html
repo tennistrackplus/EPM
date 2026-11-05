@@ -1203,6 +1203,12 @@
                 <input type="text" id="hierarchyNameInput" placeholder="Ej. Geografía" />
             </div>
 
+            <div class="form-group">
+                <label for="hierarchyEmptyValueInput" style="margin:0 0 4px;">Valor que equivale a vacío (opcional)</label>
+                <input type="text" id="hierarchyEmptyValueInput" placeholder="Ej. ---   (varios: --- | N/A)" />
+                <div style="font-size:11px;color:var(--text-muted);margin-top:3px;">En los niveles de esta jerarquía, ese texto cuenta como NULL: el nodo no se pinta y la rama termina en el nivel anterior.</div>
+            </div>
+
             <h4 style="margin-top:12px;">Niveles (arrastra los atributos de izquierda a derecha)</h4>
 
             <div class="hierarchy-editor">
@@ -1226,11 +1232,11 @@
     <script src="js/config.js?v=20261029j"></script>
     <script src="js/bigquery.js?v=20261029j"></script>
     <script src="js/provider.js?v=20261029j"></script>
-    <script src="js/semanticModelStore.js?v=20261029j"></script>
+    <script src="js/semanticModelStore.js?v=20261104b"></script>
     <script src="js/lkmlSaveBridge.js?v=20261029j"></script>
     <script src="js/lkmlOpenBridge.js?v=20261103a"></script>
     <script src="js/calcFormula.js?v=20261029j"></script>
     <script src="js/calcEditor.js?v=20261029j"></script>
-    <script src="js/semantic_model.js?v=20261103a"></script>
+    <script src="js/semantic_model.js?v=20261104b"></script>
 </body>
 </html>
