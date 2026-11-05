@@ -106,12 +106,76 @@ function hasTree() {
     return allItems.some(it => it._hasChildren);
 }
 
+/* -------------------------------------------------------------
+ * Selección en cascada (jerarquías)
+ *   - marcar un nodo marca también todos sus descendientes;
+ *   - desmarcar un nodo desmarca sus descendientes y sus ANTEPASADOS
+ *     (el padre deja de estar «entero»);
+ *   - marcar todos los hijos NO marca el padre (decisión explícita).
+ * Al aplicar se envían solo los nodos «de arriba» (los que no tienen el
+ * padre marcado): el padre ya cubre a sus hijos en el WHERE, así la
+ * consulta no lleva cientos de valores redundantes. Al reabrir, la
+ * precarga vuelve a marcar los descendientes (cascadeLoadedSelection).
+ * ----------------------------------------------------------- */
+function descendantIdx(idx) {
+    const out = [];
+    const d = allItems[idx].depth;
+    for (let i = idx + 1; i < allItems.length && allItems[i].depth > d; i++) out.push(i);
+    return out;
+}
+
+function ancestorIdx(idx) {
+    const out = [];
+    for (let p = allItems[idx]._parent; p >= 0; p = allItems[p]._parent) out.push(p);
+    return out;
+}
+
+function selectNode(idx, set, other) {
+    [idx, ...descendantIdx(idx)].forEach(i => {
+        const k = itemKey(allItems[i]);
+        set.add(k);
+        other.delete(k);   // un valor no puede estar incluido Y excluido a la vez
+    });
+}
+
+function deselectNode(idx, set) {
+    [idx, ...descendantIdx(idx), ...ancestorIdx(idx)].forEach(i => set.delete(itemKey(allItems[i])));
+}
+
+// Precarga: los nodos guardados arrastran a sus descendientes.
+function cascadeLoadedSelection() {
+    if (!hasTree()) return;
+    [includedValues, excludedValues].forEach(set => {
+        const other = set === includedValues ? excludedValues : includedValues;
+        allItems.forEach((it, idx) => { if (set.has(itemKey(it))) selectNode(idx, set, other); });
+    });
+}
+
+// Solo los nodos marcados cuyo padre NO está marcado (en ese mismo conjunto).
+function topSelectedKeys(set) {
+    if (!hasTree()) return [...set];
+    const out = [];
+    const seen = new Set();
+    allItems.forEach(it => {
+        const k = itemKey(it);
+        if (!set.has(k) || seen.has(k)) return;
+        const parentSelected = it._parent >= 0 && set.has(itemKey(allItems[it._parent]));
+        if (!parentSelected) { out.push(k); seen.add(k); }
+    });
+    // claves que no están en la lista (p. ej. de un filtro antiguo): se mantienen
+    set.forEach(k => { if (!seen.has(k) && !allItems.some(it => itemKey(it) === k)) out.push(k); });
+    return out;
+}
+
 // Expande los antepasados de los valores ya seleccionados (al reabrir un
 // filtro guardado), para que se vean sin tener que buscarlos.
 function expandAncestorsOfSelected() {
+    // Solo hasta los nodos «de arriba» seleccionados (sus hijos, que van en
+    // cascada, no abren todo el subárbol)
+    const top = new Set([...topSelectedKeys(includedValues), ...topSelectedKeys(excludedValues)]);
     allItems.forEach(it => {
         const key = itemKey(it);
-        if (!includedValues.has(key) && !excludedValues.has(key)) return;
+        if (!top.has(key)) return;
         let p = it._parent;
         while (p >= 0) { expandedNodes.add(p); p = allItems[p]._parent; }
     });
@@ -271,6 +335,16 @@ function render(items, searching) {
         row.appendChild(label);
 
         const toggle = () => {
+            if (tree) {
+                // Jerarquía: en cascada (ver selectNode / deselectNode) y se
+                // repinta, porque cambian también otras filas.
+                if (activeSet.has(key)) deselectNode(item._idx, activeSet);
+                else selectNode(item._idx, activeSet, otherValuesSet());
+                applySearch(document.getElementById("modalSearchInput").value);
+                renderChips();
+                updateSelectionCount();
+                return;
+            }
             if (activeSet.has(key)) {
                 activeSet.delete(key);
             } else {
@@ -335,6 +409,7 @@ function selectAllVisible() {
     const activeSet = activeValuesSet();
     const other = otherValuesSet();
     visible.forEach(it => {
+        if (hasTree() && typeof it._idx === "number") { selectNode(it._idx, activeSet, other); return; }
         const key = itemKey(it);
         activeSet.add(key);
         other.delete(key);
@@ -393,12 +468,18 @@ function renderChips() {
 
     const chips = [];
 
-    includedValues.forEach(key => {
+    const removeKey = (set, key) => {
+        const item = byKey.get(key);
+        if (hasTree() && item && typeof item._idx === "number") deselectNode(item._idx, set);
+        else set.delete(key);
+        afterChipRemoved();
+    };
+    topSelectedKeys(includedValues).forEach(key => {
         const item = byKey.get(key);
         chips.push({
             label: item ? displayLabel(item) : key.split("||")[1],
             include: true,
-            onRemove: () => { includedValues.delete(key); afterChipRemoved(); }
+            onRemove: () => removeKey(includedValues, key)
         });
     });
     includedRanges.forEach((r, idx) => {
@@ -408,12 +489,12 @@ function renderChips() {
             onRemove: () => { includedRanges.splice(idx, 1); afterChipRemoved(); }
         });
     });
-    excludedValues.forEach(key => {
+    topSelectedKeys(excludedValues).forEach(key => {
         const item = byKey.get(key);
         chips.push({
             label: item ? displayLabel(item) : key.split("||")[1],
             include: false,
-            onRemove: () => { excludedValues.delete(key); afterChipRemoved(); }
+            onRemove: () => removeKey(excludedValues, key)
         });
     });
     excludedRanges.forEach((r, idx) => {
@@ -451,7 +532,8 @@ function afterChipRemoved() {
 
 function updateSelectionCount() {
     const el = document.getElementById("modalSelectionCount");
-    const total = includedValues.size + includedRanges.length + excludedValues.size + excludedRanges.length;
+    const total = topSelectedKeys(includedValues).length + includedRanges.length
+        + topSelectedKeys(excludedValues).length + excludedRanges.length;
     if (total === 0) {
         el.textContent = "";
         return;
@@ -518,7 +600,8 @@ function apply() {
     let result;
 
     if (isHierarchy) {
-        const toItems = (set) => [...set].map(k => byKey.get(k)).filter(Boolean)
+        // Solo los nodos «de arriba»: el padre ya incluye a sus hijos
+        const toItems = (set) => topSelectedKeys(set).map(k => byKey.get(k)).filter(Boolean)
             .map(it => ({ attribute: it.attribute, value: it.value }));
         result = {
             mode: "list",
@@ -610,6 +693,7 @@ Office.onReady(() => {
             if (rangeTab) rangeTab.style.display = isHierarchy ? "none" : "";
 
             preloadCurrentFilter(payload.currentFilter);
+            cascadeLoadedSelection();
             expandAncestorsOfSelected();
             updateDisplayModeUI();
 

@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-10-29-fijo-calc";
+const DRACO_BUILD = "2026-11-05-arbol-picker";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -4619,7 +4619,27 @@ function computeGroupingSetDimensionsAndHierarchies(relGrid) {
         hierarchiesAcum.push(acum);
     }
 
-    const combinations = generateHierarchyCombinations(hierarchies);
+    let combinations = generateHierarchyCombinations(hierarchies);
+
+    // Filtro por nodos de la jerarquía: sin conjuntos por ENCIMA del nivel
+    // más alto filtrado (minPos) de cada tramo (ver dracoFilterRootValues).
+    try {
+        const roots = dracoFilterRootValues();
+        if (roots.size) {
+            // logicalRows/Cols ya llevan los textos pegados a su nivel: mismos tramos que «hierarchies»
+            const runs = [...dracoHierarchyRunsOf(logicalRows.map(l => l.f), true), ...dracoHierarchyRunsOf(logicalCols.map(l => l.f), true)];
+            const minPos = runs.map(run => {
+                if (run.length < 2) return 1;
+                const lv = dracoRunRootLevels(run, roots);
+                return lv.length ? Math.min(...lv.map(x => x.pos)) : 1;
+            });
+            if (runs.length === hierarchies.length && minPos.some(m => m > 1)) {
+                combinations = combinations.filter(item => item.every((depth, i) => depth >= (minPos[i] || 1)));
+            }
+        }
+    } catch (e) {
+        console.warn("[Draco] No se pudo aplicar el filtro de nodos a los GROUPING SETS:", e);
+    }
 
     return { dimensions, hierarchies, hierarchiesAcum, combinations };
 }
@@ -4813,10 +4833,34 @@ function buildFinalWhereFromAxes(axes) {
             current.push(f.AttributeName + " IS NULL");
         }
     }
-    if (groups.length === 0) return "";
-    return groups
-        .map((g, idx) => (idx === 0 ? "WHERE NOT (" : "AND NOT (") + CRLF + "    " + g.join(CRLF + "    AND ") + CRLF + ")")
-        .join(CRLF + CRLF);
+    // Filtro por nodos en niveles DISTINTOS de una misma jerarquía (p. ej.
+    // un nodo del nivel 2 y otro del nivel 4 de otra rama): los conjuntos de
+    // agrupación ya empiezan en el nivel 2, pero los antepasados del nodo del
+    // nivel 4 que no son raíz sobran. Se queda una fila si es una raíz o
+    // está por debajo de una:  ( NIVEL_2 IN (...) OR NIVEL_4 IN (...) ).
+    const rootConds = [];
+    try {
+        const roots = dracoFilterRootValues();
+        if (roots.size) {
+            for (const fields of axes) {
+                for (const run of dracoHierarchyRunsOf(fields)) {
+                    if (run.length < 2) continue;
+                    const lv = dracoRunRootLevels(run, roots);
+                    if (new Set(lv.map(x => x.pos)).size < 2) continue;   // un solo nivel: ya resuelto con los GROUPING SETS
+                    const lit = (f, v) => DracoQueryAtribGrid
+                        ? sqlValue(DracoQueryAtribGrid, f.Dimension, f.SqlAttr || f.AttributeName, v)
+                        : "'" + String(v).replace(/'/g, "''") + "'";
+                    rootConds.push("(" + CRLF + "    " + lv.map(x => x.field.AttributeName + " IN (" + x.values.map(v => lit(x.field, v)).join(", ") + ")").join(CRLF + "    OR ") + CRLF + ")");
+                }
+            }
+        }
+    } catch (e) {
+        console.warn("[Draco] No se pudo aplicar el filtro de nodos al WHERE exterior:", e);
+    }
+
+    const parts = groups.map(g => "NOT (" + CRLF + "    " + g.join(CRLF + "    AND ") + CRLF + ")").concat(rootConds);
+    if (parts.length === 0) return "";
+    return parts.map((p, idx) => (idx === 0 ? "WHERE " : "AND ") + p).join(CRLF + CRLF);
 }
 
 /* =======================================================================
@@ -5082,6 +5126,66 @@ function dracoIndexCalcAttrs(atributesGrid) {
     }
     DracoCalcAttrs = m;
     DracoEmptyVals = dracoEmptyValsForModel(modelName);
+    DracoQueryAtribGrid = atributesGrid || null;
+}
+let DracoQueryAtribGrid = null;   // MODEL_ATRIBUTES de la consulta en curso (literales del WHERE exterior)
+
+/* ---------------------------------------------------------------------
+ * FILTRO POR NODOS DE UNA JERARQUÍA DEL EJE
+ * ---------------------------------------------------------------------
+ * Si se filtra una jerarquía que está en Filas/Columnas por uno o varios
+ * nodos (p. ej. «Importe Neto Cifra de Negocios», nivel 2), los nodos
+ * filtrados pasan a ser las RAÍCES del árbol: no se generan los GROUPING
+ * SETS de los niveles de encima (computeGroupingSetDimensionsAndHierarchies)
+ * y, si hay raíces en niveles distintos (una en el 2 y otra en el 4 de otra
+ * rama), el WHERE exterior quita los antepasados que no son raíz
+ * (buildFinalWhereFromAxes). Solo cuentan los valores INCLUIDOS de una
+ * lista (las exclusiones y los rangos no definen raíces).
+ * ------------------------------------------------------------------- */
+function dracoFilterRootValues() {
+    const out = new Map();   // "DIM|ATRIBUTO" -> [valores incluidos]
+    (ReportState.Filters || []).forEach(f => {
+        if (String(f.Value || "").trim() === "") return;
+        const flt = parseStoredFilterValue(f.Value);
+        if (!flt || flt.include === false) return;
+        const add = (attr, v) => {
+            if (!attr || v === undefined || v === null || String(v) === "") return;
+            const k = (String(f.Dimension) + "|" + String(attr)).toUpperCase();
+            if (!out.has(k)) out.set(k, []);
+            if (out.get(k).indexOf(String(v)) === -1) out.get(k).push(String(v));
+        };
+        if (Array.isArray(flt.items) && flt.items.length) {
+            flt.items.forEach(it => it && add(it.attribute, it.value));
+        } else if (Array.isArray(flt.values) && flt.values.length && !(Array.isArray(flt.ranges) && flt.ranges.length)) {
+            flt.values.forEach(v => add(f.AttributeName, v));
+        }
+    });
+    return out;
+}
+
+// Tramos de jerarquía de un eje (misma dimensión y NIVEL 1,2,3... seguidos),
+// con la misma regla que pushHierarchyRunLengths. Cada tramo: [campos].
+function dracoHierarchyRunsOf(fields, keepCompanions) {
+    const runs = [];
+    let cur = null, lastDim = "", lastLevel = 0;
+    for (const f of fields || []) {
+        if (f.IsTextCompanion && !keepCompanions) continue;   // va pegado a su nivel de ID
+        const nivel = Number(f.Hierarchy) || 0;
+        if (cur && f.Dimension === lastDim && nivel === lastLevel + 1) cur.push(f);
+        else { cur = [f]; runs.push(cur); }
+        lastDim = f.Dimension; lastLevel = nivel;
+    }
+    return runs;
+}
+
+// Para un tramo: posición (1..n) de cada nivel con raíces filtradas.
+function dracoRunRootLevels(run, roots) {
+    const out = [];   // [{ pos, field, values }]
+    run.forEach((f, idx) => {
+        const vals = roots.get((String(f.Dimension) + "|" + String(f.SqlAttr || f.AttributeName)).toUpperCase());
+        if (vals && vals.length) out.push({ pos: idx + 1, field: f, values: vals });
+    });
+    return out;
 }
 
 function dracoEmptyValsForModel(modelName) {
@@ -5533,13 +5637,14 @@ function dracoExpandToLevelCollapse(reportId, zoneId, plan, dict, count) {
         const posN = positions[n - 1];
         collapsed = collapsed || new Set();
         for (const V of dict.values()) {
-            let deepest = 0;
-            for (let i = 1; i <= count; i++) {
-                if (companion[i]) continue;
+            // Profundidad dentro de ESTA jerarquía (no cortar en un NULL de
+            // otra jerarquía anterior del mismo eje, ver filterAndCompactDracoAxis)
+            let depth = 0;
+            for (const i of positions) {
                 if (String(V[i]).toLowerCase().indexOf("null") === 0) break;
-                deepest = i;
+                depth++;
             }
-            if (deepest > posN) collapsed.add(dracoCollapseKey(V, posN));
+            if (depth > n) collapsed.add(dracoCollapseKey(V, posN));
         }
     });
     return collapsed;
@@ -5638,27 +5743,59 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
         return a.oldId - b.oldId; // sin relación de parentesco directa: orden natural
     });
 
-    // Excluidas: alguna de sus filas ancestro (p < profundidad propia) está contraída.
+    // ---- Jerarquías del eje, cada una por separado ----
+    // Antes la profundidad del nodo se cortaba en el PRIMER NULL de todo el
+    // eje: con dos jerarquías en el mismo eje, en las filas en que la
+    // primera está en un nodo-resumen (niveles de debajo a NULL) nunca se
+    // llegaba a mirar la segunda, y esta se quedaba sin icono ▾/▸ (ni
+    // expandir/contraer). Ahora cada tramo de jerarquía (NIVEL 1,2,3...
+    // seguidos, sin los niveles de texto) tiene su propia profundidad. La
+    // clave de un nodo sigue siendo dracoCollapseKey(V, posición): incluye
+    // los valores de las jerarquías anteriores (el «contexto»), así que con
+    // una sola jerarquía las claves y el resultado son los mismos que antes.
+    const runs = [];   // cada tramo: [posiciones absolutas de sus niveles]
+    {
+        let cur = null, prev = 0;
+        for (let k = 1; k <= count; k++) {
+            if (companion[k]) continue;
+            if (cur && prev && Number(flags[k]) === Number(flags[prev]) + 1) cur.push(k);
+            else { cur = [k]; runs.push(cur); }
+            prev = k;
+        }
+    }
+    const isNullAt = (V, k) => String(V[k]).toLowerCase().indexOf("null") === 0;
+    items.forEach(item => {
+        item.runDepth = runs.map(run => {
+            let d = 0;
+            for (const k of run) { if (isNullAt(item.V, k)) break; d++; }
+            return d;
+        });
+    });
+
+    // Nodos con hijos, por tramo: claves de todos los antepasados (dentro
+    // de su tramo) de cada fila, contraída o no.
+    const parentKeys = runs.map(() => new Set());
+    items.forEach(item => {
+        runs.forEach((run, t) => {
+            for (let p = 1; p < item.runDepth[t]; p++) parentKeys[t].add(prefixKey(item, run[p - 1]));
+        });
+    });
+
+    // Excluidas: en alguna jerarquía, un antepasado suyo está contraído.
     const kept = items.filter(item => {
-        for (let p = 1; p < item.deepest; p++) {
-            if (collapsedSet.has(prefixKey(item, p))) return false;
+        for (let t = 0; t < runs.length; t++) {
+            for (let p = 1; p < item.runDepth[t]; p++) {
+                if (collapsedSet.has(prefixKey(item, runs[t][p - 1]))) return false;
+            }
         }
         return true;
     });
 
-    // ¿Tiene hijos? — existe OTRA fila del resultado (contraída o no) que
-    // comparte el mismo prefijo y llega más profundo.
-    function hasChildren(item) {
-        if (item.deepest <= 0) return false;
-        const key = prefixKey(item, item.deepest);
-        return items.some(other => other.deepest > item.deepest && prefixKey(other, item.deepest) === key);
-    }
-
-    // Columna/fila física (iAux) en la que cae el nivel `deepest` de este
-    // nodo — es la MISMA celda donde ya se pinta su etiqueta.
-    function fieldAtDeepest(item) {
+    // Columna/fila física (iAux) del nivel en la posición `pos`: la MISMA
+    // celda donde ya se pinta su etiqueta (ordinal de los campos NIVEL=1).
+    function fieldAtPos(pos) {
         let field = 0;
-        for (let k = 1; k <= item.deepest; k++) {
+        for (let k = 1; k <= pos; k++) {
             if (flags[k] === 1) field++;
         }
         return field;
@@ -5675,10 +5812,15 @@ function filterAndCompactDracoAxis(dict, count, collapsedSet, flags, options) {
         arr[0] = newId;
         dictOut.set(String(newId), arr);
 
-        if (item.deepest > 0 && hasChildren(item)) {
-            const nodeKey = prefixKey(item, item.deepest);
-            indicators.push({ newId, field: fieldAtDeepest(item), nodeKey, collapsed: collapsedSet.has(nodeKey) });
-        }
+        // Un icono por jerarquía cuyo nodo en esta fila tiene hijos
+        runs.forEach((run, t) => {
+            const d = item.runDepth[t];
+            if (d <= 0) return;
+            const pos = run[d - 1];
+            const nodeKey = prefixKey(item, pos);
+            if (!parentKeys[t].has(nodeKey)) return;
+            indicators.push({ newId, field: fieldAtPos(pos), nodeKey, collapsed: collapsedSet.has(nodeKey) });
+        });
     });
 
     return { dict: dictOut, idMap, indicators };
@@ -7543,7 +7685,7 @@ function parseMemberJsonTree(json, dim) {
             path += "\u0001" + v;
             if (seen.has(path)) continue;
             seen.add(path);
-            items.push({ text: " ".repeat(i * 4) + v, attribute: campos[i], value: v });
+            items.push({ text: " ".repeat(i * 4) + v, attribute: campos[i], value: v, depth: i });
         }
     }
     return items;
