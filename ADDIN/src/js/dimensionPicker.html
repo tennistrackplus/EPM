@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>Elegir dimensión</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; font-family: "Segoe UI", "Segoe UI Web", Arial, sans-serif; font-size: 13px; color: #201f1e; background: #fff; }
+        .wrap { display: flex; flex-direction: column; height: 100%; }
+        .head { padding: 12px 14px 8px; border-bottom: 1px solid #edebe9; }
+        .title { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
+        .sub { font-size: 12px; color: #605e5c; margin-bottom: 8px; }
+        #search { width: 100%; padding: 6px 8px; border: 1px solid #c8c6c4; border-radius: 4px; font: inherit; }
+        #search:focus { outline: none; border-color: #0f6cbd; }
+        .count { font-size: 11px; color: #8a8886; margin-top: 6px; }
+        .list { flex: 1; overflow-y: auto; padding: 4px 0; }
+        .dim { border-bottom: 1px solid #f3f2f1; }
+        .dim-head { display: flex; align-items: center; gap: 6px; padding: 6px 12px; cursor: pointer; font-weight: 600; user-select: none; }
+        .dim-head:hover { background: #f3f2f1; }
+        .caret { width: 12px; color: #605e5c; font-size: 10px; }
+        .dim-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .badge { font-size: 10px; font-weight: 600; color: #605e5c; background: #edebe9; border-radius: 8px; padding: 1px 6px; }
+        .dim.collapsed .items { display: none; }
+        .item { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 32px; cursor: pointer; }
+        .item:hover { background: #deecf9; }
+        .item .ico { width: 18px; text-align: center; font-size: 11px; font-weight: 700; color: #605e5c; }
+        .item.hier .ico { color: #0f6cbd; }
+        .item .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .item .meta { font-size: 11px; color: #8a8886; }
+        .item.used { opacity: .45; cursor: not-allowed; }
+        .item.used:hover { background: none; }
+        .empty { padding: 16px; color: #8a8886; text-align: center; }
+        .foot { padding: 8px 14px; border-top: 1px solid #edebe9; text-align: right; }
+        .foot button { font: inherit; padding: 5px 14px; border-radius: 4px; border: 1px solid #c8c6c4; background: #fff; cursor: pointer; }
+        .foot button:hover { background: #f3f2f1; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="head">
+            <div class="title" id="title">Elegir dimensión</div>
+            <div class="sub" id="sub">Esta fila/columna aún no tiene dimensión: elige la que irá en ella.</div>
+            <input type="text" id="search" placeholder="Buscar dimensión, atributo o jerarquía…" autocomplete="off" />
+            <div class="count" id="count">Cargando…</div>
+        </div>
+        <div class="list" id="list"></div>
+        <div class="foot"><button type="button" id="btnCancel">Cancelar</button></div>
+    </div>
+
+    <script>
+        // Recibe del panel (commands.js, openDracoDimensionPicker) los campos
+        // del modelo en trozos y devuelve { type:"select", dim, name, isHierarchy }.
+        let data = { fields: [], used: [], axis: "rows" };
+        const parts = [];
+
+        function send(obj) {
+            try { Office.context.ui.messageParent(JSON.stringify(obj)); } catch (e) { /* sin padre */ }
+        }
+
+        function esc(t) {
+            return String(t == null ? "" : t).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+        }
+
+        function render() {
+            const q = document.getElementById("search").value.trim().toLowerCase();
+            const used = new Set(data.used || []);
+            const list = document.getElementById("list");
+            list.innerHTML = "";
+            let nDims = 0, nAttrs = 0, nHiers = 0;
+            data.fields.forEach(f => {
+                // Una dimensión sin atributos es ella misma el campo (como en el panel)
+                const items = [];
+                (f.hierarchies || []).forEach(h => items.push({ name: h.name, label: h.name, hier: true, meta: h.levels + (h.levels === 1 ? " nivel" : " niveles") }));
+                if ((f.attributes || []).length) f.attributes.forEach(a => items.push({ name: a.name, label: a.alias || a.name, hier: false, meta: a.isKey ? "clave" : "" }));
+                else items.push({ name: f.name, label: f.alias || f.name, hier: false, meta: "" });
+                const dimMatch = !q || String(f.alias || f.name).toLowerCase().includes(q) || String(f.name).toLowerCase().includes(q);
+                const shown = items.filter(it => dimMatch || it.label.toLowerCase().includes(q) || it.name.toLowerCase().includes(q));
+                if (!shown.length) return;
+                nDims++;
+                shown.forEach(it => { if (it.hier) nHiers++; else nAttrs++; });
+
+                const box = document.createElement("div");
+                box.className = "dim" + (q || data.fields.length <= 6 ? "" : " collapsed");
+                box.innerHTML = `<div class="dim-head"><span class="caret">${q || data.fields.length <= 6 ? "▾" : "▸"}</span>`
+                    + `<span class="dim-name" title="${esc(f.name)}">${esc(f.alias || f.name)}</span>`
+                    + `<span class="badge" title="atributos / jerarquías">${shown.length}</span></div><div class="items"></div>`;
+                box.querySelector(".dim-head").addEventListener("click", () => {
+                    box.classList.toggle("collapsed");
+                    box.querySelector(".caret").textContent = box.classList.contains("collapsed") ? "▸" : "▾";
+                });
+                const cont = box.querySelector(".items");
+                shown.forEach(it => {
+                    const isUsed = used.has((String(f.name) + "|" + String(it.name)).toUpperCase());
+                    const row = document.createElement("div");
+                    row.className = "item" + (it.hier ? " hier" : "") + (isUsed ? " used" : "");
+                    row.title = isUsed ? "Ya está en el informe" : (it.hier ? "Jerarquía" : "Atributo");
+                    row.innerHTML = `<span class="ico">${it.hier ? "⋔" : "A"}</span><span class="nm">${esc(it.label)}</span>`
+                        + `<span class="meta">${esc(isUsed ? "en uso" : it.meta)}</span>`;
+                    if (!isUsed) row.addEventListener("click", () => send({ type: "select", dim: f.name, name: it.name, isHierarchy: it.hier }));
+                    cont.appendChild(row);
+                });
+                list.appendChild(box);
+            });
+            if (!nDims) list.innerHTML = "<div class='empty'>Sin resultados.</div>";
+            document.getElementById("count").textContent =
+                `${nDims} ${nDims === 1 ? "dimensión" : "dimensiones"} · ${nAttrs} ${nAttrs === 1 ? "atributo" : "atributos"} · ${nHiers} ${nHiers === 1 ? "jerarquía" : "jerarquías"}`;
+        }
+
+        Office.onReady(() => {
+            Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg) => {
+                let m = null;
+                try { m = JSON.parse(arg.message); } catch (e) { return; }
+                if (!m || m.type !== "chunk") return;
+                parts[m.i] = m.data;
+                if (parts.filter(x => x !== undefined).length === m.n) {
+                    try { data = JSON.parse(parts.join("")); } catch (e) { data = { fields: [], used: [] }; }
+                    document.getElementById("sub").textContent = data.axis === "columns"
+                        ? "Esta fila de la cabecera de Columnas aún no tiene dimensión: elige la que irá en ella."
+                        : "Esta columna de la cabecera de Filas aún no tiene dimensión: elige la que irá en ella.";
+                    render();
+                    document.getElementById("search").focus();
+                }
+            }, () => send({ type: "ready" }));
+            document.getElementById("search").addEventListener("input", render);
+            document.getElementById("btnCancel").addEventListener("click", () => send({ type: "cancel" }));
+            document.addEventListener("keydown", (e) => { if (e.key === "Escape") send({ type: "cancel" }); });
+        });
+    </script>
+</body>
+</html>

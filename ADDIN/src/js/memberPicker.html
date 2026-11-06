@@ -5,8 +5,8 @@
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
     <title>Seleccionar miembro</title>
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
-    <script src="js/i18n.js?v=20261029b"></script>
-    <script src="js/i18n/en.js?v=20261029b"></script>
+    <script src="js/i18n.js?v=20261029j"></script>
+    <script src="js/i18n/en.js?v=20261029j"></script>
     <style>
         * { box-sizing: border-box; }
         html, body {
@@ -22,12 +22,29 @@
             border-radius: 2px; font-size: 13px;
         }
         .items {
-            overflow-y: auto; height: calc(100% - 96px);
+            overflow-y: auto; height: calc(100% - 118px);
         }
         .item {
-            padding: 6px 12px; cursor: pointer; white-space: pre;
+            display: flex; align-items: center; gap: 4px;
+            padding: 6px 12px; cursor: pointer; white-space: nowrap;
         }
         .item:hover { background: #f3f2f1; }
+        .item .lbl { overflow: hidden; text-overflow: ellipsis; }
+        /* Árbol (jerarquías), como en el diálogo de filtro */
+        .caret {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 16px; height: 16px; flex-shrink: 0; border-radius: 2px;
+            color: #605e5c; font-size: 11px; user-select: none;
+        }
+        .caret:hover { background: #e1dfdd; color: #201f1e; }
+        .caret.leaf { visibility: hidden; }
+        .tree-tools { display: none; gap: 10px; margin-top: 6px; }
+        .tree-tools.on { display: flex; }
+        .tree-tools button {
+            border: 0; background: none; padding: 0; cursor: pointer;
+            color: #0f6cbd; font-size: 12px;
+        }
+        .tree-tools button:hover { text-decoration: underline; }
         .empty, .loading, .error {
             padding: 14px; color: #605e5c;
         }
@@ -57,6 +74,10 @@
 <body>
     <div class="header">
         <input type="text" id="searchInput" placeholder="Buscar…" autocomplete="off" />
+        <div class="tree-tools" id="treeTools">
+            <button type="button" id="btnExpandAll">⊞ Expandir todo</button>
+            <button type="button" id="btnCollapseAll">⊟ Contraer todo</button>
+        </div>
     </div>
     <div class="items" id="itemsContainer">
         <div class="loading" id="loadingMsg"><span class="spinner"></span>Cargando…</div>
@@ -76,7 +97,7 @@
         // mandar "ready" (antes era al revés y, si la consulta ya estaba
         // lista, la respuesta llegaba sin nadie escuchando -> "Cargando…"
         // para siempre).
-        const PICKER_BUILD = "2026-10-02-picker-v4";
+        const PICKER_BUILD = "2026-11-05-picker-v5-arbol";
         let allItems = [];
         let gotData = false;      // datos o error ya pintados
         let sentResult = false;   // ya se ha mandado select/cancel
@@ -102,7 +123,52 @@
             send(obj);
         }
 
-        function render(items) {
+        // ---- Árbol de jerarquía (expandir / contraer), como el del filtro ----
+        // Cada item trae depth (nivel); si no, se deduce de la sangría del texto.
+        let expanded = new Set();   // índices de nodos abiertos
+        let isTree = false;
+
+        function indexTree(items) {
+            const stack = [];
+            items.forEach((it, i) => {
+                it._idx = i;
+                if (typeof it.depth !== "number") {
+                    const m = /^ */.exec(String(it.text || ""));
+                    it.depth = Math.floor((m ? m[0].length : 0) / 4);
+                }
+                while (stack.length && items[stack[stack.length - 1]].depth >= it.depth) stack.pop();
+                it._parent = stack.length ? stack[stack.length - 1] : -1;
+                it._kids = false;
+                if (it._parent >= 0) items[it._parent]._kids = true;
+                stack.push(i);
+            });
+            isTree = items.some(it => it._kids);
+            document.getElementById("treeTools").classList.toggle("on", isTree);
+        }
+
+        function label(it) { return String(it.text || it.value || "").trim(); }
+
+        // Sin búsqueda: lo que tiene abiertos todos sus antepasados. Con
+        // búsqueda: lo que coincide y sus antepasados (para ver dónde está).
+        function visibleItems(term) {
+            const t = (term || "").toLowerCase().trim();
+            if (!isTree) return t ? allItems.filter(it => label(it).toLowerCase().indexOf(t) !== -1) : allItems;
+            if (!t) {
+                return allItems.filter(it => {
+                    for (let p = it._parent; p >= 0; p = allItems[p]._parent) if (!expanded.has(p)) return false;
+                    return true;
+                });
+            }
+            const show = new Set();
+            allItems.forEach(it => {
+                if (label(it).toLowerCase().indexOf(t) === -1) return;
+                show.add(it._idx);
+                for (let p = it._parent; p >= 0 && !show.has(p); p = allItems[p]._parent) show.add(p);
+            });
+            return allItems.filter(it => show.has(it._idx));
+        }
+
+        function render(items, searching) {
             const container = document.getElementById("itemsContainer");
             container.innerHTML = "";
             if (!items.length) {
@@ -116,7 +182,28 @@
             for (const it of items.slice(0, MAX)) {
                 const div = document.createElement("div");
                 div.className = "item";
-                div.textContent = it.text;
+                if (isTree) {
+                    div.style.paddingLeft = (8 + it.depth * 16) + "px";
+                    const caret = document.createElement("span");
+                    caret.className = "caret" + (it._kids ? "" : " leaf");
+                    if (it._kids) {
+                        const open = searching || expanded.has(it._idx);
+                        caret.textContent = open ? "▾" : "▸";
+                        caret.title = open ? "Contraer" : "Expandir";
+                        caret.addEventListener("click", (e) => {
+                            e.stopPropagation();           // el clic en la flecha no elige el miembro
+                            if (searching) return;
+                            if (expanded.has(it._idx)) expanded.delete(it._idx); else expanded.add(it._idx);
+                            applySearch(document.getElementById("searchInput").value);
+                        });
+                    }
+                    div.appendChild(caret);
+                }
+                const lbl = document.createElement("span");
+                lbl.className = "lbl";
+                lbl.textContent = isTree ? label(it) : it.text;
+                lbl.title = label(it);
+                div.appendChild(lbl);
                 div.addEventListener("click", () => {
                     sendResult({ type: "select", value: it.value, attribute: it.attribute });
                 });
@@ -132,9 +219,14 @@
         }
 
         function applySearch(term) {
-            const t = (term || "").toLowerCase();
-            const filtered = t ? allItems.filter(it => it.text.toLowerCase().indexOf(t) !== -1) : allItems;
-            render(filtered);
+            const searching = !!(term || "").trim();
+            render(visibleItems(term), searching);
+        }
+
+        function expandAll(open) {
+            expanded = new Set();
+            if (open) allItems.forEach(it => { if (it._kids) expanded.add(it._idx); });
+            applySearch(document.getElementById("searchInput").value);
         }
 
         function showError(message) {
@@ -162,6 +254,8 @@
             gotData = true;
             stopReady();
             allItems = Array.isArray(items) ? items : [];
+            indexTree(allItems);
+            expanded = new Set();
             const input = document.getElementById("searchInput");
             input.disabled = false;
             input.value = meta.initialSearch || "";
@@ -219,6 +313,8 @@
 
         document.getElementById("searchInput").addEventListener("input", (e) => applySearch(e.target.value));
         document.getElementById("btnCancel").addEventListener("click", () => sendResult({ type: "cancel" }));
+        document.getElementById("btnExpandAll").addEventListener("click", () => expandAll(true));
+        document.getElementById("btnCollapseAll").addEventListener("click", () => expandAll(false));
         document.addEventListener("keydown", (e) => { if (e.key === "Escape") sendResult({ type: "cancel" }); });
 
         Office.onReady(() => {
