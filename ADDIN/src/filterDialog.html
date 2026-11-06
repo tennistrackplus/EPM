@@ -166,6 +166,9 @@
         }
         .tree-caret:hover { background: var(--gray-100); color: var(--text-primary); }
         .tree-caret.leaf { cursor: default; }
+        /* Hijo marcado por su padre: solo visual, el filtro usa el padre */
+        .modal-item-row.inherited label { color: var(--text-muted); font-style: italic; }
+        .modal-item-row.inherited input[type="checkbox"] { opacity: .55; }
         .tree-caret.leaf:hover { background: none; }
 
         .loading, .error { padding: 14px; color: var(--text-muted); }
@@ -267,6 +270,6 @@
         <button id="btnApplyModal" class="btn-primary">Aceptar</button>
     </div>
 
-    <script src="js/filterDialog.js?v=20261105d"></script>
+    <script src="js/filterDialog.js?v=20261105g"></script>
 </body>
 </html>

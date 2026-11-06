@@ -1563,6 +1563,16 @@
     
     </style>
     <style>
+        /* Filtro anulado por un eje Estático (TaskPaneApp.refreshStaticFilterLock) */
+        .dropped-tag.filter-static-off {
+            opacity: .5; filter: grayscale(1); text-decoration: line-through;
+            cursor: not-allowed;
+        }
+        .static-filter-note {
+            margin: 6px 8px 8px; padding: 6px 8px; border-radius: 4px;
+            font-size: 11px; line-height: 1.35;
+            background: var(--surface-sunken, #f3f2f1); color: var(--text-secondary, #605e5c);
+        }
         /* Deshacer (TaskPaneApp.initUndoButton) */
         .undo-wrap { position: relative; display: inline-flex; }
         #btnUndo, #btnRedo { display: inline-flex; align-items: center; }
@@ -2352,24 +2362,24 @@
     <script src="js/connections.js?v=20261029j"></script>
     <script src="js/gitSession.js?v=20261029j"></script>
     <script src="js/semanticModelStore.js?v=20261104b"></script>
-    <script src="js/lkmlSaveBridge.js?v=20261029j"></script>
+    <script src="js/lkmlSaveBridge.js?v=20261105f"></script>
     <script src="js/lkmlOpenBridge.js?v=20261103a"></script>
-    <script src="js/reportStore.js?v=20261029j"></script>
+    <script src="js/reportStore.js?v=20261105h"></script>
     <script src="js/filterRangeStore.js"></script>
-    <script src="js/excelService.js?v=20261104e"></script>
+    <script src="js/excelService.js?v=20261105h"></script>
     <script src="js/busyindicator.js?v=20261029j"></script>
-    <script src="js/filterModal.js?v=20261104b"></script>
+    <script src="js/filterModal.js?v=20261105j"></script>
     <script src="js/distributeValues.js"></script>
     <script src="js/variablesStore.js?v=20261029j"></script>
     <script src="js/calcFormula.js?v=20261029j"></script>
-    <script src="js/commands.js?v=20261105e"></script>
-    <script src="js/taskpane.js?v=20261104k"></script>
+    <script src="js/commands.js?v=20261105j"></script>
+    <script src="js/taskpane.js?v=20261105h"></script>
     <script src="js/epmFormulaPanel.js?v=20261029j"></script>
     <!-- Funciones personalizadas DRACO.EPM_VALUE / DRACO.EPM_FORMULA (runtime compartido) -->
     <script src="js/functions.js?v=20261029j"></script>
     <script src="js/calcEditor.js?v=20261029j"></script>
-    <script src="js/login.js?v=20261104j"></script>
-    <script src="js/semantic_model.js?v=20261104b"></script>
+    <script src="js/login.js?v=20261105j"></script>
+    <script src="js/semantic_model.js?v=20261105i"></script>
 
     <script>
         // Conmutador entre las 3 vistas de nivel superior (fusionadas aquí

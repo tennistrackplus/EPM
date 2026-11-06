@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>Draco</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <style>
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0; padding: 0; height: 100%; width: 100%;
+            font-family: "Segoe UI", "Segoe UI Web", Arial, sans-serif;
+            display: flex; align-items: center; justify-content: center;
+            background: #ffffff; cursor: pointer; overflow: hidden;
+        }
+        /* Mismo aspecto que recognitionBadge.html (Reconocimiento de miembros) */
+        .badge {
+            width: 100%; height: 100%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 6px; text-align: center; padding: 10px 14px;
+            color: #ffffff; background: #0f6cbd;      /* info */
+        }
+        .badge.warn { background: #c25e00; }       /* aviso */
+        .dot { width: 12px; height: 12px; border-radius: 50%; background: rgba(255,255,255,0.9); }
+        .title { font-size: 13px; font-weight: 600; line-height: 1.3; }
+        .subtitle { font-size: 12px; opacity: 0.92; line-height: 1.35; }
+    </style>
+</head>
+<body>
+    <div id="badge" class="badge">
+        <span class="dot"></span>
+        <span class="title" id="t"></span>
+        <span class="subtitle" id="s"></span>
+    </div>
+    <script>
+        // Aviso genérico de Draco (dracoInfoNotice en commands.js): se cierra
+        // solo pasado AUTO_CLOSE_MS o al hacer clic. Solo informa.
+        const AUTO_CLOSE_MS = 3500;
+        function closeMe() {
+            try { Office.context.ui.messageParent(JSON.stringify({ type: "close" })); }
+            catch (e) { try { window.close(); } catch (e2) { /* nada */ } }
+        }
+        const p = new URLSearchParams(window.location.search);
+        document.getElementById("t").textContent = p.get("t") || "";
+        document.getElementById("s").textContent = p.get("s") || "";
+        if (p.get("tone") === "warn") document.getElementById("badge").classList.add("warn");
+        Office.onReady(() => setTimeout(closeMe, AUTO_CLOSE_MS));
+        document.body.addEventListener("click", closeMe);
+    </script>
+</body>
+</html>
