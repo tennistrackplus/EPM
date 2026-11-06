@@ -603,8 +603,10 @@ const ExcelService = {
         // en taskpane.js). Si está vacía o no es una dirección válida, se usa
         // A1. Solo se aplica cuando todavía no hay rrAddress/rcAddress
         // guardados (ver RangeAxis.loadFromAddresses en taskpane.js).
-        let anchorAddress = "";
-        try {
+        // El ancla guardada en el propio informe manda (EDIT_REPORT!E1 es
+        // compartida y cambia al crear otro informe)
+        let anchorAddress = design.anchorAddress || "";
+        if (!anchorAddress) try {
             anchorAddress = await Excel.run(async (context) => {
                 const cell = context.workbook.worksheets.getItem("EDIT_REPORT").getRange("E1");
                 cell.load("values");

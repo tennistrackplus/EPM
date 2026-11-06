@@ -243,6 +243,7 @@ const LoginApp = {
         }
 
         this.pendingConnectionId = conn.id;
+        this.clearMemberCache();   // conexión nueva: valores de filtros/buscador desde la base de datos
         try {
             if (conn.provider === "bigquery") {
                 const cfgError = GoogleAuth.validateConfig(conn.config);
@@ -258,12 +259,21 @@ const LoginApp = {
         }
     },
 
+    /** Vacía la caché de miembros (buscador de miembros y filtros), ver commands.js. */
+    clearMemberCache() {
+        try {
+            if (typeof window.dracoMemberCacheClear === "function") window.dracoMemberCacheClear();
+            else localStorage.removeItem("draco_member_cache_v1");
+        } catch (e) { /* sin caché */ }
+    },
+
     /** Cierra la sesión (token OAuth) de una conexión, sin borrar sus parámetros guardados */
     logoutConnection(id) {
         const conn = Connections.getById(id);
         if (!conn) return;
 
         GoogleAuth.logout();
+        this.clearMemberCache();   // al volver a conectar se leen los datos actuales
         this.showAlert(`Sesión cerrada para ${this.getProviderDisplayName(conn.provider)}.`);
         this.renderList();
     },
@@ -413,6 +423,7 @@ const LoginApp = {
         }
 
         this.pendingConnectionId = conn.id;
+        this.clearMemberCache();   // conexión nueva: valores de filtros/buscador desde la base de datos
         try {
             if (conn.provider === "bigquery") {
                 this.startBigQueryAuth(conn);

@@ -17,9 +17,14 @@
 
     function openSaveLkmlDialog(models, activeModel) {
 
-        const query = `models=${encodeURIComponent(JSON.stringify(models || {}))}`
-            + `&active=${encodeURIComponent(activeModel || "")}`;
+        // Los modelos ya NO van en la URL: un modelo real (decenas de campos y
+        // jerarquías) son decenas de KB y Office rechazaba el diálogo con
+        // «URL demasiado larga». El diálogo los pide al arrancar
+        // (MODELS_REQUEST) y se le mandan por mensajes, troceados.
+        const modelsJson = JSON.stringify(models || {});
+        const query = `active=${encodeURIComponent(activeModel || "")}&byMessage=1`;
         const dialogUrl = new URL(`saveSemanticModel.html?${query}`, window.location.href).href;
+        const CHUNK = 20000;
 
         Office.context.ui.displayDialogAsync(
             dialogUrl,
@@ -43,6 +48,18 @@
                         payload = JSON.parse(arg.message);
                     } catch (e) {
                         payload = null;
+                    }
+
+                    // El diálogo pide los modelos semánticos: se mandan en trozos
+                    if (payload && payload.type === "draco-save-models-request") {
+                        const n = Math.max(1, Math.ceil(modelsJson.length / CHUNK));
+                        for (let i = 0; i < n; i++) {
+                            dialog.messageChild(JSON.stringify({
+                                type: "draco-save-models-chunk", i, n,
+                                data: modelsJson.slice(i * CHUNK, (i + 1) * CHUNK)
+                            }));
+                        }
+                        return;
                     }
 
                     if (!payload || typeof payload.content !== "string") {

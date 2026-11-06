@@ -74,14 +74,55 @@ function closeDialog() {
 function parseQueryParams() {
     const params = new URLSearchParams(window.location.search);
 
-    try {
-        modelsData = JSON.parse(decodeURIComponent(params.get("models") || "{}")) || {};
-    } catch (e) {
-        console.error("No se han podido leer los modelos semánticos recibidos:", e);
-        modelsData = {};
+    // Compatibilidad: versiones anteriores mandaban los modelos en la URL
+    if (params.get("models")) {
+        try {
+            modelsData = JSON.parse(decodeURIComponent(params.get("models") || "{}")) || {};
+        } catch (e) {
+            console.error("No se han podido leer los modelos semánticos recibidos:", e);
+            modelsData = {};
+        }
     }
 
-    return { active: params.get("active") || "" };
+    return { active: params.get("active") || "", byMessage: params.get("byMessage") === "1" };
+}
+
+/**
+ * Pide los modelos semánticos a quien abrió el diálogo (lkmlSaveBridge.js).
+ * Ya no van en la URL (con un modelo real superaban el límite de Office:
+ * «URL demasiado larga»); llegan por mensajes, en trozos que aquí se juntan.
+ */
+function requestModelsFromOpener(timeoutMs = 8000) {
+    return new Promise((resolve) => {
+        const parts = [];
+        let total = -1, done = false;
+        const finish = (ok) => {
+            if (done) return;
+            done = true;
+            if (ok) {
+                try { modelsData = JSON.parse(parts.join("")) || {}; }
+                catch (e) { console.error("No se han podido leer los modelos semánticos recibidos:", e); modelsData = {}; }
+            } else {
+                console.error("No han llegado los modelos semánticos desde el panel.");
+            }
+            resolve(ok);
+        };
+        try {
+            Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg) => {
+                let msg = null;
+                try { msg = JSON.parse(arg.message); } catch (e) { return; }
+                if (!msg || msg.type !== "draco-save-models-chunk") return;
+                total = msg.n;
+                parts[msg.i] = msg.data;
+                if (parts.filter(x => x !== undefined).length === total) finish(true);
+            });
+            Office.context.ui.messageParent(JSON.stringify({ type: "draco-save-models-request" }));
+        } catch (e) {
+            console.error("No se pueden pedir los modelos al panel:", e);
+            finish(false);
+        }
+        setTimeout(() => finish(false), timeoutMs);
+    });
 }
 
 function getModel(modelName) {
@@ -408,7 +449,8 @@ function initEvents() {
 Office.onReady(async () => {
     // El token de Git vive en la sesión del panel: se pide antes de usar el repositorio (F-06).
     if (window.GitSession) await GitSession.requestFromOpener();
-    const { active } = parseQueryParams();
+    const { active, byMessage } = parseQueryParams();
+    if (byMessage) await requestModelsFromOpener();
 
     initEvents();
     populateModelSelect(active);

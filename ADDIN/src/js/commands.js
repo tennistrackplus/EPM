@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-11-05-arbol-picker";
+const DRACO_BUILD = "2026-11-05-estatico-desde-cero";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -684,9 +684,48 @@ function resultSheetNameFromGrid(editReportGrid, reportId) {
 // como fallback). Mismo criterio que resultSheetNameFromGrid.
 async function getDracoResultSheetName(context, reportId) {
     const id = reportId !== undefined ? reportId : activeReportIdOrNull();
-    if (window.ReportStore && id) {
-        const stored = window.ReportStore.getReportResultSheetName(id);
-        if (stored) return stored;
+    const RS = window.ReportStore;
+    if (id) {
+        // 1) Por el identificador TÉCNICO de la hoja (worksheet.id, como el
+        //    nombre de código de VBA): no cambia al renombrar la hoja.
+        // 2) Si no hay (informe anterior a este cambio), por sus rangos con
+        //    nombre Draco_00N_*, que Excel también mantiene al renombrar.
+        // En ambos casos se guardan id y nombre actuales en el informe:
+        // design.resultSheetName (texto) se quedaba con el nombre antiguo
+        // («Hoja1» tras renombrarla a «Importe Neto») y el refresco iba a
+        // otra hoja.
+        let ws = null;
+        const storedId = RS && RS.getReportResultSheetId ? RS.getReportResultSheetId(id) : "";
+        if (storedId) {
+            try {
+                const byId = context.workbook.worksheets.getItemOrNullObject(storedId);
+                byId.load(["isNullObject", "name", "id"]);
+                await context.sync();
+                if (!byId.isNullObject) ws = { id: byId.id, name: byId.name };
+            } catch (e) { /* id no válido: se sigue */ }
+        }
+        if (!ws) ws = await dracoSheetFromNamedRanges(context, id);
+        if (ws && ws.name) {
+            const storedName = RS ? RS.getReportResultSheetName(id) : "";
+            if ((ws.id && ws.id !== storedId) || ws.name !== storedName) {
+                try { if (RS && RS.setReportResultSheetRef) await RS.setReportResultSheetRef(id, ws.id, ws.name); } catch (e) { /* se reintenta en el próximo refresco */ }
+                if (ws.name !== storedName) dracoLog("Informe " + id + ": su hoja es «" + ws.name + "» (estaba guardada como «" + storedName + "»).");
+            }
+            return ws.name;
+        }
+    }
+    if (RS && id) {
+        const stored = RS.getReportResultSheetName(id);
+        if (stored) {
+            // Primera vez con este informe: se anota el id técnico de su hoja
+            try {
+                const byName = context.workbook.worksheets.getItemOrNullObject(stored);
+                byName.load(["isNullObject", "id"]);
+                await context.sync();
+                if (!byName.isNullObject && RS.setReportResultSheetRef) await RS.setReportResultSheetRef(id, byName.id, stored);
+            } catch (e) { /* sin id */ }
+            return stored;
+        }
     }
     try {
         const cell = context.workbook.worksheets.getItem("EDIT_REPORT").getRange("D1");
@@ -696,6 +735,24 @@ async function getDracoResultSheetName(context, reportId) {
         return v || DEFAULT_RESULT_SHEET_NAME;
     } catch (e) {
         return DEFAULT_RESULT_SHEET_NAME;
+    }
+}
+
+/** Hoja ({id, name}) de los rangos con nombre válidos (no #REF!) de un informe, o null. */
+async function dracoSheetFromNamedRanges(context, reportId) {
+    try {
+        const rn = dracoRangeNames(reportId);
+        const items = [rn.cols, rn.rows, rn.values].map(n => context.workbook.names.getItemOrNullObject(n));
+        items.forEach(it => it.load(["isNullObject", "type"]));
+        await context.sync();
+        const ok = items.find(it => !it.isNullObject && it.type === "Range");
+        if (!ok) return null;
+        const ws = ok.getRange().worksheet;
+        ws.load(["name", "id"]);
+        await context.sync();
+        return ws.name ? { id: ws.id, name: ws.name } : null;
+    } catch (e) {
+        return null;
     }
 }
 
@@ -1991,6 +2048,8 @@ async function dracoReadEpmValueCells(context, csvGrid, cells) {
 }
 
 async function readRowDefinitions(context, editReportGrid, csvGrid) {
+    // Eje Filas sin ningún campo todavía (informe estático empezado de cero)
+    if (!String(cellValue(editReportGrid, 10, 8) || "").trim() || !ReportState.AttrColumnCount) return [];
     const RRows = parseAddress(cellValue(editReportGrid, 10, 8)); // EDIT_REPORT!H10
 
     const lastRow = lastRowInColumnFormulas(csvGrid, RRows.col);
@@ -2011,6 +2070,8 @@ async function readRowDefinitions(context, editReportGrid, csvGrid) {
 
 
 async function readColumnDefinitions(context, editReportGrid, csvGrid) {
+    // Eje Columnas sin ningún campo todavía (informe estático empezado de cero)
+    if (!String(cellValue(editReportGrid, 10, 14) || "").trim() || !ReportState.AttrRowCount) return [];
     const RCols = parseAddress(cellValue(editReportGrid, 10, 14)); // EDIT_REPORT!N10
 
     const lastCol = lastColInRowFormulas(csvGrid, RCols.row);
@@ -2173,6 +2234,10 @@ function buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs) {
         }
     }
 
+    // Sin líneas en ningún eje (informe estático empezado de cero): no hay
+    // nada que podar, el total de la medida sale en una sola celda.
+    if (dict.size === 0) return "WHERE TRUE";
+
     let sql = "WHERE" + CRLF + "(" + CRLF;
     let first = true;
 
@@ -2208,6 +2273,8 @@ function buildGroupByBase(relGrid, rowsDefs, colDefs, excCols) {
     }
 
     (excCols || []).forEach((c, j) => { if (!dict.has("DRC_R|" + j)) dict.set("DRC_R|" + j, c); });
+
+    if (dict.size === 0) return "";   // sin líneas: un único total
 
     let sql = "GROUP BY" + CRLF;
     for (const val of dict.values()) {
@@ -2314,8 +2381,18 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     colDefs.length = 0; colDefs.push(...colCalc.defs);
 
     // ID de un eje sin dimensiones: la celda de la medida o el ancla del eje
-    const rowFallback = rowsDefsRaw.some(isMeasureDef) ? measureDef.R : parseAddress(cellValue(editReportGrid, 10, 8)).row;
-    const colFallback = colDefsRaw.some(isMeasureDef) ? measureDef.R : parseAddress(cellValue(editReportGrid, 10, 14)).col;
+    if (!measureName) {
+        // Informe estático sin ninguna medida (en ejes ni en Filtros)
+        dracoInfoNotice("Falta una medida", "Es necesario que exista al menos una medida en filas, columnas o filtros.", "warn");
+        throw new Error("Es necesario que exista al menos una medida en filas, columnas o filtros.");
+    }
+    // Celda de los valores cuando un eje no tiene líneas: con el marco del
+    // informe (rrAddress/rcAddress y su ancla), así un informe estático
+    // empezado de cero devuelve el total de la medida en UNA celda.
+    const frame = dracoStaticFrame(cellValue(editReportGrid, 10, 8), cellValue(editReportGrid, 10, 14),
+        await dracoReportAnchor(context, ReportState.ReportId));
+    const rowFallback = rowsDefsRaw.some(isMeasureDef) ? measureDef.R : (frame ? frame.valuesRow : 1);
+    const colFallback = colDefsRaw.some(isMeasureDef) ? measureDef.R : (frame ? frame.valuesCol : 1);
     const rowIdsArray = buildIdArray(atributesGrid, rowsDefs, "ROW_ID", rowFallback);
     const columnIdsArray = buildIdArray(atributesGrid, colDefs, "COLUMN_ID", colFallback);
 
@@ -2328,7 +2405,9 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     // fila/columna (optimización para no escanear toda la tabla de
     // hechos); los filtros de aquí son una condición añadida de negocio,
     // así que van en AND, no dentro del propio OR.
-    const filterConditions = buildFilterConditions(atributesGrid, relGrid);
+    // Los dos ejes son Estáticos: los filtros de sus dimensiones no se aplican
+    const filterConditions = buildFilterConditions(atributesGrid, relGrid,
+        dracoStaticDims([...(ReportState.Rows || []), ...(ReportState.Columns || [])], [...rowsDefs, ...colDefs]));
 
     // Agregación de excepción de la medida: BASE lleva también las dimensiones de referencia (DRC_R_j) y cada
     // celda se calcula en dos pasos (suma por celda y referencia; después la excepción por celda).
@@ -2926,7 +3005,7 @@ async function actualizarInformeFixedCore(reportIdOverride) {
         const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
         const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
-        const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
+        const resultSheetName = await getDracoResultSheetName(context, reportId);   // por sus rangos con nombre (sobrevive a renombrar la hoja)
         await ensureDracoResultSheetExists(context, resultSheetName);
         const csvGrid = await getFormulaGrid(context, resultSheetName);
         tSub = draco_perfMark(reportId, "  Leer hoja de resultados (fórmulas)", tSub);
@@ -3268,7 +3347,11 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     }
     const where = [];
     if (prune.length) where.push("(" + CRLF + "      " + prune.join(CRLF + "   OR ") + CRLF + ")");
-    buildFilterConditions(atributesGrid, relGrid).forEach(c => where.push(c));
+    // Filtros de las dimensiones del eje ESTÁTICO: no se aplican (ya filtran
+    // sus líneas). OJO, nombres cruzados: ReportState.Columns = zona Filas.
+    buildFilterConditions(atributesGrid, relGrid,
+        dracoStaticDims(staticIsRows ? ReportState.Columns : ReportState.Rows, defsRaw))
+        .forEach(c => where.push(c));
 
     // Agregación de excepción: BASE lleva también las dimensiones de referencia de esas medidas (DRC_R_j); el
     // AGG de siempre no las usa y cada medida con excepción se calcula aparte (AGG_E_n) y se cruza en AGG_X.
@@ -4069,9 +4152,9 @@ async function autofitDracoHybrid(reportId, plan) {
         const rn = dracoRangeNames(reportId);
         const items = [plan.dynamicIsColumns ? rn.cols : rn.rows, rn.values]
             .map(n => context.workbook.names.getItemOrNullObject(n));
-        items.forEach(it => it.load("name"));
+        items.forEach(it => it.load(["name", "type"]));
         await context.sync();
-        items.forEach(it => { if (!it.isNullObject) it.getRange().format.autofitColumns(); });
+        items.forEach(it => { if (!it.isNullObject && it.type === "Range") it.getRange().format.autofitColumns(); });
         await context.sync();
     });
 }
@@ -4456,10 +4539,27 @@ function buildHierarchyListCondition(atributesGrid, relGrid, dimension, filter) 
  * WHERE; buildSQLFixed (modo Fijo) las añade con AND al bloque OR ya
  * existente (ver comentario en buildSQLFixed).
  */
-function buildFilterConditions(atributesGrid, relGrid) {
+/**
+ * Dimensiones de un eje ESTÁTICO: sus filtros no se aplican (las líneas del
+ * eje ya filtran por sus miembros). Se toman del diseño del eje y de las
+ * fórmulas EPM_VALUE leídas de la hoja (defs). Nunca incluye MEASURE.
+ */
+function dracoStaticDims(axisFields, defs) {
+    const out = new Set();
+    (axisFields || []).forEach(f => { if (f && f.Dimension) out.add(String(f.Dimension).toUpperCase()); });
+    (defs || []).forEach(d => { if (d && d.Dimension) out.add(String(d.Dimension).toUpperCase()); });
+    out.delete("MEASURE");
+    return out;
+}
+
+function buildFilterConditions(atributesGrid, relGrid, skipDims) {
     // Filtros "vacíos" (sin valor seleccionado en el taskpane) no deben
     // añadirse al WHERE: se ignoran por completo, como si no existieran.
-    const activeFilters = ReportState.Filters.filter(f => String(f.Value).trim() !== "");
+    // skipDims: dimensiones de un eje Estático (ver dracoStaticDims): su
+    // filtro no se aplica, ya filtran las líneas del eje (el panel lo
+    // muestra en gris).
+    const activeFilters = ReportState.Filters.filter(f => String(f.Value).trim() !== ""
+        && !(skipDims && skipDims.has(String(f.Dimension).toUpperCase())));
     if (activeFilters.length === 0) return [];
 
     const condiciones = [];
@@ -6746,11 +6846,15 @@ const DRACO_LAST_COLUMN_INDEX = 16384 - 1;  // última columna de Excel (0-based
  */
 async function collectDracoAxisCandidates(context, sheet, axisSuffix) {
     const names = context.workbook.names;
-    names.load("items/name");
+    names.load("items/name,items/type");
     await context.sync();
 
     const pattern = new RegExp(`^Draco_(\\d+)_${axisSuffix}$`, "i");
-    const matching = names.items.filter(n => pattern.test(n.name));
+    // Un nombre roto (=#REF!, p. ej. tras borrar filas del informe) tiene
+    // type "Error": pedir su rango lanza InvalidOperation y, como todos se
+    // leen en el mismo sync, rompía el reconocimiento de miembros y el doble
+    // clic en TODOS los informes del libro. Se ignora ese nombre.
+    const matching = names.items.filter(n => pattern.test(n.name) && n.type === "Range");
     if (matching.length === 0) return [];
 
     const loaded = matching.map(n => {
@@ -6940,6 +7044,231 @@ async function growDracoNamedRange(context, sheetName, rangeName, axisSuffix, ax
  * (ver growDracoNamedRange) en cuanto el usuario confirme un valor en
  * el picker.
  */
+/* =====================================================================
+ * INFORME ESTÁTICO EMPEZADO DE CERO
+ * =====================================================================
+ * Un informe con los ejes Estáticos y sin líneas no tiene rangos con
+ * nombre Draco_00N_*: se localiza con su MARCO (las mismas reglas que
+ * RangeAxis en taskpane.js):
+ *   rr = cabecera de Filas  (rrAddress; si no hay, el ancla con ancho 0)
+ *   rc = cabecera de Columnas (rcAddress; si no hay, el ancla con alto 0)
+ *   celda de valores = (fila de rr, columna de rc)
+ * La columna a la izquierda de la cabecera de Filas y la fila encima de
+ * la de Columnas son un NIVEL NUEVO: al pulsar ahí (reconocimiento de
+ * miembros o doble clic) se pide la dimensión, se añade al principio de
+ * ese eje (la cabecera crece hacia fuera, los valores no se mueven) y se
+ * abre el buscador de miembros de esa dimensión.
+ * =================================================================== */
+function dracoParseBlock(address) {
+    const a = String(address || "").trim();
+    if (!a) return null;
+    try {
+        const parts = a.split("!").pop().split(":");
+        const p1 = parseAddress(parts[0]);
+        const p2 = parseAddress(parts[1] || parts[0]);
+        return { row: p1.row, col: p1.col, height: p2.row - p1.row + 1, width: p2.col - p1.col + 1 };
+    } catch (e) { return null; }
+}
+
+function dracoStaticFrame(rrAddress, rcAddress, anchorAddress) {
+    let anchor = null;
+    try { anchor = anchorAddress ? parseAddress(anchorAddress) : null; } catch (e) { anchor = null; }
+    let rr = dracoParseBlock(rrAddress);
+    let rc = dracoParseBlock(rcAddress);
+    if (!rr && !rc && !anchor) return null;
+    // Igual que RangeAxis.loadFromAddresses: sin dirección guardada, el ancla
+    if (!rr) rr = rc ? { row: rc.row + (rc.height || 0), col: rc.col, height: 1, width: 0 } : { row: anchor.row, col: anchor.col, height: 1, width: 0 };
+    if (!rc) rc = { row: rr.row, col: rr.col + (rr.width || 0), height: 0, width: 1 };
+    if (!dracoParseBlock(rrAddress) && dracoParseBlock(rcAddress)) rr.col = rc.col;   // Filas vacío: pegado a los valores
+    return {
+        rr, rc,
+        valuesRow: rr.row,
+        valuesCol: rc.col,
+        rowsHeaderCol: rr.col,            // primera columna de la cabecera de Filas
+        rowsWidth: rr.width || 0,         // nº de columnas de esa cabecera
+        colsHeaderRow: rc.row,            // primera fila de la cabecera de Columnas
+        colsHeight: rc.height || 0
+    };
+}
+
+// Celda ancla del informe: la guardada en su diseño o, si es el informe
+// activo y aún no la tiene, la de EDIT_REPORT!E1 (donde se creó).
+async function dracoReportAnchor(context, reportId) {
+    const report = window.ReportStore && reportId ? window.ReportStore.getReport(reportId) : null;
+    if (report && report.design && report.design.anchorAddress) return report.design.anchorAddress;
+    if (!report || String(activeReportIdOrNull()) !== String(reportId)) return "";
+    try {
+        const cell = context.workbook.worksheets.getItem("EDIT_REPORT").getRange("E1");
+        cell.load("values");
+        await context.sync();
+        return String((cell.values && cell.values[0] && cell.values[0][0]) || "").trim();
+    } catch (e) { return ""; }
+}
+
+/**
+ * Aviso centrado en Excel que se cierra solo (mismo patrón que el de
+ * Reconocimiento de miembros): infoBadge.html.  tone: "info" | "warn".
+ */
+function dracoInfoNotice(title, subtitle, tone) {
+    try {
+        const qs = new URLSearchParams({ t: title || "", s: subtitle || "", tone: tone || "info" });
+        const url = new URL(`infoBadge.html?${qs.toString()}`, window.location.href).href;
+        Office.context.ui.displayDialogAsync(url, { height: 18, width: 26, displayInIframe: false }, (res) => {
+            if (res.status === Office.AsyncResultStatus.Failed) {
+                dracoLog("No se pudo mostrar el aviso: " + (res.error && res.error.message));
+                if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.setAutoStatus) TaskPaneApp.setAutoStatus(subtitle || title);
+                return;
+            }
+            const dlg = res.value;
+            let closed = false;
+            const close = () => { if (closed) return; closed = true; try { dlg.close(); } catch (e) { /* ya cerrado */ } };
+            dlg.addEventHandler(Office.EventType.DialogMessageReceived, close);
+            dlg.addEventHandler(Office.EventType.DialogEventReceived, close);
+        });
+    } catch (e) {
+        dracoLog("Aviso no disponible: " + dracoErrMsg(e));
+    }
+}
+
+/**
+ * ¿La celda es de la cabecera de un eje ESTÁTICO de algún informe de esta
+ * hoja (con o sin rangos con nombre)? Devuelve
+ *   { reportId, axis: "rows"|"columns", level, isNew, hasMeasure }
+ * isNew = la celda está justo FUERA de la cabecera (izquierda de Filas /
+ * encima de Columnas) o el eje aún no tiene campos: hay que elegir dimensión.
+ */
+async function dracoLocateStaticAxisCell(context, sheet, addr) {
+    if (!window.ReportStore) return null;
+    let cell;
+    try { cell = parseAddress(addr); } catch (e) { return null; }
+    sheet.load(["name", "id"]);
+    await context.sync();
+    const all = window.ReportStore.getAllReports() || {};
+    for (const idStr of Object.keys(all)) {
+        const rep = all[idStr];
+        const d = (rep && rep.design) || {};
+        if (!d.rowsStatic && !d.colsStatic) continue;
+        const onSheet = (d.resultSheetId && d.resultSheetId === sheet.id) || (!d.resultSheetId && d.resultSheetName === sheet.name);
+        if (!onSheet) continue;
+        const reportId = Number(idStr);
+        const frame = dracoStaticFrame(d.rrAddress, d.rcAddress, await dracoReportAnchor(context, reportId));
+        if (!frame) continue;
+
+        let hit = null;
+        // Cabecera de Filas: a la izquierda de los valores, desde su fila
+        if (d.rowsStatic && cell.row >= frame.valuesRow && cell.col < frame.valuesCol && cell.col >= frame.rowsHeaderCol - 1) {
+            const level = cell.col - frame.rowsHeaderCol + 1;   // 0 = columna nueva a la izquierda
+            hit = { axis: "rows", level: level < 1 ? 1 : level, isNew: level < 1 || frame.rowsWidth === 0 };
+        }
+        // Cabecera de Columnas: encima de los valores, desde su columna
+        else if (d.colsStatic && cell.col >= frame.valuesCol && cell.row < frame.valuesRow && cell.row >= frame.colsHeaderRow - 1) {
+            const level = cell.row - frame.colsHeaderRow + 1;   // 0 = fila nueva encima
+            hit = { axis: "columns", level: level < 1 ? 1 : level, isNew: level < 1 || frame.colsHeight === 0 };
+        }
+        if (!hit) continue;
+
+        // ¿Hay alguna medida (en un eje o en Filtros)?
+        const hasMeasure = [...(d.rows || []), ...(d.columns || []), ...(d.filters || [])]
+            .some(e => String(e && e.dimension).toUpperCase() === "MEASURE");
+        // Guardar el ancla en el informe (EDIT_REPORT!E1 cambia al crear otros)
+        if (!d.anchorAddress && !d.rrAddress && !d.rcAddress) {
+            const a = await dracoReportAnchor(context, reportId);
+            if (a && window.ReportStore.setReportAnchor) { try { await window.ReportStore.setReportAnchor(reportId, a); } catch (e) { /* opcional */ } }
+        }
+        return Object.assign({ reportId, hasMeasure, sheetName: sheet.name }, hit);
+    }
+    return null;
+}
+
+/** Pide la dimensión de un nivel nuevo (dimensionPicker.html). Devuelve {dim, name, isHierarchy} o null. */
+function openDracoDimensionPicker(reportId, axis) {
+    return new Promise((resolve) => {
+        const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
+        const sms = window.SemanticModelStore;
+        const mName = (report && report.semanticModelName) || (sms && sms.getActiveModelName && sms.getActiveModelName()) || "";
+        const model = mName && sms ? sms.getModel(mName) : null;
+        const d = (report && report.design) || {};
+        const used = [...(d.rows || []), ...(d.columns || [])].map(e => (String(e.dimension) + "|" + String(e.name)).toUpperCase());
+        const payload = JSON.stringify({
+            axis,
+            used,
+            fields: ((model && model.fields) || []).filter(f => f && f.type === "DIMENSION" && f.enabled !== false).map(f => ({
+                name: f.name, alias: f.alias || f.name,
+                attributes: (f.attributes || []).filter(a => a.enabled !== false).map(a => ({ name: a.name, alias: a.alias || a.name, isKey: !!a.isKey })),
+                hierarchies: (f.hierarchies || []).map(h => ({ name: h.name, levels: (h.levels || []).length }))
+            }))
+        });
+        const url = new URL(`dimensionPicker.html?v=${encodeURIComponent(DRACO_BUILD)}`, window.location.href).href;
+        let settled = false;
+        const done = (v) => { if (!settled) { settled = true; resolve(v); } };
+        Office.context.ui.displayDialogAsync(url, { height: 70, width: 30, displayInIframe: false }, (res) => {
+            if (res.status === Office.AsyncResultStatus.Failed) {
+                dracoLog("No se pudo abrir el selector de dimensión: " + (res.error && res.error.message));
+                return done(null);
+            }
+            const dlg = res.value;
+            const CHUNK = 20000;
+            dlg.addEventHandler(Office.EventType.DialogMessageReceived, (arg) => {
+                let m = null;
+                try { m = JSON.parse(arg.message); } catch (e) { return; }
+                if (!m) return;
+                if (m.type === "ready") {
+                    const n = Math.max(1, Math.ceil(payload.length / CHUNK));
+                    for (let i = 0; i < n; i++) dlg.messageChild(JSON.stringify({ type: "chunk", i, n, data: payload.slice(i * CHUNK, (i + 1) * CHUNK) }));
+                    return;
+                }
+                try { dlg.close(); } catch (e) { /* ya cerrado */ }
+                if (m.type === "select" && m.dim && m.name) done({ dim: m.dim, name: m.name, isHierarchy: !!m.isHierarchy });
+                else done(null);
+            });
+            dlg.addEventHandler(Office.EventType.DialogEventReceived, () => done(null));
+        });
+    });
+}
+
+/**
+ * Tras elegir la dimensión de un nivel nuevo: la añade al principio del eje
+ * (panel + diseño guardado) y devuelve el campo para el buscador de miembros.
+ */
+async function dracoAddStaticLevelAndLocate(target) {
+    const field = await openDracoDimensionPicker(target.reportId, target.axis);
+    if (!field) return null;
+    if (typeof TaskPaneApp === "undefined" || !TaskPaneApp.addStaticAxisField) {
+        dracoInfoNotice("Abre el panel", "Abre el panel de Draco para añadir dimensiones al informe.", "warn");
+        return null;
+    }
+    const ok = await TaskPaneApp.addStaticAxisField(target.reportId, target.axis, field);
+    if (!ok) return null;
+    let fieldLocated = null;
+    await Excel.run(async (context) => {
+        fieldLocated = await resolveDracoFieldForAxisLevel(context, target.reportId, target.axis, 1, 0);
+    });
+    if (!fieldLocated) return null;
+    fieldLocated.reportId = target.reportId;
+    fieldLocated.growth = null;
+    return fieldLocated;
+}
+
+/** Destino de reconocimiento/doble clic en un eje Estático sin rangos con nombre (o nivel nuevo). */
+async function dracoStaticAxisTarget(context, sheet, addr, initialSearch, tag) {
+    const hit = await dracoLocateStaticAxisCell(context, sheet, addr);
+    if (!hit) return null;
+    if (!hit.hasMeasure) {
+        dracoLog(tag, `informe ${hit.reportId} estático sin medida: aviso`);
+        return { special: "needMeasure" };
+    }
+    if (hit.isNew) {
+        dracoLog(tag, `informe ${hit.reportId}: nivel nuevo en ${hit.axis} (${addr}), se pide la dimensión`);
+        return { special: "needDimension", addr, reportId: hit.reportId, axis: hit.axis, initialSearch };
+    }
+    const fieldLocated = await resolveDracoFieldForAxisLevel(context, hit.reportId, hit.axis, hit.level, 0);
+    if (!fieldLocated) return null;
+    fieldLocated.reportId = hit.reportId;
+    fieldLocated.growth = null;
+    dracoLog(tag, `informe ${hit.reportId} estático: ${hit.axis} nivel ${hit.level} -> ${fieldLocated.dim}.${fieldLocated.attr}`);
+    return { addr, fieldLocated, initialSearch };
+}
+
 async function findDracoRowsNamedRangeForCell(context, worksheetId, addr) {
     let found = await findDracoAxisRangeOrGrowthZoneForCell(context, worksheetId, addr, "Rows");
     let axis = "rows";
@@ -7741,20 +8070,125 @@ function dracoPickerCacheKey(located) {
     return prov + "|" + String(located.dim).toUpperCase() + "|" + String(located.attr).toUpperCase();
 }
 
+/* ---------------------------------------------------------------------
+ * CACHÉ DE MIEMBROS (buscador de miembros y diálogo de filtro)
+ * ---------------------------------------------------------------------
+ * Los valores de un campo salen de un SELECT DISTINCT que, en una tabla de
+ * hechos grande, puede leer muchos GB. Se guarda el resultado:
+ *   - clave = conexión + texto EXACTO del SQL: si cambia el modelo (otro
+ *     nivel, otra tabla, otro valor vacío...) cambia el SQL y no se usa lo
+ *     guardado; no hace falta vaciar nada a mano;
+ *   - dura TODA la sesión y sobrevive a recargar el panel (localStorage);
+ *   - se vacía al cerrar sesión o al volver a conectar (login.js), que es
+ *     como se ven los datos nuevos si han cambiado en la base de datos;
+ *   - solo guarda los miembros de la consulta: los cálculos (OIBDA...) se
+ *     añaden después, en cada informe.
+ * Se guarda compacto ({names, rows}); si no cabe en localStorage se queda
+ * solo en memoria.
+ * ------------------------------------------------------------------- */
+const DRACO_MEMBER_CACHE_LS = "draco_member_cache_v1";
+const DracoMemberCacheMem = new Map();   // clave -> { at, names, rows }
+let DracoMemberCacheLoaded = false;
+
+function dracoMemberCacheHash(str) {
+    let h1 = 5381, h2 = 52711;
+    for (let i = 0; i < str.length; i++) {
+        const c = str.charCodeAt(i);
+        h1 = (h1 * 33) ^ c; h2 = (h2 * 33) ^ c;
+    }
+    return (h1 >>> 0).toString(36) + (h2 >>> 0).toString(36) + "_" + str.length;
+}
+
+function dracoMemberCacheKey(sql) {
+    let conn = "", prov = "";
+    try { conn = (typeof Connections !== "undefined" && Connections.getActiveId) ? String(Connections.getActiveId() || "") : ""; } catch (e) { /* sin conexiones */ }
+    try { prov = (window.Provider && typeof Provider.key === "function") ? Provider.key() : ""; } catch (e) { /* nada */ }
+    return prov + "|" + conn + "|" + dracoMemberCacheHash(String(sql || ""));
+}
+
+function dracoMemberCacheLoad() {
+    if (DracoMemberCacheLoaded) return;
+    DracoMemberCacheLoaded = true;
+    try {
+        const raw = localStorage.getItem(DRACO_MEMBER_CACHE_LS);
+        const obj = raw ? JSON.parse(raw) : {};
+        Object.keys(obj || {}).forEach(k => DracoMemberCacheMem.set(k, obj[k]));
+    } catch (e) { /* sin localStorage o dato corrupto */ }
+}
+
+function dracoMemberCachePersist() {
+    let entries = [...DracoMemberCacheMem.entries()].sort((a, b) => b[1].at - a[1].at);   // recientes primero
+    while (entries.length) {
+        try {
+            localStorage.setItem(DRACO_MEMBER_CACHE_LS, JSON.stringify(Object.fromEntries(entries)));
+            return;
+        } catch (e) {
+            entries = entries.slice(0, entries.length - 1);   // no cabe: fuera la más antigua
+        }
+    }
+    try { localStorage.removeItem(DRACO_MEMBER_CACHE_LS); } catch (e) { /* nada */ }
+}
+
+/** Respuesta guardada para ese SQL (con el formato JSON de BigQuery) o null. */
+function dracoMemberCacheGet(sql) {
+    dracoMemberCacheLoad();
+    const e = DracoMemberCacheMem.get(dracoMemberCacheKey(sql));
+    if (!e) return null;
+    return JSON.stringify({
+        schema: { fields: (e.names || []).map(n => ({ name: n })) },
+        rows: (e.rows || []).map(r => ({ f: r.map(v => ({ v })) }))
+    }, null, 2);
+}
+
+/** Guarda la respuesta (JSON de BigQuery) de ese SQL. */
+function dracoMemberCacheSet(sql, json) {
+    try {
+        const p = typeof json === "string" ? JSON.parse(json) : json;
+        if (!p || !p.schema || !Array.isArray(p.rows)) return;
+        dracoMemberCacheLoad();
+        DracoMemberCacheMem.set(dracoMemberCacheKey(sql), {
+            at: Date.now(),
+            names: (p.schema.fields || []).map(f => f.name),
+            rows: p.rows.map(r => (r.f || []).map(c => (c && c.v !== undefined) ? c.v : null))
+        });
+        dracoMemberCachePersist();
+    } catch (e) { /* no se guarda */ }
+}
+
+/** Ejecuta el SQL de valores usando la caché de miembros. */
+async function dracoMemberQuery(sql, tag) {
+    const hit = dracoMemberCacheGet(sql);
+    if (hit) {
+        if (tag) dracoLog(tag, "valores desde la caché de la sesión (sin consultar)");
+        return hit;
+    }
+    let json = await window.ExcelService.executeSQL(sql);
+    if (typeof json !== "string") json = JSON.stringify(json);
+    dracoMemberCacheSet(sql, json);
+    return json;
+}
+
+/** Vacía la caché de miembros (al cerrar sesión o volver a conectar). */
+function dracoMemberCacheClear() {
+    DracoMemberCacheMem.clear();
+    DracoPickerItemsCache.clear();
+    try { localStorage.removeItem(DRACO_MEMBER_CACHE_LS); } catch (e) { /* nada */ }
+    dracoLog("Caché de miembros vaciada.");
+}
+window.dracoMemberQuery = dracoMemberQuery;
+window.dracoMemberCacheClear = dracoMemberCacheClear;
+
 /** Vacía la caché de valores del picker (p.ej. tras cambiar de modelo/conexión). */
 function clearDracoPickerCache() {
-    DracoPickerItemsCache.clear();
-    dracoLog("Caché del picker vaciada.");
+    dracoMemberCacheClear();
 }
 window.clearDracoPickerCache = clearDracoPickerCache;
 
 async function loadDracoPickerItems(located, tag) {
-    const key = dracoPickerCacheKey(located);
-    const cached = DracoPickerItemsCache.get(key);
-    if (cached && Date.now() - cached.at < DRACO_PICKER_CACHE_TTL_MS) {
-        dracoLog(tag, "valores desde caché (" + cached.items.length + " items) " + key);
-        return cached.items;
-    }
+    // La caché de valores es ahora la de miembros (dracoMemberQuery: toda la
+    // sesión, por conexión + SQL). Aquí solo se evita lanzar dos veces la
+    // misma consulta a la vez (dobles clics seguidos).
+    const key = dracoPickerCacheKey(located) + "|" + String(located.reportId || "");
 
     let p = DracoPickerItemsInflight.get(key);
     if (p) {
@@ -7768,8 +8202,7 @@ async function loadDracoPickerItems(located, tag) {
                 throw new Error("No se ha encontrado " + located.dim + " / " + located.attr + " en el modelo (atributo o jerarquía).");
             }
             const t1 = Date.now();
-            let json = await window.ExcelService.executeSQL(sql);
-            if (typeof json !== "string") json = JSON.stringify(json);
+            const json = await dracoMemberQuery(sql, tag);   // caché de la sesión (clave = conexión + SQL)
             const items = parseMemberJsonTree(json, located.dim);
             // Cálculos entre miembros de ese atributo (del informe y del modelo):
             // se pueden elegir como una línea más del eje Estático.
@@ -7784,7 +8217,6 @@ async function loadDracoPickerItems(located, tag) {
                     });
             } catch (e) { /* sin cálculos */ }
             dracoLog(tag, "consulta OK en " + (Date.now() - t1) + " ms | respuesta " + json.length + " chars | " + items.length + " items");
-            DracoPickerItemsCache.set(key, { at: Date.now(), items });
             return items;
         })();
         DracoPickerItemsInflight.set(key, p);
@@ -8211,6 +8643,12 @@ async function runDracoMemberRecognitionAction(context, sheetName, targetAddr, t
 
     const located = await findDracoRowsNamedRangeForCell(context, sheet.id, addr);
     if (!located) {
+        // Informe Estático sin rangos con nombre (empezado de cero) o nivel nuevo
+        const st = await dracoStaticAxisTarget(context, sheet, addr, currentText, tag);
+        if (st) {
+            try { cell.select(); await context.sync(); } catch (e) { /* hoja no activa */ }
+            return st;
+        }
         dracoLog(tag, "REC: fuera de cualquier Draco_XXX_Rows/Cols:", sheetName, addr);
         return;
     }
@@ -8265,6 +8703,9 @@ async function runDracoSimulatedDoubleClick(context, sheetName, targetAddr, tag)
 
     const located = await findDracoRowsNamedRangeForCell(context, sheet.id, addr);
     if (!located) {
+        // Informe Estático sin rangos con nombre (empezado de cero) o nivel nuevo
+        const st = await dracoStaticAxisTarget(context, sheet, addr, "", tag);
+        if (st) return st;
         dracoLog(tag, "DC fuera de cualquier Draco_*_Rows/Cols (ni zona de crecimiento): " + sheetName + "!" + addr);
         return;
     }
@@ -8467,6 +8908,16 @@ async function runDracoPickerLoop() {
                 }
                 if (DracoPickerPending) {
                     dracoLog(tag, "no se abre: ya ha llegado una petición más nueva");
+                    continue;
+                }
+                if (target.special === "needMeasure") {
+                    dracoInfoNotice("Falta una medida", "Es necesario que exista al menos una medida en filas, columnas o filtros.", "warn");
+                    continue;
+                }
+                if (target.special === "needDimension") {
+                    const fl = await dracoAddStaticLevelAndLocate(target);
+                    if (!fl) { dracoLog(tag, "no se eligió dimensión: no se abre el buscador"); continue; }
+                    await openMemberRecognitionPicker(target.addr, fl, target.initialSearch);
                     continue;
                 }
                 await openMemberRecognitionPicker(target.addr, target.fieldLocated, target.initialSearch);
@@ -9239,10 +9690,10 @@ async function jsonTo3MatricesCore(context, json, reportIdOverride) {
     const rangeNamesForClear = dracoRangeNames(reportId);
     const prevNamedItems = [rangeNamesForClear.rows, rangeNamesForClear.cols, rangeNamesForClear.values]
         .map(n => context.workbook.names.getItemOrNullObject(n));
-    prevNamedItems.forEach(it => it.load("isNullObject"));
+    prevNamedItems.forEach(it => it.load(["isNullObject", "type"]));
     await context.sync();
 
-    const prevRanges = prevNamedItems.filter(it => !it.isNullObject).map(it => it.getRange());
+    const prevRanges = prevNamedItems.filter(it => !it.isNullObject && it.type === "Range").map(it => it.getRange());   // un nombre roto (#REF!) no tiene rango
     prevRanges.forEach(r => r.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]));
     if (prevRanges.length > 0) {
         await context.sync();
@@ -9943,13 +10394,13 @@ async function clearDracoNamedRanges(context, reportId, overwriteFormats) {
     const rn = dracoRangeNames(reportId);
     const names = [rn.rows, rn.cols, rn.values];
     const items = names.map(n => context.workbook.names.getItemOrNullObject(n));
-    items.forEach(it => it.load("isNullObject"));
+    items.forEach(it => it.load(["isNullObject", "type"]));
     await context.sync();
 
     const clearMode = overwriteFormats ? Excel.ClearApplyTo.all : Excel.ClearApplyTo.contents;
     let anyToClear = false;
     for (const it of items) {
-        if (!it.isNullObject) {
+        if (!it.isNullObject && it.type === "Range") {   // un nombre roto (#REF!) no tiene rango que limpiar
             it.getRange().clear(clearMode);
             anyToClear = true;
         }
@@ -10771,9 +11222,9 @@ async function dracoPaintedRanges(context, ids) {
         [["rows", rn.rows], ["cols", rn.cols], ["values", rn.values]].forEach(([kind, n]) =>
             items.push({ id, kind, it: context.workbook.names.getItemOrNullObject(n) }));
     }
-    items.forEach(x => x.it.load("isNullObject"));
+    items.forEach(x => x.it.load(["isNullObject", "type"]));
     await context.sync();
-    const live = items.filter(x => !x.it.isNullObject).map(x => {
+    const live = items.filter(x => !x.it.isNullObject && x.it.type === "Range").map(x => {   // sin nombres rotos (#REF!)
         const r = x.it.getRange();
         r.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
         return Object.assign(x, { r });

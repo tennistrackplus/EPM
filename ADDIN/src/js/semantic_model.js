@@ -338,8 +338,14 @@ function previewCurrentHierarchy() {
         return;
     }
 
-    if (!field.relProject || !field.relDataset || !field.relTable) {
-        showToast("Selecciona primero la tabla de dimensión.", "error");
+    // Dimensión de la tabla de hechos (grupo o columna suelta, sin JOIN): sus
+    // niveles son columnas de la tabla de hechos, así que se previsualiza ahí.
+    const isFact = !field.relTable;
+    const prevProject = isFact ? document.getElementById("factProject").value : field.relProject;
+    const prevDataset = isFact ? document.getElementById("factDataset").value : field.relDataset;
+    const prevTable = isFact ? document.getElementById("factTable").value : field.relTable;
+    if (!prevProject || !prevDataset || !prevTable) {
+        showToast(isFact ? "Indica primero la tabla de hechos del modelo." : "Selecciona primero la tabla de dimensión.", "error");
         return;
     }
 
@@ -359,9 +365,9 @@ function previewCurrentHierarchy() {
     });
 
     const spec = {
-        project: field.relProject,
-        dataset: field.relDataset,
-        table: field.relTable,
+        project: prevProject,
+        dataset: prevDataset,
+        table: prevTable,
         hierarchyName: document.getElementById("hierarchyNameInput").value.trim() || "(sin nombre)",
         levels: levels,
         emptyValues: ((document.getElementById("hierarchyEmptyValueInput") || {}).value || "").split("|").map(t => t.trim()).filter(t => t !== "")
@@ -1137,6 +1143,21 @@ function openConfigModal(index) {
         } else if (proj && ds && tbl) {
             document.getElementById("dimRelFullConcat").value = `${proj}.${ds}.${tbl}`;
             fetchDimensionAttributes(false);
+        } else if (isFactDimension(field)) {
+            // Columna suelta de la tabla de hechos (sin tabla de dimensión):
+            // antes se ocultaba la lista de atributos y con ella el botón
+            // ƒx, así que no se podían crear valores calculados (p. ej.
+            // OIBDA = [Ingresos] - [Gastos]). Su único atributo es la propia
+            // columna; se crea si no existe, con su tipo (para el SQL).
+            document.getElementById("dimRelFullConcat").value = "";
+            if (!(field.attributes || []).length) {
+                field.attributes = [{
+                    name: field.name, alias: field.alias || field.name, dataType: field.dataType,
+                    enabled: true, isKey: true
+                }];
+            }
+            renderAttributesTable(field.attributes);
+            document.getElementById("attributesContainer").style.display = "block";
         } else {
             document.getElementById("dimRelFullConcat").value = "";
             document.getElementById("attributesContainer").style.display = "none";

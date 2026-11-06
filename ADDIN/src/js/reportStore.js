@@ -235,7 +235,42 @@
         const report = getReport(reportId);
         if (!report) return;
         report.design = report.design || {};
+        if ((report.design.resultSheetName || "") !== (sheetName || "")) {
+            // Otra hoja: el id técnico guardado era de la anterior; se
+            // vuelve a anotar en el siguiente refresco (getDracoResultSheetName)
+            delete report.design.resultSheetId;
+        }
         report.design.resultSheetName = sheetName || "";
+        await _writeReport(reportId, report);
+    }
+
+    /**
+     * Identificador TÉCNICO de la hoja del informe (worksheet.id de
+     * Office.js). Es el equivalente al nombre de código de VBA: no cambia
+     * al renombrar ni al mover la hoja, así que el informe sigue en su hoja
+     * aunque el usuario la renombre (ver getDracoResultSheetName en
+     * commands.js, que lo guarda en el primer refresco).
+     */
+    function getReportResultSheetId(reportId) {
+        const report = getReport(reportId);
+        return report && report.design ? (report.design.resultSheetId || "") : "";
+    }
+
+    /** Celda ancla del informe (origen de los valores mientras no tiene ejes): ver dracoStaticFrame en commands.js. */
+    async function setReportAnchor(reportId, anchorAddress) {
+        const report = getReport(reportId);
+        if (!report || !anchorAddress) return;
+        report.design = report.design || {};
+        report.design.anchorAddress = anchorAddress;
+        await _writeReport(reportId, report);
+    }
+
+    async function setReportResultSheetRef(reportId, sheetId, sheetName) {
+        const report = getReport(reportId);
+        if (!report) return;
+        report.design = report.design || {};
+        if (sheetId) report.design.resultSheetId = sheetId;
+        if (sheetName) report.design.resultSheetName = sheetName;
         await _writeReport(reportId, report);
     }
 
@@ -862,6 +897,9 @@
         getReportGrid,
         getReportResultSheetName,
         setReportResultSheetName,
+        getReportResultSheetId,
+        setReportResultSheetRef,
+        setReportAnchor,
         hasReportClipboard,
         getReportClipboard,
         copyReportToClipboard,

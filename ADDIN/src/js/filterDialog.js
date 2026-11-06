@@ -361,6 +361,12 @@ function render(items, searching) {
         row.addEventListener("click", toggle);
 
         if (checkbox.checked) row.classList.add("selected");
+        // Marcado solo porque su padre lo está: es visual, el filtro usa el
+        // padre (al aplicar solo se envían los nodos de arriba, topSelectedKeys)
+        if (tree && checkbox.checked && item._parent >= 0 && activeSet.has(itemKey(allItems[item._parent]))) {
+            row.classList.add("inherited");
+            row.title = "Incluido por su nodo padre (el filtro usa el padre)";
+        }
 
         frag.appendChild(row);
     });

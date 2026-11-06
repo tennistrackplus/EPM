@@ -270,7 +270,11 @@ const FilterModal = {
                     const emp = (typeof dracoHierarchyEmptyTokens === "function") ? dracoHierarchyEmptyTokens(null) : new Map();
                     (query.levels || []).forEach(L => { L.empty = emp.get((String(fieldData.dim) + "|" + String(L.attribute)).toUpperCase()) || null; });
                 } catch (e) { /* sin valor vacío */ }
-                const json = await window.ExcelService.executeSQL(query.sql);
+                // Caché de miembros de la sesión (commands.js): mismo SQL y
+                // conexión = sin volver a consultar; se vacía al cerrar sesión
+                const json = (typeof window.dracoMemberQuery === "function")
+                    ? await window.dracoMemberQuery(query.sql)
+                    : await window.ExcelService.executeSQL(query.sql);
                 const items = buildMemberTree(parseBqRows(json), query);
                 // Cálculos entre miembros (del informe y del modelo, p. ej.
                 // OIBDA = [Ingresos] - [Gastos]): se ofrecen como un miembro más

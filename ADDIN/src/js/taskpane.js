@@ -299,6 +299,7 @@ const TaskPaneApp = {
      * que sí lo altera, se actualiza igualmente.
      */
     scheduleAutoUpdate(opts) {
+        try { this.refreshStaticFilterLock(); } catch (e) { /* sin panel */ }
         if (!this.currentReportId) return; // sin informe activo todavía: nada que guardar
         if (!(opts && opts.saveOnly)) this.autoNeedsRefresh = true;
         this.setAutoStatus("Cambios pendientes…");
@@ -1109,6 +1110,7 @@ const TaskPaneApp = {
                 this.state.rowsStatic = e.target.checked;
                 this.updateStaticLabel("rows");
                 this.setZoneLocked("rows", this.state.rowsStatic);
+                this.refreshStaticFilterLock();
                 await this.applyAxisStaticFormulas("rows", this.state.rowsStatic);
                 this.saveDesignOnly();
             });
@@ -1118,6 +1120,7 @@ const TaskPaneApp = {
                 this.state.colsStatic = e.target.checked;
                 this.updateStaticLabel("cols");
                 this.setZoneLocked("columns", this.state.colsStatic);
+                this.refreshStaticFilterLock();
                 await this.applyAxisStaticFormulas("columns", this.state.colsStatic);
                 this.saveDesignOnly();
             });
@@ -1603,6 +1606,7 @@ const TaskPaneApp = {
             this.setZoneLocked("rows", this.state.rowsStatic);
             this.setZoneLocked("columns", this.state.colsStatic);
 
+            this.refreshStaticFilterLock(false);
             this.undoAfterLoad();
 
         } catch (err) {
@@ -2143,6 +2147,84 @@ const TaskPaneApp = {
 
     // Aviso visual breve (borde rojo + texto en el estado de autoguardado)
     // cuando se rechaza un drop por la regla anterior.
+    /* -------------------------------------------------------------
+     * Informe Estático empezado de cero (commands.js,
+     * dracoAddStaticLevelAndLocate): tras elegir la dimensión de un NIVEL
+     * NUEVO (celda a la izquierda de la cabecera de Filas o encima de la de
+     * Columnas), se añade al PRINCIPIO de ese eje. La cabecera crece hacia
+     * fuera (Filas a la izquierda, Columnas hacia arriba) y los valores no
+     * se mueven, así la celda pulsada pasa a ser el nivel 1 del eje.
+     * ----------------------------------------------------------- */
+    async addStaticAxisField(reportId, zone, field) {
+        if (String(this.currentReportId) !== String(reportId)) {
+            await this.onReportSelectorChange(String(reportId));
+        }
+        const list = zone === "rows" ? this.state.rows : this.state.columns;
+        const same = e => String(e.dimension).toUpperCase() === String(field.dim).toUpperCase()
+            && String(e.name).toUpperCase() === String(field.name).toUpperCase();
+        if (list.some(same)) {
+            this.flashZoneWarning(zone, `${field.name} ya está en ${zone === "rows" ? "Filas" : "Columnas"}.`);
+            return false;
+        }
+        this.undoRecord();
+        list.unshift({ dimension: field.dim, name: field.name, isHierarchy: !!field.isHierarchy });
+        // Hacia fuera (como en el modo híbrido), aunque los dos ejes sean Estáticos
+        if (zone === "rows") RangeAxis.onRowFieldAdded(true); else RangeAxis.onColFieldAdded(true);
+        await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
+        await this.loadDesignFromSheet();
+        this.setAutoStatus(`${field.name} añadido a ${zone === "rows" ? "Filas" : "Columnas"}.`);
+        return true;
+    },
+
+    /* -------------------------------------------------------------
+     * Filtros anulados por un eje ESTÁTICO: si una dimensión de un eje
+     * Estático está también en Filtros, ese filtro no se aplica (las
+     * líneas del eje ya filtran por sus miembros; ver
+     * buildFilterConditions(skipDims) en commands.js). Aquí se pinta en
+     * gris, no se puede editar y se avisa en la zona Filtros.
+     * ----------------------------------------------------------- */
+    staticFilterDims() {
+        const out = new Set();
+        const add = list => (list || []).forEach(e => {
+            const d = String(e.dimension || "").toUpperCase();
+            if (d && d !== "MEASURE") out.add(d);
+        });
+        if (this.state.rowsStatic) add(this.state.rows);
+        if (this.state.colsStatic) add(this.state.columns);
+        return out;
+    },
+
+    refreshStaticFilterLock(announce) {
+        const card = document.querySelector('.zone-card[data-zone="filters"]');
+        if (!card) return;
+        const dims = this.staticFilterDims();
+        const locked = [];
+        card.querySelectorAll(".dropzone-content .dropped-tag").forEach(tag => {
+            const d = String(tag.dataset.dim || "");
+            const on = !tag.classList.contains("measure-tag") && dims.has(d.toUpperCase());
+            tag.classList.toggle("filter-static-off", on);
+            if (on) {
+                tag.title = `No se aplica en un informe Estático: ${d} ya se filtra por las líneas del eje.`;
+                if (locked.indexOf(d) === -1) locked.push(d);
+            } else if (tag.title && tag.title.indexOf("No se aplica en un informe Estático") === 0) {
+                tag.title = "";
+            }
+        });
+        let note = card.querySelector(".static-filter-note");
+        if (!locked.length) { if (note) note.remove(); this._staticLockedSig = ""; return; }
+        const msg = `En informe estático deja de aplicarse el filtro de ${locked.length === 1 ? "la dimensión" : "las dimensiones"} ${locked.join(", ")}: ya se filtra por las líneas del eje.`;
+        if (!note) {
+            note = document.createElement("div");
+            note.className = "static-filter-note";
+            card.appendChild(note);
+        }
+        note.textContent = "ⓘ " + msg;
+        // Aviso en la barra de estado al aparecer (p. ej. al marcar Estático)
+        const sig = locked.join("|");
+        if (announce !== false && sig !== this._staticLockedSig) this.flashZoneWarning("filters", msg);
+        this._staticLockedSig = sig;
+    },
+
     flashZoneWarning(zoneId, message) {
         const card = document.querySelector(`.zone-card[data-zone="${zoneId}"]`);
         if (card) {
@@ -2428,6 +2510,7 @@ const TaskPaneApp = {
         const tag = document.createElement("div");
         tag.className = "dropped-tag";
         if (isMeasure) tag.classList.add("measure-tag");
+        tag.dataset.dim = String(entry.dimension || "");
         tag.draggable = true;
         tag.dataset.dim = entry.dimension;
         tag.dataset.fieldName = entry.name;
@@ -2491,6 +2574,10 @@ const TaskPaneApp = {
         if (zoneId === "filters" && !isMeasure) {
             tag.addEventListener("dblclick", async () => {
                 clearTimeout(this._tagClickTimer); this._tagClickTimer = null; // sin abrir propiedades
+                if (this.staticFilterDims().has(String(entry.dimension).toUpperCase())) {
+                    this.flashZoneWarning("filters", `El filtro de ${entry.dimension} no se aplica: esa dimensión está en un eje Estático.`);
+                    return;
+                }
                 if (typeof FilterModal === "undefined" || !FilterModal.open) return;
 
                 const result = await FilterModal.open({
