@@ -281,13 +281,17 @@ const FilterModal = {
                 // al final de la lista. Si se filtra, el cálculo solo sale
                 // cuando está elegido (ver dracoCalcAllowedByFilters).
                 try {
-                    if (!fieldData.isHierarchy && typeof window.dracoCalcsForAttr === "function") {
+                    // También en las jerarquías: los cálculos de cada nivel, con
+                    // el atributo de ese nivel, como nodos raíz al final.
+                    if (typeof window.dracoCalcsForField === "function") {
                         const reportId = (typeof TaskPaneApp !== "undefined") ? TaskPaneApp.currentReportId : null;
-                        const attr = (items[0] && items[0].attribute) || fieldData.name;
-                        const have = new Set(items.map(i => String(i.value).toUpperCase()));
-                        window.dracoCalcsForAttr(reportId, fieldData.dim, fieldData.name).forEach(c => {
-                            const n = String(c.name || "").trim();
-                            if (n && !have.has(n.toUpperCase())) items.push({ attribute: attr, value: n, depth: 0, calc: true });
+                        const single = (items[0] && items[0].attribute) || fieldData.name;
+                        const have = new Set(items.map(i => String(i.attribute).toUpperCase() + "|" + String(i.value).toUpperCase()));
+                        window.dracoCalcsForField(reportId, fieldData.dim, fieldData.name).forEach(({ calc, attr }) => {
+                            const n = String(calc.name || "").trim();
+                            const a = fieldData.isHierarchy ? attr : single;
+                            const k = String(a).toUpperCase() + "|" + n.toUpperCase();
+                            if (n && !have.has(k)) { items.push({ attribute: a, value: n, depth: 0, calc: true }); have.add(k); }
                         });
                     }
                 } catch (e) { console.warn("FilterModal: no se pudieron añadir los cálculos:", e); }

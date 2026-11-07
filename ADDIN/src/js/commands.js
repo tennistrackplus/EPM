@@ -1255,6 +1255,33 @@ function dracoCalcsForAttr(reportId, dim, attr) {
 window.dracoCalcsForAttr = dracoCalcsForAttr;
 
 /**
+ * Cálculos de un CAMPO del eje/filtro: si es una jerarquía, los de cada uno
+ * de sus niveles ([{ calc, attr: atributo del nivel, level }]); si no, los
+ * del atributo. Así el buscador de miembros y el filtro de una jerarquía
+ * ofrecen también los cálculos definidos sobre sus niveles (antes solo los
+ * buscaban con el nombre de la jerarquía y no encontraban ninguno).
+ */
+function dracoCalcsForField(reportId, dim, name) {
+    const out = [];
+    let levels = null;
+    try {
+        const report = (window.ReportStore && reportId !== null && reportId !== undefined) ? window.ReportStore.getReport(reportId) : null;
+        const sms = window.SemanticModelStore;
+        const mName = (report && report.semanticModelName) || (sms && sms.getActiveModelName && sms.getActiveModelName()) || "";
+        const model = mName && sms && sms.getModel ? sms.getModel(mName) : null;
+        const f = ((model && model.fields) || []).find(x => x && x.type === "DIMENSION" && String(x.name).toUpperCase() === String(dim).toUpperCase());
+        const h = f && (f.hierarchies || []).find(x => String(x.name).toUpperCase() === String(name).toUpperCase());
+        if (h) levels = (h.levels || []).map(l => l.attribute);
+    } catch (e) { levels = null; }
+    const attrs = levels && levels.length ? levels : [name];
+    attrs.forEach((a, i) => dracoCalcsForAttr(reportId, dim, a)
+        .filter(c => c && c.mode !== "position")
+        .forEach(c => out.push({ calc: c, attr: a, level: i + 1 })));
+    return out;
+}
+window.dracoCalcsForField = dracoCalcsForField;
+
+/**
  * ¿Se muestra el cálculo «calcName» con los filtros del informe sobre ese
  * atributo? Sin filtro: sí. Con un filtro de lista que incluye valores:
  * solo si el cálculo está entre los elegidos (el selector de filtro lo
@@ -1263,6 +1290,19 @@ window.dracoCalcsForAttr = dracoCalcsForAttr;
 function dracoCalcAllowedByFilters(dim, attr, calcName) {
     const U = (x) => String(x === null || x === undefined ? "" : x).trim().toUpperCase();
     const name = U(calcName);
+    // Filtro de una JERARQUÍA de la dimensión: sus elementos llevan el
+    // atributo de cada nivel; el cálculo sale si está entre los elegidos (o
+    // si el filtro no elige ninguno) y no si está entre los excluidos.
+    for (const f of (ReportState.Filters || []).filter(f => U(f.Dimension) === U(dim) && String(f.Value).trim() !== "")) {
+        const filter = parseStoredFilterValue(f.Value);
+        if (!filter || !Array.isArray(filter.items) || (!filter.items.length && !(filter.excludeItems || []).length)) continue;
+        const k = U(attr) + "|" + name;
+        const inc = (filter.items || []).map(it => U(it.attribute) + "|" + U(it.value));
+        const exc = (filter.excludeItems || []).map(it => U(it.attribute) + "|" + U(it.value));
+        if (exc.indexOf(k) !== -1) return false;
+        if (filter.include === false) { if (inc.indexOf(k) !== -1) return false; continue; }
+        if (inc.length && inc.indexOf(k) === -1) return false;
+    }
     const fs = (ReportState.Filters || []).filter(f => U(f.Dimension) === U(dim) && U(f.AttributeName) === U(attr) && String(f.Value).trim() !== "");
     for (const f of fs) {
         const filter = parseStoredFilterValue(f.Value);
@@ -2399,10 +2439,14 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     // jsonPaintValues escribe en todas: el valor devuelto o vacío si no hay
     // datos (antes, una celda sin datos se quedaba con el valor anterior).
     const uniq = arr => [...new Set(arr)].filter(n => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
+    // OJO: las líneas de la HOJA (antes de cambiar las de un cálculo por sus
+    // líneas ocultas con ID negativo), para que la línea del cálculo se pinte.
+    const sheetRows = uniq(rowsDefsRaw.filter(d => !isMeasureDef(d)).map(d => Number(d.R)));
+    const sheetCols = uniq(colDefsRaw.filter(d => !isMeasureDef(d)).map(d => Number(d.R)));
     ReportState.FixedPaint = {
         reportId: ReportState.ReportId,
-        rows: rowsDefs.length ? uniq(rowsDefs.map(d => Number(d.R))) : [Number(rowFallback)],
-        cols: colDefs.length ? uniq(colDefs.map(d => Number(d.R))) : [Number(colFallback)]
+        rows: sheetRows.length ? sheetRows : [Number(rowFallback)],
+        cols: sheetCols.length ? sheetCols : [Number(colFallback)]
     };
     const rowIdsArray = buildIdArray(atributesGrid, rowsDefs, "ROW_ID", rowFallback);
     const columnIdsArray = buildIdArray(atributesGrid, colDefs, "COLUMN_ID", colFallback);
@@ -3334,6 +3378,40 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
         else line.defs.push(d);
     }
     const lines = Array.from(linesMap.values()).sort((a, b) => a.id - b.id);
+    const visibleLines = lines.slice();   // las que se pintan (incluida la de un cálculo)
+
+    // Líneas cuyo valor es un CÁLCULO entre miembros (del modelo o del
+    // informe, p. ej. «Diferencia» = [A] - [B]): igual que en el modo Fijo
+    // (dracoExpandStaticCalcLines), la línea se cambia por una línea OCULTA
+    // (ID negativo) por cada miembro de la fórmula y su valor se calcula al
+    // final (AGG_C). Antes el híbrido no los tenía en cuenta.
+    const calcLinesH = [];
+    if (window.DracoCalc && typeof dracoCalcsForAttr === "function") {
+        const U = x => String(x === null || x === undefined ? "" : x).trim().toUpperCase();
+        const expanded = [];
+        let nextSid = -1;
+        for (const l of lines) {
+            let calc = null, calcDef = null;
+            for (const d of l.defs) {
+                const c = dracoCalcsForAttr(reportId, d.Dimension, d.AttributeName)
+                    .find(x => x && x.mode !== "position" && U(x.name) === U(d.Value));
+                if (c) { calc = c; calcDef = d; break; }
+            }
+            if (!calc) { expanded.push(l); continue; }
+            const a = window.DracoCalc.analyze(calc.expr, "member");
+            if (!a.ok) throw new Error(`El cálculo «${calc.name}» tiene un error: ${a.error}`);
+            const terms = {};
+            a.refs.forEach(ref => {
+                const key = U(ref);
+                if (terms[key] !== undefined) return;
+                const sid = nextSid--;
+                terms[key] = sid;
+                expanded.push({ id: sid, measure: l.measure, defs: l.defs.map(d => d === calcDef ? Object.assign({}, d, { Value: String(ref).trim() }) : d) });
+            });
+            calcLinesH.push({ id: l.id, ast: a.ast, terms });
+        }
+        if (calcLinesH.length) { lines.length = 0; lines.push(...expanded); }
+    }
 
     // Líneas EPM_FORMULA del eje estático (no van al SQL; se rellenan al pintar)
     const formulaLines = [];
@@ -3385,7 +3463,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
 
     const plan = {
         staticIsRows, dynamicIsColumns,
-        lines: lines.map(l => ({ id: l.id, measure: l.measure || defaultMeasure })),
+        lines: visibleLines.map(l => ({ id: l.id, measure: l.measure || defaultMeasure })),
         formulaLines,
         fields, dynCols, measureLevelIdx, dynMeasures,
         measureCols: measureCols.map(m => ({ name: m.name, alias: m.alias })),
@@ -3524,6 +3602,30 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
                 + keyN.map(n => " AND a." + n + " IS NOT DISTINCT FROM e" + (k + 1) + "." + n).join("") + CRLF).join("")
             + ")" + CRLF + CRLF;
         aggName = "AGG_X";
+    }
+
+    // --- Líneas calculadas: AGG_C = las líneas reales + una fila por cálculo
+    //     y miembro dinámico, a partir de las líneas ocultas (IDs negativos).
+    if (calcLinesH.length) {
+        sql = sql.replace(/\)\r?\n\r?\n$/, "),\r\n\r\n");
+        const keyCols = [...dynNames, ...(aggName === "AGG" ? gFlags.map((n, i) => "DRC_G_" + i) : [])];
+        const mAliases = measureCols.map(m => m.alias);
+        const cols = [...keyCols, ...mAliases];
+        let c = "AGG_C AS (" + CRLF
+            + "    SELECT LINE_ID" + cols.map(n => ", " + n).join("") + " FROM " + aggName + " WHERE LINE_ID > 0" + CRLF;
+        calcLinesH.forEach(l => {
+            const sids = Object.values(l.terms);
+            const mExpr = mAliases.map(a => window.DracoCalc.toSql(l.ast, ref => {
+                const sid = l.terms[String(ref).trim().toUpperCase()];
+                return "COALESCE(SUM(CASE WHEN LINE_ID = " + sid + " THEN " + a + " END), 0)";
+            }) + " AS " + a);
+            c += "    UNION ALL" + CRLF
+                + "    SELECT " + l.id + " AS LINE_ID" + keyCols.map(n => ", " + n).join("") + mExpr.map(x => ", " + x).join("") + CRLF
+                + "    FROM " + aggName + " WHERE LINE_ID IN (" + sids.join(", ") + ")" + CRLF
+                + (keyCols.length ? "    GROUP BY " + keyCols.join(", ") + CRLF : "");
+        });
+        sql += c + ")" + CRLF + CRLF;
+        aggName = "AGG_C";
     }
 
     // --- Orden del eje dinámico: atributos por su valor; en jerarquías,
@@ -7310,16 +7412,26 @@ async function dracoSyncReportPositions(reportId) {
             const oldRr = dracoParseBlock(d.rrAddress);
             const oldRc = dracoParseBlock(d.rcAddress);
             let rr = oldRr, rc = oldRc;
-            // Cabecera de Filas: esquina del nombre, ancho del informe
-            if (oldRr) {
-                if (rows) rr = { row: rows.row, col: rows.col, height: 1, width: oldRr.width };
-                else if (vals) rr = { row: vals.row, col: vals.col - oldRr.width, height: 1, width: oldRr.width };
+            // Lo que dicen los nombres es cuánto se ha DESPLAZADO el informe
+            // desde que Draco los escribió (esquina de ahora - esquina guardada
+            // en design.namedAt). Ese desplazamiento se aplica al diseño
+            // actual: así un campo añadido en el panel (la cabecera crece) no
+            // se deshace porque el nombre aún tenga la forma anterior.
+            const at = d.namedAt || null;
+            const shift = (now, then) => (now && then) ? { dr: now.row - then.row, dc: now.col - then.col } : null;
+            if (!at) {
+                // Informe anterior a este cambio: se anota la referencia y no se mueve nada
+                await window.ReportStore.setReportNamedAt(reportId, {
+                    rows: rows ? { row: rows.row, col: rows.col } : null,
+                    cols: cols ? { row: cols.row, col: cols.col } : null,
+                    values: vals ? { row: vals.row, col: vals.col } : null
+                });
+                return;
             }
-            // Cabecera de Columnas: esquina del nombre, alto del informe
-            if (oldRc) {
-                if (cols) rc = { row: cols.row, col: cols.col, height: oldRc.height, width: 1 };
-                else if (vals) rc = { row: vals.row - oldRc.height, col: vals.col, height: oldRc.height, width: 1 };
-            }
+            const sRows = shift(rows, at.rows) || shift(vals, at.values);
+            const sCols = shift(cols, at.cols) || shift(vals, at.values);
+            if (oldRr && sRows) rr = Object.assign({}, oldRr, { row: oldRr.row + sRows.dr, col: oldRr.col + sRows.dc });
+            if (oldRc && sCols) rc = Object.assign({}, oldRc, { row: oldRc.row + sCols.dr, col: oldRc.col + sCols.dc });
             // Si fuera de línea se borró una columna/fila de la cabecera, el
             // nombre es más pequeño que lo que espera el informe: los valores
             // van DETRÁS de la cabecera esperada (el refresco repinta así).
@@ -7327,11 +7439,19 @@ async function dracoSyncReportPositions(reportId) {
                 if (rc.col < rr.col + rr.width) rc = Object.assign({}, rc, { col: rr.col + rr.width });
                 if (rr.row < rc.row + rc.height) rr = Object.assign({}, rr, { row: rc.row + rc.height });
             }
+            const moved = (sRows && (sRows.dr || sRows.dc)) || (sCols && (sCols.dr || sCols.dc));
+            if (moved) {
+                // Nueva referencia: los nombres ya están donde están
+                await window.ReportStore.setReportNamedAt(reportId, {
+                    rows: rows ? { row: rows.row, col: rows.col } : at.rows,
+                    cols: cols ? { row: cols.row, col: cols.col } : at.cols,
+                    values: vals ? { row: vals.row, col: vals.col } : at.values
+                });
+            }
             const newRr = rr ? dracoBlockA1(rr) : (d.rrAddress || "");
             const newRc = rc ? dracoBlockA1(rc) : (d.rcAddress || "");
-            const originRow = rr ? rr.row : (vals ? vals.row : 0);
-            const originCol = rc ? rc.col : (vals ? vals.col : 0);
-            const origin = (originRow && originCol) ? dracoRectA1({ r: originRow - 1, c: originCol - 1, h: 1, w: 1 }) : "";
+            // Ancla (celda de valores) solo si el informe se ha desplazado
+            const origin = (moved && rr && rc) ? dracoRectA1({ r: rr.row - 1, c: rc.col - 1, h: 1, w: 1 }) : "";
             if (newRr === (d.rrAddress || "") && newRc === (d.rcAddress || "") && (!origin || origin === d.anchorAddress)) return;
 
             await window.ReportStore.setReportPositions(reportId, newRr, newRc, origin || undefined);
@@ -7387,9 +7507,10 @@ let DracoStructureQueue = Promise.resolve();
 async function handleDracoStructureChanged(ev) {
     if (!ev || DracoSuppressChangeEvents) return;
     const t = String(ev.changeType || "");
-    if (!/^(RowInserted|RowDeleted|ColumnInserted|ColumnDeleted|CellInserted|CellDeleted)$/.test(t)) return;
     if (ev.source && ev.source !== "Local") return;
     if (ev.triggerSource === "ThisLocalAddin") return;
+    if (t === "RangeEdited" || t === "") { dracoQueueStaticEdit(ev); return; }
+    if (!/^(RowInserted|RowDeleted|ColumnInserted|ColumnDeleted|CellInserted|CellDeleted)$/.test(t)) return;
     DracoStructureQueue = DracoStructureQueue.then(async () => {
         try {
             let sheetName = "";
@@ -7429,6 +7550,62 @@ async function handleDracoStructureChanged(ev) {
             dracoLog("Cambio de filas/columnas: " + dracoErrMsg(e));
         }
     });
+}
+
+/**
+ * Pegar (o escribir) fórmulas EPM_VALUE / EPM_FORMULA en la cabecera de un
+ * informe estático: se reajustan sus rangos con nombre a las líneas que haya.
+ * Solo si lo editado cae en la franja de su cabecera de Filas (columnas de la
+ * cabecera, desde la fila de valores hacia abajo) o de Columnas (filas de la
+ * cabecera, desde la columna de valores hacia la derecha). Con espera corta
+ * para agrupar pegados de varias celdas.
+ */
+let DracoStaticEditTimer = null;
+const DracoStaticEditPending = new Set();
+function dracoQueueStaticEdit(ev) {
+    DracoStaticEditPending.add(ev.worksheetId + "|" + String(ev.address || ""));
+    if (DracoStaticEditTimer) clearTimeout(DracoStaticEditTimer);
+    DracoStaticEditTimer = setTimeout(() => {
+        DracoStaticEditTimer = null;
+        const edits = [...DracoStaticEditPending];
+        DracoStaticEditPending.clear();
+        DracoStructureQueue = DracoStructureQueue.then(() => dracoApplyStaticEdits(edits)).catch(() => {});
+    }, 400);
+}
+
+async function dracoApplyStaticEdits(edits) {
+    try {
+        await Excel.run(async (context) => {
+            const done = new Set();
+            for (const e of edits) {
+                const k = e.indexOf("|");
+                const wsId = e.slice(0, k), address = e.slice(k + 1).split("!").pop().replace(/\$/g, "");
+                const sh = context.workbook.worksheets.getItemOrNullObject(wsId);
+                sh.load(["isNullObject", "name"]);
+                await context.sync();
+                if (sh.isNullObject || sh.name.toUpperCase() === "EDIT_REPORT") continue;
+                const area = dracoParseBlock(address.indexOf(":") === -1 ? address + ":" + address : address);
+                if (!area) continue;
+                for (const reportId of dracoReportsOnSheet(wsId, sh.name)) {
+                    if (done.has(reportId)) continue;
+                    const d = (window.ReportStore.getReport(reportId) || {}).design || {};
+                    if (!d.rowsStatic || !d.colsStatic) continue;
+                    const fr = dracoStaticFrame(d.rrAddress, d.rcAddress, await dracoReportAnchor(context, reportId));
+                    if (!fr) continue;
+                    const overlaps = (a0, a1, b0, b1) => a0 <= b1 && b0 <= a1;
+                    const inRows = fr.rowsWidth > 0 && overlaps(area.col, area.col + area.width - 1, fr.rowsHeaderCol, fr.rowsHeaderCol + fr.rowsWidth - 1)
+                        && area.row + area.height - 1 >= fr.valuesRow;
+                    const inCols = fr.colsHeight > 0 && overlaps(area.row, area.row + area.height - 1, fr.colsHeaderRow, fr.colsHeaderRow + fr.colsHeight - 1)
+                        && area.col + area.width - 1 >= fr.valuesCol;
+                    if (!inRows && !inCols) continue;
+                    done.add(reportId);
+                    await dracoRebuildStaticNames(context, reportId);
+                }
+            }
+        });
+    } catch (e) {
+        dracoLog("Ajuste de rangos tras pegar/editar: " + dracoErrMsg(e));
+    }
 }
 
 /* ---------------------------------------------------------------------
@@ -7498,6 +7675,8 @@ async function dracoRebuildStaticNames(context, reportId) {
         if (w.b) context.workbook.names.add(w.name, sh.getRangeByIndexes(w.b.row - 1, w.b.col - 1, w.b.height, w.b.width));
     });
     await context.sync();
+    const corner = b => b ? { row: b.row, col: b.col } : null;
+    await window.ReportStore.setReportNamedAt(reportId, { rows: corner(want[0].b), cols: corner(want[1].b), values: corner(want[2].b) });
     dracoLog(`Informe ${reportId} (estático): rangos ajustados a sus líneas (${nRows} filas x ${nCols} columnas).`);
     return true;
 }
@@ -8529,14 +8708,18 @@ async function loadDracoPickerItems(located, tag) {
             // Cálculos entre miembros de ese atributo (del informe y del modelo):
             // se pueden elegir como una línea más del eje Estático.
             try {
-                const have = new Set(items.map(i => String(i.value).toUpperCase()));
-                const attrName = (items[0] && items[0].attribute) || located.attr;
-                dracoCalcsForAttr(located.reportId, located.dim, located.attr)
-                    .filter(c => c && c.mode !== "position")
-                    .forEach(c => {
-                        const n = String(c.name || "").trim();
-                        if (n && !have.has(n.toUpperCase())) items.push({ text: n, attribute: attrName, value: n });
-                    });
+                // Jerarquía: los cálculos de cada nivel, con el atributo de ese
+                // nivel (EPM_VALUE(dim, nivel, «Diferencia»)), como nodos raíz.
+                const have = new Set(items.map(i => String(i.attribute).toUpperCase() + "|" + String(i.value).toUpperCase()));
+                const single = (items[0] && items[0].attribute) || located.attr;
+                dracoCalcsForField(located.reportId, located.dim, located.attr).forEach(({ calc, attr }) => {
+                    const n = String(calc.name || "").trim();
+                    const a = attr === located.attr ? single : attr;
+                    if (n && !have.has(String(a).toUpperCase() + "|" + n.toUpperCase())) {
+                        items.push({ text: n, attribute: a, value: n, depth: 0 });
+                        have.add(String(a).toUpperCase() + "|" + n.toUpperCase());
+                    }
+                });
             } catch (e) { /* sin cálculos */ }
             dracoLog(tag, "consulta OK en " + (Date.now() - t1) + " ms | respuesta " + json.length + " chars | " + items.length + " items");
             return items;
@@ -11099,6 +11282,17 @@ async function applyDracoNamedRanges(context, sheet, dims, reportId, existingIte
         await context.sync();
         draco_perfMark(reportId, "  Redefinir rangos con nombre (sin formato)", tPerf);
     }
+
+    // Referencia para dracoSyncReportPositions: dónde quedan los nombres ahora
+    try {
+        if (window.ReportStore && window.ReportStore.setReportNamedAt) {
+            await window.ReportStore.setReportNamedAt(reportId, {
+                rows: rowsRange ? { row: RRows.row, col: RRows.col } : null,
+                cols: colsRange ? { row: RCols.row, col: RCols.col } : null,
+                values: valuesRange ? { row: RRows.row, col: RCols.col } : null
+            });
+        }
+    } catch (e) { /* solo referencia */ }
 
     return { rowsRange, colsRange, valuesRange };
 }
@@ -13722,7 +13916,38 @@ async function copiarInforme(event) {
             console.warn("[Draco] Copiar informe: no hay ningún informe activo.");
             return;
         }
-        const copied = await window.ReportStore.copyReportToClipboard(reportId);
+        // Bloque COMPLETO del informe en la hoja (como Ctrl+C): de la esquina
+        // superior izquierda a la inferior derecha de sus rangos con nombre
+        // (cabeceras + valores). Antes del bloque, la posición al día.
+        let extra = null;
+        try {
+            await dracoSyncReportPositions(reportId);
+            await Excel.run(async (context) => {
+                const sheetName = await getDracoResultSheetName(context, reportId);
+                const rn = dracoRangeNames(reportId);
+                const b = { rows: await dracoReadNameBlock(context, rn.rows), cols: await dracoReadNameBlock(context, rn.cols), values: await dracoReadNameBlock(context, rn.values) };
+                const d = (window.ReportStore.getReport(reportId) || {}).design || {};
+                // Sin rangos (informe aún sin pintar): cabeceras del diseño y celda de valores
+                const fr = dracoStaticFrame(d.rrAddress, d.rcAddress, await dracoReportAnchor(context, reportId));
+                const parts = [b.rows, b.cols, b.values].filter(Boolean);
+                if (!parts.length && fr) {
+                    if (fr.rowsWidth) parts.push({ row: fr.valuesRow, col: fr.rowsHeaderCol, height: 1, width: fr.rowsWidth });
+                    if (fr.colsHeight) parts.push({ row: fr.colsHeaderRow, col: fr.valuesCol, height: fr.colsHeight, width: 1 });
+                    parts.push({ row: fr.valuesRow, col: fr.valuesCol, height: 1, width: 1 });
+                }
+                if (!parts.length) return;
+                const top = Math.min(...parts.map(p => p.row)), left = Math.min(...parts.map(p => p.col));
+                const bottom = Math.max(...parts.map(p => p.row + p.height - 1)), right = Math.max(...parts.map(p => p.col + p.width - 1));
+                extra = {
+                    sourceSheet: sheetName,
+                    sourceBlock: dracoBlockA1({ row: top, col: left, height: bottom - top + 1, width: right - left + 1 }),
+                    sourceNames: { rows: dracoBlockA1(b.rows), cols: dracoBlockA1(b.cols), values: dracoBlockA1(b.values) }
+                };
+            });
+        } catch (e) {
+            dracoLog("Copiar informe: no se pudo leer su bloque en la hoja: " + dracoErrMsg(e));
+        }
+        const copied = await window.ReportStore.copyReportToClipboard(reportId, extra);
         if (copied) {
             console.log(`[Draco] Informe "${copied.name}" copiado al portapapeles.`);
             if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.setAutoStatus) {
@@ -13788,10 +14013,43 @@ async function pegarInforme(event) {
         }
         console.log(`[Draco] Informe "${pasted.name}" pegado en "${activeSheetName}"!${anchorAddress} (id ${pasted.id}).`);
 
-        // Ejes Estáticos: sus celdas (EPM_VALUE / EPM_FORMULA) se copian a la
-        // nueva posición; copyFrom ajusta las referencias relativas de las
-        // fórmulas igual que copiar y pegar en Excel.
-        const copies = pasted.__staticCopies || [];
+        // TODO el bloque del informe (cabeceras, valores, fórmulas, formatos)
+        // se copia como un Ctrl+C / Ctrl+V: copyFrom ajusta las referencias
+        // relativas de las fórmulas igual que Excel. Después se crean los
+        // rangos con nombre del informe nuevo (los del original, desplazados)
+        // y se anota su referencia (namedAt) para dracoSyncReportPositions.
+        if (pasted.__blockCopy) try {
+            const bc = pasted.__blockCopy;
+            await Excel.run(async (context) => {
+                DracoSuppressChangeEvents = true;
+                try {
+                    const to = context.workbook.worksheets.getItem(activeSheetName);
+                    const from = context.workbook.worksheets.getItem(bc.fromSheet).getRange(bc.from);
+                    to.getRange(bc.to).copyFrom(from, Excel.RangeCopyType.all);
+                    await context.sync();
+                    const nm = pasted.__names || {};
+                    const rn = dracoRangeNames(pasted.id);
+                    const want = [[rn.rows, nm.rows], [rn.cols, nm.cols], [rn.values, nm.values]].filter(x => x[1]);
+                    const olds = want.map(([n]) => context.workbook.names.getItemOrNullObject(n));
+                    olds.forEach(o => o.load("isNullObject"));
+                    await context.sync();
+                    let del = false;
+                    olds.forEach(o => { if (!o.isNullObject) { o.delete(); del = true; } });
+                    if (del) await context.sync();
+                    want.forEach(([n, a]) => context.workbook.names.add(n, to.getRange(a)));
+                    await context.sync();
+                    const corner = a => { const b = a ? dracoParseBlock(a) : null; return b ? { row: b.row, col: b.col } : null; };
+                    await window.ReportStore.setReportNamedAt(pasted.id, { rows: corner(nm.rows), cols: corner(nm.cols), values: corner(nm.values) });
+                } finally {
+                    DracoSuppressChangeEvents = false;
+                }
+            });
+        } catch (e) {
+            console.warn("[Draco] Pegar informe: no se pudo copiar el bloque del informe:", e);
+        }
+
+        // Portapapeles de una versión anterior: solo las cabeceras estáticas
+        const copies = pasted.__blockCopy ? [] : (pasted.__staticCopies || []);
         if (copies.length) try {
             await Excel.run(async (context) => {
                 DracoSuppressChangeEvents = true;

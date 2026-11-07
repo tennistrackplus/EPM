@@ -291,6 +291,20 @@
         await _writeReport(reportId, report);
     }
 
+    /**
+     * Esquinas de los rangos con nombre Draco_00N_* cuando Draco los escribió
+     * por última vez ({ rows:{row,col}, cols:{row,col}, values:{row,col} }).
+     * Comparándolas con las de ahora se sabe cuánto se ha DESPLAZADO el
+     * informe (filas/columnas insertadas o borradas): ver dracoSyncReportPositions.
+     */
+    async function setReportNamedAt(reportId, namedAt) {
+        const report = getReport(reportId);
+        if (!report) return;
+        report.design = report.design || {};
+        report.design.namedAt = namedAt || null;
+        await _writeReport(reportId, report);
+    }
+
     /** Celda ancla del informe (origen de los valores mientras no tiene ejes): ver dracoStaticFrame en commands.js. */
     async function setReportAnchor(reportId, anchorAddress) {
         const report = getReport(reportId);
@@ -343,7 +357,10 @@
         }
     }
 
-    async function copyReportToClipboard(reportId) {
+    // extra (opcional, lo pone copiarInforme en commands.js con la hoja
+    // abierta): { sourceSheet, sourceBlock, sourceNames:{rows,cols,values},
+    // anchorAddress } -> el bloque COMPLETO del informe en la hoja.
+    async function copyReportToClipboard(reportId, extra) {
         const report = getReport(reportId);
         if (!report) return null;
 
@@ -363,7 +380,13 @@
                 // si un eje es Estático, se copian sus celdas.
                 rrAddress: design.rrAddress || "",
                 rcAddress: design.rcAddress || "",
-                sourceSheet: design.resultSheetName || ""
+                anchorAddress: design.anchorAddress || "",
+                sourceSheet: design.resultSheetName || "",
+                // Bloque completo del informe (esquina sup. izquierda -> inf.
+                // derecha) y sus rangos con nombre, para copiarlo como Ctrl+C
+                sourceBlock: "",
+                sourceNames: null,
+                ...(extra || {})
             },
             reportProperties: Object.assign({}, DEFAULT_REPORT_PROPERTIES, report.reportProperties || {})
         };
@@ -412,20 +435,39 @@
         const report = await createReport(clip.semanticModelName || "", resultSheetName);
 
         const d0 = clip.design || {};
-        const rrTL = _rangeTopLeft(d0.rrAddress), rcTL = _rangeTopLeft(d0.rcAddress);
         const anchor = _parseA1(anchorAddress);
-        let rrAddress = d0.rrAddress || "", rcAddress = d0.rcAddress || "";
-        const staticCopies = [];
-        if (anchor && (rrTL || rcTL)) {
-            const top = Math.min(rrTL ? rrTL.row : Infinity, rcTL ? rcTL.row : Infinity);
-            const left = Math.min(rrTL ? rrTL.col : Infinity, rcTL ? rcTL.col : Infinity);
-            const dRow = anchor.row - top, dCol = anchor.col - left;
-            rrAddress = _shiftRange(d0.rrAddress, dRow, dCol);
-            rcAddress = _shiftRange(d0.rcAddress, dRow, dCol);
+        // Esquina de referencia: la del bloque completo copiado; si no hay
+        // (copiado con una versión anterior), la de las cabeceras.
+        const blockTL = _rangeTopLeft(d0.sourceBlock);
+        const rrTL = _rangeTopLeft(d0.rrAddress), rcTL = _rangeTopLeft(d0.rcAddress), anTL = _rangeTopLeft(d0.anchorAddress);
+        let dRow = 0, dCol = 0;
+        if (anchor) {
+            const top = blockTL ? blockTL.row : Math.min(rrTL ? rrTL.row : Infinity, rcTL ? rcTL.row : Infinity, anTL ? anTL.row : Infinity);
+            const left = blockTL ? blockTL.col : Math.min(rrTL ? rrTL.col : Infinity, rcTL ? rcTL.col : Infinity, anTL ? anTL.col : Infinity);
+            if (isFinite(top) && isFinite(left)) { dRow = anchor.row - top; dCol = anchor.col - left; }
         }
-        if (d0.sourceSheet) {
+        const sh = a => _shiftRange(a, dRow, dCol);
+        const rrAddress = sh(d0.rrAddress), rcAddress = sh(d0.rcAddress);
+        // Lo que commands.js copia en la hoja (todo el bloque, como Ctrl+C/Ctrl+V)
+        // y los rangos con nombre del informe nuevo (los del original desplazados)
+        const blockCopy = (d0.sourceSheet && d0.sourceBlock) ? { fromSheet: d0.sourceSheet, from: d0.sourceBlock, to: sh(d0.sourceBlock) } : null;
+        const names = d0.sourceNames ? {
+            rows: d0.sourceNames.rows ? sh(d0.sourceNames.rows) : "",
+            cols: d0.sourceNames.cols ? sh(d0.sourceNames.cols) : "",
+            values: d0.sourceNames.values ? sh(d0.sourceNames.values) : ""
+        } : null;
+        // Compatibilidad (portapapeles antiguo): solo las cabeceras estáticas
+        const staticCopies = [];
+        if (!blockCopy && d0.sourceSheet) {
             if (d0.rowsStatic && d0.rrAddress && rrAddress) staticCopies.push({ fromSheet: d0.sourceSheet, from: d0.rrAddress, to: rrAddress });
             if (d0.colsStatic && d0.rcAddress && rcAddress) staticCopies.push({ fromSheet: d0.sourceSheet, from: d0.rcAddress, to: rcAddress });
+        }
+        if (d0.anchorAddress) {
+            const r = getReport(report.id);
+            r.design = r.design || {};
+            r.design.anchorAddress = sh(d0.anchorAddress).split(":")[0];
+            r.design.namedAt = null;
+            await _writeReport(report.id, r);
         }
 
         // saveDesign ya expande jerarquías (expandedRows/expandedCols) a
@@ -453,7 +495,11 @@
         await saveReportProperties(report.id, props);
 
         const out = getReport(report.id);
-        if (out) out.__staticCopies = staticCopies;
+        if (out) {
+            out.__staticCopies = staticCopies;
+            out.__blockCopy = blockCopy;
+            out.__names = names;
+        }
         return out;
     }
 
@@ -937,6 +983,7 @@
         setReportAnchor,
         axisColumnOwners,
         setReportPositions,
+        setReportNamedAt,
         hasReportClipboard,
         getReportClipboard,
         copyReportToClipboard,
