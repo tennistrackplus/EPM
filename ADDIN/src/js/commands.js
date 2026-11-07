@@ -7439,8 +7439,9 @@ async function dracoSyncReportPositions(reportId) {
                 if (rc.col < rr.col + rr.width) rc = Object.assign({}, rc, { col: rr.col + rr.width });
                 if (rr.row < rc.row + rc.height) rr = Object.assign({}, rr, { row: rc.row + rc.height });
             }
+            const sVals0 = shift(vals, at.values);
             const moved = (sRows && (sRows.dr || sRows.dc)) || (sCols && (sCols.dr || sCols.dc));
-            if (moved) {
+            if (moved || (sVals0 && (sVals0.dr || sVals0.dc))) {
                 // Nueva referencia: los nombres ya están donde están
                 await window.ReportStore.setReportNamedAt(reportId, {
                     rows: rows ? { row: rows.row, col: rows.col } : at.rows,
@@ -7450,13 +7451,23 @@ async function dracoSyncReportPositions(reportId) {
             }
             const newRr = rr ? dracoBlockA1(rr) : (d.rrAddress || "");
             const newRc = rc ? dracoBlockA1(rc) : (d.rcAddress || "");
-            // Ancla (celda de valores) solo si el informe se ha desplazado
-            const origin = (moved && rr && rc) ? dracoRectA1({ r: rr.row - 1, c: rc.col - 1, h: 1, w: 1 }) : "";
+            // Ancla (celda de valores) si el informe se ha desplazado. Sin
+            // cabeceras (p. ej. estático solo con la medida) se mueve con el
+            // nombre de Valores; antes se quedaba en la celda anterior y el
+            // reconocimiento de miembros no encontraba el informe.
+            let origin = "";
+            if (moved && rr && rc) origin = dracoRectA1({ r: rr.row - 1, c: rc.col - 1, h: 1, w: 1 });
+            else {
+                const sV = shift(vals, at.values);
+                const an = d.anchorAddress ? dracoParseBlock(d.anchorAddress.split(":")[0] + ":" + d.anchorAddress.split(":")[0]) : null;
+                if (sV && (sV.dr || sV.dc) && an) origin = dracoRectA1({ r: an.row + sV.dr - 1, c: an.col + sV.dc - 1, h: 1, w: 1 });
+            }
             if (newRr === (d.rrAddress || "") && newRc === (d.rcAddress || "") && (!origin || origin === d.anchorAddress)) return;
 
             await window.ReportStore.setReportPositions(reportId, newRr, newRc, origin || undefined);
-            changed = newRr !== (d.rrAddress || "") || newRc !== (d.rcAddress || "");
-            if (changed) dracoLog(`Informe ${reportId}: posición ajustada a sus rangos con nombre (Filas ${newRr || "—"}, Columnas ${newRc || "—"}).`);
+            // También cuenta un ancla movida (informe sin cabeceras): el panel la usa
+            changed = newRr !== (d.rrAddress || "") || newRc !== (d.rcAddress || "") || (!!origin && origin !== d.anchorAddress);
+            if (changed) dracoLog(`Informe ${reportId}: posición ajustada a sus rangos con nombre (Filas ${newRr || "—"}, Columnas ${newRc || "—"}, valores ${origin || d.anchorAddress || "—"}).`);
         });
     } catch (e) {
         dracoLog("No se pudo sincronizar la posición del informe " + reportId + ": " + dracoErrMsg(e));
@@ -7588,6 +7599,11 @@ async function dracoApplyStaticEdits(edits) {
                 if (!area) continue;
                 for (const reportId of dracoReportsOnSheet(wsId, sh.name)) {
                     if (done.has(reportId)) continue;
+                    // Cortar/pegar (Ctrl+X / Ctrl+V) mueve los rangos con nombre:
+                    // PRIMERO se lleva la posición del informe a ellos. Antes se
+                    // reconstruían con la posición antigua: Rows quedaba de la
+                    // fila vieja a la nueva y Cols se borraba.
+                    if (area.width * area.height > 1) await dracoSyncReportPositions(reportId);
                     const d = (window.ReportStore.getReport(reportId) || {}).design || {};
                     if (!d.rowsStatic || !d.colsStatic) continue;
                     const fr = dracoStaticFrame(d.rrAddress, d.rcAddress, await dracoReportAnchor(context, reportId));
