@@ -256,6 +256,41 @@
         return report && report.design ? (report.design.resultSheetId || "") : "";
     }
 
+    /**
+     * Columna física (Filas) o fila física (Columnas) de la cabecera -> índice
+     * del campo del eje que la ocupa. Un campo puede ocupar más de una
+     * («ID y texto»). Lo usa commands.js para saber qué dimensión se ha
+     * borrado al eliminar columnas/filas enteras de la cabecera.
+     */
+    function axisColumnOwners(reportId, zoneId) {
+        const report = getReport(reportId);
+        const d = report && report.design;
+        if (!d) return [];
+        const list = (zoneId === "rows" ? d.rows : d.columns) || [];
+        const ctx = _expansionContext(report);
+        const owners = [];
+        list.forEach((item, i) => {
+            let n = 1;
+            if (ctx && ctx.model) {
+                const rows = _expandAxis([item], zoneId, d.fieldOptions || {}, ctx);
+                n = rows.filter(r => Number(r[2]) === 1 && String(r[5] || "").indexOf("HIDE") === -1).length || 1;
+            }
+            for (let k = 0; k < n; k++) owners.push(i);
+        });
+        return owners;
+    }
+
+    /** Posición del informe (cabeceras y ancla) sacada de sus rangos con nombre (dracoSyncReportPositions). */
+    async function setReportPositions(reportId, rrAddress, rcAddress, anchorAddress) {
+        const report = getReport(reportId);
+        if (!report) return;
+        report.design = report.design || {};
+        if (rrAddress !== undefined) report.design.rrAddress = rrAddress;
+        if (rcAddress !== undefined) report.design.rcAddress = rcAddress;
+        if (anchorAddress) report.design.anchorAddress = anchorAddress;
+        await _writeReport(reportId, report);
+    }
+
     /** Celda ancla del informe (origen de los valores mientras no tiene ejes): ver dracoStaticFrame en commands.js. */
     async function setReportAnchor(reportId, anchorAddress) {
         const report = getReport(reportId);
@@ -900,6 +935,8 @@
         getReportResultSheetId,
         setReportResultSheetRef,
         setReportAnchor,
+        axisColumnOwners,
+        setReportPositions,
         hasReportClipboard,
         getReportClipboard,
         copyReportToClipboard,

@@ -1609,6 +1609,13 @@ const TaskPaneApp = {
             this.refreshStaticFilterLock(false);
             this.undoAfterLoad();
 
+            // La posición real del informe son sus rangos con nombre (Excel los
+            // mueve al insertar/borrar filas o columnas, también sin el
+            // complemento): se ajustan las direcciones del panel si difieren.
+            if (typeof window.dracoSyncReportPositions === "function" && this.currentReportId && !this.undoApplying) {
+                window.dracoSyncReportPositions(this.currentReportId).catch(() => {});
+            }
+
         } catch (err) {
             console.error("Error cargando el diseño desde EDIT_REPORT:", err);
         }
@@ -2174,6 +2181,35 @@ const TaskPaneApp = {
         await this.loadDesignFromSheet();
         this.setAutoStatus(`${field.name} añadido a ${zone === "rows" ? "Filas" : "Columnas"}.`);
         return true;
+    },
+
+    /* -------------------------------------------------------------
+     * Se han borrado columnas ENTERAS de la cabecera de Filas (o filas de
+     * la de Columnas) con el complemento cargado (handleDracoStructureChanged
+     * en commands.js): se quitan del informe los campos que ocupaban y la
+     * cabecera se estrecha en las columnas/filas borradas. La posición la
+     * ajusta después dracoSyncReportPositions con los rangos con nombre.
+     * ----------------------------------------------------------- */
+    async removeAxisFieldsAfterDelete(reportId, zone, itemIndexes, removedPhysical) {
+        if (String(this.currentReportId) !== String(reportId)) {
+            await this.onReportSelectorChange(String(reportId));
+        }
+        const list = zone === "rows" ? this.state.rows : this.state.columns;
+        const names = itemIndexes.map(i => list[i] && list[i].name).filter(Boolean);
+        if (!names.length) return;
+        this.undoRecord();
+        [...itemIndexes].sort((a, b) => b - a).forEach(i => list.splice(i, 1));
+        if (zone === "rows") RangeAxis.rr.width = Math.max(0, (RangeAxis.rr.width || 0) - removedPhysical);
+        else RangeAxis.rc.height = Math.max(0, (RangeAxis.rc.height || 0) - removedPhysical);
+        try {
+            if (window.ReportStore && window.ReportStore.countTextColumns) {
+                this.textExtra[zone] = window.ReportStore.countTextColumns(this.currentReportId, zone, list, this.state.fieldOptions);
+            }
+        } catch (e) { /* sin textos */ }
+        await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
+        await this.loadDesignFromSheet();
+        this.flashZoneWarning(zone, `Se ha quitado ${names.join(", ")} del informe: se borró su ${zone === "rows" ? "columna" : "fila"}.`);
+        this.scheduleAutoUpdate();
     },
 
     /* -------------------------------------------------------------

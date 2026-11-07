@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-11-05-estatico-desde-cero";
+const DRACO_BUILD = "2026-11-06-posiciones";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -2393,6 +2393,17 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
         await dracoReportAnchor(context, ReportState.ReportId));
     const rowFallback = rowsDefsRaw.some(isMeasureDef) ? measureDef.R : (frame ? frame.valuesRow : 1);
     const colFallback = colDefsRaw.some(isMeasureDef) ? measureDef.R : (frame ? frame.valuesCol : 1);
+
+    // Celdas que pinta este informe: los CRUCES de las líneas EPM_VALUE de
+    // Filas con las de Columnas (o la celda única si un eje no tiene líneas).
+    // jsonPaintValues escribe en todas: el valor devuelto o vacío si no hay
+    // datos (antes, una celda sin datos se quedaba con el valor anterior).
+    const uniq = arr => [...new Set(arr)].filter(n => Number.isFinite(n) && n > 0).sort((a, b) => a - b);
+    ReportState.FixedPaint = {
+        reportId: ReportState.ReportId,
+        rows: rowsDefs.length ? uniq(rowsDefs.map(d => Number(d.R))) : [Number(rowFallback)],
+        cols: colDefs.length ? uniq(colDefs.map(d => Number(d.R))) : [Number(colFallback)]
+    };
     const rowIdsArray = buildIdArray(atributesGrid, rowsDefs, "ROW_ID", rowFallback);
     const columnIdsArray = buildIdArray(atributesGrid, colDefs, "COLUMN_ID", colFallback);
 
@@ -2887,6 +2898,58 @@ async function jsonPaintValues(context, json, reportId) {
     const isPlanningReport = !!(report && report.reportProperties && report.reportProperties.planningReport);
     const baseline = isPlanningReport ? new Map() : null;
 
+    // Informe estático: se escriben SOLO los cruces de líneas EPM_VALUE de
+    // Filas x Columnas (ver ReportState.FixedPaint en buildSQLFixed), con el
+    // valor devuelto o vacío si no hay datos. No se toca el resto del rango
+    // de valores (líneas EPM_FORMULA, celdas del usuario...). Una escritura
+    // por fila y tramo de columnas seguidas.
+    const fp = ReportState.FixedPaint;
+    if (fp && String(fp.reportId) === String(reportId) && fp.rows.length && fp.cols.length) {
+        const byCell = new Map();
+        for (const t of triples) byCell.set(t.row + "_" + t.col, coerceCellLiteral(t.text));
+        // Tramos de números seguidos: [7,8,10] -> [[7,8],[10,10]]
+        const toRuns = list => {
+            const out = [];
+            let start = list[0], prev = list[0];
+            for (let i = 1; i <= list.length; i++) {
+                const n = list[i];
+                if (n === prev + 1) { prev = n; continue; }
+                out.push([start, prev]);
+                start = prev = n;
+            }
+            return out;
+        };
+        // Bloques rectangulares = tramo de filas seguidas x tramo de columnas
+        // seguidas: un informe con las líneas una detrás de otra es UNA sola
+        // escritura; solo se parte donde hay huecos (líneas EPM_FORMULA, etc.)
+        const rowRuns = toRuns(fp.rows), colRuns = toRuns(fp.cols);
+        let cleared = 0, blocks = 0;
+        for (const [r0, r1] of rowRuns) {
+            for (const [c0, c1] of colRuns) {
+                const grid = [];
+                for (let r = r0; r <= r1; r++) {
+                    const vals = [];
+                    for (let c = c0; c <= c1; c++) {
+                        const k = r + "_" + c;
+                        const v = byCell.has(k) ? byCell.get(k) : "";
+                        if (v === "") cleared++;
+                        vals.push(v);
+                        if (baseline && byCell.has(k)) baseline.set(k, v);
+                    }
+                    grid.push(vals);
+                }
+                sheet.getRangeByIndexes(r0 - 1, c0 - 1, r1 - r0 + 1, c1 - c0 + 1).values = grid;
+                blocks++;
+            }
+        }
+        ReportState.FixedPaint = null;
+        if (isPlanningReport) DracoPlanningBaselineValues.set(reportId, baseline);
+        else DracoPlanningBaselineValues.delete(reportId);
+        await context.sync();
+        draco_perfMark(reportId, `Escribir valores en la hoja (${fp.rows.length}x${fp.cols.length} cruces en ${blocks} bloque(s), ${cleared} vacíos)`, tPerf);
+        return;
+    }
+
     // Antes: UN range.getRangeByIndexes(...).values=[[...]] POR CELDA (un
     // informe "Fijo"/planificación grande -p.ej. 500 filas x 24 meses =
     // 12.000 celdas, ver comentario en handleDracoPlanningValueChanged-
@@ -2960,6 +3023,8 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
     await refreshDracoDiagnosticsFlag(); // Diagnóstico activo en este libro (EDIT_REPORT!AB1)
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
+    // Posición = sus rangos con nombre (filas/columnas insertadas o borradas, también sin el complemento)
+    await dracoSyncReportPositions(reportId);
     let sql;
     beginDracoPerfLog();
     const tRefreshStart = performance.now(); // TOTAL de extremo a extremo, ver más abajo
@@ -3058,6 +3123,13 @@ async function actualizarInformeFixedCore(reportIdOverride) {
         });
     } catch (e) {
         console.warn("[Draco] No se pudieron aplicar las fórmulas/formato del informe estático:", e);
+    }
+    // Rangos con nombre = todas las líneas EPM_VALUE / EPM_FORMULA encontradas
+    // (aparte: un fallo del formato no debe dejar el informe sin rangos)
+    try {
+        await Excel.run(async (context) => { await dracoRebuildStaticNames(context, reportId); });
+    } catch (e) {
+        dracoLog("No se pudieron ajustar los rangos del informe estático " + reportId + ": " + dracoErrMsg(e));
     }
     tPerf = draco_perfMark(reportId, "Líneas EPM_FORMULA y formato estático", tPerf);
 
@@ -4080,6 +4152,8 @@ async function finishDracoFixedReport(context, reportId, editReportGrid) {
 
 async function actualizarInformeHybridCore(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
+    // Posición = sus rangos con nombre (filas/columnas insertadas o borradas, también sin el complemento)
+    await dracoSyncReportPositions(reportId);
     let built;
     beginDracoPerfLog();
     const tRefreshStart = performance.now();
@@ -7180,6 +7254,254 @@ async function dracoLocateStaticAxisCell(context, sheet, addr) {
     return null;
 }
 
+/* =====================================================================
+ * POSICIÓN DEL INFORME = SUS RANGOS CON NOMBRE
+ * =====================================================================
+ * Excel mueve/ajusta solo los nombres Draco_00N_Rows/Cols/Values al
+ * insertar o borrar filas/columnas (aunque el complemento no esté
+ * cargado). La posición guardada en el diseño (rrAddress / rcAddress, lo
+ * que se ve en el panel) se SINCRONIZA con ellos:
+ *   - al cargar el informe en el panel y en cada refresco (cambios hechos
+ *     sin el complemento),
+ *   - al insertar/borrar filas o columnas con el complemento cargado
+ *     (handleDracoStructureChanged).
+ * La ESQUINA sale del nombre; el TAMAÑO (nº de columnas de la cabecera de
+ * Filas / filas de la de Columnas) sale del informe: si fuera de línea se
+ * borró una columna de la cabecera, se pinta lo que espera el informe.
+ * Un nombre roto (#REF!) se ignora.
+ * =================================================================== */
+async function dracoReadNameBlock(context, name) {
+    const it = context.workbook.names.getItemOrNullObject(name);
+    it.load(["isNullObject", "type"]);
+    await context.sync();
+    if (it.isNullObject || it.type !== "Range") return null;
+    const r = it.getRange();
+    r.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    await context.sync();
+    return { row: r.rowIndex + 1, col: r.columnIndex + 1, height: r.rowCount, width: r.columnCount };
+}
+
+function dracoBlockA1(b) {
+    if (!b || !(b.width > 0) || !(b.height > 0)) return "";
+    // Mismo formato que RangeAxis.addressOf en el panel: siempre "C6:C6"
+    const a = dracoColumnLetter(b.col) + b.row;
+    const z = dracoColumnLetter(b.col + b.width - 1) + (b.row + b.height - 1);
+    return a + ":" + z;
+}
+
+/**
+ * Lleva rrAddress/rcAddress (y el panel, si muestra este informe) a la
+ * posición de los rangos con nombre. Devuelve true si algo ha cambiado.
+ */
+async function dracoSyncReportPositions(reportId) {
+    if (!window.ReportStore || reportId === null || reportId === undefined) return false;
+    const report = window.ReportStore.getReport(reportId);
+    const d = report && report.design;
+    if (!d) return false;
+    let changed = false;
+    try {
+        await Excel.run(async (context) => {
+            const rn = dracoRangeNames(reportId);
+            const rows = await dracoReadNameBlock(context, rn.rows);
+            const cols = await dracoReadNameBlock(context, rn.cols);
+            const vals = await dracoReadNameBlock(context, rn.values);
+            if (!rows && !cols && !vals) return;   // sin nombres (o #REF!): manda el diseño
+
+            const oldRr = dracoParseBlock(d.rrAddress);
+            const oldRc = dracoParseBlock(d.rcAddress);
+            let rr = oldRr, rc = oldRc;
+            // Cabecera de Filas: esquina del nombre, ancho del informe
+            if (oldRr) {
+                if (rows) rr = { row: rows.row, col: rows.col, height: 1, width: oldRr.width };
+                else if (vals) rr = { row: vals.row, col: vals.col - oldRr.width, height: 1, width: oldRr.width };
+            }
+            // Cabecera de Columnas: esquina del nombre, alto del informe
+            if (oldRc) {
+                if (cols) rc = { row: cols.row, col: cols.col, height: oldRc.height, width: 1 };
+                else if (vals) rc = { row: vals.row - oldRc.height, col: vals.col, height: oldRc.height, width: 1 };
+            }
+            // Si fuera de línea se borró una columna/fila de la cabecera, el
+            // nombre es más pequeño que lo que espera el informe: los valores
+            // van DETRÁS de la cabecera esperada (el refresco repinta así).
+            if (rr && rc && oldRr && oldRc) {
+                if (rc.col < rr.col + rr.width) rc = Object.assign({}, rc, { col: rr.col + rr.width });
+                if (rr.row < rc.row + rc.height) rr = Object.assign({}, rr, { row: rc.row + rc.height });
+            }
+            const newRr = rr ? dracoBlockA1(rr) : (d.rrAddress || "");
+            const newRc = rc ? dracoBlockA1(rc) : (d.rcAddress || "");
+            const originRow = rr ? rr.row : (vals ? vals.row : 0);
+            const originCol = rc ? rc.col : (vals ? vals.col : 0);
+            const origin = (originRow && originCol) ? dracoRectA1({ r: originRow - 1, c: originCol - 1, h: 1, w: 1 }) : "";
+            if (newRr === (d.rrAddress || "") && newRc === (d.rcAddress || "") && (!origin || origin === d.anchorAddress)) return;
+
+            await window.ReportStore.setReportPositions(reportId, newRr, newRc, origin || undefined);
+            changed = newRr !== (d.rrAddress || "") || newRc !== (d.rcAddress || "");
+            if (changed) dracoLog(`Informe ${reportId}: posición ajustada a sus rangos con nombre (Filas ${newRr || "—"}, Columnas ${newRc || "—"}).`);
+        });
+    } catch (e) {
+        dracoLog("No se pudo sincronizar la posición del informe " + reportId + ": " + dracoErrMsg(e));
+        return false;
+    }
+    // Panel: mismas direcciones (si no, el siguiente autoguardado las revertiría)
+    try {
+        if (changed && typeof TaskPaneApp !== "undefined" && String(TaskPaneApp.currentReportId) === String(reportId)
+            && typeof RangeAxis !== "undefined") {
+            const dd = window.ReportStore.getReport(reportId).design;
+            RangeAxis.loadFromAddresses(dd.rrAddress || "", dd.rcAddress || "", dd.anchorAddress || "");
+            if (TaskPaneApp.refreshRangeLabels) TaskPaneApp.refreshRangeLabels();
+            if (TaskPaneApp.undoSetBaseline) TaskPaneApp.undoSetBaseline();
+        }
+    } catch (e) { /* sin panel */ }
+    return changed;
+}
+window.dracoSyncReportPositions = dracoSyncReportPositions;
+
+/** Informes (ids) cuya hoja es la indicada. */
+function dracoReportsOnSheet(sheetId, sheetName) {
+    const all = (window.ReportStore && window.ReportStore.getAllReports()) || {};
+    return Object.keys(all).filter(id => {
+        const d = (all[id] && all[id].design) || {};
+        return (d.resultSheetId && d.resultSheetId === sheetId) || (!d.resultSheetId && d.resultSheetName === sheetName);
+    }).map(Number);
+}
+
+function dracoParseWholeSpan(address, kind) {
+    const a = String(address || "").split("!").pop().replace(/\$/g, "");
+    const re = kind === "cols" ? /^([A-Z]+)(?:\d+)?:([A-Z]+)(?:\d+)?$/i : /^(?:[A-Z]+)?(\d+):(?:[A-Z]+)?(\d+)$/i;
+    const m = re.exec(a);
+    if (!m) return null;
+    if (kind === "cols") {
+        const n = s => s.toUpperCase().split("").reduce((acc, ch) => acc * 26 + ch.charCodeAt(0) - 64, 0);
+        return [n(m[1]), n(m[2])];
+    }
+    return [Number(m[1]), Number(m[2])];
+}
+
+/**
+ * Insertar/borrar filas o columnas con el complemento cargado: se ajusta la
+ * posición de los informes de esa hoja. Si se borran columnas ENTERAS de la
+ * cabecera de Filas (o filas enteras de la de Columnas), se quita del
+ * informe la dimensión que ocupaban.
+ */
+let DracoStructureQueue = Promise.resolve();
+async function handleDracoStructureChanged(ev) {
+    if (!ev || DracoSuppressChangeEvents) return;
+    const t = String(ev.changeType || "");
+    if (!/^(RowInserted|RowDeleted|ColumnInserted|ColumnDeleted|CellInserted|CellDeleted)$/.test(t)) return;
+    if (ev.source && ev.source !== "Local") return;
+    if (ev.triggerSource === "ThisLocalAddin") return;
+    DracoStructureQueue = DracoStructureQueue.then(async () => {
+        try {
+            let sheetName = "";
+            await Excel.run(async (context) => {
+                const sh = context.workbook.worksheets.getItemOrNullObject(ev.worksheetId);
+                sh.load(["isNullObject", "name"]);
+                await context.sync();
+                if (!sh.isNullObject) sheetName = sh.name;
+            });
+            if (!sheetName || sheetName.toUpperCase() === "EDIT_REPORT") return;
+            for (const reportId of dracoReportsOnSheet(ev.worksheetId, sheetName)) {
+                const d = (window.ReportStore.getReport(reportId) || {}).design || {};
+                // ¿Se ha borrado una columna/fila ENTERA de la cabecera?
+                const zone = t === "ColumnDeleted" ? "rows" : (t === "RowDeleted" ? "columns" : "");
+                const span = zone ? dracoParseWholeSpan(ev.address, zone === "rows" ? "cols" : "rows") : null;
+                const hdr = zone === "rows" ? dracoParseBlock(d.rrAddress) : (zone === "columns" ? dracoParseBlock(d.rcAddress) : null);
+                if (span && hdr) {
+                    const start = zone === "rows" ? hdr.col : hdr.row;
+                    const size = zone === "rows" ? hdr.width : hdr.height;
+                    const offsets = [];
+                    for (let k = Math.max(span[0], start); k <= Math.min(span[1], start + size - 1); k++) offsets.push(k - start);
+                    if (offsets.length && typeof TaskPaneApp !== "undefined" && TaskPaneApp.removeAxisFieldsAfterDelete) {
+                        const owners = window.ReportStore.axisColumnOwners(reportId, zone);
+                        const items = [...new Set(offsets.map(o => owners[o]).filter(i => i !== undefined))];
+                        // Solo si se borran TODAS las columnas/filas de ese campo
+                        const whole = items.filter(i => owners.every((ow, k) => ow !== i || offsets.indexOf(k) !== -1));
+                        if (whole.length) {
+                            const removedPhysical = owners.filter(ow => whole.indexOf(ow) !== -1).length;
+                            dracoLog(`Informe ${reportId}: borradas ${t === "ColumnDeleted" ? "columnas" : "filas"} de la cabecera (${ev.address}) -> se quita(n) ${whole.length} campo(s) de ${zone}.`);
+                            await TaskPaneApp.removeAxisFieldsAfterDelete(reportId, zone, whole, removedPhysical);
+                        }
+                    }
+                }
+                await dracoSyncReportPositions(reportId);
+            }
+        } catch (e) {
+            dracoLog("Cambio de filas/columnas: " + dracoErrMsg(e));
+        }
+    });
+}
+
+/* ---------------------------------------------------------------------
+ * INFORME ESTÁTICO: los rangos con nombre cubren TODAS sus líneas
+ * ---------------------------------------------------------------------
+ * Tras escribir un EPM_VALUE con el buscador y tras cada refresco, los
+ * nombres Draco_00N_* se ajustan a las fórmulas (EPM_VALUE / EPM_FORMULA)
+ * que hay en las cabeceras: Filas = columnas de la cabecera x filas con
+ * líneas; Columnas = filas de la cabecera x columnas con líneas; Valores =
+ * su cruce. Un eje sin líneas usa la celda de valores (como el SQL).
+ * ------------------------------------------------------------------- */
+async function dracoRebuildStaticNames(context, reportId) {
+    const report = window.ReportStore ? window.ReportStore.getReport(reportId) : null;
+    const d = report && report.design;
+    if (!d || !d.rowsStatic || !d.colsStatic) return false;      // solo informes con los dos ejes Estáticos
+    const frame = dracoStaticFrame(d.rrAddress, d.rcAddress, await dracoReportAnchor(context, reportId));
+    if (!frame) return false;
+    const sheetName = await getDracoResultSheetName(context, reportId);
+    const sheet = context.workbook.worksheets.getItemOrNullObject(sheetName);
+    sheet.load("isNullObject");
+    await context.sync();
+    if (sheet.isNullObject) return false;
+    const used = sheet.getUsedRangeOrNullObject();
+    used.load(["isNullObject", "rowIndex", "columnIndex", "rowCount", "columnCount", "formulas"]);
+    await context.sync();
+    if (used.isNullObject) return false;
+    const isLine = f => typeof f === "string" && f.charAt(0) === "=" && /EPM_(VALUE|FORMULA)\s*\(/i.test(f);
+    const cellF = (row, col) => {
+        const r = row - 1 - used.rowIndex, c = col - 1 - used.columnIndex;
+        if (r < 0 || c < 0 || r >= used.rowCount || c >= used.columnCount) return "";
+        return used.formulas[r][c];
+    };
+    const lastRow = used.rowIndex + used.rowCount, lastCol = used.columnIndex + used.columnCount;
+    // Filas con alguna fórmula en la cabecera de Filas
+    let maxR = 0;
+    if (frame.rowsWidth > 0) {
+        for (let R = frame.valuesRow; R <= lastRow; R++) {
+            for (let C = frame.rowsHeaderCol; C < frame.rowsHeaderCol + frame.rowsWidth; C++) if (isLine(cellF(R, C))) { maxR = R; break; }
+        }
+    }
+    // Columnas con alguna fórmula en la cabecera de Columnas
+    let maxC = 0;
+    if (frame.colsHeight > 0) {
+        for (let C = frame.valuesCol; C <= lastCol; C++) {
+            for (let R = frame.colsHeaderRow; R < frame.colsHeaderRow + frame.colsHeight; R++) if (isLine(cellF(R, C))) { maxC = C; break; }
+        }
+    }
+    const nRows = maxR ? maxR - frame.valuesRow + 1 : 1;
+    const nCols = maxC ? maxC - frame.valuesCol + 1 : 1;
+    const rn = dracoRangeNames(reportId);
+    const want = [
+        { name: rn.rows, b: (maxR && frame.rowsWidth) ? { row: frame.valuesRow, col: frame.rowsHeaderCol, height: nRows, width: frame.rowsWidth } : null },
+        { name: rn.cols, b: (maxC && frame.colsHeight) ? { row: frame.colsHeaderRow, col: frame.valuesCol, height: frame.colsHeight, width: nCols } : null },
+        { name: rn.values, b: { row: frame.valuesRow, col: frame.valuesCol, height: nRows, width: nCols } }
+    ];
+    const items = want.map(w => context.workbook.names.getItemOrNullObject(w.name));
+    items.forEach(it => it.load(["isNullObject", "type"]));
+    await context.sync();
+    const sh = context.workbook.worksheets.getItem(sheetName);
+    // Primero se borran los antiguos y se SINCRONIZA; después se crean. Si se
+    // borra y se crea el mismo nombre en el mismo lote, Excel lo rechaza (el
+    // nombre aún existe) y no se creaba ningún rango.
+    let anyDeleted = false;
+    items.forEach(it => { if (!it.isNullObject) { it.delete(); anyDeleted = true; } });
+    if (anyDeleted) await context.sync();
+    want.forEach(w => {
+        if (w.b) context.workbook.names.add(w.name, sh.getRangeByIndexes(w.b.row - 1, w.b.col - 1, w.b.height, w.b.width));
+    });
+    await context.sync();
+    dracoLog(`Informe ${reportId} (estático): rangos ajustados a sus líneas (${nRows} filas x ${nCols} columnas).`);
+    return true;
+}
+
 /** Pide la dimensión de un nivel nuevo (dimensionPicker.html). Devuelve {dim, name, isHierarchy} o null. */
 function openDracoDimensionPicker(reportId, axis) {
     return new Promise((resolve) => {
@@ -8421,6 +8743,9 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         const sheet = context.workbook.worksheets.getItem(resultSheetName);
                         sheet.getRange(addr).values = [[buildEpmValueFormula(located.dim, payload.attribute, payload.value)]];
                         await context.sync();
+                        // Informe estático: los rangos con nombre pasan a cubrir la línea nueva
+                        try { await dracoRebuildStaticNames(context, located.reportId); }
+                        catch (e) { dracoLog(tag, "no se pudieron ajustar los rangos: " + dracoErrMsg(e)); }
                     });
                     dracoLog(tag, "EPM_VALUE escrita en " + addr);
                 });
@@ -8856,6 +9181,9 @@ async function registerDracoMemberRecognitionListener(context) {
     } catch (e) { return; }
     DracoRecListenerRegistered = true;
     context.workbook.worksheets.onChanged.add(handleDracoSheetEdited);
+    // Insertar/borrar filas o columnas: posición de los informes (y quitar la
+    // dimensión cuya columna/fila de cabecera se borre entera)
+    context.workbook.worksheets.onChanged.add(handleDracoStructureChanged);
     await context.sync();
     dracoLog("Reconocimiento de miembros (JS) registrado.");
 }
@@ -10897,6 +11225,8 @@ async function actualizarInformeCore(reportIdOverride) {
     await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
     await refreshDracoDiagnosticsFlag(); // Diagnóstico activo en este libro (EDIT_REPORT!AB1)
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
+    // Posición = sus rangos con nombre (filas/columnas insertadas o borradas, también sin el complemento)
+    await dracoSyncReportPositions(reportId);
     let sql;
     beginDracoPerfLog();
     const tRefreshStart = performance.now(); // TOTAL de extremo a extremo, ver más abajo
