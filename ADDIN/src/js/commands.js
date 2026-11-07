@@ -7305,6 +7305,7 @@ function dracoInfoNotice(title, subtitle, tone) {
         dracoLog("Aviso no disponible: " + dracoErrMsg(e));
     }
 }
+window.dracoInfoNotice = dracoInfoNotice;
 
 /**
  * ¿La celda es de la cabecera de un eje ESTÁTICO de algún informe de esta

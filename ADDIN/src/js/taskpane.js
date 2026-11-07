@@ -2409,12 +2409,19 @@ const TaskPaneApp = {
         if (typeof FilterModal === "undefined" || !FilterModal.open) return;
         const same = f => f.dimension === entry.dimension && f.name === entry.name;
         const existing = this.state.filters.find(same);
-        const result = await FilterModal.open({
+        this._filterDialogOpen = true;
+        let result = null;
+        try {
+            result = await FilterModal.open({
             dim: entry.dimension,
             name: entry.name,
             isHierarchy: entry.isHierarchy,
             currentFilter: existing ? existing.filter : null
         });
+        } finally {
+            this._filterDialogOpen = false;
+            this._lastTagDblClickAt = Date.now();
+        }
         if (!result) return;
         if (existing) {
             existing.filter = result;
@@ -2610,18 +2617,33 @@ const TaskPaneApp = {
         if (zoneId === "filters" && !isMeasure) {
             tag.addEventListener("dblclick", async () => {
                 clearTimeout(this._tagClickTimer); this._tagClickTimer = null; // sin abrir propiedades
+                this._lastTagDblClickAt = Date.now();
                 if (this.staticFilterDims().has(String(entry.dimension).toUpperCase())) {
-                    this.flashZoneWarning("filters", `El filtro de ${entry.dimension} no se aplica: esa dimensión está en un eje Estático.`);
+                    // Filtro anulado por un eje Estático (ver refreshStaticFilterLock):
+                    // aviso visible en el centro de Excel, no solo en la barra de estado
+                    const msg = `El filtro de ${entry.dimension} no se aplica: esa dimensión está en un eje Estático (ya filtran sus líneas).`;
+                    this.flashZoneWarning("filters", msg);
+                    if (typeof window.dracoInfoNotice === "function") window.dracoInfoNotice("Filtro sin efecto", msg, "warn");
                     return;
                 }
                 if (typeof FilterModal === "undefined" || !FilterModal.open) return;
 
-                const result = await FilterModal.open({
-                    dim: entry.dimension,
-                    name: entry.name,
-                    isHierarchy: entry.isHierarchy,
-                    currentFilter: entry.filter
-                });
+                // Mientras la ventana del filtro está abierta, el panel no abre
+                // las propiedades del campo (si lo hacía, Excel cogía el foco y
+                // la ventana del filtro desaparecía detrás).
+                this._filterDialogOpen = true;
+                let result = null;
+                try {
+                    result = await FilterModal.open({
+                        dim: entry.dimension,
+                        name: entry.name,
+                        isHierarchy: entry.isHierarchy,
+                        currentFilter: entry.filter
+                    });
+                } finally {
+                    this._filterDialogOpen = false;
+                    this._lastTagDblClickAt = Date.now();
+                }
                 if (result) {
                     entry.filter = result;
                     if (!entry.isHierarchy) entry.realAttribute = result.attribute || entry.name;
@@ -2647,6 +2669,7 @@ const TaskPaneApp = {
                 if (e.target.closest(".dropped-tag-remove")) return;
                 e.stopPropagation();
                 clearTimeout(this._tagClickTimer); this._tagClickTimer = null; // sin abrir propiedades
+                this._lastTagDblClickAt = Date.now();
                 this.openFilterForAxisField(entry);
             });
         }
@@ -2680,12 +2703,18 @@ const TaskPaneApp = {
         tag.addEventListener("click", (e) => {
             if (e.target.closest(".dropped-tag-remove")) return;
             if (!hasDblClick) { this.selectFieldForOptions(zoneId, entry); return; }
-            if (e.detail > 1) return; // segundo clic de un doble clic
+            if (e.detail > 1) { clearTimeout(this._tagClickTimer); this._tagClickTimer = null; return; } // segundo clic de un doble clic
             clearTimeout(this._tagClickTimer);
+            // 400 ms: un doble clic algo lento (Windows admite hasta 500 ms)
+            // no llega a abrir las propiedades antes de que llegue el segundo clic.
             this._tagClickTimer = setTimeout(() => {
                 this._tagClickTimer = null;
+                // Protección explícita: nunca abrir las propiedades durante un
+                // doble clic (aunque el evento llegue tarde o desordenado) ni
+                // con la ventana de un filtro abierta.
+                if (this._filterDialogOpen || (Date.now() - (this._lastTagDblClickAt || 0)) < 1000) return;
                 this.selectFieldForOptions(zoneId, entry);
-            }, 250);
+            }, 400);
         });
 
         // Las medidas de Filas/Columnas se agrupan en su propia caja
