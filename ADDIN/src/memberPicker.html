@@ -22,7 +22,7 @@
             border-radius: 2px; font-size: 13px;
         }
         .items {
-            overflow-y: auto; height: calc(100% - 118px);
+            overflow-y: auto; height: calc(100% - 146px);
         }
         .item {
             display: flex; align-items: center; gap: 4px;
@@ -38,6 +38,12 @@
         }
         .caret:hover { background: #e1dfdd; color: #201f1e; }
         .caret.leaf { visibility: hidden; }
+        /* ID / Texto / ID y texto (como el diálogo de filtro) */
+        .display-tabs { display: none; margin-top: 6px; border: 1px solid #c8c6c4; border-radius: 4px; overflow: hidden; width: max-content; }
+        .display-tabs.on { display: inline-flex; }
+        .display-tabs button { border: 0; background: #fff; padding: 3px 10px; font-size: 12px; cursor: pointer; color: #323130; }
+        .display-tabs button + button { border-left: 1px solid #c8c6c4; }
+        .display-tabs button.active { background: #0f6cbd; color: #fff; }
         .tree-tools { display: none; gap: 10px; margin-top: 6px; }
         .tree-tools.on { display: flex; }
         .tree-tools button {
@@ -73,7 +79,12 @@
 </head>
 <body>
     <div class="header">
-        <input type="text" id="searchInput" placeholder="Buscar…" autocomplete="off" />
+        <input type="text" id="searchInput" placeholder="Buscar por ID o texto…" autocomplete="off" />
+        <div class="display-tabs" id="displayTabs">
+            <button type="button" data-display="ID">ID</button>
+            <button type="button" data-display="TEXT">Texto</button>
+            <button type="button" data-display="ID_TEXT" class="active">ID y texto</button>
+        </div>
         <div class="tree-tools" id="treeTools">
             <button type="button" id="btnExpandAll">⊞ Expandir todo</button>
             <button type="button" id="btnCollapseAll">⊟ Contraer todo</button>
@@ -97,7 +108,7 @@
         // mandar "ready" (antes era al revés y, si la consulta ya estaba
         // lista, la respuesta llegaba sin nadie escuchando -> "Cargando…"
         // para siempre).
-        const PICKER_BUILD = "2026-11-05-picker-v5-arbol";
+        const PICKER_BUILD = "2026-11-07-picker-v6-texto";
         let allItems = [];
         let gotData = false;      // datos o error ya pintados
         let sentResult = false;   // ya se ha mandado select/cancel
@@ -148,11 +159,37 @@
 
         function label(it) { return String(it.text || it.value || "").trim(); }
 
+        // Qué se ve de cada miembro (el valor elegido es siempre el ID). Se
+        // recuerda entre aperturas, igual que en el diálogo de filtro.
+        const DISPLAY_MODE_KEY = "draco_filter_display_mode";
+        let displayMode = "ID_TEXT";
+        try {
+            const saved = localStorage.getItem(DISPLAY_MODE_KEY);
+            if (saved === "ID" || saved === "TEXT" || saved === "ID_TEXT") displayMode = saved;
+        } catch (e) { /* sin storage */ }
+        function shown(it) {
+            const id = String(it.value), txt = it.label ? String(it.label) : "";
+            if (!txt || displayMode === "ID") return id;
+            if (displayMode === "TEXT") return txt;
+            return id + " - " + txt;
+        }
+        function matches(it, t) {
+            return String(it.value).toLowerCase().indexOf(t) !== -1
+                || (!!it.label && String(it.label).toLowerCase().indexOf(t) !== -1)
+                || label(it).toLowerCase().indexOf(t) !== -1;
+        }
+        function setDisplayMode(mode) {
+            displayMode = mode;
+            try { localStorage.setItem(DISPLAY_MODE_KEY, mode); } catch (e) { /* sin storage */ }
+            document.querySelectorAll("#displayTabs button").forEach(b => b.classList.toggle("active", b.dataset.display === mode));
+            applySearch(document.getElementById("searchInput").value);
+        }
+
         // Sin búsqueda: lo que tiene abiertos todos sus antepasados. Con
         // búsqueda: lo que coincide y sus antepasados (para ver dónde está).
         function visibleItems(term) {
             const t = (term || "").toLowerCase().trim();
-            if (!isTree) return t ? allItems.filter(it => label(it).toLowerCase().indexOf(t) !== -1) : allItems;
+            if (!isTree) return t ? allItems.filter(it => matches(it, t)) : allItems;
             if (!t) {
                 return allItems.filter(it => {
                     for (let p = it._parent; p >= 0; p = allItems[p]._parent) if (!expanded.has(p)) return false;
@@ -161,7 +198,7 @@
             }
             const show = new Set();
             allItems.forEach(it => {
-                if (label(it).toLowerCase().indexOf(t) === -1) return;
+                if (!matches(it, t)) return;
                 show.add(it._idx);
                 for (let p = it._parent; p >= 0 && !show.has(p); p = allItems[p]._parent) show.add(p);
             });
@@ -201,11 +238,11 @@
                 }
                 const lbl = document.createElement("span");
                 lbl.className = "lbl";
-                lbl.textContent = isTree ? label(it) : it.text;
-                lbl.title = label(it);
+                lbl.textContent = shown(it);
+                lbl.title = it.label ? String(it.value) + " - " + it.label : label(it);
                 div.appendChild(lbl);
                 div.addEventListener("click", () => {
-                    sendResult({ type: "select", value: it.value, attribute: it.attribute });
+                    sendResult({ type: "select", value: it.value, attribute: it.attribute, display: shown(it) });
                 });
                 frag.appendChild(div);
             }
@@ -256,6 +293,9 @@
             allItems = Array.isArray(items) ? items : [];
             indexTree(allItems);
             expanded = new Set();
+            const hasTexts = allItems.some(it => it.label);
+            document.getElementById("displayTabs").classList.toggle("on", hasTexts);
+            document.querySelectorAll("#displayTabs button").forEach(b => b.classList.toggle("active", b.dataset.display === displayMode));
             const input = document.getElementById("searchInput");
             input.disabled = false;
             input.value = meta.initialSearch || "";
@@ -313,6 +353,7 @@
 
         document.getElementById("searchInput").addEventListener("input", (e) => applySearch(e.target.value));
         document.getElementById("btnCancel").addEventListener("click", () => sendResult({ type: "cancel" }));
+        document.querySelectorAll("#displayTabs button").forEach(b => b.addEventListener("click", () => setDisplayMode(b.dataset.display)));
         document.getElementById("btnExpandAll").addEventListener("click", () => expandAll(true));
         document.getElementById("btnCollapseAll").addEventListener("click", () => expandAll(false));
         document.addEventListener("keydown", (e) => { if (e.key === "Escape") sendResult({ type: "cancel" }); });
