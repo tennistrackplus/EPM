@@ -667,19 +667,26 @@ function initEvents() {
 }
 
 Office.onReady(() => {
-    log("Office.onReady. Enviando 'ready' al host…");
     initEvents();
 
-    try {
-        Office.context.ui.messageParent(JSON.stringify({ type: "ready" }));
-    } catch (err) {
-        log("Error enviando 'ready':", err);
-    }
-
+    // Primero se registra el receptor y DESPUÉS se avisa «ready» (callback de
+    // addHandlerAsync). Al revés, con los valores ya en la caché de la sesión
+    // la respuesta podía llegar antes de estar escuchando y perderse.
     Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, (arg) => {
         log("Datos recibidos del host.");
         try {
             const payload = JSON.parse(arg.message);
+            if (payload && payload.error) {
+                // El panel no pudo cargar los valores: se explica aquí (antes
+                // la ventana se cerraba sin más)
+                const box = document.getElementById("modalItemsContainer");
+                box.innerHTML = "";
+                const div = document.createElement("div");
+                div.className = "error";
+                div.textContent = "No se pudieron cargar los valores: " + payload.error;
+                box.appendChild(div);
+                return;
+            }
 
             allItems = payload.items || [];
             fieldData = payload.fieldData || {};
@@ -714,6 +721,13 @@ Office.onReady(() => {
             log("Error interpretando los datos recibidos:", err);
             document.getElementById("modalItemsContainer").innerHTML =
                 "<div class='error'>Error cargando los valores.</div>";
+        }
+    }, () => {
+        log("Receptor listo. Enviando 'ready' al host…");
+        try {
+            Office.context.ui.messageParent(JSON.stringify({ type: "ready" }));
+        } catch (err) {
+            log("Error enviando 'ready':", err);
         }
     });
 });

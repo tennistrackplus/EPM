@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-11-06-posiciones";
+const DRACO_BUILD = "2026-11-07-picker-texto";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -694,9 +694,12 @@ async function getDracoResultSheetName(context, reportId) {
         // design.resultSheetName (texto) se quedaba con el nombre antiguo
         // («Hoja1» tras renombrarla a «Importe Neto») y el refresco iba a
         // otra hoja.
-        let ws = null;
+        // Primero los rangos con nombre: si el informe se ha cortado y pegado
+        // en OTRA hoja (Ctrl+X / Ctrl+V), Excel los lleva con él; el id
+        // guardado seguiría apuntando a la hoja de antes (que sigue existiendo).
         const storedId = RS && RS.getReportResultSheetId ? RS.getReportResultSheetId(id) : "";
-        if (storedId) {
+        let ws = await dracoSheetFromNamedRanges(context, id);
+        if (!ws && storedId) {
             try {
                 const byId = context.workbook.worksheets.getItemOrNullObject(storedId);
                 byId.load(["isNullObject", "name", "id"]);
@@ -704,7 +707,6 @@ async function getDracoResultSheetName(context, reportId) {
                 if (!byId.isNullObject) ws = { id: byId.id, name: byId.name };
             } catch (e) { /* id no válido: se sigue */ }
         }
-        if (!ws) ws = await dracoSheetFromNamedRanges(context, id);
         if (ws && ws.name) {
             const storedName = RS ? RS.getReportResultSheetName(id) : "";
             if ((ws.id && ws.id !== storedId) || ws.name !== storedName) {
@@ -2669,7 +2671,96 @@ async function executeSQL(sql, billingProjectId) {
         BQ.onSessionExpired("query");
         throw BQ.authExpiredError();
     }
-    return text;
+    return await dracoCompleteBigQueryResult(text, projectId, token);
+}
+
+/**
+ * jobs.query espera como mucho unos segundos: si la consulta tarda más,
+ * BigQuery responde con "jobComplete": false y SIN filas (solo el jobId), y
+ * el informe no pintaba nada. Y si el resultado es grande, llega por
+ * páginas (pageToken) y solo se leía la primera. Aquí se espera al job
+ * (jobs.getQueryResults) y se juntan TODAS las páginas en una sola
+ * respuesta con el mismo formato de Google (el pintado lee "v": "x" con
+ * espacio tras los dos puntos: JSON.stringify con sangría lo respeta).
+ * Si la respuesta ya venía completa y en una página, se devuelve tal cual.
+ */
+const DRACO_QUERY_MAX_WAIT_MS = 10 * 60 * 1000;   // 10 min
+// Máximo de filas de RESULTADO que se descargan para pintar un informe. Más
+// no cabe en una hoja ni se puede descargar en el navegador (35 millones de
+// filas son decenas de GB de JSON): se avisa en vez de colgar Excel.
+const DRACO_MAX_RESULT_ROWS = 500000;
+async function dracoCompleteBigQueryResult(text, projectId, token) {
+    const tooBigMsg = (n) => `El informe devuelve ${n.toLocaleString("es-ES")} filas (máximo ${DRACO_MAX_RESULT_ROWS.toLocaleString("es-ES")}). `
+        + "Quita detalle (p. ej. documento) o añade filtros (sociedad, ejercicio...).";
+    // Caso normal (respuesta completa y en una página): se mira con búsquedas
+    // en el texto, SIN convertirlo a objeto (JSON.parse de unos MB son
+    // decenas o cientos de ms, y el pintado vuelve a leer el texto después).
+    const sText = String(text || "");
+    const incomplete = /"jobComplete"\s*:\s*false/.test(sText);
+    const hasPages = /"pageToken"\s*:/.test(sText);
+    if (!incomplete && !hasPages) {
+        const m = /"totalRows"\s*:\s*"(\d+)"/.exec(sText);
+        const n = m ? Number(m[1]) : 0;
+        if (n > DRACO_MAX_RESULT_ROWS) {
+            const msg = tooBigMsg(n);
+            if (typeof dracoInfoNotice === "function") dracoInfoNotice("Informe demasiado grande", msg, "warn");
+            throw new Error(msg);
+        }
+        return text;
+    }
+    // Job sin terminar o resultado en varias páginas: aquí sí se convierte
+    let first;
+    try { first = JSON.parse(text); } catch (e) { return text; }
+    if (!first || first.error || !first.jobReference) return text;
+    const tooBig = (r) => {
+        const n = Number(r && r.totalRows);
+        if (!(n > DRACO_MAX_RESULT_ROWS)) return;
+        const msg = tooBigMsg(n);
+        if (typeof dracoInfoNotice === "function") dracoInfoNotice("Informe demasiado grande", msg, "warn");
+        throw new Error(msg);
+    };
+    tooBig(first);
+    const needsWait = first.jobComplete === false;
+    if (!needsWait && !first.pageToken) return text;
+
+    const job = first.jobReference;
+    const base = "https://bigquery.googleapis.com/bigquery/v2/projects/" + encodeURIComponent(job.projectId || projectId)
+        + "/queries/" + encodeURIComponent(job.jobId);
+    const loc = job.location ? "&location=" + encodeURIComponent(job.location) : "";
+    const get = async (extra) => {
+        const r = await fetch(base + "?timeoutMs=20000" + loc + (extra || ""), { headers: { "Authorization": "Bearer " + token } });
+        const t = await r.text();
+        if (BQ.isAuthError && BQ.isAuthError(r.status, t)) { BQ.onSessionExpired("query"); throw BQ.authExpiredError(); }
+        let j;
+        try { j = JSON.parse(t); } catch (e) { throw new Error("Respuesta de BigQuery no válida: " + t.slice(0, 300)); }
+        if (!r.ok || j.error) throw new Error("Error de BigQuery (" + r.status + "): " + ((j.error && j.error.message) || t.slice(0, 300)));
+        return j;
+    };
+
+    // 1) Esperar a que termine
+    let res = first;
+    const t0 = Date.now();
+    while (res.jobComplete === false) {
+        if (Date.now() - t0 > DRACO_QUERY_MAX_WAIT_MS) {
+            throw new Error("La consulta lleva más de " + (DRACO_QUERY_MAX_WAIT_MS / 60000) + " minutos en BigQuery. Acota el informe (filtros, menos detalle) o inténtalo más tarde.");
+        }
+        res = await get("");
+    }
+    tooBig(res);   // antes de descargar las páginas
+    // 2) Todas las páginas
+    const rows = (res.rows || []).slice();
+    let pageToken = res.pageToken;
+    let pages = 1;
+    while (pageToken) {
+        const pg = await get("&pageToken=" + encodeURIComponent(pageToken));
+        (pg.rows || []).forEach(r => rows.push(r));
+        pageToken = pg.pageToken;
+        pages++;
+    }
+    const out = Object.assign({}, res, { rows, totalRows: String(rows.length), jobComplete: true });
+    delete out.pageToken;
+    if (typeof dracoLog === "function") dracoLog(`Consulta completada${needsWait ? " tras esperar al job" : ""}: ${rows.length} filas en ${pages} página(s), ${Math.round((Date.now() - t0) / 1000)} s.`);
+    return JSON.stringify(out, null, 2);
 }
 
 /**
@@ -7380,8 +7471,9 @@ async function dracoReadNameBlock(context, name) {
     if (it.isNullObject || it.type !== "Range") return null;
     const r = it.getRange();
     r.load(["rowIndex", "columnIndex", "rowCount", "columnCount"]);
+    r.worksheet.load(["id", "name"]);
     await context.sync();
-    return { row: r.rowIndex + 1, col: r.columnIndex + 1, height: r.rowCount, width: r.columnCount };
+    return { row: r.rowIndex + 1, col: r.columnIndex + 1, height: r.rowCount, width: r.columnCount, sheetId: r.worksheet.id, sheetName: r.worksheet.name };
 }
 
 function dracoBlockA1(b) {
@@ -7409,6 +7501,16 @@ async function dracoSyncReportPositions(reportId) {
             const cols = await dracoReadNameBlock(context, rn.cols);
             const vals = await dracoReadNameBlock(context, rn.values);
             if (!rows && !cols && !vals) return;   // sin nombres (o #REF!): manda el diseño
+
+            // Cortado y pegado en OTRA hoja: los nombres ya están allí
+            const onSheet = rows || cols || vals;
+            const otherSheet = d.resultSheetId ? (onSheet.sheetId && onSheet.sheetId !== d.resultSheetId)
+                                               : (onSheet.sheetName && onSheet.sheetName !== d.resultSheetName);
+            if (otherSheet && window.ReportStore.setReportResultSheetRef) {
+                await window.ReportStore.setReportResultSheetRef(reportId, onSheet.sheetId, onSheet.sheetName);
+                dracoLog(`Informe ${reportId}: se ha movido a la hoja «${onSheet.sheetName}».`);
+                changed = true;
+            }
 
             const oldRr = dracoParseBlock(d.rrAddress);
             const oldRc = dracoParseBlock(d.rcAddress);
@@ -7461,7 +7563,12 @@ async function dracoSyncReportPositions(reportId) {
             else {
                 const sV = shift(vals, at.values);
                 const an = d.anchorAddress ? dracoParseBlock(d.anchorAddress.split(":")[0] + ":" + d.anchorAddress.split(":")[0]) : null;
-                if (sV && (sV.dr || sV.dc) && an) origin = dracoRectA1({ r: an.row + sV.dr - 1, c: an.col + sV.dc - 1, h: 1, w: 1 });
+                if (sV && (sV.dr || sV.dc)) {
+                    // Sin ancla guardada (informe dinámico creado solo con la
+                    // medida): en un informe sin ejes la celda de valores ES el ancla.
+                    origin = an ? dracoRectA1({ r: an.row + sV.dr - 1, c: an.col + sV.dc - 1, h: 1, w: 1 })
+                        : (!rr && !rc ? dracoRectA1({ r: vals.row - 1, c: vals.col - 1, h: 1, w: 1 }) : "");
+                }
             }
             if (newRr === (d.rrAddress || "") && newRc === (d.rcAddress || "") && (!origin || origin === d.anchorAddress)) return;
 
@@ -7598,6 +7705,14 @@ async function dracoApplyStaticEdits(edits) {
                 if (sh.isNullObject || sh.name.toUpperCase() === "EDIT_REPORT") continue;
                 const area = dracoParseBlock(address.indexOf(":") === -1 ? address + ":" + address : address);
                 if (!area) continue;
+                // Pegado de varias celdas: puede venir un informe cortado de OTRA
+                // hoja (en el diseño aún figura en la antigua). Se sincronizan
+                // todos los informes; cada uno lee solo sus 3 nombres.
+                if (area.width * area.height > 1 && !done.has("__all__")) {
+                    done.add("__all__");
+                    const all = Object.keys(window.ReportStore.getAllReports() || {}).map(Number);
+                    for (const rid of all) { try { await dracoSyncReportPositions(rid); } catch (e) { /* sigue */ } }
+                }
                 for (const reportId of dracoReportsOnSheet(wsId, sh.name)) {
                     if (done.has(reportId)) continue;
                     // Cortar/pegar (Ctrl+X / Ctrl+V) mueve los rangos con nombre:
@@ -8499,6 +8614,51 @@ async function ensureDracoRowsClickLoggerRegistered() {
  * del DOM del taskpane: el diálogo del picker se ejecuta en su PROPIA
  * ventana/contexto y no puede acceder a nada del taskpane directamente.
  */
+/**
+ * Como parseMemberJsonTree, pero con la consulta de buildFilterValuesQuery
+ * (columna de TEXTO detrás de cada nivel): cada miembro lleva `label` (su
+ * texto) para el selector ID / Texto / ID y texto del buscador de miembros.
+ */
+function dracoParseMembersWithText(json, query, dim) {
+    let names = [], rows = [];
+    try {
+        const p = JSON.parse(String(json || ""));
+        names = ((p && p.schema && p.schema.fields) || []).map(f => f.name);
+        rows = ((p && p.rows) || []).map(r => (r.f || []).map(c => (c && c.v !== null && c.v !== undefined) ? String(c.v) : null));
+    } catch (e) {
+        return parseMemberJsonTree(json, dim);
+    }
+    const emptyBy = dim ? dracoHierarchyEmptyTokens(null) : new Map();
+    const isEmpty = (col, v) => {
+        const set = emptyBy.get((String(dim) + "|" + String(col)).toUpperCase());
+        return !!(set && set.has(String(v).trim()));
+    };
+    const levels = query.levels || [];
+    const items = [];
+    const byPath = new Map();
+    for (const row of rows) {
+        let path = "";
+        for (let i = 0; i < levels.length; i++) {
+            const L = levels[i];
+            const attr = names[L.idCol] || L.attribute;
+            const v = row[L.idCol];
+            if (v === null || v === undefined || v === "" || isEmpty(attr, v)) break;
+            path += "\u0001" + v;
+            let it = byPath.get(path);
+            if (!it) {
+                it = { text: " ".repeat(i * 4) + v, attribute: attr, value: v, depth: i };
+                byPath.set(path, it);
+                items.push(it);
+            }
+            if (L.txtCol >= 0 && !it.label) {
+                const t = row[L.txtCol];
+                if (t !== null && t !== undefined && t !== "" && !isEmpty(attr, t)) it.label = t;
+            }
+        }
+    }
+    return items;
+}
+
 function parseMemberJsonTree(json, dim) {
     // «Valor vacío» de las jerarquías ("---"): cuenta como NULL (corta la rama)
     const emptyBy = dim ? dracoHierarchyEmptyTokens(null) : new Map();
@@ -8714,14 +8874,29 @@ async function loadDracoPickerItems(located, tag) {
     } else {
         p = (async () => {
             const t0 = Date.now();
-            const sql = await window.ExcelService.buildFilterValuesSQL(located.dim, located.attr);
+            // Con la columna de TEXTO de cada nivel (misma consulta que el
+            // diálogo de filtro) para el selector ID / Texto / ID y texto del
+            // buscador; si no la hay o falla, la consulta básica de siempre.
+            let query = null;
+            try { query = await window.ExcelService.buildFilterValuesQuery(located.dim, located.attr); } catch (e) { query = null; }
+            let sql = query && query.sql;
+            if (!sql) { query = null; sql = await window.ExcelService.buildFilterValuesSQL(located.dim, located.attr); }
             dracoLog(tag, "SQL construida en " + (Date.now() - t0) + " ms" + (sql ? "" : " -> VACÍA (dim/attr no encontrados en MODEL_ATRIBUTES/MODEL_HIER)"));
             if (!sql) {
                 throw new Error("No se ha encontrado " + located.dim + " / " + located.attr + " en el modelo (atributo o jerarquía).");
             }
             const t1 = Date.now();
-            const json = await dracoMemberQuery(sql, tag);   // caché de la sesión (clave = conexión + SQL)
-            const items = parseMemberJsonTree(json, located.dim);
+            let json;
+            try {
+                json = await dracoMemberQuery(sql, tag);   // caché de la sesión (clave = conexión + SQL)
+            } catch (e) {
+                if (!query || !(query.levels || []).some(L => L.txtCol >= 0)) throw e;
+                dracoLog(tag, "falló la consulta con textos; se repite sin textos: " + dracoErrMsg(e));
+                query = null;
+                sql = await window.ExcelService.buildFilterValuesSQL(located.dim, located.attr);
+                json = await dracoMemberQuery(sql, tag);
+            }
+            const items = query ? dracoParseMembersWithText(json, query, located.dim) : parseMemberJsonTree(json, located.dim);
             // Cálculos entre miembros de ese atributo (del informe y del modelo):
             // se pueden elegir como una línea más del eje Estático.
             try {
@@ -8941,7 +9116,10 @@ async function openMemberRecognitionPicker(addr, located, initialSearch) {
                         }
                         const resultSheetName = await getDracoResultSheetName(context, located.reportId);
                         const sheet = context.workbook.worksheets.getItem(resultSheetName);
-                        sheet.getRange(addr).values = [[buildEpmValueFormula(located.dim, payload.attribute, payload.value)]];
+                        // El valor es siempre el ID; lo que se ve en la celda, según el
+                        // modo elegido en el buscador (ID / Texto / ID y texto)
+                        const shown = payload.display && String(payload.display) !== String(payload.value) ? payload.display : undefined;
+                        sheet.getRange(addr).values = [[buildEpmValueFormula(located.dim, payload.attribute, payload.value, shown)]];
                         await context.sync();
                         // Informe estático: los rangos con nombre pasan a cubrir la línea nueva
                         try { await dracoRebuildStaticNames(context, located.reportId); }

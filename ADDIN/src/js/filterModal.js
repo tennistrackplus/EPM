@@ -260,10 +260,17 @@ const FilterModal = {
             const itemsPromise = (async () => {
                 // Con columnas de texto (selector ID / Texto / ID y texto del
                 // diálogo); el filtro se sigue guardando por ID.
-                const query = await window.ExcelService.buildFilterValuesQuery(fieldData.dim, fieldData.name);
+                let query = null;
+                try {
+                    query = await window.ExcelService.buildFilterValuesQuery(fieldData.dim, fieldData.name);
+                } catch (e) {
+                    console.warn("FilterModal: consulta con textos no disponible, se usa la básica:", e);
+                }
                 if (!query || !query.sql) {
-                    console.error("FilterModal: no se ha encontrado el atributo o jerarquía.", fieldData);
-                    return null; // null = error, distinto de "sin resultados" ([])
+                    // Consulta básica (sin columnas de texto), la de siempre
+                    const sql = await window.ExcelService.buildFilterValuesSQL(fieldData.dim, fieldData.name);
+                    if (!sql) throw new Error(`No se encuentra «${fieldData.dim}.${fieldData.name}» en el modelo semántico activo.`);
+                    query = { sql, levels: null };
                 }
                 // «Valor vacío» de las jerarquías del modelo ("---"): se trata como NULL al construir el árbol
                 try {
@@ -272,9 +279,22 @@ const FilterModal = {
                 } catch (e) { /* sin valor vacío */ }
                 // Caché de miembros de la sesión (commands.js): mismo SQL y
                 // conexión = sin volver a consultar; se vacía al cerrar sesión
-                const json = (typeof window.dracoMemberQuery === "function")
-                    ? await window.dracoMemberQuery(query.sql)
-                    : await window.ExcelService.executeSQL(query.sql);
+                const runQuery = sql => (typeof window.dracoMemberQuery === "function")
+                    ? window.dracoMemberQuery(sql)
+                    : window.ExcelService.executeSQL(sql);
+                let json;
+                try {
+                    json = await runQuery(query.sql);
+                } catch (e) {
+                    // Si falla la consulta con columnas de texto, se reintenta la
+                    // básica antes de dar error (el filtro sigue siendo por ID).
+                    if (!(query.levels || []).some(L => L.txtCol >= 0)) throw e;
+                    console.warn("FilterModal: falló la consulta con textos; se reintenta sin textos:", e);
+                    const sql = await window.ExcelService.buildFilterValuesSQL(fieldData.dim, fieldData.name);
+                    if (!sql) throw e;
+                    json = await runQuery(sql);
+                    query = { sql, levels: null };
+                }
                 const items = buildMemberTree(parseBqRows(json), query);
                 // Cálculos entre miembros (del informe y del modelo, p. ej.
                 // OIBDA = [Ingresos] - [Gastos]): se ofrecen como un miembro más
@@ -340,14 +360,6 @@ const FilterModal = {
                             // .then() se resuelve al instante.
                             itemsPromise.then((items) => {
                                 if (settled) return; // el usuario ya canceló mientras tanto
-                                if (items === null) {
-                                    // buildFilterValuesSQL no encontró el campo: no
-                                    // hay nada que mostrar, se cierra el diálogo.
-                                    settled = true;
-                                    closeDialog();
-                                    resolve(null);
-                                    return;
-                                }
                                 dialog.messageChild(JSON.stringify({
                                     items,
                                     fieldData: { dim: fieldData.dim, name: fieldData.name, isHierarchy: fieldData.isHierarchy },
@@ -355,11 +367,17 @@ const FilterModal = {
                                     initialSearch: fieldData.initialSearch || ""
                                 }));
                             }, (err) => {
+                                // Antes se cerraba la ventana sin decir nada: ahora
+                                // se queda abierta y muestra el motivo.
                                 console.error("Error cargando valores de filtro:", err);
                                 if (settled) return;
-                                settled = true;
-                                closeDialog();
-                                resolve(null);
+                                try {
+                                    dialog.messageChild(JSON.stringify({ error: String((err && err.message) || err || "Error cargando los valores.") }));
+                                } catch (e) {
+                                    settled = true;
+                                    closeDialog();
+                                    resolve(null);
+                                }
                             });
                             return;
                         }

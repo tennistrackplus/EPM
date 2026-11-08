@@ -929,6 +929,11 @@
 
         set(10, 8, design.rrAddress || "");
         set(10, 14, design.rcAddress || "");
+        // Ancla del informe (celda de valores sin ejes, p. ej. solo la medida en
+        // Filtros): la del PROPIO informe, que se mueve con él (Ctrl+X/Ctrl+V,
+        // filas insertadas...). Antes salía de EDIT_REPORT!E1, compartida, y el
+        // informe volvía a pintarse donde se creó.
+        if (design.anchorAddress) set(1, 5, String(design.anchorAddress).split(":")[0]);
         set(12, 8, design.rowsStatic ? "X" : "");
         set(12, 14, design.colsStatic ? "X" : "");
 
