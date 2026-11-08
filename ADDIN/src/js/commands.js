@@ -857,6 +857,15 @@ function mergeEditReportGrid(physicalGrid, designGrid) {
         const rowArr = [];
         for (let c = 0; c < maxCol; c++) {
             const col1 = c + 1;
+            // E1 (ancla): la del PROPIO informe si la tiene (design.anchorAddress,
+            // que se mueve con él al cortar/pegar o insertar filas). La E1
+            // física de EDIT_REPORT es compartida y guarda la celda donde se
+            // creó el informe: un informe sin ejes volvía a pintarse allí.
+            if (row1 === 1 && col1 === 5) {
+                const own = cellValue(designGrid, 1, 5);
+                rowArr.push(String(own === null || own === undefined ? "" : own).trim() !== "" ? own : cellValue(physicalGrid, 1, 5));
+                continue;
+            }
             rowArr.push(isDesignOwnedCell(row1, col1)
                 ? cellValue(designGrid, row1, col1)
                 : cellValue(physicalGrid, row1, col1));
@@ -3953,6 +3962,10 @@ async function jsonPaintHybrid(context, json, reportId, plan, editReportGrid) {
             : sheet.getRangeByIndexes(firstDyn - 1, minL - 1, nTuples, maxL - minL + 1);
         context.workbook.names.add(rn.values, rect);
     }
+    // Referencia para dracoSyncReportPositions (antes el híbrido no la
+    // guardaba: tras cortar/pegar el informe no se movía y perdía sus líneas)
+    await context.sync();
+    await dracoRecordNamedAt(context, reportId);
 
     // Escritura por línea estática (sin pisar nada entre líneas). El
     // formato de los valores (medida, centrado) se aplica con "Sobrescribir
@@ -7485,6 +7498,24 @@ function dracoBlockA1(b) {
 }
 
 /**
+ * Anota en el informe dónde están AHORA sus rangos con nombre (namedAt), la
+ * referencia con la que dracoSyncReportPositions mide cuánto se ha movido.
+ * Para los caminos que crean los nombres por su cuenta (p. ej. el híbrido).
+ */
+async function dracoRecordNamedAt(context, reportId) {
+    try {
+        const rn = dracoRangeNames(reportId);
+        const rows = await dracoReadNameBlock(context, rn.rows);
+        const cols = await dracoReadNameBlock(context, rn.cols);
+        const vals = await dracoReadNameBlock(context, rn.values);
+        const c = b => b ? { row: b.row, col: b.col } : null;
+        if (window.ReportStore && window.ReportStore.setReportNamedAt) {
+            await window.ReportStore.setReportNamedAt(reportId, { rows: c(rows), cols: c(cols), values: c(vals) });
+        }
+    } catch (e) { /* solo referencia */ }
+}
+
+/**
  * Lleva rrAddress/rcAddress (y el panel, si muestra este informe) a la
  * posición de los rangos con nombre. Devuelve true si algo ha cambiado.
  */
@@ -7520,16 +7551,20 @@ async function dracoSyncReportPositions(reportId) {
             // en design.namedAt). Ese desplazamiento se aplica al diseño
             // actual: así un campo añadido en el panel (la cabecera crece) no
             // se deshace porque el nombre aún tenga la forma anterior.
-            const at = d.namedAt || null;
+            const oldRrX = dracoParseBlock(d.rrAddress), oldRcX = dracoParseBlock(d.rcAddress);
+            let at = d.namedAt || null;
             const shift = (now, then) => (now && then) ? { dr: now.row - then.row, dc: now.col - then.col } : null;
             if (!at) {
-                // Informe anterior a este cambio: se anota la referencia y no se mueve nada
-                await window.ReportStore.setReportNamedAt(reportId, {
-                    rows: rows ? { row: rows.row, col: rows.col } : null,
-                    cols: cols ? { row: cols.row, col: cols.col } : null,
-                    values: vals ? { row: vals.row, col: vals.col } : null
-                });
-                return;
+                // Sin referencia (informe pintado con una versión anterior):
+                // se deduce del propio diseño, que es donde estaba el informe
+                // cuando se pintó. Antes se tomaban los nombres YA movidos como
+                // referencia y el informe no se desplazaba.
+                const fr = dracoStaticFrame(d.rrAddress, d.rcAddress, d.anchorAddress || "");
+                at = {
+                    rows: oldRrX ? { row: oldRrX.row, col: oldRrX.col } : null,
+                    cols: oldRcX ? { row: oldRcX.row, col: oldRcX.col } : null,
+                    values: fr ? { row: fr.valuesRow, col: fr.valuesCol } : null
+                };
             }
             const sRows = shift(rows, at.rows) || shift(vals, at.values);
             const sCols = shift(cols, at.cols) || shift(vals, at.values);
