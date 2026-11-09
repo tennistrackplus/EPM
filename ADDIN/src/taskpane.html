@@ -2102,6 +2102,38 @@
                             </div>
                         </div>
 
+                        <!-- Databricks -->
+                        <div class="connector-item">
+                            <div class="connector-card" data-provider="databricks">
+                                <div class="connector-info">
+                                    <div class="connector-icon">
+                                        <img src="assets/datasource-db.svg" alt="Databricks">
+                                    </div>
+                                    <div class="connector-details">
+                                        <h3>Databricks</h3>
+                                        <span>SQL Warehouse · Unity Catalog</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Campos específicos de Databricks -->
+                            <div class="provider-config-panel" id="databricksConfigPanel">
+                                <label for="dbxGatewayUrl" style="margin-top:10px;">Pasarela de Databricks del cliente</label>
+                                <input type="text" id="dbxGatewayUrl" placeholder="https://draco-dbx.cliente.com" autocomplete="off">
+                                <span class="hint">URL del servicio DATABRICKS-GATEWAY desplegado en la nube del cliente. Databricks no admite llamadas directas desde el navegador: los datos van de su workspace a esa pasarela y de ahí a Excel, sin pasar por servidores de Stratesys.</span>
+
+                                <label for="dbxAuthMode" style="margin-top:10px;">Autenticación</label>
+                                <select id="dbxAuthMode">
+                                    <option value="oauth">Inicio de sesión de Databricks (recomendado)</option>
+                                    <option value="pat">Token personal (solo pruebas)</option>
+                                </select>
+                                <div id="dbxPatFields" style="display:none;">
+                                    <input type="password" id="dbxPat" style="margin-top:6px;" placeholder="Token personal de Databricks (dapi...)" autocomplete="off">
+                                    <span class="hint">Solo para pruebas. No se guarda en la conexión: vive en la sesión del panel y se borra al cerrar Excel (máximo 8 horas).</span>
+                                </div>
+                                <span class="hint">Las consultas se ejecutan con tu usuario: Unity Catalog decide qué catálogos, esquemas y tablas ves.</span>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
 
@@ -2353,32 +2385,34 @@
     
     </div>
 
-    <script src="js/config.js?v=20261029j"></script>
-    <script src="js/bigquery.js?v=20261104e"></script>
+    <script src="js/config.js?v=20261109diag"></script>
+    <script src="js/bigquery.js?v=20261108dbx"></script>
+    <script src="js/databricks.js?v=20261109diag"></script>
     <script src="js/google-auth.js?v=20261029j"></script>
     <script src="js/gcsExport.js?v=20261029j"></script>
-    <script src="js/gcsSaveBridge.js"></script>
-    <script src="js/provider.js?v=20261029j"></script>
-    <script src="js/connections.js?v=20261029j"></script>
+    <script src="js/gcsSaveBridge.js?v=20261108d"></script>
+    <script src="js/provider.js?v=20261109diag"></script>
+    <script src="js/queryJournal.js?v=20261109diag"></script>
+    <script src="js/connections.js?v=20261108dbx"></script>
     <script src="js/gitSession.js?v=20261029j"></script>
-    <script src="js/semanticModelStore.js?v=20261104b"></script>
-    <script src="js/lkmlSaveBridge.js?v=20261105f"></script>
-    <script src="js/lkmlOpenBridge.js?v=20261103a"></script>
-    <script src="js/reportStore.js?v=20261107a"></script>
+    <script src="js/semanticModelStore.js?v=20261108dbx"></script>
+    <script src="js/lkmlSaveBridge.js?v=20261108d"></script>
+    <script src="js/lkmlOpenBridge.js?v=20261108d"></script>
+    <script src="js/reportStore.js?v=20261108d"></script>
     <script src="js/filterRangeStore.js"></script>
-    <script src="js/excelService.js?v=20261105h"></script>
+    <script src="js/excelService.js?v=20261109diag"></script>
     <script src="js/busyindicator.js?v=20261029j"></script>
-    <script src="js/filterModal.js?v=20261107a"></script>
+    <script src="js/filterModal.js?v=20261109diag"></script>
     <script src="js/distributeValues.js"></script>
-    <script src="js/variablesStore.js?v=20261029j"></script>
-    <script src="js/calcFormula.js?v=20261029j"></script>
-    <script src="js/commands.js?v=20261108c"></script>
+    <script src="js/variablesStore.js?v=20261108dbx"></script>
+    <script src="js/calcFormula.js?v=20261108dbx"></script>
+    <script src="js/commands.js?v=20261109diag"></script>
     <script src="js/taskpane.js?v=20261106i"></script>
     <script src="js/epmFormulaPanel.js?v=20261029j"></script>
     <!-- Funciones personalizadas DRACO.EPM_VALUE / DRACO.EPM_FORMULA (runtime compartido) -->
     <script src="js/functions.js?v=20261029j"></script>
-    <script src="js/calcEditor.js?v=20261029j"></script>
-    <script src="js/login.js?v=20261105j"></script>
+    <script src="js/calcEditor.js?v=20261109diag"></script>
+    <script src="js/login.js?v=20261108dbx"></script>
     <script src="js/semantic_model.js?v=20261105i"></script>
 
     <script>

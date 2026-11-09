@@ -79,7 +79,7 @@
             </svg>
         </span>
         <div class="status-spinner" aria-hidden="true"></div>
-        <h3>Procesando autenticación con Google BigQuery</h3>
+        <h3>Procesando autenticación</h3>
         <p>Por favor, espera un momento. Esta ventana se cerrará automáticamente.</p>
     </div>
 
@@ -94,6 +94,8 @@
             const state = params.get("state");
             const session = params.get("session");   // solo modo backend (servicio de autenticación)
             const scope = params.get("scope");       // permisos concedidos (lectura/escritura)
+            // La pasarela de Databricks añade provider=databricks; el AUTH-BROKER y Google no.
+            const provider = params.get("provider") === "databricks" ? "databricks" : "bigquery";
 
             // Se borra el fragmento de la URL para que el token no quede en el historial.
             try { history.replaceState(null, "", window.location.pathname); } catch (e) { /* noop */ }
@@ -103,7 +105,7 @@
             if (accessToken) {
                 payload = JSON.stringify({
                     status: "success",
-                    provider: "bigquery",
+                    provider: provider,
                     token: accessToken,
                     expiresIn: expiresIn,
                     state: state,
@@ -113,7 +115,7 @@
             } else if (error) {
                 payload = JSON.stringify({
                     status: "error",
-                    provider: "bigquery",
+                    provider: provider,
                     error: error,
                     state: state
                 });
