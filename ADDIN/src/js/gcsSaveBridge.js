@@ -22,7 +22,7 @@
      */
     function openSaveBucketDialog(onSelected) {
         const suggested = (window.GCS && GCS.getSuggestedFileName && GCS.getSuggestedFileName()) || "Informe_EPM.xlsx";
-        const url = new URL("saveBucket.html", window.location.href);
+        const url = new URL("saveBucket.html", window.location.href); url.searchParams.set("v", (typeof DRACO_BUILD !== "undefined" ? DRACO_BUILD : "1"));
         url.searchParams.set("name", suggested);
         // SEGURIDAD: ya no se pasa el token OAuth por la URL. El propio
         // diálogo (saveBucket.html) lo pide por mensajería nada más cargar

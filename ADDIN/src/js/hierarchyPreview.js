@@ -151,7 +151,9 @@ async function bootHierarchyPreview() {
     if (typeof Office !== "undefined" && Office.onReady) {
         try { await Office.onReady(); } catch (e) { /* fuera de Office */ }
     }
-    if (window.BQ && !BQ.isConnected()) {
+    // Se pide la sesión si falta la de cualquiera de los motores: la respuesta
+    // dice además cuál está activo en el panel (BigQuery o Databricks).
+    if (window.BQ && (!BQ.isConnected() || (window.DBX && !DBX.isConnected()))) {
         await BQ.requestSessionFromOpener();
     }
     await runHierarchyPreview();

@@ -22,7 +22,7 @@
         // «URL demasiado larga». El diálogo los pide al arrancar
         // (MODELS_REQUEST) y se le mandan por mensajes, troceados.
         const modelsJson = JSON.stringify(models || {});
-        const query = `active=${encodeURIComponent(activeModel || "")}&byMessage=1`;
+        const query = `active=${encodeURIComponent(activeModel || "")}&byMessage=1&v=${encodeURIComponent((typeof DRACO_BUILD !== "undefined" ? DRACO_BUILD : "1"))}`;
         const dialogUrl = new URL(`saveSemanticModel.html?${query}`, window.location.href).href;
         const CHUNK = 20000;
 

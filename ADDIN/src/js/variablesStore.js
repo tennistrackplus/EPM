@@ -140,7 +140,8 @@
          */
         resolveSql(sql, provider) {
             if (typeof sql !== "string" || sql.indexOf("$") === -1) return sql;
-            const bq = provider === "bigquery";
+            // BigQuery y Databricks escapan con barra invertida dentro de los literales.
+            const bq = provider === "bigquery" || provider === "databricks";
             const escIn = (s) => bq ? String(s).replace(/\\/g, "\\\\").replace(/'/g, "\\'") : String(s).replace(/'/g, "''");
             const missing = new Set();
             const valueOf = (name) => {

@@ -280,8 +280,8 @@ const FilterModal = {
                 // Caché de miembros de la sesión (commands.js): mismo SQL y
                 // conexión = sin volver a consultar; se vacía al cerrar sesión
                 const runQuery = sql => (typeof window.dracoMemberQuery === "function")
-                    ? window.dracoMemberQuery(sql)
-                    : window.ExcelService.executeSQL(sql);
+                    ? window.dracoMemberQuery(sql, "[FILTRO]")
+                    : window.ExcelService.executeSQL(sql, "Valores de filtro");
                 let json;
                 try {
                     json = await runQuery(query.sql);
@@ -323,7 +323,7 @@ const FilterModal = {
             // consola; el error real, si lo hay, ya se habrá logueado arriba.
             itemsPromise.catch(() => {});
 
-            const dialogUrl = new URL("filterDialog.html", window.location.href).href;
+            const dialogUrl = new URL("filterDialog.html?v=" + encodeURIComponent((typeof DRACO_BUILD !== "undefined" ? DRACO_BUILD : "1")), window.location.href).href;
 
             Office.context.ui.displayDialogAsync(
                 dialogUrl,

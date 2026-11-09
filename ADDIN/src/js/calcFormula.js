@@ -355,7 +355,7 @@
  * (columna nueva calculada a partir de otras columnas de la MISMA tabla).
  * ----------------------------------------------------------
  * Lista cerrada de funciones (nada de SQL libre), traducidas a SQL que
- * vale para BigQuery y Snowflake (dialect = "bigquery" | "snowflake"):
+ * vale para BigQuery, Snowflake y Databricks (dialect = "bigquery" | "snowflake" | "databricks"):
  *   Texto:  CONCATENAR(a; b; ...) o a & b, IZQUIERDA(t; n), DERECHA(t; n),
  *           EXTRAE(t; inicio; n), MAYUS(t), MINUS(t), ESPACIOS(t),
  *           SUSTITUIR(t; buscar; poner), LARGO(t)
@@ -429,6 +429,7 @@
     /** col(nombre) -> referencia SQL de la columna (con o sin alias de tabla). */
     function toSql(formula, col, dialect) {
         const sf = String(dialect || "bigquery").toLowerCase() === "snowflake";
+        const db = String(dialect || "bigquery").toLowerCase() === "databricks";
         const tk = tokenize(formula);
         if (!tk.length) throw new Error("La fórmula está vacía.");
         let p = 0;
@@ -494,20 +495,24 @@
                 case "REPLACE": n(a, 3, 3, "SUSTITUIR"); return "REPLACE(" + str(a[0]) + ", " + a[1] + ", " + a[2] + ")";
                 case "LEN": n(a, 1, 1, "LARGO"); return "LENGTH(" + str(a[0]) + ")";
                 case "ROUND": n(a, 1, 2, "REDONDEAR"); return "ROUND(" + a[0] + (a[1] !== undefined ? ", " + a[1] : "") + ")";
-                case "TRUNC": n(a, 1, 2, "TRUNCAR"); return "TRUNC(" + a[0] + (a[1] !== undefined ? ", " + a[1] : "") + ")";
+                case "TRUNC": n(a, 1, 2, "TRUNCAR");
+                    // Databricks: TRUNC es solo para fechas; se trunca con FLOOR/CEIL hacia el cero.
+                    if (db) { const d = a[1] !== undefined ? a[1] : "0"; return "(CASE WHEN " + a[0] + " >= 0 THEN FLOOR(" + a[0] + ", " + d + ") ELSE CEIL(" + a[0] + ", " + d + ") END)"; }
+                    return "TRUNC(" + a[0] + (a[1] !== undefined ? ", " + a[1] : "") + ")";
                 case "ABS": n(a, 1, 1, "ABS"); return "ABS(" + a[0] + ")";
                 case "YEAR": n(a, 1, 1, "AÑO"); return "EXTRACT(YEAR FROM " + a[0] + ")";
                 case "MONTH": n(a, 1, 1, "MES"); return "EXTRACT(MONTH FROM " + a[0] + ")";
                 case "QUARTER": n(a, 1, 1, "TRIMESTRE"); return "EXTRACT(QUARTER FROM " + a[0] + ")";
                 case "DAY": n(a, 1, 1, "DIA"); return "EXTRACT(DAY FROM " + a[0] + ")";
-                case "SOM": n(a, 1, 1, "INICIO_MES"); return sf ? "DATE_TRUNC('MONTH', " + a[0] + ")" : "DATE_TRUNC(DATE(" + a[0] + "), MONTH)";
-                case "SOY": n(a, 1, 1, "INICIO_AÑO"); return sf ? "DATE_TRUNC('YEAR', " + a[0] + ")" : "DATE_TRUNC(DATE(" + a[0] + "), YEAR)";
+                case "SOM": n(a, 1, 1, "INICIO_MES"); if (db) return "TRUNC(CAST(" + a[0] + " AS DATE), 'MM')"; return sf ? "DATE_TRUNC('MONTH', " + a[0] + ")" : "DATE_TRUNC(DATE(" + a[0] + "), MONTH)";
+                case "SOY": n(a, 1, 1, "INICIO_AÑO"); if (db) return "TRUNC(CAST(" + a[0] + " AS DATE), 'YEAR')"; return sf ? "DATE_TRUNC('YEAR', " + a[0] + ")" : "DATE_TRUNC(DATE(" + a[0] + "), YEAR)";
                 case "FMTDATE": {
                     n(a, 2, 2, "TEXTO_FECHA");
                     const m = /^'(.*)'$/.exec(a[1]);
                     if (!m) throw new Error("TEXTO_FECHA: el formato va entre comillas, p. ej. \"AAAA-MM\".");
                     const fmt = m[1];
                     if (!/^[AMD\-\/ .]+$/i.test(fmt)) throw new Error("TEXTO_FECHA: usa solo AAAA, MM, DD y separadores (- / . espacio).");
+                    if (db) return "DATE_FORMAT(" + a[0] + ", " + q(fmt.replace(/AAAA/gi, "yyyy").replace(/DD/gi, "dd").replace(/MM/gi, "MM")) + ")";
                     if (sf) return "TO_CHAR(" + a[0] + ", " + q(fmt.replace(/AAAA/gi, "YYYY").replace(/DD/gi, "DD").replace(/MM/gi, "MM")) + ")";
                     return "FORMAT_DATE(" + q(fmt.replace(/AAAA/gi, "%Y").replace(/MM/gi, "%m").replace(/DD/gi, "%d")) + ", DATE(" + a[0] + "))";
                 }

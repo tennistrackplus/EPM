@@ -475,8 +475,18 @@
         // sigue el taskpane al autoguardar el diseño-, así que no hace
         // falta duplicar esa lógica aquí; y (con el fix de más arriba)
         // conserva el resultSheetName que acaba de fijar createReport.
+        // Los filtros del portapapeles vienen como se GUARDAN (value: texto
+        // JSON) y saveDesign espera el formato del panel (filter: objeto).
+        // Antes se pasaban tal cual y el informe pegado perdía sus valores.
+        const pastedFilters = (clip.design.filters || []).map(f => {
+            let filter = f.filter || null;
+            if (!filter && f.value) {
+                try { filter = typeof f.value === "string" ? JSON.parse(f.value) : f.value; } catch (e) { filter = null; }
+            }
+            return Object.assign({}, f, { filter });
+        });
         await saveDesign(report.id, {
-            filters: clip.design.filters,
+            filters: pastedFilters,
             rows: clip.design.rows,
             columns: clip.design.columns,
             rowsStatic: clip.design.rowsStatic,

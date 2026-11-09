@@ -357,6 +357,11 @@ async function svcFetchWithTimeout(url, options) {
 }
 
 async function executeSQLBigQuery(sql) {
+    // Databricks (pasarela del cliente): mismo formato de texto que BigQuery.
+    if (typeof Provider !== "undefined" && Provider.isDatabricks && Provider.isDatabricks()) {
+        return await DBX.runQueryRaw(sql);
+    }
+
     // BigQuery
     const token = BQ.getToken();
 
@@ -582,7 +587,11 @@ const ExcelService = {
         return levels;
     },
 
-    async executeSQL(sql) {
+    /** kind: tipo de consulta para el diario del Diagnóstico (js/queryJournal.js). */
+    async executeSQL(sql, kind) {
+        if (window.DracoQueryJournal) {
+            return await window.DracoQueryJournal.track(sql, () => executeSQLBigQuery(sql), { kind });
+        }
         return await executeSQLBigQuery(sql);
     },
 

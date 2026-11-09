@@ -19,12 +19,13 @@ const Connections = {
     ACTIVE_KEY: "epm_active_connection_id",
 
     PROVIDER_LABELS: {
-        bigquery: "BigQuery"
+        bigquery: "BigQuery",
+        databricks: "Databricks"
     },
 
     // Proveedores con flujo de conexión implementado. Una conexión guardada
     // con otro proveedor (versiones anteriores) muestra "no disponible".
-    IMPLEMENTED_PROVIDERS: ["bigquery"],
+    IMPLEMENTED_PROVIDERS: ["bigquery", "databricks"],
 
     labelFor(providerKey) {
         return this.PROVIDER_LABELS[providerKey] || providerKey;

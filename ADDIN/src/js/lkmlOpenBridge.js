@@ -25,7 +25,7 @@
      */
     function openOpenLkmlDialog(onImported) {
 
-        const dialogUrl = new URL("openSemanticModel.html", window.location.href).href;
+        const dialogUrl = new URL("openSemanticModel.html?v=" + encodeURIComponent((typeof DRACO_BUILD !== "undefined" ? DRACO_BUILD : "1")), window.location.href).href;
 
         Office.context.ui.displayDialogAsync(
             dialogUrl,

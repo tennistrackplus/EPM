@@ -110,10 +110,17 @@ const BQ = {
             if (msg && msg.type === this.TOKEN_REQUEST_MESSAGE_TYPE) {
                 const token = this.getToken();
                 const expires = this._store().getItem(this.EXPIRES_KEY);
+                // Con una conexión de Databricks activa se comparte también
+                // su sesión (DBX): el diálogo no tiene por qué ver el
+                // localStorage del panel para saber qué motor usar.
+                const dbx = (window.Provider && Provider.isDatabricks && Provider.isDatabricks() && window.DBX)
+                    ? DBX.exportForDialog() : null;
                 dialog.messageChild(JSON.stringify({
                     type: this.TOKEN_RESPONSE_MESSAGE_TYPE,
                     token: token || null,
-                    expires: expires || null
+                    expires: expires || null,
+                    provider: dbx ? "databricks" : "bigquery",
+                    dbx: dbx
                 }));
                 return true;
             }
@@ -153,6 +160,11 @@ const BQ = {
                             clearTimeout(timer);
                             if (msg.token && msg.expires) {
                                 this.setToken(msg.token, msg.expires);
+                            }
+                            if (msg.provider === "databricks" && msg.dbx && window.DBX) {
+                                DBX.importFromDialog(msg.dbx);
+                            } else if (msg.provider === "bigquery") {
+                                try { sessionStorage.setItem("draco_session_provider", "bigquery"); } catch (e) { /* sin acceso */ }
                             }
                             finish(true);
                         }

@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-11-07-picker-texto";
+const DRACO_BUILD = "2026-11-09-diario-consultas-paralelo";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -297,7 +297,7 @@ function mostrarVistaEditarModelo(event) {
  */
 function abrirDesdeBucket(event) {
     try {
-        const url = new URL("bucketBrowser.html", window.location.href);
+        const url = new URL("bucketBrowser.html", window.location.href); url.searchParams.set("v", (typeof DRACO_BUILD !== "undefined" ? DRACO_BUILD : "1"));
         // SEGURIDAD: ya no se pasa el token por la URL (ver
         // BQ.handleDialogMessage/requestSessionFromOpener en bigquery.js).
         Office.context.ui.displayDialogAsync(url.href, { height: 55, width: 40, displayInIframe: false }, (asyncResult) => {
@@ -332,7 +332,7 @@ function abrirDesdeBucket(event) {
 function guardarExcelEnBucket(event) {
     function showResult(ok, msg) {
         try {
-            const url = new URL("uploadStatus.html", window.location.href);
+            const url = new URL("uploadStatus.html", window.location.href); url.searchParams.set("v", (typeof DRACO_BUILD !== "undefined" ? DRACO_BUILD : "1"));
             url.searchParams.set("ok", ok ? "1" : "0");
             url.searchParams.set("msg", msg);
             Office.context.ui.displayDialogAsync(url.href, { height: 25, width: 30, displayInIframe: false }, (asyncResult) => {
@@ -1355,14 +1355,25 @@ function attachDracoCalcs() {
     collect(ReportState.Rows, "Rows");
 }
 
-// Literal de texto SQL según motor (BigQuery escapa con \, el resto
+// Literal de texto SQL según motor (BigQuery y Databricks escapan con \, el resto
 // duplicando la comilla).
 function dracoSqlString(v) {
     const t = String(v);
-    if (Provider.key && Provider.key() === "bigquery") {
+    if (Provider.key && (Provider.key() === "bigquery" || Provider.key() === "databricks")) {
         return "'" + t.replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
     }
     return "'" + t.replace(/'/g, "''") + "'";
+}
+
+/**
+ * Literal de texto de los valores de miembros (filas, columnas y filtros).
+ * Databricks: dos comillas seguidas son dos literales concatenados (se
+ * perdería la comilla sin error), así que allí se escapa con barra
+ * invertida. BigQuery mantiene el comportamiento anterior.
+ */
+function dracoQuoteLiteral(v) {
+    if (Provider.isDatabricks && Provider.isDatabricks()) return dracoSqlString(v);
+    return "'" + String(v).replace(/'/g, "''") + "'";
 }
 
 // Parte del ORDER BY de ROW_ID/COLUMN_ID: un atributo con cálculos se
@@ -1880,7 +1891,7 @@ function sqlValue(atributesGrid, dimension, atributo, valor) {
     if (DRACO_SQL_NUMERIC_TYPE_RE.test(tipo) && txt !== "" && !isNaN(Number(txt))) {
         return String(Number(txt));
     }
-    return "'" + String(valor).replace(/'/g, "''") + "'";
+    return dracoQuoteLiteral(valor);
 }
 
 // Tipos DATA_TYPE (MODEL_ATRIBUTES) que NO van entre comillas en SQL —
@@ -2353,7 +2364,7 @@ function buildIdArray(atributesGrid, defs, idFieldName, fallbackId) {
     // Eje sin dimensiones (solo la medida): todas las filas de BASE van al
     // mismo ID. Antes salía «UNNEST([ ]) WHERE COND» y BigQuery fallaba con
     // «Unrecognized name: COND».
-    if (!defs.length) return "[" + (Number(fallbackId) || 1) + "]";
+    if (!defs.length) return Provider.arrayLiteral([Number(fallbackId) || 1]);
     const dict = new Map();
 
     for (const v of defs) {
@@ -2367,20 +2378,12 @@ function buildIdArray(atributesGrid, defs, idFieldName, fallbackId) {
         }
     }
 
-    // BigQuery
-    const structs = [];
+    // Dialecto del motor activo (ver Provider.idArrayLines)
+    const pairs = [];
     for (const [id, conds] of dict.entries()) {
-        structs.push("STRUCT(" + id + " AS " + idFieldName + ", (" + conds.join(" AND ") + ") AS COND)");
+        pairs.push({ id, cond: conds.join(" AND ") });
     }
-
-    let sql = "ARRAY(" + CRLF;
-    sql += "    SELECT " + idFieldName + " FROM UNNEST([" + CRLF;
-    sql += structs.map(s => "        " + s).join("," + CRLF) + CRLF;
-    sql += "    ])" + CRLF;
-    sql += "    WHERE COND" + CRLF;
-    sql += ")";
-
-    return sql;
+    return Provider.idArrayLines(pairs, idFieldName, CRLF);
 }
 
 async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid) {
@@ -2518,9 +2521,10 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
     sql += "    COLUMN_ID," + CRLF;
     rNames.forEach(n => { sql += "    " + n + "," + CRLF; });
     sql += "    SUM(IMPORTE) AS IMPORTE" + CRLF;
-    sql += "FROM TAGGED," + CRLF;
-    sql += "UNNEST(ROW_IDS) AS ROW_ID," + CRLF;
-    sql += "UNNEST(COLUMN_IDS) AS COLUMN_ID" + CRLF;
+    sql += Provider.explodeFrom("FROM TAGGED", [
+        { array: "ROW_IDS", alias: "ROW_ID" },
+        { array: "COLUMN_IDS", alias: "COLUMN_ID" }
+    ], CRLF) + CRLF;
     if (exc) {
         sql += "GROUP BY ROW_ID, COLUMN_ID" + rNames.map(n => ", " + n).join("") + CRLF;
         sql += ") X" + CRLF;
@@ -2641,13 +2645,47 @@ function rowsToPseudoBqJson(rows) {
  *   debe pasarlo aquí para que el job se facture ahí y no en un proyecto sin
  *   billing (ver executeDracoPlanningInserts).
  */
-async function executeSQL(sql, billingProjectId) {
+/* ---------------------------------------------------------------------
+ * executeSQL: punto único de ejecución de SQL del motor de informes.
+ *  - Consultas ADELANTADAS (DracoSqlPrefetch): «Actualizar todos» lanza en
+ *    paralelo las consultas de los informes Fijos/Híbridos y deja aquí su
+ *    promesa con el SQL como clave; cuando el informe llega a su turno de
+ *    pintado, recoge el resultado en vez de volver a consultar.
+ *  - Diario de consultas del Diagnóstico (js/queryJournal.js): tipo,
+ *    duración, filas, volumen y coste de cada consulta.
+ * ------------------------------------------------------------------- */
+const DracoSqlPrefetch = new Map();   // sql -> Promise<texto JSON>
+
+async function executeSQL(sql, billingProjectId, kind) {
+    if (typeof sql === "string" && DracoSqlPrefetch.has(sql)) {
+        const p = DracoSqlPrefetch.get(sql);
+        DracoSqlPrefetch.delete(sql);
+        return await p;
+    }
+    return await dracoExecuteTracked(sql, billingProjectId, kind);
+}
+
+async function dracoExecuteTracked(sql, billingProjectId, kind) {
+    if (window.DracoQueryJournal) {
+        return await window.DracoQueryJournal.track(typeof sql === "string" ? sql : (sql && sql.text) || "",
+            () => dracoExecuteSQLInner(sql, billingProjectId), { kind });
+    }
+    return await dracoExecuteSQLInner(sql, billingProjectId);
+}
+
+async function dracoExecuteSQLInner(sql, billingProjectId) {
     // Variables ($NOMBRE$ en las líneas EPM_VALUE de un eje Estático, ver
     // js/variablesStore.js): el SQL se genera con el marcador y se sustituye
     // por el valor AQUÍ, justo antes de ejecutarlo. Así un SQL guardado (Tablas
     // Draco) vale para cualquier valor de la variable.
     if (typeof sql === "string" && window.DracoVariables) {
         sql = window.DracoVariables.resolveSql(sql, Provider.key());
+    }
+
+    // Databricks: a través de la pasarela del cliente, con el mismo formato
+    // de texto que BigQuery (ver DBX.runQueryRaw).
+    if (Provider.isDatabricks()) {
+        return await DBX.runQueryRaw(sql);
     }
 
     // BigQuery
@@ -2787,7 +2825,7 @@ function dracoSessionExpiredNotice(detail) {
     DracoSessionNoticeAt = Date.now();
     try {
         const expired = !(detail && detail.source === "no-token" && !detail.hadToken);
-        const dialogUrl = new URL(`sessionExpiredBadge.html?expired=${expired ? "1" : "0"}`, window.location.href).href;
+        const dialogUrl = new URL(`sessionExpiredBadge.html?expired=${expired ? "1" : "0"}&v=${encodeURIComponent(DRACO_BUILD)}`, window.location.href).href;
         Office.context.ui.displayDialogAsync(dialogUrl, { height: 15, width: 22, displayInIframe: false }, (asyncResult) => {
             if (asyncResult.status === Office.AsyncResultStatus.Failed) {
                 console.warn("[Draco] No se pudo mostrar el aviso de sesión caducada:", asyncResult.error && asyncResult.error.message);
@@ -2931,19 +2969,20 @@ async function alternarDiagnostico(event) {
                 sh.getRange("X1").select();
             } else {
                 ["W1", "X1", "Y1", "Z1"].forEach(a => sh.getRange(a).values = [[""]]);
+                if (window.DracoQueryJournal) await window.DracoQueryJournal.clear(context);
                 sh.getRange(DRACO_LOG_COL + "1:" + DRACO_LOG_COL + (DRACO_LOG_MAX + 1)).clear(Excel.ClearApplyTo.contents);
                 sh.visibility = Excel.SheetVisibility.hidden;
             }
             await context.sync();
         });
         if (on) {
-            dracoLog("Diagnóstico ACTIVADO: X1 = SQL, Y1 = resultados, AA = log con tiempos (más reciente arriba)");
+            dracoLog("Diagnóstico ACTIVADO: X1 = SQL, Y1 = resultados, AA = log con tiempos, AD:AP = todas las consultas con volumen y coste (más reciente arriba)");
             DracoLogDirty = true;
             scheduleDracoLogFlush();
         }
         if (typeof TaskPaneApp !== "undefined" && TaskPaneApp.setAutoStatus) {
             TaskPaneApp.setAutoStatus(on
-                ? "Diagnóstico activado: SQL, resultados y tiempos en EDIT_REPORT."
+                ? "Diagnóstico activado: SQL, resultados, tiempos y consumo de cada consulta en EDIT_REPORT (columnas X a AP)."
                 : "Diagnóstico desactivado.");
         }
     } catch (error) {
@@ -3159,6 +3198,37 @@ async function jsonPaintValues(context, json, reportId) {
  * ------------------------------------------------------------------- */
 
 /**
+ * SQL de un informe Fijo (lee EDIT_REPORT y la hoja de resultados). Deja
+ * cargado ReportState de ESE informe. La usa actualizarInformeFixedCore y,
+ * para adelantar las consultas en paralelo, actualizarTodosCore.
+ */
+async function dracoBuildFixedSQL(reportId) {
+    let sql;
+    await Excel.run(async (context) => {
+        let tSub = performance.now(); // sub-marcas dentro de "Generando SQL"
+        const editReportGrid = await getEditReportGrid(context, reportId);
+        tSub = draco_perfMark(reportId, "  Leer EDIT_REPORT (usedRange)", tSub);
+
+        const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
+        const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+        const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+        const resultSheetName = await getDracoResultSheetName(context, reportId);   // por sus rangos con nombre (sobrevive a renombrar la hoja)
+        await ensureDracoResultSheetExists(context, resultSheetName);
+        const csvGrid = await getFormulaGrid(context, resultSheetName);
+        tSub = draco_perfMark(reportId, "  Leer hoja de resultados (fórmulas)", tSub);
+
+        loadReportDefinition(editReportGrid, reportId);
+
+        sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
+        tSub = draco_perfMark(reportId, "  loadReportDefinition + buildSQLFixed (JS puro)", tSub);
+
+        await context.sync();
+        draco_perfMark(reportId, "  Escribir/sincronizar", tSub);
+    });
+    return sql;
+}
+
+/**
  * Núcleo de Actualizar_informe_fixed(), sin manejo de `event` (para poder
  * reutilizarlo tanto desde el botón del ribbon como desde el dispatcher
  * Actualizar()).
@@ -3205,33 +3275,13 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     tPerf = draco_perfMark(reportId, "Candado cruzado de planificación (begin)", tPerf);
     try {
 
-    // 1) LoadReportDefinition + BuildSQL_Fixed + escritura de A1
-    await Excel.run(async (context) => {
-        let tSub = performance.now(); // sub-marcas dentro de "Generando SQL"
-        const editReportGrid = await getEditReportGrid(context, reportId);
-        tSub = draco_perfMark(reportId, "  Leer EDIT_REPORT (usedRange)", tSub);
-
-        const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
-        const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
-        const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
-        const resultSheetName = await getDracoResultSheetName(context, reportId);   // por sus rangos con nombre (sobrevive a renombrar la hoja)
-        await ensureDracoResultSheetExists(context, resultSheetName);
-        const csvGrid = await getFormulaGrid(context, resultSheetName);
-        tSub = draco_perfMark(reportId, "  Leer hoja de resultados (fórmulas)", tSub);
-
-        loadReportDefinition(editReportGrid, reportId);
-
-        sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
-        tSub = draco_perfMark(reportId, "  loadReportDefinition + buildSQLFixed (JS puro)", tSub);
-
-        await context.sync();
-        draco_perfMark(reportId, "  Escribir/sincronizar", tSub);
-    });
+    // 1) LoadReportDefinition + BuildSQL_Fixed
+    sql = await dracoBuildFixedSQL(reportId);
     tPerf = draco_perfMark(reportId, "Generando SQL", tPerf);
 
     // 2) ExecuteSQL contra BigQuery
     if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
-    const json = await executeSQL(sql);
+    const json = await executeSQL(sql, undefined, "Informe (fijo)");
     tPerf = draco_perfMark(reportId, "Ejecutando consulta (red)", tPerf);
 
     // [Punto 8] SQL y JSON generados ya NO se escriben en A1/B1 de la hoja
@@ -3661,17 +3711,17 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     const gSel = (colRef) => gFlags.map((n, i) => ", GROUPING(" + colRef(n) + ") AS DRC_G_" + i).join("");
     let excSrc = null;      // { lineRef, colRef, mRef, from } para AGG_E_n
     {
-        const structs = lines.map(l => "STRUCT(" + l.id + " AS LINE_ID, (" + lineCond(l) + ") AS COND)");
+        const lineIds = Provider.idArrayLines(lines.map(l => ({ id: l.id, cond: lineCond(l) })), "LINE_ID", CRLF)
+            .split(CRLF).map((x, i) => i === 0 ? x : "    " + x).join(CRLF);
+        const lineFrom = Provider.explodeFrom("    FROM TAGGED", [{ array: "LINE_IDS", alias: "LINE_ID" }]) + CRLF;
         sql += "TAGGED AS (" + CRLF
             + "    SELECT " + [...dynNames, ...mSel, ...rAll].map(x => x + ", ").join("")
-            + "ARRAY(" + CRLF + "        SELECT LINE_ID FROM UNNEST([" + CRLF
-            + structs.map(x => "            " + x).join("," + CRLF) + CRLF
-            + "        ]) WHERE COND" + CRLF + "    ) AS LINE_IDS" + CRLF
+            + lineIds + " AS LINE_IDS" + CRLF
             + "    FROM BASE" + CRLF + ")," + CRLF + CRLF;
-        excSrc = { lineRef: "LINE_ID", colRef: n => n, mRef: a => a, from: "    FROM TAGGED, UNNEST(LINE_IDS) AS LINE_ID" + CRLF };
+        excSrc = { lineRef: "LINE_ID", colRef: n => n, mRef: a => a, from: lineFrom };
         sql += "AGG AS (" + CRLF
             + "    SELECT LINE_ID" + dynNames.map(n => ", " + n).join("") + gSel(n => n) + measureCols.map(m => ", SUM(" + m.alias + ") AS " + m.alias).join("") + CRLF
-            + "    FROM TAGGED, UNNEST(LINE_IDS) AS LINE_ID" + CRLF
+            + lineFrom
             + "    " + groupBy("LINE_ID", n => n) + CRLF
             + ")" + CRLF + CRLF;
     }
@@ -4356,6 +4406,26 @@ async function finishDracoFixedReport(context, reportId, editReportGrid) {
     await context.sync();
 }
 
+/** SQL de un informe Híbrido: { built: {sql, plan}, grid } (ver dracoBuildFixedSQL). */
+async function dracoBuildHybridSQL(reportId) {
+    let built, grid;
+    await Excel.run(async (context) => {
+        const editReportGrid = await getEditReportGrid(context, reportId);
+        grid = editReportGrid;
+        const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
+        const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
+        const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
+        const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
+        await ensureDracoResultSheetExists(context, resultSheetName);
+        const csvGrid = await getFormulaGrid(context, resultSheetName);
+
+        loadReportDefinition(editReportGrid, reportId);
+        built = await buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid, reportId);
+        await context.sync();
+    });
+    return { built, grid };
+}
+
 async function actualizarInformeHybridCore(reportIdOverride) {
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     // Posición = sus rangos con nombre (filas/columnas insertadas o borradas, también sin el complemento)
@@ -4370,27 +4440,15 @@ async function actualizarInformeHybridCore(reportIdOverride) {
     if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(reportId, "Generando SQL"));
     await beginSuppressPlanningPaint();
     try {
-        let editReportGridForPaint;
-        await Excel.run(async (context) => {
-            const editReportGrid = await getEditReportGrid(context, reportId);
-            editReportGridForPaint = editReportGrid;
-            const relGrid = await window.SemanticModelStore.getModelGrid("MODEL_RELATIONSHIP");
-            const measuresGrid = await window.SemanticModelStore.getModelGrid("MODEL_MEASURES");
-            const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
-            const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
-            await ensureDracoResultSheetExists(context, resultSheetName);
-            const csvGrid = await getFormulaGrid(context, resultSheetName);
-
-            loadReportDefinition(editReportGrid, reportId);
-            built = await buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid, reportId);
-            await context.sync();
-        });
+        const hb = await dracoBuildHybridSQL(reportId);
+        built = hb.built;
+        const editReportGridForPaint = hb.grid;
         tPerf = draco_perfMark(reportId, "Híbrido: generando SQL", tPerf);
 
         let json = "";
         if (built.sql) {
             if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
-            json = await executeSQL(built.sql);
+            json = await executeSQL(built.sql, undefined, "Informe (híbrido)");
             tPerf = draco_perfMark(reportId, "Híbrido: ejecutando consulta (red)", tPerf);
         }
 
@@ -4640,7 +4698,7 @@ function singleDracoFilterValueForWriteback(rawValue) {
 function sqlLiteralForFilter(atributesGrid, dimension, attributeName, rawValue) {
     const tipo = getAttributeType(atributesGrid, dimension, attributeName);
     if (UNQUOTED_TYPES.includes(tipo)) return String(rawValue);
-    return "'" + String(rawValue).replace(/'/g, "''") + "'";
+    return dracoQuoteLiteral(rawValue);
 }
 
 /**
@@ -4778,11 +4836,19 @@ function buildHierarchyFilterCondition(atributesGrid, relGrid, dimension, filter
  * (cumple los incluidos Y no cae en ninguno de los excluidos).
  */
 function buildHierarchyListCondition(atributesGrid, relGrid, dimension, filter) {
+    const valueCond = (attr, value) => buildSimpleFilterCondition(atributesGrid, relGrid, dimension, attr,
+        { mode: "values", include: true, values: [value] });
+
     const buildGroupedCondition = (items, include) => {
         if (!items || items.length === 0) return "";
 
         const porAtributo = new Map();
+        const conRuta = [];
         for (const it of items) {
+            // Miembro repetido en varias ramas del árbol: el diálogo envía su
+            // ruta (antepasados) y la condición exige también esos niveles,
+            // para no filtrar la misma clave en las otras ramas.
+            if (Array.isArray(it.path) && it.path.length) { conRuta.push(it); continue; }
             if (!porAtributo.has(it.attribute)) porAtributo.set(it.attribute, []);
             porAtributo.get(it.attribute).push(it.value);
         }
@@ -4792,6 +4858,11 @@ function buildHierarchyListCondition(atributesGrid, relGrid, dimension, filter) 
             const cond = buildSimpleFilterCondition(atributesGrid, relGrid, dimension, attr,
                 { mode: "values", include: true, values });
             if (cond) partes.push(cond);
+        }
+        for (const it of conRuta) {
+            const conds = [...it.path, { attribute: it.attribute, value: it.value }]
+                .map(p => valueCond(p.attribute, p.value)).filter(Boolean);
+            if (conds.length) partes.push("(" + conds.join(" AND ") + ")");
         }
 
         if (partes.length === 0) return "";
@@ -5229,7 +5300,7 @@ function buildFinalWhereFromAxes(axes) {
                     if (new Set(lv.map(x => x.pos)).size < 2) continue;   // un solo nivel: ya resuelto con los GROUPING SETS
                     const lit = (f, v) => DracoQueryAtribGrid
                         ? sqlValue(DracoQueryAtribGrid, f.Dimension, f.SqlAttr || f.AttributeName, v)
-                        : "'" + String(v).replace(/'/g, "''") + "'";
+                        : dracoQuoteLiteral(v);
                     rootConds.push("(" + CRLF + "    " + lv.map(x => x.field.AttributeName + " IN (" + x.values.map(v => lit(x.field, v)).join(", ") + ")").join(CRLF + "    OR ") + CRLF + ")");
                 }
             }
@@ -6973,14 +7044,14 @@ async function openDracoFilterRangePicker(addr, sheetName, rangeName, meta) {
             console.warn("[Draco] Añadir filtro: no se ha encontrado el atributo o jerarquía.", meta);
             return;
         }
-        const json = await window.ExcelService.executeSQL(sql);
+        const json = await window.ExcelService.executeSQL(sql, "Filtro (rango de celdas)");
         items = parseMemberJsonTree(json, meta.dim);
     } catch (err) {
         console.error("[Draco] Añadir filtro: error cargando los valores del filtro:", err);
         return;
     }
 
-    const dialogUrl = new URL("filterDialog.html", window.location.href).href;
+    const dialogUrl = new URL("filterDialog.html?v=" + encodeURIComponent(DRACO_BUILD), window.location.href).href;
 
     await new Promise((resolve) => {
         Office.context.ui.displayDialogAsync(
@@ -7391,7 +7462,7 @@ async function dracoReportAnchor(context, reportId) {
  */
 function dracoInfoNotice(title, subtitle, tone) {
     try {
-        const qs = new URLSearchParams({ t: title || "", s: subtitle || "", tone: tone || "info" });
+        const qs = new URLSearchParams({ t: title || "", s: subtitle || "", tone: tone || "info", v: DRACO_BUILD });
         const url = new URL(`infoBadge.html?${qs.toString()}`, window.location.href).href;
         Office.context.ui.displayDialogAsync(url, { height: 18, width: 26, displayInIframe: false }, (res) => {
             if (res.status === Office.AsyncResultStatus.Failed) {
@@ -8869,13 +8940,28 @@ function dracoMemberCacheSet(sql, json) {
 }
 
 /** Ejecuta el SQL de valores usando la caché de miembros. */
+/** Tipo de consulta de miembros para el diario del Diagnóstico, según quién la pide. */
+function dracoMemberQueryKind(tag) {
+    const t = String(tag || "");
+    if (t.indexOf("[REC") === 0) return "Reconocimiento de miembros";
+    if (t.indexOf("[FILTRO") === 0) return "Valores de filtro";
+    if (t.indexOf("[DC") === 0) return "Miembros (doble clic)";
+    if (t.indexOf("[picker") === 0 || t.indexOf("[req") === 0) return "Buscador de miembros";
+    return "Miembros" + (t ? " " + t : "");
+}
+
 async function dracoMemberQuery(sql, tag) {
     const hit = dracoMemberCacheGet(sql);
     if (hit) {
         if (tag) dracoLog(tag, "valores desde la caché de la sesión (sin consultar)");
+        // En el diario del Diagnóstico, para ver que no ha costado nada
+        if (window.DracoQueryJournal) {
+            window.DracoQueryJournal.record({ sql, kind: dracoMemberQueryKind(tag) + " (caché de Draco)", ms: 0,
+                cacheHit: true, rows: window.DracoQueryJournal.statsFromText(hit).rows, result: hit });
+        }
         return hit;
     }
-    let json = await window.ExcelService.executeSQL(sql);
+    let json = await window.ExcelService.executeSQL(sql, dracoMemberQueryKind(tag));
     if (typeof json !== "string") json = JSON.stringify(json);
     dracoMemberCacheSet(sql, json);
     return json;
@@ -11706,7 +11792,7 @@ async function actualizarInformeCore(reportIdOverride) {
     tPerf = draco_perfMark(reportId, "Generando SQL", tPerf);
 
     if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
-    const json = await executeSQL(sql);
+    const json = await executeSQL(sql, undefined, "Informe (dinámico)");
     tPerf = draco_perfMark(reportId, "Ejecutando consulta (red)", tPerf);
 
     console.log("JSON de BigQuery ->", json);
@@ -12051,7 +12137,7 @@ async function dracoRefreshLinkGroup(mainId) {
         // vacía haría fallar el refresco de todo el grupo, también el del principal.
         if (id !== mainId && q.empty) continue;
         if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(id, "Ejecutando consulta"));
-        q.json = await executeSQL(q.sql);
+        q.json = await executeSQL(q.sql, undefined, "Informe vinculado");
         parts.push(q);
         if (id !== mainId) painted.push(id);
     }
@@ -12113,7 +12199,7 @@ async function crearInformeVinculado(event) {
                 const linked = dracoLinkedOf(r.id);
                 return { id: r.id, name: r.name, lockedAxis: linked.length ? dracoLinkOf(linked[0]).axis : null, linkedCount: linked.length };
             });
-        const url = new URL("linkDialog.html", window.location.href).href;
+        const url = new URL("linkDialog.html?v=" + encodeURIComponent(DRACO_BUILD), window.location.href).href;
         let createdId = null;
         await new Promise((resolve) => {
             Office.context.ui.displayDialogAsync(url, { height: 55, width: 35, displayInIframe: false }, (res) => {
@@ -12274,7 +12360,20 @@ async function actualizarTodosCore(concurrency) {
             });
 
             if (mode === "fixed" || mode === "hybrid") {
-                fixedReports.push({ reportId, reportName: r.name, mode });
+                // Su SQL se construye ya (en serie, lee Excel) para lanzar su
+                // consulta en paralelo con las demás; el informe la recoge
+                // después, en su turno de pintado (ver DracoSqlPrefetch).
+                const f = { reportId, reportName: r.name, mode, sql: "" };
+                try {
+                    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Generando SQL"));
+                    await dracoSyncReportPositions(reportId);
+                    if (mode === "fixed") f.sql = await dracoBuildFixedSQL(reportId);
+                    else f.sql = ((await dracoBuildHybridSQL(reportId)).built || {}).sql || "";
+                } catch (err) {
+                    console.warn(`[Draco] No se pudo adelantar la consulta del informe "${r.name}"; se hará en su turno:`, err);
+                    f.sql = "";
+                }
+                fixedReports.push(f);
             } else {
                 let sql;
                 if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Generando SQL"));
@@ -12303,9 +12402,25 @@ async function actualizarTodosCore(concurrency) {
     //    EMPEZAR cada consulta (así se ve cuál acaba de arrancar) y se
     //    lleva la cuenta de cuántas han terminado ya, sin bajar la
     //    concurrencia para conseguirlo.
+    //    Las de los Fijos/Híbridos van en el MISMO lote: su promesa queda en
+    //    DracoSqlPrefetch y su núcleo la recoge al pintar (si el SQL que
+    //    vuelve a generar es idéntico; si no, consulta por su cuenta).
+    const prefetchJobs = fixedReports.filter(f => f.sql && !DracoSqlPrefetch.has(f.sql)).map(f => {
+        const job = { reportId: f.reportId, reportName: f.reportName, sql: f.sql,
+            kind: f.mode === "hybrid" ? "Informe (híbrido)" : "Informe (fijo)" };
+        job.promise = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; });
+        job.promise.catch(() => { /* se trata al recogerla */ });
+        DracoSqlPrefetch.set(f.sql, job.promise);
+        return job;
+    });
+    dynamicJobs.forEach(job => {
+        job.promise = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; });
+        job.promise.catch(() => { /* se trata al pintar */ });
+    });
+    const allQueries = dynamicJobs.map(j => Object.assign(j, { kind: "Informe (dinámico)" })).concat(prefetchJobs);
     let queriesDone = 0;
-    const totalQueries = dynamicJobs.length;
-    await runWithConcurrency(dynamicJobs, concurrency || 4, async (job) => {
+    const totalQueries = allQueries.length;
+    const queriesRun = runWithConcurrency(allQueries, concurrency || 4, async (job) => {
         if (window.BusyIndicator) {
             await window.BusyIndicator.update(
                 busyStepLabel(job.reportId, "Ejecutando consulta") + ` (${queriesDone}/${totalQueries} hechas)`
@@ -12313,20 +12428,23 @@ async function actualizarTodosCore(concurrency) {
         }
         const tJob = performance.now(); // tiempo propio de ESTE informe, no encadenado (van en paralelo)
         try {
-            job.json = await executeSQL(job.sql);
+            const json = await dracoExecuteTracked(job.sql, undefined, job.kind);
             draco_perfMark(job.reportId, "Ejecutando consulta (red, en paralelo)", tJob);
+            job.resolve(json);
         } catch (err) {
-            job.error = err;
             console.error(`[Draco] Error consultando datos del informe "${job.reportName}":`, err);
+            job.reject(err);
         } finally {
             queriesDone++;
         }
     });
 
-    // 3) Pintar los "Dinámicos" en Excel EN SERIE: la API de Excel no
-    //    admite escrituras concurrentes seguras sobre el mismo libro.
+    // 3) Pintar los "Dinámicos" en Excel EN SERIE (la API de Excel no admite
+    //    escrituras concurrentes seguras sobre el mismo libro), cada uno en
+    //    cuanto llega SU resultado, mientras las demás consultas siguen.
     let paintedCount = 0;
     for (const job of dynamicJobs) {
+        try { job.json = await job.promise; } catch (err) { job.error = err; }
         if (job.error || !job.json) continue;
         try {
             if (window.BusyIndicator) {
@@ -12349,10 +12467,8 @@ async function actualizarTodosCore(concurrency) {
         }
     }
 
-    // 4) Informes en modo "Fijo" (ambos ejes Estático): flujo aparte,
-    //    todo-en-uno (aquí incluso construir el SQL necesita leer la hoja
-    //    de resultados en Excel, no solo el pintado), así que van en SERIE
-    //    entre sí — no solo el pintado, sino el flujo completo.
+    // 4) Informes Fijos/Híbridos: su flujo completo va en SERIE (lee y pinta
+    //    Excel), pero su consulta ya está en marcha desde el paso 2.
     for (const f of fixedReports) {
         try {
             if (f.mode === "hybrid") await actualizarInformeHybridCore(f.reportId);
@@ -12372,7 +12488,11 @@ async function actualizarTodosCore(concurrency) {
         }
     }
 
+    await queriesRun;
     } finally {
+        // Consultas adelantadas que nadie recogió (p. ej. el informe falló
+        // antes de consultar): no se quedan colgando para otro refresco.
+        DracoSqlPrefetch.clear();
         await endSuppressPlanningPaint();
         await draco_endManualCalculation();
         if (window.BusyIndicator) await window.BusyIndicator.hide();
@@ -13055,6 +13175,9 @@ function dracoPlanningSqlLiteralForDimValue(value, dataType) {
         return (s === "" || isNaN(num)) ? "NULL" : num;
     }
 
+    // Databricks: dos comillas seguidas son dos literales concatenados, no
+    // una comilla escapada; allí se escapa con barra invertida.
+    if (Provider.isDatabricks && Provider.isDatabricks()) return dracoSqlString(value);
     return "'" + String(value).replace(/'/g, "''") + "'";
 }
 
@@ -13179,7 +13302,7 @@ async function executeDracoPlanningInserts(rows, dimNames) {
             // Factura el INSERT contra el proyecto de SU tabla de hechos
             // (p.ej. "draco-506807"), no contra un proyecto fijo sin billing.
             const billingProjectId = projectIdFromQualifiedTable(stmt.table);
-            const responseText = await executeSQL(stmt.sql, billingProjectId);
+            const responseText = await executeSQL(stmt.sql, billingProjectId, "Planificación (INSERT)");
             let parsed = null;
             try { parsed = JSON.parse(responseText); } catch (e) { /* respuesta no era JSON, se asume OK */ }
 
@@ -13675,7 +13798,7 @@ async function dracoModelFieldList() {
 async function dracoFieldMembers(dim, attr) {
     const sql = await window.ExcelService.buildFilterValuesSQL(dim, attr);
     if (!sql) throw new Error("No se encuentra el campo en el modelo semántico.");
-    const json = await window.ExcelService.executeSQL(sql);
+    const json = await window.ExcelService.executeSQL(sql, "Miembros del campo");
     return Array.from(new Set(extractDracoJsonValues(json).filter(v => !isDracoNullLiteral(v)).map(v => String(v)))).slice(0, 5000);
 }
 
@@ -13685,7 +13808,7 @@ async function abrirVariables(event) {
     try {
         let fields = [];
         try { fields = await dracoModelFieldList(); } catch (e) { console.warn("[Draco] Variables: campos del modelo:", e); }
-        const url = new URL("variablesDialog.html", window.location.href).href;
+        const url = new URL("variablesDialog.html?v=" + encodeURIComponent(DRACO_BUILD), window.location.href).href;
         await new Promise((resolve) => {
             Office.context.ui.displayDialogAsync(url, { height: 70, width: 55, displayInIframe: false }, (res) => {
                 if (res.status === Office.AsyncResultStatus.Failed) { console.error("Variables: displayDialogAsync:", res.error && res.error.message); resolve(); return; }
@@ -14005,7 +14128,7 @@ async function abrirAnadirFiltro(event) {
 
         const reports = (window.ReportStore ? window.ReportStore.listReports() : []) || [];
 
-        const dialogUrl = new URL("addFilterRange.html", window.location.href).href;
+        const dialogUrl = new URL("addFilterRange.html?v=" + encodeURIComponent(DRACO_BUILD), window.location.href).href;
 
         await new Promise((resolve) => {
             Office.context.ui.displayDialogAsync(

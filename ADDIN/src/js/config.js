@@ -14,6 +14,19 @@ const DracoConfig = {
     allowSimpleOAuth: true,
 
     // ---------------------------------------------------------
+    // Databricks: permitir conectar con un token personal (PAT) en vez del
+    // inicio de sesión OAuth de la pasarela. SOLO PRUEBAS: en producción
+    // debe ser false (un PAT es un secreto de larga duración).
+    // ---------------------------------------------------------
+    allowDatabricksPat: true,
+
+    // Precio on-demand de BigQuery por TiB facturado (USD) para estimar el
+    // coste de cada consulta en el Diagnóstico. 6,25 es el precio de lista
+    // en EE. UU.; en otras regiones varía. Con reservas/editions el coste
+    // real es la capacidad contratada: la estimación solo sirve para comparar.
+    bigqueryPricePerTiB: 6.25,
+
+    // ---------------------------------------------------------
     // Auditoría F-15: celdas de depuración de EDIT_REPORT (SQL, JSON de
     // resultados y trazas de planificación). En false no se guardan en el
     // libro; ponerlo a true solo para diagnosticar un problema.

@@ -72,6 +72,38 @@ function itemKey(item) {
     return item.attribute + "||" + item.value;
 }
 
+/*
+ * Clave de SELECCIÓN. En un árbol, un mismo miembro puede colgar de varias
+ * ramas (p. ej. la cuenta 100 bajo dos grupos distintos): con la clave por
+ * valor (atributo||valor), marcar un padre marcaba también ese miembro en
+ * las OTRAS ramas, y como allí su padre no estaba marcado, aparecía además
+ * como selección propia en la lista de la derecha y en el filtro. En el
+ * árbol se selecciona por NODO (#posición); en una lista plana, por valor.
+ */
+function selKey(item) {
+    return hasTree() ? "#" + item._idx : itemKey(item);
+}
+
+// Valores (atributo||valor) que aparecen en más de una rama del árbol.
+let duplicatedKeys = new Set();
+function indexDuplicates() {
+    const seen = new Set();
+    duplicatedKeys = new Set();
+    allItems.forEach(it => {
+        const k = itemKey(it);
+        if (seen.has(k)) duplicatedKeys.add(k); else seen.add(k);
+    });
+}
+
+// Ruta de antepasados de un nodo, de la raíz al padre: [{attribute, value}]
+function ancestorPath(item) {
+    const path = [];
+    for (let p = item._parent; p >= 0; p = allItems[p]._parent) {
+        path.unshift({ attribute: allItems[p].attribute, value: allItems[p].value });
+    }
+    return path;
+}
+
 function displayLabel(item) {
     if (!item) return "";
     const id = String(item.value);
@@ -132,14 +164,14 @@ function ancestorIdx(idx) {
 
 function selectNode(idx, set, other) {
     [idx, ...descendantIdx(idx)].forEach(i => {
-        const k = itemKey(allItems[i]);
+        const k = selKey(allItems[i]);
         set.add(k);
         other.delete(k);   // un valor no puede estar incluido Y excluido a la vez
     });
 }
 
 function deselectNode(idx, set) {
-    [idx, ...descendantIdx(idx), ...ancestorIdx(idx)].forEach(i => set.delete(itemKey(allItems[i])));
+    [idx, ...descendantIdx(idx), ...ancestorIdx(idx)].forEach(i => set.delete(selKey(allItems[i])));
 }
 
 // Precarga: los nodos guardados arrastran a sus descendientes.
@@ -147,7 +179,7 @@ function cascadeLoadedSelection() {
     if (!hasTree()) return;
     [includedValues, excludedValues].forEach(set => {
         const other = set === includedValues ? excludedValues : includedValues;
-        allItems.forEach((it, idx) => { if (set.has(itemKey(it))) selectNode(idx, set, other); });
+        allItems.forEach((it, idx) => { if (set.has(selKey(it))) selectNode(idx, set, other); });
     });
 }
 
@@ -157,13 +189,13 @@ function topSelectedKeys(set) {
     const out = [];
     const seen = new Set();
     allItems.forEach(it => {
-        const k = itemKey(it);
+        const k = selKey(it);
         if (!set.has(k) || seen.has(k)) return;
-        const parentSelected = it._parent >= 0 && set.has(itemKey(allItems[it._parent]));
+        const parentSelected = it._parent >= 0 && set.has(selKey(allItems[it._parent]));
         if (!parentSelected) { out.push(k); seen.add(k); }
     });
     // claves que no están en la lista (p. ej. de un filtro antiguo): se mantienen
-    set.forEach(k => { if (!seen.has(k) && !allItems.some(it => itemKey(it) === k)) out.push(k); });
+    set.forEach(k => { if (!seen.has(k) && !k.startsWith("#")) out.push(k); });
     return out;
 }
 
@@ -174,8 +206,7 @@ function expandAncestorsOfSelected() {
     // cascada, no abren todo el subárbol)
     const top = new Set([...topSelectedKeys(includedValues), ...topSelectedKeys(excludedValues)]);
     allItems.forEach(it => {
-        const key = itemKey(it);
-        if (!top.has(key)) return;
+        if (!top.has(selKey(it))) return;
         let p = it._parent;
         while (p >= 0) { expandedNodes.add(p); p = allItems[p]._parent; }
     });
@@ -291,7 +322,7 @@ function render(items, searching) {
     const frag = document.createDocumentFragment();
 
     items.forEach((item) => {
-        const key = itemKey(item);
+        const key = selKey(item);
 
         const row = document.createElement("div");
         row.className = "modal-item-row";
@@ -363,7 +394,7 @@ function render(items, searching) {
         if (checkbox.checked) row.classList.add("selected");
         // Marcado solo porque su padre lo está: es visual, el filtro usa el
         // padre (al aplicar solo se envían los nodos de arriba, topSelectedKeys)
-        if (tree && checkbox.checked && item._parent >= 0 && activeSet.has(itemKey(allItems[item._parent]))) {
+        if (tree && checkbox.checked && item._parent >= 0 && activeSet.has(selKey(allItems[item._parent]))) {
             row.classList.add("inherited");
             row.title = "Incluido por su nodo padre (el filtro usa el padre)";
         }
@@ -416,7 +447,7 @@ function selectAllVisible() {
     const other = otherValuesSet();
     visible.forEach(it => {
         if (hasTree() && typeof it._idx === "number") { selectNode(it._idx, activeSet, other); return; }
-        const key = itemKey(it);
+        const key = selKey(it);
         activeSet.add(key);
         other.delete(key);
     });
@@ -470,7 +501,7 @@ function rangeLabel(r) {
 
 function renderChips() {
     const container = document.getElementById("modalSelectedChips");
-    const byKey = new Map(allItems.map(it => [itemKey(it), it]));
+    const byKey = new Map(allItems.map(it => [selKey(it), it]));
 
     const chips = [];
 
@@ -563,7 +594,18 @@ function preloadCurrentFilter(currentFilter) {
     };
     const addItems = (items, include) => {
         const set = include ? includedValues : excludedValues;
-        (items || []).forEach(it => set.add(it.attribute + "||" + it.value));
+        (items || []).forEach(it => {
+            const key = it.attribute + "||" + it.value;
+            if (!hasTree()) { set.add(key); return; }
+            const samePath = (node) => {
+                const path = ancestorPath(node);
+                return path.length === it.path.length && path.every((p, i) =>
+                    String(p.attribute) === String(it.path[i].attribute) && String(p.value) === String(it.path[i].value));
+            };
+            const nodes = allItems.filter(n => itemKey(n) === key && (!Array.isArray(it.path) || samePath(n)));
+            if (nodes.length) nodes.forEach(n => set.add(selKey(n)));
+            else set.add(key);   // ya no está en la lista: se conserva tal cual
+        });
     };
     const addRangeEntry = (from, to, include) => {
         if ((from === undefined || from === "") && (to === undefined || to === "")) return;
@@ -602,13 +644,25 @@ function apply() {
         return;
     }
 
-    const byKey = new Map(allItems.map(it => [itemKey(it), it]));
+    const byKey = new Map(allItems.map(it => [selKey(it), it]));
     let result;
 
     if (isHierarchy) {
         // Solo los nodos «de arriba»: el padre ya incluye a sus hijos
-        const toItems = (set) => topSelectedKeys(set).map(k => byKey.get(k)).filter(Boolean)
-            .map(it => ({ attribute: it.attribute, value: it.value }));
+        const toItems = (set) => topSelectedKeys(set).map(k => {
+            const it = byKey.get(k);
+            if (it) {
+                const out = { attribute: it.attribute, value: it.value };
+                // Miembro repetido en otra rama: se envía su ruta para que el
+                // filtro afecte SOLO a la rama elegida (ver commands.js,
+                // buildHierarchyListCondition).
+                if (duplicatedKeys.has(itemKey(it)) && it._parent >= 0) out.path = ancestorPath(it);
+                return out;
+            }
+            // Clave de un filtro antiguo que ya no está en la lista: se mantiene
+            const i = k.indexOf("||");
+            return i > 0 ? { attribute: k.slice(0, i), value: k.slice(i + 2) } : null;
+        }).filter(Boolean);
         result = {
             mode: "list",
             items: toItems(includedValues),
@@ -693,6 +747,7 @@ Office.onReady(() => {
             isHierarchy = !!fieldData.isHierarchy;
 
             indexTree(allItems);
+            indexDuplicates();
             hasTexts = allItems.some(it => it.label);
             try {
                 const saved = localStorage.getItem(DISPLAY_MODE_KEY);

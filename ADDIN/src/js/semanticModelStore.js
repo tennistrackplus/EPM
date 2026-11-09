@@ -369,6 +369,7 @@ window.DracoPlanningGate = {
     },
 
     canWrite() {
+        if (window.Provider && typeof Provider.canWrite === "function") return Provider.canWrite();
         return !(window.BQ && typeof BQ.canWriteBigQuery === "function") || BQ.canWriteBigQuery();
     },
 

@@ -57,7 +57,7 @@
             const calcs = {};
             attrs.forEach(a => { calcs[a] = opts.getCalcs(a) || []; });
 
-            const url = new URL("calcDialog.html", window.location.href).href;
+            const url = new URL("calcDialog.html?v=" + encodeURIComponent((typeof DRACO_BUILD !== "undefined" ? DRACO_BUILD : "1")), window.location.href).href;
             Office.context.ui.displayDialogAsync(url, { height: 72, width: 60, displayInIframe: false }, (res) => {
                 if (res.status === Office.AsyncResultStatus.Failed) {
                     console.error("Cálculos: displayDialogAsync ha fallado:", res.error && res.error.message);
@@ -106,7 +106,7 @@
             try {
                 const sql = await window.ExcelService.buildFilterValuesSQL(dimension, attribute);
                 if (!sql) throw new Error("No se encuentra el atributo en el modelo.");
-                const json = await window.ExcelService.executeSQL(sql);
+                const json = await window.ExcelService.executeSQL(sql, "Editor de cálculos");
                 const items = (typeof loadJsonTree === "function") ? loadJsonTree(json) : [];
                 const members = Array.from(new Set(items.map(i => String(i.value)))).slice(0, 5000);
                 return { members, visible, error: null };
