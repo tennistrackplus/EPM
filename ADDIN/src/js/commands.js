@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-11-11-estatico-valor-json";
+const DRACO_BUILD = "2026-11-11-niveles-estaticos";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -929,7 +929,15 @@ async function dracoEditReportPhysicalGrid(context) {
  * Devuelve la misma forma que getFormulaGrid (las celdas no leídas quedan
  * vacías), así que readRowDefinitions/readColumnDefinitions no cambian.
  */
-async function dracoAxisFormulaGrid(context, sheetName, editReportGrid) {
+async function dracoAxisFormulaGrid(context, sheetName, editReportGrid, rowLevels, colLevels) {
+    // Niveles de cada eje (ReportState.AttrColumnCount / AttrRowCount, con
+    // loadReportDefinition ya hecho): un eje Estático con varios niveles
+    // ocupa VARIAS columnas (Filas) o VARIAS filas (Columnas), y
+    // readRowDefinitions/readColumnDefinitions las leen todas. Sin ese dato
+    // se lee la hoja entera, como antes.
+    const nRowLevels = Math.max(1, parseInt(rowLevels, 10) || 0);
+    const nColLevels = Math.max(1, parseInt(colLevels, 10) || 0);
+    if (!(parseInt(rowLevels, 10) >= 0) || !(parseInt(colLevels, 10) >= 0)) return getFormulaGrid(context, sheetName);
     let rowAxis = null, colAxis = null;
     try {
         const h10 = String(cellValue(editReportGrid, 10, 8) || "").trim();
@@ -950,27 +958,38 @@ async function dracoAxisFormulaGrid(context, sheetName, editReportGrid) {
     const formulas = [];
     for (let i = 0; i < nRows; i++) formulas.push([]);
 
-    let colRange = null, rowRange = null;
-    if (rowAxis && rowAxis.col - 1 >= startCol && rowAxis.col - 1 < startCol + nCols) {
-        colRange = sheet.getRangeByIndexes(startRow, rowAxis.col - 1, nRows, 1);
-        colRange.load("formulas");
+    // Franja de Filas: columnas H10 .. H10+niveles-1 (todas las filas usadas).
+    // Franja de Columnas: filas N10 .. N10+niveles-1 (todas las columnas usadas).
+    // Recortadas al rango usado.
+    let colRange = null, rowRange = null, c0 = 0, r0 = 0;
+    if (rowAxis) {
+        const a = Math.max(rowAxis.col - 1, startCol), b = Math.min(rowAxis.col - 1 + nRowLevels - 1, startCol + nCols - 1);
+        if (b >= a) {
+            c0 = a - startCol;
+            colRange = sheet.getRangeByIndexes(startRow, a, nRows, b - a + 1);
+            colRange.load("formulas");
+        }
     }
-    if (colAxis && colAxis.row - 1 >= startRow && colAxis.row - 1 < startRow + nRows) {
-        rowRange = sheet.getRangeByIndexes(colAxis.row - 1, startCol, 1, nCols);
-        rowRange.load("formulas");
+    if (colAxis) {
+        const a = Math.max(colAxis.row - 1, startRow), b = Math.min(colAxis.row - 1 + nColLevels - 1, startRow + nRows - 1);
+        if (b >= a) {
+            r0 = a - startRow;
+            rowRange = sheet.getRangeByIndexes(a, startCol, b - a + 1, nCols);
+            rowRange.load("formulas");
+        }
     }
     if (colRange || rowRange) await context.sync();
     if (colRange) {
-        const c = rowAxis.col - 1 - startCol;
-        colRange.formulas.forEach((row, i) => { formulas[i][c] = row[0]; });
+        colRange.formulas.forEach((row, i) => { row.forEach((v, k) => { formulas[i][c0 + k] = v; }); });
     }
     if (rowRange) {
-        const r = colAxis.row - 1 - startRow;
-        const line = rowRange.formulas[0] || [];
-        for (let c = 0; c < line.length; c++) {
-            if (formulas[r][c] === undefined) formulas[r][c] = line[c];
-        }
-        formulas[r].length = Math.max(formulas[r].length, line.length);
+        rowRange.formulas.forEach((line, k) => {
+            const r = r0 + k;
+            for (let c = 0; c < line.length; c++) {
+                if (formulas[r][c] === undefined) formulas[r][c] = line[c];
+            }
+            formulas[r].length = Math.max(formulas[r].length, line.length);
+        });
     }
     return { formulas, startRow, startCol, sheetName };
 }
@@ -3317,10 +3336,9 @@ async function dracoBuildFixedSQL(reportId) {
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
         const resultSheetName = await getDracoResultSheetName(context, reportId);   // por sus rangos con nombre (sobrevive a renombrar la hoja)
         await ensureDracoResultSheetExists(context, resultSheetName);
-        const csvGrid = await dracoAxisFormulaGrid(context, resultSheetName, editReportGrid);
+        loadReportDefinition(editReportGrid, reportId);   // antes de leer la hoja: da el número de niveles de cada eje
+        const csvGrid = await dracoAxisFormulaGrid(context, resultSheetName, editReportGrid, ReportState.AttrColumnCount, ReportState.AttrRowCount);
         tSub = draco_perfMark(reportId, "  Leer hoja de resultados (fórmulas)", tSub);
-
-        loadReportDefinition(editReportGrid, reportId);
 
         sql = await buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid);
         tSub = draco_perfMark(reportId, "  loadReportDefinition + buildSQLFixed (JS puro)", tSub);
@@ -4520,9 +4538,8 @@ async function dracoBuildHybridSQL(reportId) {
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
         const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
         await ensureDracoResultSheetExists(context, resultSheetName);
-        const csvGrid = await dracoAxisFormulaGrid(context, resultSheetName, editReportGrid);
-
-        loadReportDefinition(editReportGrid, reportId);
+        loadReportDefinition(editReportGrid, reportId);   // antes de leer la hoja: da el número de niveles de cada eje
+        const csvGrid = await dracoAxisFormulaGrid(context, resultSheetName, editReportGrid, ReportState.AttrColumnCount, ReportState.AttrRowCount);
         built = await buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid, reportId);
         await context.sync();
     });
@@ -6733,7 +6750,7 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         }
 
         const range = namedRange.getRange();
-        range.load(["values", "text", "formulas", "rowCount", "columnCount", "rowIndex", "columnIndex"]);
+        range.load(["values", "text", "formulas", "numberFormat", "rowCount", "columnCount", "rowIndex", "columnIndex"]);
         await context.sync();
 
         // Valor CANÓNICO de cada celda pintada, tal como vino en el JSON del
@@ -6764,6 +6781,20 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
 
         const newFormulas = [];
         let changed = false;
+        // Estático -> Dinámico: la celda pasa a texto y Excel puede convertir
+        // «2026-06-01» en una fecha. Se guarda aquí el valor de la EPM_VALUE
+        // (como haría el pintado dinámico con el JSON) para que, si se vuelve
+        // a Estático sin refrescar, se recupere el valor exacto.
+        const EPM_ARGS_RE = /EPM_VALUE\s*\(\s*"((?:[^"]|"")*)"\s*,\s*"((?:[^"]|"")*)"\s*,\s*"((?:[^"]|"")*)"/i;
+        let cacheForDynamic = null;
+        if (!makeStatic) {
+            cacheForDynamic = DracoAxisCrossValues.get(reportId);
+            if (!cacheForDynamic) { cacheForDynamic = new Map(); DracoAxisCrossValues.set(reportId, cacheForDynamic); }
+            // Lo que hubiera de un pintado anterior en estas celdas ya no vale
+            for (let r = 0; r < range.rowCount; r++) {
+                for (let c = 0; c < range.columnCount; c++) cacheForDynamic.delete((range.rowIndex + r + 1) + "_" + (range.columnIndex + c + 1));
+            }
+        }
 
         for (let r = 0; r < range.rowCount; r++) {
             const rowOut = [];
@@ -6819,7 +6850,10 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
                                 try { atributesGridForDates = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES"); }
                                 catch (e) { atributesGridForDates = { values: [], startRow: 0, startCol: 0 }; }
                             }
-                            if (dracoPlanningValueIsDateType(resolveDracoPlanningDimensionType(atributesGridForDates, field.dim))) {
+                            const fmt = String((range.numberFormat[r] && range.numberFormat[r][c]) || "");
+                            // Formato de fecha de Excel (d/m/y), sin contar los de número u hora sola
+                            const looksDate = !/^(general|standard)$/i.test(fmt.trim()) && /[dy]/i.test(fmt.replace(/"[^"]*"|\[[^\]]*\]/g, ""));
+                            if (looksDate || dracoPlanningValueIsDateType(resolveDracoPlanningDimensionType(atributesGridForDates, field.dim))) {
                                 value = excelSerialToISODate(currentValue);
                             }
                         }
@@ -6839,6 +6873,12 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
                     const text = match ? match[1].replace(/""/g, '"') : String(currentValue);
                     rowOut.push(text);
                     changed = true;
+                    const args = !isMeasureFormula && cacheForDynamic ? currentFormula.match(EPM_ARGS_RE) : null;
+                    if (args) {
+                        cacheForDynamic.set((range.rowIndex + r + 1) + "_" + (range.columnIndex + c + 1), {
+                            dim: args[1].replace(/""/g, '"'), attr: args[2].replace(/""/g, '"'), value: args[3].replace(/""/g, '"')
+                        });
+                    }
                 }
             }
             newFormulas.push(rowOut);
@@ -6853,6 +6893,48 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
     } finally {
         DracoSuppressChangeEvents = false; DracoLastSelfWriteAt = Date.now();
     }
+}
+
+/**
+ * Miembros de las líneas EPM_VALUE de un eje (del informe activo), por campo:
+ * [{dim, attr, values}]. Sin medidas ni cálculos (no son miembros). Al pasar
+ * un eje de Estático a Dinámico el panel los pone en Filtros: en Estático
+ * los filtros de esas dimensiones no se aplican (filtran las líneas), así
+ * que sin esto el Dinámico enseñaría todos los miembros.
+ */
+async function dracoCollectAxisStaticMembers(axis) {
+    const reportId = activeReportIdOrNull();
+    const rangeName = axis === "rows" ? dracoRangeNames(reportId).rows : dracoRangeNames(reportId).cols;
+    const groups = new Map();
+    await Excel.run(async (context) => {
+        const nm = context.workbook.names.getItemOrNullObject(rangeName);
+        nm.load("isNullObject");
+        await context.sync();
+        if (nm.isNullObject) return;
+        const rng = nm.getRange();
+        rng.load("formulas");
+        await context.sync();
+        const RE = /EPM_VALUE\s*\(\s*"((?:[^"]|"")*)"\s*,\s*"((?:[^"]|"")*)"\s*,\s*"((?:[^"]|"")*)"/i;
+        const un = (x) => x.replace(/""/g, '"');
+        const calcNames = new Map();   // dim|attr -> Set(nombres de cálculo)
+        rng.formulas.forEach(row => row.forEach(f => {
+            const m = typeof f === "string" ? f.match(RE) : null;
+            if (!m) return;
+            const dim = un(m[1]), attr = un(m[2]), value = un(m[3]);
+            if (!dim || dim.toUpperCase() === "MEASURE" || value === "") return;
+            const key = dim.toUpperCase() + "|" + attr.toUpperCase();
+            if (!calcNames.has(key)) {
+                const set = new Set();
+                try { dracoCalcsForField(reportId, dim, attr).forEach(({ calc }) => set.add(String(calc.name || "").toUpperCase())); } catch (e) { /* sin cálculos */ }
+                calcNames.set(key, set);
+            }
+            if (calcNames.get(key).has(value.toUpperCase())) return;
+            if (!groups.has(key)) groups.set(key, { dim, attr, values: [] });
+            const g = groups.get(key);
+            if (g.values.indexOf(value) === -1) g.values.push(value);
+        }));
+    });
+    return Array.from(groups.values());
 }
 
 // Convierte un número de columna (1-based) en letras de columna Excel ("A", "AB"...)
@@ -12725,7 +12807,7 @@ async function actualizarTodos(event) {
 window.ReportActions = {
     actualizar, actualizarInforme, actualizarInformeFixed, actualizarTodos,
     toggleRefreshPaused, toggleMemberRecognition, openReportProperties, openFieldOptions,
-    convertAxisStaticFormulas, repaintAxisIfHiddenIds, ensureDracoHandlersRegistered,
+    convertAxisStaticFormulas, repaintAxisIfHiddenIds, ensureDracoHandlersRegistered, dracoCollectAxisStaticMembers,
     // "Añadir filtro" (rango con nombre sobre una celda cualquiera del libro)
     dracoFilterRangeName,
     resolveDracoFilterRangeAddress, openDracoFilterRangePicker,
@@ -12800,9 +12882,8 @@ function summarizeDracoFilterValue(rawValue) {
 async function loadDracoPlanningCrossContext(context, reportId) {
     const editReportGrid = await getEditReportGrid(context, reportId);
     const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
-    const csvGrid = await dracoAxisFormulaGrid(context, resultSheetName, editReportGrid);
-
-    loadReportDefinition(editReportGrid, reportId); // rellena ReportState (incluye Filters)
+    loadReportDefinition(editReportGrid, reportId); // rellena ReportState (incluye Filters); antes de leer la hoja (niveles)
+    const csvGrid = await dracoAxisFormulaGrid(context, resultSheetName, editReportGrid, ReportState.AttrColumnCount, ReportState.AttrRowCount);
 
     // Variables ($X$) -> su valor real: la planificación escribe con él.
     const resolveVars = (defs) => window.DracoVariables

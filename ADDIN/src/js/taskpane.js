@@ -1111,8 +1111,11 @@ const TaskPaneApp = {
                 this.updateStaticLabel("rows");
                 this.setZoneLocked("rows", this.state.rowsStatic);
                 this.refreshStaticFilterLock();
+                // Estático -> Dinámico: los miembros de las líneas pasan a Filtros
+                const staticMembers = this.state.rowsStatic ? [] : await this.collectStaticMembers("rows");
                 await this.applyAxisStaticFormulas("rows", this.state.rowsStatic);
                 this.saveDesignOnly();
+                if (staticMembers.length) await this.staticMembersToFilters(staticMembers);
             });
         }
         if (chkCols) {
@@ -1121,8 +1124,11 @@ const TaskPaneApp = {
                 this.updateStaticLabel("cols");
                 this.setZoneLocked("columns", this.state.colsStatic);
                 this.refreshStaticFilterLock();
+                // Estático -> Dinámico: los miembros de las líneas pasan a Filtros
+                const staticMembers = this.state.colsStatic ? [] : await this.collectStaticMembers("columns");
                 await this.applyAxisStaticFormulas("columns", this.state.colsStatic);
                 this.saveDesignOnly();
+                if (staticMembers.length) await this.staticMembersToFilters(staticMembers);
             });
         }
 
@@ -1498,6 +1504,30 @@ const TaskPaneApp = {
      * pintada no hace nada (se pintará ya en el modo correcto en el
      * próximo refresco). No bloquea la UI: los errores solo se registran.
      */
+    /** Miembros de las líneas EPM_VALUE del eje (antes de pasarlo a texto). */
+    async collectStaticMembers(axis) {
+        try {
+            if (window.ReportActions && window.ReportActions.dracoCollectAxisStaticMembers) {
+                return await window.ReportActions.dracoCollectAxisStaticMembers(axis);
+            }
+        } catch (err) {
+            console.warn("No se pudieron leer los miembros del eje estático:", err);
+        }
+        return [];
+    },
+
+    /**
+     * Al pasar un eje de Estático a Dinámico, sus líneas dejan de filtrar:
+     * los miembros que tenía cada dimensión pasan a Filtros (sustituyen al
+     * filtro de esa dimensión si ya lo había, que en Estático no se aplicaba),
+     * para que el Dinámico enseñe lo mismo que el Estático.
+     */
+    async staticMembersToFilters(items) {
+        if (!this.currentReportId || !items.length) return;
+        await this.setFilterValues(this.currentReportId, items);
+        this.refreshStaticFilterLock(false);
+    },
+
     async applyAxisStaticFormulas(axis, isStatic) {
         try {
             // "Solo texto": con IDs ocultos no se puede convertir celda a celda
