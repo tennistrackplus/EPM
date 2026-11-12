@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-11-09-diario-consultas-paralelo";
+const DRACO_BUILD = "2026-11-11-estatico-valor-json";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -75,6 +75,9 @@ async function flushDracoLog() {
     if (DracoLogFlushing) { scheduleDracoLogFlush(); return; }
     if (!DracoLogDirty) return;
     if (!dracoDiagOn()) return; // solo con Diagnóstico activo (el log sigue en memoria y en la consola)
+    // Durante un refresco no se escribe (escribir en Excel a la vez que se
+    // pinta ralentizaba el pintado): se vuelca al terminar.
+    if (dracoRefreshInProgress()) { scheduleDracoLogFlush(); return; }
     DracoLogFlushing = true;
     DracoLogDirty = false;
     const snapshot = DracoLogLines.slice();
@@ -530,6 +533,12 @@ function busyStepLabel(reportId, phase) {
 let DracoPerfLog = [];
 let DracoPerfLogDepth = 0;
 
+/** ¿Hay un refresco de informes en curso? (los volcados del Diagnóstico esperan a que acabe) */
+function dracoRefreshInProgress() {
+    return DracoPerfLogDepth > 0;
+}
+window.dracoRefreshInProgress = dracoRefreshInProgress;
+
 function beginDracoPerfLog() {
     DracoPerfLogDepth++;
     if (DracoPerfLogDepth === 1) DracoPerfLog = [];
@@ -557,7 +566,7 @@ async function endDracoPerfLog() {
     } catch (e) {
         console.error("[Draco] No se pudo escribir el registro de tiempos en EDIT_REPORT!Z1:", e);
     } finally {
-        DracoSuppressChangeEvents = false;
+        DracoSuppressChangeEvents = false; DracoLastSelfWriteAt = Date.now();
     }
 }
 
@@ -881,7 +890,7 @@ function mergeEditReportGrid(physicalGrid, designGrid) {
 // momento (necesario para "Refrescar todos", que recorre varios informes
 // uno a uno).
 async function getEditReportGrid(context, reportIdOverride) {
-    const physicalGrid = await getValuesGrid(context, "EDIT_REPORT");
+    const physicalGrid = await dracoEditReportPhysicalGrid(context);
     const reportId = reportIdOverride !== undefined ? reportIdOverride : activeReportIdOrNull();
     // Mantiene al día las columnas de "ID y texto" (y las jerarquías) con el
     // modelo semántico actual aunque el informe no se haya vuelto a guardar.
@@ -893,6 +902,77 @@ async function getEditReportGrid(context, reportIdOverride) {
         ? window.ReportStore.getReportGrid(reportId)
         : { values: [], startRow: 0, startCol: 0 };
     return mergeEditReportGrid(physicalGrid, designGrid);
+}
+
+/**
+ * EDIT_REPORT física, SOLO columnas A:Z: es todo lo que usa
+ * mergeEditReportGrid (maxCol = 26). Antes se leía el rango usado entero,
+ * y con el Diagnóstico activo eso incluye el log (AA) y el diario de
+ * consultas (AD:AQ) con SQL y resultados de miles de caracteres: megas de
+ * datos en cada lectura, varias veces por informe.
+ */
+async function dracoEditReportPhysicalGrid(context) {
+    const sheet = context.workbook.worksheets.getItem("EDIT_REPORT");
+    const used = sheet.getRange("A:Z").getUsedRangeOrNullObject();
+    used.load(["values", "rowIndex", "columnIndex", "isNullObject"]);
+    await context.sync();
+    if (used.isNullObject) return { values: [], startRow: 0, startCol: 0 };
+    return { values: used.values, startRow: used.rowIndex, startCol: used.columnIndex };
+}
+
+/**
+ * Fórmulas de la hoja de resultados que necesita generar el SQL de un
+ * informe Fijo/Híbrido: SOLO la columna de las líneas de filas (EDIT_REPORT!H10)
+ * y la fila de las líneas de columnas (N10), no toda la hoja. Antes se
+ * cargaban las fórmulas de todo el rango usado, incluida el área de valores
+ * ya pintada (miles de celdas), dos veces por informe en «Actualizar todos».
+ * Devuelve la misma forma que getFormulaGrid (las celdas no leídas quedan
+ * vacías), así que readRowDefinitions/readColumnDefinitions no cambian.
+ */
+async function dracoAxisFormulaGrid(context, sheetName, editReportGrid) {
+    let rowAxis = null, colAxis = null;
+    try {
+        const h10 = String(cellValue(editReportGrid, 10, 8) || "").trim();
+        const n10 = String(cellValue(editReportGrid, 10, 14) || "").trim();
+        if (h10) rowAxis = parseAddress(h10);
+        if (n10) colAxis = parseAddress(n10);
+    } catch (e) {
+        return getFormulaGrid(context, sheetName);   // dirección rara: como antes
+    }
+    const sheet = context.workbook.worksheets.getItem(sheetName);
+    const used = sheet.getUsedRangeOrNullObject();
+    used.load(["rowIndex", "columnIndex", "rowCount", "columnCount", "isNullObject"]);
+    await context.sync();
+    if (used.isNullObject) return { formulas: [], startRow: 0, startCol: 0, sheetName };
+
+    const startRow = used.rowIndex, startCol = used.columnIndex;
+    const nRows = used.rowCount, nCols = used.columnCount;
+    const formulas = [];
+    for (let i = 0; i < nRows; i++) formulas.push([]);
+
+    let colRange = null, rowRange = null;
+    if (rowAxis && rowAxis.col - 1 >= startCol && rowAxis.col - 1 < startCol + nCols) {
+        colRange = sheet.getRangeByIndexes(startRow, rowAxis.col - 1, nRows, 1);
+        colRange.load("formulas");
+    }
+    if (colAxis && colAxis.row - 1 >= startRow && colAxis.row - 1 < startRow + nRows) {
+        rowRange = sheet.getRangeByIndexes(colAxis.row - 1, startCol, 1, nCols);
+        rowRange.load("formulas");
+    }
+    if (colRange || rowRange) await context.sync();
+    if (colRange) {
+        const c = rowAxis.col - 1 - startCol;
+        colRange.formulas.forEach((row, i) => { formulas[i][c] = row[0]; });
+    }
+    if (rowRange) {
+        const r = colAxis.row - 1 - startRow;
+        const line = rowRange.formulas[0] || [];
+        for (let c = 0; c < line.length; c++) {
+            if (formulas[r][c] === undefined) formulas[r][c] = line[c];
+        }
+        formulas[r].length = Math.max(formulas[r].length, line.length);
+    }
+    return { formulas, startRow, startCol, sheetName };
 }
 
 async function getFormulaGrid(context, sheetName) {
@@ -2654,7 +2734,30 @@ function rowsToPseudoBqJson(rows) {
  *  - Diario de consultas del Diagnóstico (js/queryJournal.js): tipo,
  *    duración, filas, volumen y coste de cada consulta.
  * ------------------------------------------------------------------- */
-const DracoSqlPrefetch = new Map();   // sql -> Promise<texto JSON>
+const DracoSqlPrefetch = new Map();          // sql -> Promise<texto JSON>
+const DracoSqlPrefetchByReport = new Map();  // reportId -> sql adelantado (para avisar si ya no coincide)
+
+/** ¿Tiene este informe una consulta adelantada por «Actualizar todos»? */
+function dracoPrefetchPending(reportId) {
+    return DracoSqlPrefetchByReport.has(reportId);
+}
+
+/**
+ * Texto del indicador al llegar a la consulta: si ya se hizo en paralelo
+ * solo se recoge el resultado. Si el SQL ha cambiado desde que se adelantó
+ * (p. ej. al pintar otro informe se movió este), se avisa en el log y se
+ * consulta de nuevo: el resultado adelantado ya no valdría.
+ */
+function dracoPrefetchLabel(reportId, sql) {
+    const pre = DracoSqlPrefetchByReport.get(reportId);
+    DracoSqlPrefetchByReport.delete(reportId);
+    if (pre && pre === sql && DracoSqlPrefetch.has(sql)) {
+        dracoLog(`Informe ${reportId}: se reutiliza la consulta hecha en paralelo (sin volver a consultar).`);
+        return "Recogiendo resultado (ya consultado)";
+    }
+    if (pre) dracoLog(`Informe ${reportId}: el SQL cambió desde que se adelantó la consulta; se consulta de nuevo.`);
+    return "Ejecutando consulta";
+}
 
 async function executeSQL(sql, billingProjectId, kind) {
     if (typeof sql === "string" && DracoSqlPrefetch.has(sql)) {
@@ -3214,7 +3317,7 @@ async function dracoBuildFixedSQL(reportId) {
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
         const resultSheetName = await getDracoResultSheetName(context, reportId);   // por sus rangos con nombre (sobrevive a renombrar la hoja)
         await ensureDracoResultSheetExists(context, resultSheetName);
-        const csvGrid = await getFormulaGrid(context, resultSheetName);
+        const csvGrid = await dracoAxisFormulaGrid(context, resultSheetName, editReportGrid);
         tSub = draco_perfMark(reportId, "  Leer hoja de resultados (fórmulas)", tSub);
 
         loadReportDefinition(editReportGrid, reportId);
@@ -3264,7 +3367,7 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     // la vez: no se quita hasta que TODAS las llamadas a show() tengan su
     // hide(). if (window.BusyIndicator) por si esta página (commands.html
     // vs taskpane.html) no lo tiene cargado.
-    if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(reportId, "Generando SQL"));
+    if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(reportId, dracoPrefetchPending(reportId) ? "Preparando pintado" : "Generando SQL"));
     tPerf = draco_perfMark(reportId, "Mostrar indicador (crear forma)", tPerf);
 
     // Ver comentario junto a DracoSuppressPlanningPaintCount: mientras
@@ -3280,13 +3383,13 @@ async function actualizarInformeFixedCore(reportIdOverride) {
     tPerf = draco_perfMark(reportId, "Generando SQL", tPerf);
 
     // 2) ExecuteSQL contra BigQuery
-    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
+    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, dracoPrefetchLabel(reportId, sql)));
     const json = await executeSQL(sql, undefined, "Informe (fijo)");
     tPerf = draco_perfMark(reportId, "Ejecutando consulta (red)", tPerf);
 
     // [Punto 8] SQL y JSON generados ya NO se escriben en A1/B1 de la hoja
     // de resultados: se escriben en EDIT_REPORT!X1 (SQL) e Y1 (JSON).
-    await Excel.run(async (context) => {
+    if (dracoDiagOn()) await Excel.run(async (context) => {
         const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
         editReportSheet.getRange("X1").values = [[draco_debugCell(typeof sql === "string" ? sql : sql.text)]];
 
@@ -4417,7 +4520,7 @@ async function dracoBuildHybridSQL(reportId) {
         const atributesGrid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES");
         const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
         await ensureDracoResultSheetExists(context, resultSheetName);
-        const csvGrid = await getFormulaGrid(context, resultSheetName);
+        const csvGrid = await dracoAxisFormulaGrid(context, resultSheetName, editReportGrid);
 
         loadReportDefinition(editReportGrid, reportId);
         built = await buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, atributesGrid, csvGrid, reportId);
@@ -4437,7 +4540,7 @@ async function actualizarInformeHybridCore(reportIdOverride) {
 
     await draco_beginManualCalculation();
     await flushDracoPlanningModifiedCells();
-    if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(reportId, "Generando SQL"));
+    if (window.BusyIndicator) await window.BusyIndicator.show(busyStepLabel(reportId, dracoPrefetchPending(reportId) ? "Preparando pintado" : "Generando SQL"));
     await beginSuppressPlanningPaint();
     try {
         const hb = await dracoBuildHybridSQL(reportId);
@@ -4447,12 +4550,12 @@ async function actualizarInformeHybridCore(reportIdOverride) {
 
         let json = "";
         if (built.sql) {
-            if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Ejecutando consulta"));
+            if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, dracoPrefetchLabel(reportId, built.sql)));
             json = await executeSQL(built.sql, undefined, "Informe (híbrido)");
             tPerf = draco_perfMark(reportId, "Híbrido: ejecutando consulta (red)", tPerf);
         }
 
-        await Excel.run(async (context) => {
+        if (dracoDiagOn()) await Excel.run(async (context) => {
             const editReportSheet = context.workbook.worksheets.getItem("EDIT_REPORT");
             editReportSheet.getRange("X1").values = [[draco_debugCell(built.sql || "(Híbrido: el eje Estático no tiene ninguna línea EPM_VALUE todavía)")]];
             const LIMIT = 32000;
@@ -5794,6 +5897,7 @@ function getDracoIndicatorMap(reportId) {
 // hoja de resultados distinta que se vaya usando.
 const DracoHandlerRegisteredSheets = new Set();
 let DracoEditReportHandlerRegistered = false; // evita registrar el listener de EDIT_REPORT!A5 (picker) más de una vez — INDEPENDIENTE de lo anterior: no depende de que exista ninguna hoja de resultados ni de que se haya refrescado nunca
+let DracoLastSelfWriteAt = 0;     // fin de la última escritura propia (ver dracoQueueBulkRecognition)
 let DracoSuppressChangeEvents = false; // true mientras jsonTo3Matrices pinta celdas (evita que el reconocimiento de miembros reaccione a nuestras propias escrituras)
 
 // true mientras handleDracoPickerFlagRequest está procesando de verdad una
@@ -6392,7 +6496,7 @@ function ensureDracoFnMode() {
                     DracoFnPrefix = xlam ? "" : "DRACO.";
                     decided = true;
                 } finally {
-                    DracoSuppressChangeEvents = false;
+                    DracoSuppressChangeEvents = false; DracoLastSelfWriteAt = Date.now();
                 }
             });
         } catch (e) {
@@ -6437,7 +6541,7 @@ async function normalizeDracoFunctionNames() {
             });
             if (changed) await context.sync();
         } finally {
-            DracoSuppressChangeEvents = false;
+            DracoSuppressChangeEvents = false; DracoLastSelfWriteAt = Date.now();
         }
     });
     if (changed) dracoLog("Fórmulas EPM_* adaptadas a este equipo: " + changed);
@@ -6629,8 +6733,17 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
         }
 
         const range = namedRange.getRange();
-        range.load(["values", "text", "formulas", "rowCount", "columnCount"]);
+        range.load(["values", "text", "formulas", "rowCount", "columnCount", "rowIndex", "columnIndex"]);
         await context.sync();
+
+        // Valor CANÓNICO de cada celda pintada, tal como vino en el JSON del
+        // último refresco (DracoAxisCrossValues, el mismo que usa la
+        // planificación): lo que se ve en la celda puede no ser el valor. Una
+        // fecha se ve con el formato de Excel («15/03/2025», «mar-25» o
+        // incluso «####» si la columna es estrecha) y en «ID y texto» se ve
+        // «100 - Ventas». Antes la EPM_VALUE se construía con ese texto visto.
+        const crossCache = DracoAxisCrossValues.get(reportId) || null;
+        let atributesGridForDates = null;   // solo si hace falta (fecha sin valor canónico)
 
         // Profundidad real (indentLevel) de cada celda ya pintada: para una
         // jerarquía, cada fila/columna puede estar a un nivel distinto
@@ -6690,7 +6803,29 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
                         // vacío, Display = nombre de la medida.
                         rowOut.push(buildEpmValueFormula("MEASURE", field.attr, "", text));
                     } else {
-                        rowOut.push(buildEpmValueFormula(field.dim, field.attr, text));
+                        // Valor: el del JSON si esa celda se pintó con este mismo
+                        // campo; si no (sin refresco previo en esta sesión), una
+                        // fecha guardada como número de serie se pasa a AAAA-MM-DD
+                        // (como en la planificación); si tampoco, el texto visto.
+                        const key = (range.rowIndex + r + 1) + "_" + (range.columnIndex + c + 1);
+                        const cached = crossCache ? crossCache.get(key) : null;
+                        const same = cached && String(cached.dim).toUpperCase() === String(field.dim).toUpperCase()
+                            && String(cached.attr).toUpperCase() === String(field.attr).toUpperCase();
+                        let value = text;
+                        if (same && cached.value !== undefined && cached.value !== null && cached.value !== "") {
+                            value = String(cached.value);
+                        } else if (typeof currentValue === "number") {
+                            if (!atributesGridForDates) {
+                                try { atributesGridForDates = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES"); }
+                                catch (e) { atributesGridForDates = { values: [], startRow: 0, startCol: 0 }; }
+                            }
+                            if (dracoPlanningValueIsDateType(resolveDracoPlanningDimensionType(atributesGridForDates, field.dim))) {
+                                value = excelSerialToISODate(currentValue);
+                            }
+                        }
+                        // Lo que se ve se conserva como texto de la celda (salvo «####»)
+                        const display = text && !/^#+$/.test(text) && text !== value ? text : undefined;
+                        rowOut.push(buildEpmValueFormula(field.dim, field.attr, value, display));
                     }
                     changed = true;
                 } else {
@@ -6716,7 +6851,7 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
     });
 
     } finally {
-        DracoSuppressChangeEvents = false;
+        DracoSuppressChangeEvents = false; DracoLastSelfWriteAt = Date.now();
     }
 }
 
@@ -7104,7 +7239,7 @@ async function openDracoFilterRangePicker(addr, sheetName, rangeName, meta) {
                         } catch (err) {
                             console.error("[Draco] Añadir filtro: error pintando el filtro en la celda:", err);
                         } finally {
-                            DracoSuppressChangeEvents = false;
+                            DracoSuppressChangeEvents = false; DracoLastSelfWriteAt = Date.now();
                         }
                         // Si el taskpane está abierto (mismo contexto que
                         // commands.js), refresca la zona "Filtros" para que
@@ -8285,7 +8420,7 @@ async function writeDracoPlanningDebug(msg) {
     } catch (e) {
         console.error("[Draco] No se pudo escribir el diagnóstico en EDIT_REPORT!W1:", e);
     } finally {
-        DracoSuppressChangeEvents = false;
+        DracoSuppressChangeEvents = false; DracoLastSelfWriteAt = Date.now();
     }
 }
 
@@ -8957,7 +9092,7 @@ async function dracoMemberQuery(sql, tag) {
         // En el diario del Diagnóstico, para ver que no ha costado nada
         if (window.DracoQueryJournal) {
             window.DracoQueryJournal.record({ sql, kind: dracoMemberQueryKind(tag) + " (caché de Draco)", ms: 0,
-                cacheHit: true, rows: window.DracoQueryJournal.statsFromText(hit).rows, result: hit });
+                cacheHit: true, dracoCache: true, rows: window.DracoQueryJournal.statsFromText(hit).rows, result: hit });
         }
         return hit;
     }
@@ -9613,6 +9748,10 @@ async function readAndClearDracoPickerRequest(eventAddr, suppressedAtEvent) {
     if (!req) return;
 
     const tag = "[req#" + req.id + "]";
+    if (window.DracoBulkRecognition && window.DracoBulkRecognition.isActive()) {
+        dracoLog(tag, req.flag + " ignorado: hay un reconocimiento masivo en marcha");
+        return;
+    }
     if (req.flag === "REC" && !suppressedAtEvent && dracoRecIsDuplicate(req.sheetName, req.targetAddr)) {
         dracoLog(tag, "REC del XLAM ignorado: ya lo ha detectado el add-in (se puede quitar App_SheetChange del XLAM)");
         return;
@@ -9645,6 +9784,10 @@ function dracoRecIsDuplicate(sheetName, targetAddr) {
     return false;
 }
 function queueDracoPickerRequest(sheetName, targetAddr, flag, fromButton) {
+    if (window.DracoBulkRecognition && window.DracoBulkRecognition.isActive()) {
+        dracoLog(flag + " de " + sheetName + "!" + targetAddr + " ignorado: hay un reconocimiento masivo en marcha");
+        return;
+    }
     if (flag === "REC" && dracoRecIsDuplicate(sheetName, targetAddr)) {
         dracoLog("REC JS de " + sheetName + "!" + targetAddr + " ignorado: aviso repetido (XLAM antiguo o la misma edición)");
         return;
@@ -9664,7 +9807,8 @@ function queueDracoPickerRequest(sheetName, targetAddr, flag, fromButton) {
  * ¿es una celda de Filas/Columnas de un informe?, ¿es una fórmula?) lo hace
  * runDracoMemberRecognitionAction, igual que con el XLAM. Funciona también
  * en Excel online. Se ignoran: EDIT_REPORT, los cambios de otros usuarios
- * (coautoría), las celdas vaciadas y los rangos (pegar/rellenar).
+ * (coautoría) y las celdas vaciadas. Los rangos (pegar/rellenar) van al
+ * reconocimiento MASIVO (dracoQueueBulkRecognition, js/bulkRecognition.js).
  * Si un XLAM antiguo sigue enviando REC por EDIT_REPORT!T2:V2, ese duplicado
  * se descarta (ver readAndClearDracoPickerRequest).
  * --------------------------------------------------------------------- */
@@ -9692,8 +9836,15 @@ async function handleDracoSheetEdited(ev) {
         if (!ev || DracoSuppressChangeEvents) return;
         if (ev.changeType && ev.changeType !== "RangeEdited") return;
         if (ev.source && ev.source !== "Local") return;
+        // Mientras dura un reconocimiento MASIVO no se atiende nada más (las
+        // EPM_VALUE que escribe él mismo también disparan este evento).
+        if (window.DracoBulkRecognition && window.DracoBulkRecognition.isActive()) return;
         const addr = String(ev.address || "");
-        if (!addr || addr.indexOf(":") !== -1) return;      // solo una celda
+        if (!addr) return;
+        if (addr.indexOf(":") !== -1) {                     // varias celdas (pegar/rellenar)
+            dracoQueueBulkRecognition(ev, addr);
+            return;
+        }
         const after = ev.details ? ev.details.valueAfter : undefined;
         if (after === "" || after === null) return;          // celda vaciada
         let sheetName = null;
@@ -9708,6 +9859,34 @@ async function handleDracoSheetEdited(ev) {
     } catch (e) {
         dracoLog("Reconocimiento de miembros (JS): " + dracoErrMsg(e));
     }
+}
+
+/**
+ * Pegado/relleno de VARIAS celdas: reconocimiento masivo (js/bulkRecognition.js).
+ * Filtros previos, para no reaccionar a escrituras del propio add-in (pintar
+ * un informe escribe rangos enteros): el aviso de Excel de que lo ha hecho
+ * este add-in (triggerSource, ExcelApi 1.14), el pintado en curso y
+ * cualquier refresco en marcha. El resto (¿reconocimiento activo?, ¿son
+ * celdas de un informe?, ¿fórmulas?) lo decide el propio reconocimiento.
+ */
+function dracoQueueBulkRecognition(ev, addr) {
+    if (!window.DracoBulkRecognition) return;
+    if (ev.triggerSource && ev.triggerSource !== "Unknown") return;   // "ThisLocalAddin": lo hemos escrito nosotros
+    if (DracoSuppressChangeEvents || dracoRefreshInProgress()) return;
+    // Excel puede entregar el aviso de un pintado justo DESPUÉS de bajar
+    // DracoSuppressChangeEvents (y sin triggerSource en versiones antiguas)
+    if (Date.now() - DracoLastSelfWriteAt < 2000) return;
+    const sheetId = ev.worksheetId;
+    Excel.run(async (context) => {
+        const sh = context.workbook.worksheets.getItemOrNullObject(sheetId);
+        sh.load(["isNullObject", "name"]);
+        await context.sync();
+        return sh.isNullObject ? null : sh.name;
+    }).then((sheetName) => {
+        if (!sheetName || sheetName.toUpperCase() === "EDIT_REPORT") return;
+        dracoLog("[BULK] pegado en " + sheetName + "!" + addr);
+        return window.DracoBulkRecognition.run(sheetName, addr);
+    }).catch((e) => dracoLog("Reconocimiento masivo: " + dracoErrMsg(e)));
 }
 
 async function runDracoPickerLoop() {
@@ -10087,7 +10266,7 @@ async function jsonTo3Matrices(context, json, reportId) {
     try {
         return await jsonTo3MatricesCore(context, json, reportId);
     } finally {
-        DracoSuppressChangeEvents = false;
+        DracoSuppressChangeEvents = false; DracoLastSelfWriteAt = Date.now();
     }
 }
 
@@ -12136,11 +12315,15 @@ async function dracoRefreshLinkGroup(mainId) {
         // Un vinculado recién creado (aún sin medidas) no se consulta ni se pinta: si no, su consulta
         // vacía haría fallar el refresco de todo el grupo, también el del principal.
         if (id !== mainId && q.empty) continue;
-        if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(id, "Ejecutando consulta"));
-        q.json = await executeSQL(q.sql, undefined, "Informe vinculado");
         parts.push(q);
         if (id !== mainId) painted.push(id);
     }
+    // Las consultas del grupo son independientes: van todas a la vez
+    const reused = parts.filter(q => DracoSqlPrefetch.has(q.sql)).length;
+    if (reused) dracoLog(`Grupo vinculado ${mainId}: ${reused} de ${parts.length} consulta(s) ya hechas en paralelo.`);
+    if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(mainId, reused === parts.length
+        ? "Recogiendo resultados (ya consultados)" : `Ejecutando ${parts.length - reused} consulta(s) en paralelo`));
+    await Promise.all(parts.map(async (q) => { q.json = await executeSQL(q.sql, undefined, "Informe vinculado"); }));
     const axis = linkedIds.length ? dracoLinkOf(linkedIds[0]).axis : "rows";
     const merged = painted.length ? dracoMergeLinkedResults(parts, axis) : parts.map(p => p.json);
     if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(mainId, "Pintando resultados"));
@@ -12352,7 +12535,23 @@ async function actualizarTodosCore(concurrency) {
         try {
             const reportId = r.id;
             if (dracoLinkMainId(reportId) !== null) continue;                     // vinculado: va con su principal
-            if (dracoLinkedOf(reportId).length) { linkGroups.push(reportId); continue; }
+            if (dracoLinkedOf(reportId).length) {
+                // Grupo vinculado: sus consultas se adelantan al lote paralelo
+                // (el grupo las recoge en su turno, ver DracoSqlPrefetch)
+                linkGroups.push(reportId);
+                try {
+                    const linkedIds = dracoLinkedOf(reportId);
+                    await dracoSyncLinkedDesigns(reportId, linkedIds);
+                    for (const id of [reportId, ...linkedIds]) {
+                        const q = await dracoBuildDynamicQuery(id);
+                        if (id !== reportId && q.empty) continue;
+                        if (q.sql) fixedReports.push({ reportId: id, reportName: r.name, mode: "link", sql: q.sql, prefetchOnly: true });
+                    }
+                } catch (err) {
+                    console.warn(`[Draco] No se pudieron adelantar las consultas del grupo vinculado "${r.name}"; se harán en su turno:`, err);
+                }
+                continue;
+            }
             if (window.BusyIndicator) await window.BusyIndicator.update(busyStepLabel(reportId, "Clasificando informe"));
             const mode = await Excel.run(async (context) => {
                 const grid = await getEditReportGrid(context, reportId);
@@ -12407,10 +12606,11 @@ async function actualizarTodosCore(concurrency) {
     //    vuelve a generar es idéntico; si no, consulta por su cuenta).
     const prefetchJobs = fixedReports.filter(f => f.sql && !DracoSqlPrefetch.has(f.sql)).map(f => {
         const job = { reportId: f.reportId, reportName: f.reportName, sql: f.sql,
-            kind: f.mode === "hybrid" ? "Informe (híbrido)" : "Informe (fijo)" };
+            kind: f.mode === "hybrid" ? "Informe (híbrido)" : (f.mode === "link" ? "Informe vinculado" : "Informe (fijo)") };
         job.promise = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; });
         job.promise.catch(() => { /* se trata al recogerla */ });
         DracoSqlPrefetch.set(f.sql, job.promise);
+        if (!f.prefetchOnly) DracoSqlPrefetchByReport.set(f.reportId, f.sql);
         return job;
     });
     dynamicJobs.forEach(job => {
@@ -12421,10 +12621,14 @@ async function actualizarTodosCore(concurrency) {
     let queriesDone = 0;
     const totalQueries = allQueries.length;
     const queriesRun = runWithConcurrency(allQueries, concurrency || 4, async (job) => {
+        // SIN await: actualizar el indicador es una escritura en Excel y, si
+        // en ese momento se está pintando otro informe, esperaría a que
+        // terminase el pintado... retrasando el arranque de esta consulta
+        // (las consultas acababan yendo en serie, detrás de cada pintado).
         if (window.BusyIndicator) {
-            await window.BusyIndicator.update(
+            Promise.resolve(window.BusyIndicator.update(
                 busyStepLabel(job.reportId, "Ejecutando consulta") + ` (${queriesDone}/${totalQueries} hechas)`
-            );
+            )).catch(() => {});
         }
         const tJob = performance.now(); // tiempo propio de ESTE informe, no encadenado (van en paralelo)
         try {
@@ -12458,7 +12662,7 @@ async function actualizarTodosCore(concurrency) {
                 const jsonForCell = job.json.length > EXCEL_CELL_CHAR_LIMIT
                     ? job.json.substring(0, EXCEL_CELL_CHAR_LIMIT) + " ...(truncado, JSON completo en la consola F12)"
                     : job.json;
-                editReportSheet.getRange("Y1").values = [[draco_debugCell(jsonForCell)]];
+                if (dracoDiagOn()) editReportSheet.getRange("Y1").values = [[jsonForCell]];
                 await jsonTo3Matrices(context, job.json, job.reportId);
             });
             paintedCount++;
@@ -12470,6 +12674,7 @@ async function actualizarTodosCore(concurrency) {
     // 4) Informes Fijos/Híbridos: su flujo completo va en SERIE (lee y pinta
     //    Excel), pero su consulta ya está en marcha desde el paso 2.
     for (const f of fixedReports) {
+        if (f.prefetchOnly) continue;   // consulta adelantada de un grupo vinculado: el grupo se refresca abajo
         try {
             if (f.mode === "hybrid") await actualizarInformeHybridCore(f.reportId);
             else await actualizarInformeFixedCore(f.reportId);
@@ -12493,6 +12698,7 @@ async function actualizarTodosCore(concurrency) {
         // Consultas adelantadas que nadie recogió (p. ej. el informe falló
         // antes de consultar): no se quedan colgando para otro refresco.
         DracoSqlPrefetch.clear();
+        DracoSqlPrefetchByReport.clear();
         await endSuppressPlanningPaint();
         await draco_endManualCalculation();
         if (window.BusyIndicator) await window.BusyIndicator.hide();
@@ -12594,7 +12800,7 @@ function summarizeDracoFilterValue(rawValue) {
 async function loadDracoPlanningCrossContext(context, reportId) {
     const editReportGrid = await getEditReportGrid(context, reportId);
     const resultSheetName = resultSheetNameFromGrid(editReportGrid, reportId);
-    const csvGrid = await getFormulaGrid(context, resultSheetName);
+    const csvGrid = await dracoAxisFormulaGrid(context, resultSheetName, editReportGrid);
 
     loadReportDefinition(editReportGrid, reportId); // rellena ReportState (incluye Filters)
 
@@ -14394,7 +14600,7 @@ async function pegarInforme(event) {
                     const corner = a => { const b = a ? dracoParseBlock(a) : null; return b ? { row: b.row, col: b.col } : null; };
                     await window.ReportStore.setReportNamedAt(pasted.id, { rows: corner(nm.rows), cols: corner(nm.cols), values: corner(nm.values) });
                 } finally {
-                    DracoSuppressChangeEvents = false;
+                    DracoSuppressChangeEvents = false; DracoLastSelfWriteAt = Date.now();
                 }
             });
         } catch (e) {
@@ -14414,7 +14620,7 @@ async function pegarInforme(event) {
                     });
                     await context.sync();
                 } finally {
-                    DracoSuppressChangeEvents = false;
+                    DracoSuppressChangeEvents = false; DracoLastSelfWriteAt = Date.now();
                 }
             });
         } catch (e) {

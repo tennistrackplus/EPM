@@ -87,6 +87,26 @@
         return store[modelName] || null;
     }
 
+    /*
+     * Lectura con caché SOLO para construir las rejillas MODEL_* (que se
+     * piden 3 o más veces por informe en cada refresco): mientras el JSON
+     * guardado no cambie, no se vuelve a parsear (con modelos grandes eran
+     * decenas de ms cada vez). Las rejillas se construyen siempre nuevas
+     * (los constructores no tocan el modelo), así que el objeto en caché no
+     * sale de aquí: nadie puede modificarlo por error.
+     */
+    let _gridCacheRaw = null, _gridCacheStore = null;
+    function _readStoreForGrid() {
+        let raw;
+        try { raw = Office.context.document.settings.get(SMS_KEY); } catch (e) { return _readStoreRaw(); }
+        if (!raw) return {};
+        if (raw === _gridCacheRaw && _gridCacheStore) return _gridCacheStore;
+        const store = _readStoreRaw();
+        _gridCacheRaw = raw;
+        _gridCacheStore = store;
+        return store;
+    }
+
     async function saveModel(modelName, modelObj) {
         const store = _readStoreRaw();
         store[modelName] = modelObj;
@@ -294,7 +314,7 @@
         const header = HEADERS[sheetName];
 
         if (sheetName === "MODEL_FACT") {
-            const store = _readStoreRaw();
+            const store = _readStoreForGrid();
             const rows = Object.keys(store).sort().map(name => buildFactRow(name, store[name].fact));
             return { values: [header, ...rows], startRow: 0, startCol: 0 };
         }
@@ -304,7 +324,7 @@
             return { values: [header], startRow: 0, startCol: 0 };
         }
 
-        const model = getModel(modelName);
+        const model = _readStoreForGrid()[modelName] || null;
         if (!model) {
             return { values: [header], startRow: 0, startCol: 0 };
         }
