@@ -82,26 +82,53 @@ const RangeAxis = {
         if (this.rc.row + this.rc.height > this.rr.row) this.moveRR(1, 0);
     },
 
+    // MODO HÍBRIDO (un eje Estático): las líneas del eje Estático son
+    // celdas fijas de la hoja (fórmulas EPM_VALUE del usuario), así que NO
+    // se pueden desplazar. Cuando el otro eje (Dinámico) gana o pierde un
+    // campo, su cabecera crece/encoge HACIA FUERA (Columnas hacia arriba,
+    // Filas hacia la izquierda) en vez de empujar al eje Estático. Si ya
+    // está pegada al borde (fila/columna 1), se hace como siempre.
+
     // Al añadir un campo al eje Filas: crece en anchura y empuja columnas
-    onRowFieldAdded() {
+    onRowFieldAdded(colsStatic) {
+        if (colsStatic && this.rr.col > 1) {
+            this.rr.col -= 1;
+            this.rr.width += 1;
+            return;
+        }
         this.rr.width += 1;
         this.moveRC(0, 1);
     },
 
     // Al quitar un campo del eje Filas
-    onRowFieldRemoved() {
+    onRowFieldRemoved(colsStatic) {
+        if (colsStatic && this.rr.width > 0) {
+            this.rr.width -= 1;
+            this.rr.col += 1;
+            return;
+        }
         this.rr.width = Math.max(0, this.rr.width - 1);
         this.moveRC(0, -1);
     },
 
     // Al añadir un campo al eje Columnas: crece en altura y empuja filas
-    onColFieldAdded() {
+    onColFieldAdded(rowsStatic) {
+        if (rowsStatic && this.rc.row > 1) {
+            this.rc.row -= 1;
+            this.rc.height += 1;
+            return;
+        }
         this.rc.height += 1;
         this.moveRR(1, 0);
     },
 
     // Al quitar un campo del eje Columnas
-    onColFieldRemoved() {
+    onColFieldRemoved(rowsStatic) {
+        if (rowsStatic && this.rc.height > 0) {
+            this.rc.height -= 1;
+            this.rc.row += 1;
+            return;
+        }
         this.rc.height = Math.max(0, this.rc.height - 1);
         this.moveRR(-1, 0);
     }
@@ -136,9 +163,14 @@ const TaskPaneApp = {
         subtotalsOnTop: false,
         hierarchyNodesOnTop: true,
         overwriteFormats: true,
-        autoFitColumns: true,
+        overwriteStaticFormats: false,
+        autoFitColumns: false,
         planningReport: false
     },
+
+    // Columnas/filas físicas extra que ya están contadas en el rango de cada eje
+    // por los "ID y texto" (ver reconcileTextColumns).
+    textExtra: { rows: 0, columns: 0 },
 
     // Campo actualmente seleccionado en el panel "Opciones de campo"
     // ({ zoneId, dimension, name, isHierarchy }) o null si no hay ninguno.
@@ -176,8 +208,100 @@ const TaskPaneApp = {
         };
     },
 
-    scheduleAutoUpdate() {
+    /**
+     * "Filtrar valores seleccionados" (clic derecho en celdas del informe):
+     * pone en Filtros, para cada campo {dim, attr, values}, la lista de
+     * valores (sustituye la selección si el campo ya estaba en Filtros).
+     */
+    async setFilterValues(reportId, items) {
+        if (!this.currentReportId || String(this.currentReportId) !== String(reportId)) {
+            this.setAutoStatus("Abre ese informe en el panel para filtrar sus valores.");
+            return;
+        }
+        items.forEach(({ dim, attr, values }) => {
+            const filter = { mode: "list", attribute: attr, values: values.slice(), ranges: [], excludeValues: [], excludeRanges: [] };
+            let entry = this.state.filters.find(f => !f.isHierarchy
+                && String(f.dimension).toUpperCase() === String(dim).toUpperCase()
+                && String(f.realAttribute || f.name).toUpperCase() === String(attr).toUpperCase());
+            if (entry) {
+                entry.filter = filter;
+            } else {
+                this.state.filters.push({ dimension: dim, name: attr, isHierarchy: false, realAttribute: attr, filter });
+            }
+        });
+        const filtersContent = document.querySelector('.zone-card[data-zone="filters"] .dropzone-content');
+        if (filtersContent) {
+            filtersContent.innerHTML = "";
+            this.state.filters.forEach(f => this.renderTag(filtersContent, "filters", f));
+            if (this.renderLockedFilterTags) this.renderLockedFilterTags(filtersContent);
+        }
+        this.scheduleAutoUpdate();
+    },
+
+    /**
+     * Clic derecho en una celda del informe (ver dracoFieldActionFromCell en
+     * commands.js): aplica una acción al campo de esa celda, cambiando antes
+     * de informe si hace falta. action: "totals:show|hide", "mode:ID|ID_TEXT|TEXT",
+     * "options" (abre Opciones de campo: niveles y expandir de una jerarquía).
+     */
+    async fieldActionFromCell(target, action) {
+        if (!this.currentReportId || String(this.currentReportId) !== String(target.reportId)) {
+            const sel = document.getElementById("reportSelector") || document.getElementById("reportSelect");
+            if (sel) sel.value = String(target.reportId);
+            await this.onReportSelectorChange(String(target.reportId));
+        }
+        const zone = target.axis === "columns" ? "columns" : "rows";
+        const list = this.listForZone(zone) || [];
+        const up = (x) => String(x || "").toUpperCase();
+
+        // Borrar filtro: elimina de la zona Filtros los filtros de la
+        // dimensión de la celda (cualquier atributo o jerarquía de esa dimensión).
+        if (action === "filter:clear") {
+            const hits = this.state.filters.filter(f => up(f.dimension) === up(target.dim));
+            if (!hits.length) { this.setAutoStatus("Este campo no tiene filtro."); return; }
+            this.state.filters = this.state.filters.filter(f => hits.indexOf(f) === -1);
+            this.rerenderFiltersZone();
+            this.scheduleAutoUpdate();
+            this.setAutoStatus("Filtro de " + target.dim + " borrado.");
+            return;
+        }
+        const sameDim = list.filter(e => up(e.dimension) === up(target.dim));
+        let entry = sameDim.find(e => e.isHierarchy && up(e.name) === up(target.attr))
+            || sameDim.find(e => !e.isHierarchy && up(e.name) === up(target.attr))
+            || sameDim.find(e => !e.isHierarchy && up(e.name) === up(target.levelAttr))
+            || (sameDim.length === 1 ? sameDim[0] : null);
+        if (!entry) { this.setAutoStatus("No se encontró el campo de la celda en el diseño."); return; }
+
+        if (action === "options") {
+            await this.selectFieldForOptions(zone, entry);
+        } else if (action.indexOf("mode:") === 0) {
+            const info = window.ReportStore.getDisplayTextInfo(this.currentReportId, entry.dimension, entry.name, !!entry.isHierarchy);
+            const mode = action.slice(5);
+            if (!info || !info.applicable) { this.setAutoStatus("Este campo no tiene texto asociado."); return; }
+            if (mode !== "ID" && !info.available) { this.setAutoStatus(info.reason); return; }
+            this.setDisplayMode(zone, entry, mode);
+        } else if (action.indexOf("totals:") === 0) {
+            if (entry.isHierarchy) { this.setAutoStatus("Una jerarquía no tiene totales: usa Opciones del campo."); return; }
+            const cur = this.getFieldOptions(zone, entry);
+            cur.showTotals = action === "totals:show";
+            this.setFieldOptions(zone, entry, cur);
+            const selF = this.selectedFieldForOptions;
+            if (selF && selF.zoneId === zone && selF.dimension === entry.dimension && selF.name === entry.name) this.renderFieldOptionsBody(zone, entry);
+            this.scheduleAutoUpdate();
+        }
+    },
+
+    /**
+     * Autoguardado del diseño + actualización de datos (700 ms después del
+     * último cambio). opts.saveOnly: el cambio no altera el informe (p. ej.
+     * soltar un campo en Filtros sin valor todavía): solo se guarda el
+     * diseño, sin consultar ni repintar. Si mientras tanto llega otro cambio
+     * que sí lo altera, se actualiza igualmente.
+     */
+    scheduleAutoUpdate(opts) {
+        try { this.refreshStaticFilterLock(); } catch (e) { /* sin panel */ }
         if (!this.currentReportId) return; // sin informe activo todavía: nada que guardar
+        if (!(opts && opts.saveOnly)) this.autoNeedsRefresh = true;
         this.setAutoStatus("Cambios pendientes…");
         if (this.autoRefreshTimer) clearTimeout(this.autoRefreshTimer);
         this.autoRefreshTimer = setTimeout(() => this.runAutoSaveAndRefresh(), 700);
@@ -190,10 +314,19 @@ const TaskPaneApp = {
             return;
         }
         this.isAutoRefreshing = true;
+        const needRefresh = !!this.autoNeedsRefresh;
+        this.autoNeedsRefresh = false;
 
         try {
             this.setAutoStatus("Guardando…");
+            this.undoRecord();
             await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
+
+            if (!needRefresh) {
+                // Cambio que no altera el informe: guardado, sin actualizar
+                this.setAutoStatus("");
+                return;
+            }
 
             if (this.isRefreshPaused()) {
                 // Pausa activa (botón de pausa marcado): se guarda el diseño
@@ -225,7 +358,7 @@ const TaskPaneApp = {
             this.isAutoRefreshing = false;
             if (this.autoRefreshQueued) {
                 this.autoRefreshQueued = false;
-                this.scheduleAutoUpdate();
+                this.scheduleAutoUpdate({ saveOnly: true }); // conserva si hacía falta actualizar
             }
         }
     },
@@ -277,10 +410,353 @@ const TaskPaneApp = {
     // Guarda el diseño SIN disparar Actualizar() (BigQuery). Se usa al
     // marcar/desmarcar Estático: el propio botón pide explícitamente que
     // eso no dispare un refresco automático.
+    /* -------------------------------------------------------------
+     * DESHACER (botón ↶ junto a «Pausar»): historial de las últimas 15
+     * acciones del informe activo. Antes de cada guardado del diseño se
+     * guarda una copia del diseño anterior con una etiqueta que describe el
+     * cambio (se calcula comparando diseños, así sirve para cualquier acción:
+     * arrastrar, filtros, opciones de campo, clic derecho, Estático...).
+     * Elegir una entrada deshace esa acción y todas las posteriores.
+     * Vive en memoria (por informe): se pierde al cerrar el libro/panel.
+     * ----------------------------------------------------------- */
+    UNDO_MAX: 15,
+
+    undoClone(d) {
+        return JSON.parse(JSON.stringify(d || {}));
+    },
+
+    undoStack() {
+        if (!this.undoStacks) this.undoStacks = {};
+        const k = String(this.currentReportId);
+        if (!this.undoStacks[k]) this.undoStacks[k] = [];
+        return this.undoStacks[k];
+    },
+
+    // Acciones deshechas que se pueden rehacer (la [0] es la siguiente a
+    // rehacer). Cualquier acción nueva la vacía, como en Office.
+    redoStack() {
+        if (!this.redoStacks) this.redoStacks = {};
+        const k = String(this.currentReportId);
+        if (!this.redoStacks[k]) this.redoStacks[k] = [];
+        return this.redoStacks[k];
+    },
+
+    // Diseño de referencia (el último guardado/cargado) del informe activo.
+    undoSetBaseline() {
+        if (!this.currentReportId) { this.undoBaseline = null; return; }
+        this.undoBaseline = { reportId: String(this.currentReportId), design: this.undoClone(this.collectDesignPayload()) };
+        this.renderUndoButton();
+    },
+
+    // Antes de guardar: si el diseño ha cambiado, apila el anterior.
+    undoRecord() {
+        if (!this.currentReportId || this.undoApplying) return;
+        const cur = this.undoClone(this.collectDesignPayload());
+        const base = this.undoBaseline;
+        if (!base || base.reportId !== String(this.currentReportId)) { this.undoSetBaseline(); return; }
+        if (JSON.stringify(base.design) === JSON.stringify(cur)) return;
+        const stack = this.undoStack();
+        stack.unshift({ label: this.undoDescribe(base.design, cur), design: base.design, ts: Date.now() });
+        if (stack.length > this.UNDO_MAX) stack.length = this.UNDO_MAX;
+        this.redoStack().length = 0;   // acción nueva: ya no se puede rehacer lo deshecho
+        this.undoBaseline = { reportId: String(this.currentReportId), design: cur };
+        this.renderUndoButton();
+    },
+
+    // Tras cargar el diseño de la hoja: si es el mismo informe y ha cambiado
+    // desde fuera del panel, también cuenta como acción; si no, nueva referencia.
+    undoAfterLoad() {
+        if (this.undoApplying) return;
+        const base = this.undoBaseline;
+        if (base && this.currentReportId && base.reportId === String(this.currentReportId)) this.undoRecord();
+        else this.undoSetBaseline();
+    },
+
+    /* ---- descripción del cambio ---- */
+    undoFieldName(e) {
+        return e ? String(e.name || e.dimension || "") : "";
+    },
+
+    undoFilterSummary(f) {
+        const flt = f && f.filter;
+        if (!flt) return "";
+        const vals = [].concat(flt.values || []);
+        const rng = (flt.ranges || []).map(r => (r && (r.from !== undefined || r.to !== undefined)) ? `${r.from ?? ""}–${r.to ?? ""}` : "").filter(Boolean);
+        const all = vals.concat(rng);
+        const exc = [].concat(flt.excludeValues || []);
+        let txt = all.slice(0, 3).join(", ") + (all.length > 3 ? ` (+${all.length - 3})` : "");
+        if (exc.length) txt += (txt ? " " : "") + "excepto " + exc.slice(0, 2).join(", ") + (exc.length > 2 ? "…" : "");
+        return txt;
+    },
+
+    undoDescribe(prev, cur) {
+        const parts = [];
+        const key = e => (String(e.dimension) + "|" + String(e.name) + "|" + (e.isHierarchy ? "H" : "A")).toUpperCase();
+        const idx = list => new Map((list || []).map(e => [key(e), e]));
+        const P = { filters: idx(prev.filters), rows: idx(prev.rows), columns: idx(prev.columns) };
+        const C = { filters: idx(cur.filters), rows: idx(cur.rows), columns: idx(cur.columns) };
+        const zoneName = { rows: "filas", columns: "columnas", filters: "filtros" };
+
+        // Filas / Columnas: añadir, mover, quitar, reordenar
+        // "salió de z" / "entró en z" (un campo puede estar a la vez en Filas y en Filtros)
+        const left = (z, k) => P[z].has(k) && !C[z].has(k);
+        const entered = (z, k) => C[z].has(k) && !P[z].has(k);
+        ["rows", "columns"].forEach(z => {
+            const other = z === "rows" ? "columns" : "rows";
+            C[z].forEach((e, k) => {
+                if (P[z].has(k)) return;
+                if (left(other, k) || left("filters", k)) parts.push(`Mover ${this.undoFieldName(e)} a ${zoneName[z]}`);
+                else parts.push(`Añadir ${this.undoFieldName(e)} a ${zoneName[z]}`);
+            });
+            P[z].forEach((e, k) => {
+                if (!C[z].has(k) && !entered(other, k) && !entered("filters", k)) parts.push(`Quitar ${this.undoFieldName(e)} de ${zoneName[z]}`);
+            });
+            const pk = (prev[z] || []).map(key).filter(k => C[z].has(k));
+            const ck = (cur[z] || []).map(key).filter(k => P[z].has(k));
+            if (pk.length === ck.length && pk.join() !== ck.join()) parts.push(`Reordenar ${zoneName[z]}`);
+        });
+
+        // Filtros
+        C.filters.forEach((e, k) => {
+            const p = P.filters.get(k);
+            const sum = this.undoFilterSummary(e);
+            if (!p) {
+                if (left("rows", k) || left("columns", k)) parts.push(`Mover ${this.undoFieldName(e)} a filtros`);
+                else parts.push(sum ? `Filtrar por: ${this.undoFieldName(e)} ${sum}` : `Añadir filtro: ${this.undoFieldName(e)}`);
+            } else if (JSON.stringify(p.filter || null) !== JSON.stringify(e.filter || null)) {
+                parts.push(sum ? `Filtrar por: ${this.undoFieldName(e)} ${sum}` : `Quitar valores del filtro: ${this.undoFieldName(e)}`);
+            }
+        });
+        P.filters.forEach((e, k) => {
+            if (!C.filters.has(k) && !entered("rows", k) && !entered("columns", k)) parts.push(`Quitar filtro: ${this.undoFieldName(e)}`);
+        });
+
+        // Estático / Dinámico
+        if (!!prev.rowsStatic !== !!cur.rowsStatic) parts.push(cur.rowsStatic ? "Filas: poner en estático" : "Filas: poner en dinámico");
+        if (!!prev.colsStatic !== !!cur.colsStatic) parts.push(cur.colsStatic ? "Columnas: poner en estático" : "Columnas: poner en dinámico");
+
+        // Opciones de campo
+        const po = prev.fieldOptions || {}, co = cur.fieldOptions || {};
+        new Set([...Object.keys(po), ...Object.keys(co)]).forEach(k => {
+            const a = po[k] || {}, b = co[k] || {};
+            if (JSON.stringify(a) === JSON.stringify(b)) return;
+            const name = String(k).split("|")[2] || k;
+            const changed = new Set([...Object.keys(a), ...Object.keys(b)].filter(p => JSON.stringify(a[p]) !== JSON.stringify(b[p])));
+            if (changed.has("showTotals")) parts.push(`${b.showTotals ? "Mostrar" : "Ocultar"} totales: ${name}`);
+            if (changed.has("displayMode")) parts.push(`Mostrar ${({ ID: "ID", TEXT: "texto", ID_TEXT: "ID y texto" })[b.displayMode] || b.displayMode}: ${name}`);
+            if (changed.has("sortOrder")) parts.push(`Ordenar ${name}: ${({ asc: "ascendente", desc: "descendente", none: "sin orden" })[String(b.sortOrder).toLowerCase()] || b.sortOrder}`);
+            if (changed.has("expandToLevel")) parts.push(`Expandir ${name} hasta nivel ${b.expandToLevel ?? "—"}`);
+            if (changed.has("visibleLevels")) parts.push(`Niveles visibles: ${name}`);
+            if (changed.has("aggregation")) parts.push(`Agregación de ${name}: ${b.aggregation || "la del modelo"}`);
+            if (changed.has("numberFormat") || changed.has("decimals")) parts.push(`Formato de ${name}`);
+            const known = ["showTotals", "displayMode", "sortOrder", "expandToLevel", "visibleLevels", "aggregation", "numberFormat", "decimals"];
+            if ([...changed].some(p => known.indexOf(p) === -1)) parts.push(`Opciones de ${name}`);
+        });
+
+        if (prev.rrAddress !== cur.rrAddress || prev.rcAddress !== cur.rcAddress) parts.push("Mover el informe");
+
+        const uniq = [...new Set(parts)];
+        if (!uniq.length) return "Cambio en el diseño";
+        return uniq.length <= 2 ? uniq.join(" · ") : `${uniq.slice(0, 2).join(" · ")} (+${uniq.length - 2})`;
+    },
+
+    /* ---- deshacer / rehacer ---- */
+    // Deshace la acción `index` del historial y todas las más recientes.
+    async undoTo(index) {
+        const stack = this.undoStack();
+        if (!stack[index] || !this.currentReportId || this.undoApplying) return;
+        const current = this.undoClone(this.collectDesignPayload());
+        const target = stack[index].design;
+        // Cada acción deshecha pasa a Rehacer con el diseño de DESPUÉS de hacerla
+        const undone = stack.splice(0, index + 1);          // [más reciente ... acción index]
+        const redo = this.redoStack();
+        undone.forEach((e, k) => {
+            const after = k === 0 ? current : undone[k - 1].design;
+            redo.unshift({ label: e.label, design: this.undoClone(after), ts: e.ts });
+        });
+        if (redo.length > this.UNDO_MAX) redo.length = this.UNDO_MAX;
+        await this.undoApplyDesign(target, index === 0 ? "Deshaciendo…" : `Deshaciendo ${index + 1} acciones…`, "Deshecho");
+    },
+
+    // Rehace la acción `index` de Rehacer y todas las anteriores a ella.
+    async redoTo(index) {
+        const redo = this.redoStack();
+        if (!redo[index] || !this.currentReportId || this.undoApplying) return;
+        const current = this.undoClone(this.collectDesignPayload());
+        const target = redo[index].design;
+        const redone = redo.splice(0, index + 1);           // [siguiente a rehacer ... acción index]
+        const stack = this.undoStack();
+        redone.forEach((e, k) => {
+            const before = k === 0 ? current : redone[k - 1].design;
+            stack.unshift({ label: e.label, design: this.undoClone(before), ts: e.ts });
+        });
+        if (stack.length > this.UNDO_MAX) stack.length = this.UNDO_MAX;
+        await this.undoApplyDesign(target, index === 0 ? "Rehaciendo…" : `Rehaciendo ${index + 1} acciones…`, "Rehecho");
+    },
+
+    // Restaura un diseño completo (lo usan Deshacer y Rehacer).
+    async undoApplyDesign(design, busyText, doneText) {
+        if (this.autoRefreshTimer) { clearTimeout(this.autoRefreshTimer); this.autoRefreshTimer = null; }
+        this.undoApplying = true;
+        const target = this.undoClone(design);
+        const wasRows = !!this.state.rowsStatic, wasCols = !!this.state.colsStatic;
+        try {
+            this.renderUndoButton();
+            this.setAutoStatus(busyText);
+
+            // Pasar un eje a Estático necesita el eje ya pintado con el diseño
+            // al que se vuelve: primero se restaura en Dinámico, se actualiza
+            // y luego se convierte (como al marcar la casilla).
+            const toStatic = { rows: !!target.rowsStatic && !wasRows, columns: !!target.colsStatic && !wasCols };
+            const toDynamic = { rows: !target.rowsStatic && wasRows, columns: !target.colsStatic && wasCols };
+            const stage = this.undoClone(target);
+            if (toStatic.rows) stage.rowsStatic = false;
+            if (toStatic.columns) stage.colsStatic = false;
+
+            // Estático -> Dinámico: fórmulas EPM_VALUE a texto antes de repintar
+            for (const ax of ["rows", "columns"]) {
+                if (!toDynamic[ax]) continue;
+                if (ax === "rows") this.state.rowsStatic = false; else this.state.colsStatic = false;
+                await this.applyAxisStaticFormulas(ax, false);
+            }
+
+            await window.ExcelService.saveEditReportDesign(this.currentReportId, stage);
+            await this.loadDesignFromSheet();
+
+            if (!this.isRefreshPaused() && window.ReportActions && typeof window.ReportActions.actualizar === "function") {
+                this.setAutoStatus("Actualizando…");
+                if (window.BusyIndicator) await window.BusyIndicator.show("Actualizando");
+                try { await window.ReportActions.actualizar(); }
+                finally { if (window.BusyIndicator) await window.BusyIndicator.hide(); }
+            }
+
+            // Dinámico -> Estático
+            for (const ax of ["rows", "columns"]) {
+                if (!toStatic[ax]) continue;
+                if (ax === "rows") this.state.rowsStatic = true; else this.state.colsStatic = true;
+                this.updateStaticLabel(ax === "rows" ? "rows" : "cols");
+                this.setZoneLocked(ax, true);
+                const chk = document.getElementById(ax === "rows" ? "chkAsymmetricRows" : "chkAsymmetricCols");
+                if (chk) chk.checked = true;
+                await this.applyAxisStaticFormulas(ax, true);
+            }
+            if (toStatic.rows || toStatic.columns) {
+                await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
+            }
+
+            this.setAutoStatus(this.isRefreshPaused() ? `${doneText} (pausado, sin actualizar)` : `${doneText} ✓`);
+            setTimeout(() => {
+                const el = document.getElementById("autoStatus");
+                if (el && el.innerText.indexOf(doneText) === 0) el.innerText = "";
+            }, 2000);
+        } catch (err) {
+            console.error("Error al deshacer/rehacer:", err);
+            this.setAutoStatus("Error al " + (doneText === "Rehecho" ? "rehacer" : "deshacer"));
+        } finally {
+            this.undoApplying = false;
+            this.undoSetBaseline();
+        }
+    },
+
+    /* ---- botones y desplegables (Deshacer ↶ / Rehacer ↷) ---- */
+    renderUndoButton() {
+        const has = !!this.currentReportId;
+        const undo = has ? this.undoStack() : [], redo = has ? this.redoStack() : [];
+        const bU = document.getElementById("btnUndo"), bR = document.getElementById("btnRedo");
+        if (bU) {
+            bU.disabled = !undo.length || !!this.undoApplying;
+            bU.title = undo.length ? `Deshacer: ${undo[0].label}` : "Deshacer (no hay acciones)";
+        }
+        if (bR) {
+            // Solo se ve cuando hay algo deshecho que rehacer: aparece al
+            // deshacer y desaparece al hacer un cambio nuevo (o rehacerlo todo).
+            bR.hidden = !redo.length;
+            bR.disabled = !redo.length || !!this.undoApplying;
+            bR.title = redo.length ? `Rehacer: ${redo[0].label}` : "Rehacer";
+        }
+        const menu = document.getElementById("undoMenu");
+        if (menu && !menu.hidden) {
+            if (menu.dataset.kind === "redo" && !redo.length) this.closeUndoMenu();
+            else this.renderUndoMenu(menu.dataset.kind || "undo");
+        }
+    },
+
+    renderUndoMenu(kind) {
+        const menu = document.getElementById("undoMenu");
+        if (!menu) return;
+        const isRedo = kind === "redo";
+        const stack = isRedo ? this.redoStack() : this.undoStack();
+        menu.dataset.kind = isRedo ? "redo" : "undo";
+        menu.classList.toggle("undo-menu--redo", isRedo);
+        menu.innerHTML = "";
+        const head = document.createElement("div");
+        head.className = "undo-menu-head";
+        head.textContent = isRedo ? "Rehacer" : "Deshacer";
+        const list = document.createElement("div");
+        list.className = "undo-menu-list";
+        const footer = document.createElement("div");
+        footer.className = "undo-menu-footer";
+        const verb = isRedo ? "Rehacer" : "Deshacer";
+        const setHint = (n) => { footer.textContent = n ? (n === 1 ? `${verb} 1 acción` : `${verb} ${n} acciones`) : "Cancelar"; };
+        stack.forEach((e, i) => {
+            const it = document.createElement("button");
+            it.type = "button";
+            it.className = "undo-menu-item";
+            const time = new Date(e.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            const lbl = document.createElement("span"); lbl.className = "undo-menu-label"; lbl.textContent = e.label; lbl.title = e.label;
+            const tm = document.createElement("span"); tm.className = "undo-menu-time"; tm.textContent = time;
+            it.appendChild(lbl); it.appendChild(tm);
+            // Al pasar el ratón se marcan esa acción y las anteriores de la lista (van juntas)
+            it.addEventListener("mouseenter", () => {
+                list.querySelectorAll(".undo-menu-item").forEach((x, j) => x.classList.toggle("undo-hl", j <= i));
+                setHint(i + 1);
+            });
+            it.addEventListener("click", () => { this.closeUndoMenu(); isRedo ? this.redoTo(i) : this.undoTo(i); });
+            list.appendChild(it);
+        });
+        list.addEventListener("mouseleave", () => {
+            list.querySelectorAll(".undo-menu-item").forEach(x => x.classList.remove("undo-hl"));
+            setHint(0);
+        });
+        setHint(0);
+        menu.appendChild(head);
+        menu.appendChild(list);
+        menu.appendChild(footer);
+    },
+
+    closeUndoMenu() {
+        const menu = document.getElementById("undoMenu");
+        if (menu) menu.hidden = true;
+    },
+
+    initUndoButton() {
+        const menu = document.getElementById("undoMenu");
+        if (!menu || menu.dataset.bound) return;
+        menu.dataset.bound = "1";
+        const bind = (id, kind) => {
+            const btn = document.getElementById(id);
+            if (!btn) return;
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const stack = kind === "redo" ? this.redoStack() : this.undoStack();
+                if (!stack.length) return;
+                if (!menu.hidden && menu.dataset.kind === kind) { this.closeUndoMenu(); return; }
+                this.renderUndoMenu(kind);
+                menu.hidden = false;
+            });
+        };
+        bind("btnUndo", "undo");
+        bind("btnRedo", "redo");
+        document.addEventListener("click", (e) => { if (!menu.hidden && !menu.contains(e.target)) this.closeUndoMenu(); });
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.closeUndoMenu(); });
+        this.renderUndoButton();
+    },
+
     async saveDesignOnly() {
         if (!this.currentReportId) return;
         try {
             this.setAutoStatus("Guardando…");
+            this.undoRecord();
             await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
             this.setAutoStatus("Guardado ✓");
             setTimeout(() => {
@@ -498,11 +974,14 @@ const TaskPaneApp = {
             }
         };
 
+        await safeStep("applyPlanningGateUI", () => this.applyPlanningGateUI());
+
         if (typeof FilterModal !== "undefined" && FilterModal.init) {
             await safeStep("FilterModal.init", () => FilterModal.init());
         }
         await safeStep("bindEvents", () => this.bindEvents());
         await safeStep("initRefreshPauseButton", () => this.initRefreshPauseButton());
+        await safeStep("initUndoButton", () => this.initUndoButton());
         await safeStep("registerPendingRibbonActionListener", () => this.registerPendingRibbonActionListener());
 
         // Botón del ribbon "Editar informe" (EditarInformeButton -> Show
@@ -631,6 +1110,7 @@ const TaskPaneApp = {
                 this.state.rowsStatic = e.target.checked;
                 this.updateStaticLabel("rows");
                 this.setZoneLocked("rows", this.state.rowsStatic);
+                this.refreshStaticFilterLock();
                 await this.applyAxisStaticFormulas("rows", this.state.rowsStatic);
                 this.saveDesignOnly();
             });
@@ -640,6 +1120,7 @@ const TaskPaneApp = {
                 this.state.colsStatic = e.target.checked;
                 this.updateStaticLabel("cols");
                 this.setZoneLocked("columns", this.state.colsStatic);
+                this.refreshStaticFilterLock();
                 await this.applyAxisStaticFormulas("columns", this.state.colsStatic);
                 this.saveDesignOnly();
             });
@@ -687,6 +1168,7 @@ const TaskPaneApp = {
 
         const propModelSelect = document.getElementById("propSemanticModel");
         if (propModelSelect) propModelSelect.addEventListener("change", () => {
+            this.applyPlanningGateToProperties();
             if (document.getElementById("propPlanningReport").checked) this.renderDimensionsBehaviorRows();
         });
 
@@ -982,7 +1464,7 @@ const TaskPaneApp = {
         const zone = document.querySelector(`.zone-card[data-zone="${zoneId}"]`);
         if (!zone) return;
         zone.classList.toggle("zone-locked", locked);
-        zone.querySelectorAll(".dropped-tag").forEach(tag => { tag.draggable = !locked; });
+        zone.querySelectorAll(".dropped-tag, .measure-group").forEach(tag => { tag.draggable = !locked; });
     },
 
     isZoneLocked(zoneId) {
@@ -1018,6 +1500,12 @@ const TaskPaneApp = {
      */
     async applyAxisStaticFormulas(axis, isStatic) {
         try {
+            // "Solo texto": con IDs ocultos no se puede convertir celda a celda
+            // (el ID no está en la hoja): se guarda el diseño y se repinta.
+            if (window.ReportActions && window.ReportActions.repaintAxisIfHiddenIds && this.currentReportId) {
+                await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
+                if (await window.ReportActions.repaintAxisIfHiddenIds(axis)) return;
+            }
             if (window.ReportActions && window.ReportActions.convertAxisStaticFormulas) {
                 await window.ReportActions.convertAxisStaticFormulas(axis, isStatic);
             }
@@ -1038,6 +1526,17 @@ const TaskPaneApp = {
         if (!label) return;
         label.innerText = isStatic ? "Estático" : "Dinámico";
         label.style.color = isStatic ? "#1D8154" : "#7045A9";
+
+        // Modo del informe (ver dracoReportMode en commands.js): se muestra
+        // como ayuda al pasar el ratón por cualquiera de los dos interruptores.
+        const r = this.state.rowsStatic, c = this.state.colsStatic;
+        const mode = r && c ? "Estático (las dos líneas las defines tú en la hoja)"
+            : (r || c) ? `Híbrido: ${r ? "Filas" : "Columnas"} estático (tus líneas de la hoja) y ${r ? "Columnas" : "Filas"} dinámico (sale de los datos)`
+            : "Dinámico (los dos ejes salen de los datos)";
+        ["lblStaticRows", "lblStaticCols"].forEach(id => {
+            const el = document.getElementById(id);
+            if (el && el.parentElement) el.parentElement.title = "Modo del informe: " + mode;
+        });
     },
 
     refreshRangeLabels() {
@@ -1070,8 +1569,11 @@ const TaskPaneApp = {
             this.state.rowsStatic = design.rowsStatic;
             this.state.colsStatic = design.colsStatic;
             this.state.fieldOptions = design.fieldOptions || {};
+            this.refreshCalcBadges();
 
             RangeAxis.loadFromAddresses(design.rrAddress, design.rcAddress, design.anchorAddress);
+            // El rango guardado ya incluye las columnas de "ID y texto" del diseño.
+            this.reconcileTextColumns(true);
 
             // Pintar checkboxes + sombreado/bloqueo si el eje ya venía Estático
             const chkRows = document.getElementById("chkAsymmetricRows");
@@ -1103,6 +1605,16 @@ const TaskPaneApp = {
             // crea las etiquetas con draggable=true por defecto.
             this.setZoneLocked("rows", this.state.rowsStatic);
             this.setZoneLocked("columns", this.state.colsStatic);
+
+            this.refreshStaticFilterLock(false);
+            this.undoAfterLoad();
+
+            // La posición real del informe son sus rangos con nombre (Excel los
+            // mueve al insertar/borrar filas o columnas, también sin el
+            // complemento): se ajustan las direcciones del panel si difieren.
+            if (typeof window.dracoSyncReportPositions === "function" && this.currentReportId && !this.undoApplying) {
+                window.dracoSyncReportPositions(this.currentReportId).catch(() => {});
+            }
 
         } catch (err) {
             console.error("Error cargando el diseño desde EDIT_REPORT:", err);
@@ -1183,6 +1695,16 @@ const TaskPaneApp = {
         const report = (this.currentReportId && window.ReportStore) ? window.ReportStore.getReport(this.currentReportId) : null;
         let modelName = report ? (report.semanticModelName || "") : "";
 
+        // Sin informe todavía: sin modelo elegido y sin poder elegirlo (el
+        // modelo es del informe; se elige después de crearlo).
+        if (!report) {
+            select.value = "";
+            select.disabled = true;
+            select.title = "Crea un informe para elegir su modelo semántico";
+            return;
+        }
+        select.title = "";
+
         // Un único modelo semántico disponible: se asigna por defecto.
         if (!modelName && models.length === 1 && report && window.ReportStore) {
             modelName = models[0];
@@ -1258,6 +1780,7 @@ const TaskPaneApp = {
             this.state.rowsStatic = false;
             this.state.colsStatic = false;
             this.state.fieldOptions = {};
+            this.refreshCalcBadges();
             this.reportProperties = Object.assign({}, this.reportProperties, {
                 reportName: report.name,
                 suppressZeroRows: false,
@@ -1265,7 +1788,8 @@ const TaskPaneApp = {
                 subtotalsOnTop: false,
                 hierarchyNodesOnTop: true,
                 overwriteFormats: true,
-                autoFitColumns: true,
+                overwriteStaticFormats: false,
+                autoFitColumns: false,
                 planningReport: false
             });
             RangeAxis.loadFromAddresses("", "", "");
@@ -1279,13 +1803,27 @@ const TaskPaneApp = {
             console.error("Error al añadir el informe:", err);
             alert("Error al añadir el informe: " + (err.message || err));
         } finally {
-            if (btn) { btn.disabled = false; btn.innerText = "Añadir informe"; }
+            if (btn) { btn.disabled = false; btn.innerText = "+ Informe"; }
         }
     },
 
     /* -------------------------------------------------------------
      * Lista de campos disponibles (izquierda)
      * ----------------------------------------------------------- */
+    /**
+     * Al volver a «Editar informes» (p. ej. desde el modelo semántico): vuelve
+     * a leer los modelos y los campos de dimensiones del informe actual, por
+     * si el modelo semántico ha cambiado.
+     */
+    async refreshSemanticFields() {
+        try {
+            await this.populateModelSelectorMain();
+            await this.loadFields();
+        } catch (e) {
+            console.warn("[Draco] No se pudieron recargar los campos del modelo:", e);
+        }
+    },
+
     async loadFields() {
         const container = document.getElementById("availableFieldsContainer");
         if (!container) return;
@@ -1299,10 +1837,16 @@ const TaskPaneApp = {
                 ? window.ReportStore.getReport(this.currentReportId) : null;
             const modelName = report ? (report.semanticModelName || "") : "";
 
+            // Sin informe: no se muestra ningún modelo (ni el activo global)
+            if (!report) {
+                container.innerHTML = "<div style='color: #605e5c; padding: 4px;'>Pulsa «+ Informe» para empezar.</div>";
+                return;
+            }
+
             const result = await window.ExcelService.readDim2Data(modelName || undefined);
 
             if (result.error) {
-                container.innerHTML = `<div style='color: #a80000; padding: 4px;'>⚠️ ${result.error}</div>`;
+                container.innerHTML = `<div style='color: #a80000; padding: 4px;'>⚠️ ${draco_escapeHtml(result.error)}</div>`;
                 return;
             }
 
@@ -1331,6 +1875,11 @@ const TaskPaneApp = {
                 nameSpan.textContent = dim.dimension.toLowerCase();
                 header.appendChild(caretSpan);
                 header.appendChild(nameSpan);
+                // ƒx: cálculos entre miembros de los atributos de esta
+                // dimensión (abre el editor con el primero seleccionado).
+                if (dim.attributes && dim.attributes.length) {
+                    header.appendChild(this.createCalcButton(dim.dimension, null, dim.attributes));
+                }
                 // Contraer/expandir la dimensión oculta sus atributos (y
                 // jerarquías) para dejar el árbol de campos más compacto,
                 // igual que las listas de campos de una tabla dinámica.
@@ -1345,18 +1894,65 @@ const TaskPaneApp = {
                 });
 
                 dim.attributes.forEach(att => {
-                    group.appendChild(this.createFieldElement(dim.dimension, att, false));
+                    group.appendChild(this.createFieldElement(dim.dimension, att, false, dim.attributes));
                 });
 
                 container.appendChild(group);
             });
+            this.refreshCalcBadges();
+            // Si había una búsqueda escrita, se vuelve a aplicar al recargar.
+            const fieldSearch = document.getElementById("fieldSearch");
+            if (fieldSearch && fieldSearch.value) this.filterFields(fieldSearch.value);
         } catch (err) {
             console.error("Error al cargar dimensiones:", err);
-            container.innerHTML = `<div style='color: #a80000; padding: 4px;'>❌ Error: ${err.message || err}</div>`;
+            container.innerHTML = `<div style='color: #a80000; padding: 4px;'>❌ Error: ${draco_escapeHtml(err.message || err)}</div>`;
         }
     },
 
-    createFieldElement(dim, name, isHierarchy) {
+    /**
+     * Botón ƒx (a la derecha del campo / de la dimensión) que abre el
+     * editor de cálculos entre miembros (js/calcEditor.js). Solo en
+     * atributos: las jerarquías no admiten cálculos.
+     */
+    createCalcButton(dim, attribute, attributes) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "field-fx-btn";
+        btn.textContent = "ƒx";
+        btn.title = attribute ? `Cálculos de ${attribute.toLowerCase()}` : `Cálculos de ${String(dim).toLowerCase()}`;
+        btn.setAttribute("aria-label", btn.title);
+        btn.dataset.dim = String(dim).toUpperCase();
+        if (attribute) btn.dataset.attr = String(attribute).toUpperCase();
+        btn.draggable = false;
+        btn.addEventListener("mousedown", (e) => e.stopPropagation());
+        btn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            if (!window.DracoCalcEditor) return;
+            // Desde un atributo: ventana de cálculos de ese atributo.
+            // Desde la dimensión: listado de los cálculos de todos sus atributos.
+            window.DracoCalcEditor.open(this, dim, attribute || null, attributes);
+        });
+        return btn;
+    },
+
+    // Marca (ƒx en color) los atributos y dimensiones que tienen cálculos en el informe actual.
+    refreshCalcBadges() {
+        if (!window.DracoCalc) return;
+        const fo = this.state.fieldOptions || {};
+        const withCalcs = new Set(Object.keys(fo)
+            .filter(k => window.DracoCalc.isCalcKey(k) && Array.isArray(fo[k]) && fo[k].length)
+            .map(k => k.split("|").slice(1).join("|")));
+        const dimsWithCalcs = new Set(Array.from(withCalcs).map(k => k.split("|")[0]));
+        document.querySelectorAll(".field-fx-btn").forEach(b => {
+            const has = b.dataset.attr
+                ? withCalcs.has(b.dataset.dim + "|" + b.dataset.attr)
+                : dimsWithCalcs.has(b.dataset.dim);
+            b.classList.toggle("has-calcs", has);
+        });
+    },
+
+    createFieldElement(dim, name, isHierarchy, dimAttributes) {
         const div = document.createElement("div");
         div.className = "field-item";
         div.draggable = true;
@@ -1374,6 +1970,7 @@ const TaskPaneApp = {
         labelSpan.textContent = name.toLowerCase();
         div.appendChild(iconSpan);
         div.appendChild(labelSpan);
+        if (!isHierarchy) div.appendChild(this.createCalcButton(dim, name, [name]));
 
         const fieldData = { dim, name, isHierarchy };
 
@@ -1389,11 +1986,31 @@ const TaskPaneApp = {
         return div;
     },
 
+    // Buscador de campos: solo quedan las dimensiones con algún atributo o
+    // jerarquía que coincida (antes se veían todas las cabeceras, aunque
+    // no tuvieran nada). Mientras se busca, las dimensiones contraídas se
+    // abren para ver lo encontrado; al vaciar la búsqueda se respeta otra
+    // vez el contraído (antes el display:flex en línea lo anulaba).
     filterFields(query) {
-        const q = query.toLowerCase();
-        document.querySelectorAll(".field-item").forEach(item => {
-            const label = item.querySelector(".field-label").innerText.toLowerCase();
-            item.style.display = label.includes(q) ? "flex" : "none";
+        const q = String(query || "").trim().toLowerCase();
+        const container = document.getElementById("availableFieldsContainer");
+        if (!container) return;
+        // Estilos en línea (no depende de styles.css): con búsqueda, los
+        // campos que coinciden se ven aunque su dimensión esté contraída y
+        // las dimensiones sin ninguno se ocultan enteras; sin búsqueda se
+        // limpia todo y vuelve a mandar el contraído de cada dimensión.
+        container.querySelectorAll(".dimension-group").forEach(group => {
+            let matches = 0;
+            Array.from(group.children).forEach(item => {
+                if (!item.classList || !item.classList.contains("field-item")) return;
+                if (q === "") { item.style.display = ""; return; }
+                const labelEl = item.querySelector(".field-label");
+                const label = (labelEl ? labelEl.textContent : item.textContent || "").toLowerCase();
+                const ok = label.includes(q);
+                item.style.display = ok ? "flex" : "none";
+                if (ok) matches++;
+            });
+            group.style.display = (q !== "" && matches === 0) ? "none" : "";
         });
     },
 
@@ -1411,14 +2028,29 @@ const TaskPaneApp = {
         // está arrastrando una tag ya colocada (sourceTag), no un campo
         // nuevo desde la lista de la izquierda.
         const dragged = this.draggedElementData;
-        if (dragged && dragged.sourceTag && dragged.sourceZone === zoneId) {
+        if (dragged && dragged.isMeasureBlock && dragged.sourceZone === zoneId) {
+            // Bloque "Σ Medidas" completo: se coloca entre las dimensiones
+            // del eje (encima o debajo de cualquiera de ellas).
+            const dropzoneContent = e.currentTarget.querySelector(".dropzone-content");
+            if (dropzoneContent) {
+                const afterElement = this.getDragAfterElement(dropzoneContent, e.clientY);
+                if (afterElement == null) {
+                    dropzoneContent.appendChild(dragged.sourceTag);
+                } else if (afterElement !== dragged.sourceTag) {
+                    dropzoneContent.insertBefore(dragged.sourceTag, afterElement);
+                }
+            }
+        } else if (dragged && dragged.sourceTag && dragged.sourceZone === zoneId) {
             const dropzoneContent = e.currentTarget.querySelector(".dropzone-content");
             if (dropzoneContent) {
                 // Una medida se reordena SOLO dentro de su propio grupo
                 // "Σ Medidas" (no se compara su posición con las tags de
                 // dimensiones sueltas del mismo eje); el resto de campos se
                 // reordena entre sí, directamente en la dropzone.
-                const container = this.isMeasureField(dragged.data)
+                // En Filtros no hay caja «Σ Medidas»: antes, al pasar una
+                // medida de Filtros por su propia zona, se creaba una caja
+                // allí y se quedaba vacía al llevarla a Filas/Columnas.
+                const container = (this.isMeasureField(dragged.data) && (zoneId === "rows" || zoneId === "columns"))
                     ? this.ensureMeasureGroup(dropzoneContent, zoneId)
                     : dropzoneContent;
                 const afterElement = this.getDragAfterElement(container, e.clientY);
@@ -1438,7 +2070,9 @@ const TaskPaneApp = {
     // colarse dentro del grupo de medidas al reordenar dimensiones sueltas,
     // ni al revés.
     getDragAfterElement(container, y) {
-        const elements = [...container.querySelectorAll(":scope > .dropped-tag:not(.dragging)")];
+        // El bloque "Σ Medidas" cuenta como un elemento más: una dimensión
+        // puede quedar encima o debajo de él, y el bloque entre dimensiones.
+        const elements = [...container.querySelectorAll(":scope > .dropped-tag:not(.dragging), :scope > .measure-group:not(.dragging)")];
         return elements.reduce((closest, child) => {
             const box = child.getBoundingClientRect();
             const offset = y - box.top - box.height / 2;
@@ -1465,7 +2099,25 @@ const TaskPaneApp = {
             group = document.createElement("div");
             group.className = "measure-group";
             group.dataset.zone = zoneId;
-            group.innerHTML = `<div class="measure-group-title">Σ Medidas</div><div class="measure-group-content"></div>`;
+            group.innerHTML = `<div class="measure-group-title" title="Arrastra para mover todas las medidas">Σ Medidas</div><div class="measure-group-content"></div>`;
+            // El bloque entero se arrastra (desde su título o su borde): se
+            // recoloca entre las dimensiones del eje o pasa al otro eje con
+            // todas sus medidas. Cada medida sigue arrastrándose sola dentro
+            // del bloque (su dragstart para la propagación).
+            group.draggable = !this.isZoneLocked(zoneId);
+            group.addEventListener("dragstart", (e) => {
+                const zone = group.dataset.zone;
+                this.draggedElementData = {
+                    data: { dim: "MEASURE", name: "", isHierarchy: false },
+                    sourceTag: group,
+                    sourceZone: zone,
+                    isMeasureBlock: true
+                };
+                group.classList.add("dragging");
+                e.dataTransfer.effectAllowed = "move";
+                e.dataTransfer.setData("text/plain", "draco-measure-block");
+            });
+            group.addEventListener("dragend", () => group.classList.remove("dragging"));
             dropzoneContent.appendChild(group);
         }
         return group.querySelector(".measure-group-content");
@@ -1502,6 +2154,113 @@ const TaskPaneApp = {
 
     // Aviso visual breve (borde rojo + texto en el estado de autoguardado)
     // cuando se rechaza un drop por la regla anterior.
+    /* -------------------------------------------------------------
+     * Informe Estático empezado de cero (commands.js,
+     * dracoAddStaticLevelAndLocate): tras elegir la dimensión de un NIVEL
+     * NUEVO (celda a la izquierda de la cabecera de Filas o encima de la de
+     * Columnas), se añade al PRINCIPIO de ese eje. La cabecera crece hacia
+     * fuera (Filas a la izquierda, Columnas hacia arriba) y los valores no
+     * se mueven, así la celda pulsada pasa a ser el nivel 1 del eje.
+     * ----------------------------------------------------------- */
+    async addStaticAxisField(reportId, zone, field) {
+        if (String(this.currentReportId) !== String(reportId)) {
+            await this.onReportSelectorChange(String(reportId));
+        }
+        const list = zone === "rows" ? this.state.rows : this.state.columns;
+        const same = e => String(e.dimension).toUpperCase() === String(field.dim).toUpperCase()
+            && String(e.name).toUpperCase() === String(field.name).toUpperCase();
+        if (list.some(same)) {
+            this.flashZoneWarning(zone, `${field.name} ya está en ${zone === "rows" ? "Filas" : "Columnas"}.`);
+            return false;
+        }
+        this.undoRecord();
+        list.unshift({ dimension: field.dim, name: field.name, isHierarchy: !!field.isHierarchy });
+        // Hacia fuera (como en el modo híbrido), aunque los dos ejes sean Estáticos
+        if (zone === "rows") RangeAxis.onRowFieldAdded(true); else RangeAxis.onColFieldAdded(true);
+        await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
+        await this.loadDesignFromSheet();
+        this.setAutoStatus(`${field.name} añadido a ${zone === "rows" ? "Filas" : "Columnas"}.`);
+        return true;
+    },
+
+    /* -------------------------------------------------------------
+     * Se han borrado columnas ENTERAS de la cabecera de Filas (o filas de
+     * la de Columnas) con el complemento cargado (handleDracoStructureChanged
+     * en commands.js): se quitan del informe los campos que ocupaban y la
+     * cabecera se estrecha en las columnas/filas borradas. La posición la
+     * ajusta después dracoSyncReportPositions con los rangos con nombre.
+     * ----------------------------------------------------------- */
+    async removeAxisFieldsAfterDelete(reportId, zone, itemIndexes, removedPhysical) {
+        if (String(this.currentReportId) !== String(reportId)) {
+            await this.onReportSelectorChange(String(reportId));
+        }
+        const list = zone === "rows" ? this.state.rows : this.state.columns;
+        const names = itemIndexes.map(i => list[i] && list[i].name).filter(Boolean);
+        if (!names.length) return;
+        this.undoRecord();
+        [...itemIndexes].sort((a, b) => b - a).forEach(i => list.splice(i, 1));
+        if (zone === "rows") RangeAxis.rr.width = Math.max(0, (RangeAxis.rr.width || 0) - removedPhysical);
+        else RangeAxis.rc.height = Math.max(0, (RangeAxis.rc.height || 0) - removedPhysical);
+        try {
+            if (window.ReportStore && window.ReportStore.countTextColumns) {
+                this.textExtra[zone] = window.ReportStore.countTextColumns(this.currentReportId, zone, list, this.state.fieldOptions);
+            }
+        } catch (e) { /* sin textos */ }
+        await window.ExcelService.saveEditReportDesign(this.currentReportId, this.collectDesignPayload());
+        await this.loadDesignFromSheet();
+        this.flashZoneWarning(zone, `Se ha quitado ${names.join(", ")} del informe: se borró su ${zone === "rows" ? "columna" : "fila"}.`);
+        this.scheduleAutoUpdate();
+    },
+
+    /* -------------------------------------------------------------
+     * Filtros anulados por un eje ESTÁTICO: si una dimensión de un eje
+     * Estático está también en Filtros, ese filtro no se aplica (las
+     * líneas del eje ya filtran por sus miembros; ver
+     * buildFilterConditions(skipDims) en commands.js). Aquí se pinta en
+     * gris, no se puede editar y se avisa en la zona Filtros.
+     * ----------------------------------------------------------- */
+    staticFilterDims() {
+        const out = new Set();
+        const add = list => (list || []).forEach(e => {
+            const d = String(e.dimension || "").toUpperCase();
+            if (d && d !== "MEASURE") out.add(d);
+        });
+        if (this.state.rowsStatic) add(this.state.rows);
+        if (this.state.colsStatic) add(this.state.columns);
+        return out;
+    },
+
+    refreshStaticFilterLock(announce) {
+        const card = document.querySelector('.zone-card[data-zone="filters"]');
+        if (!card) return;
+        const dims = this.staticFilterDims();
+        const locked = [];
+        card.querySelectorAll(".dropzone-content .dropped-tag").forEach(tag => {
+            const d = String(tag.dataset.dim || "");
+            const on = !tag.classList.contains("measure-tag") && dims.has(d.toUpperCase());
+            tag.classList.toggle("filter-static-off", on);
+            if (on) {
+                tag.title = `No se aplica en un informe Estático: ${d} ya se filtra por las líneas del eje.`;
+                if (locked.indexOf(d) === -1) locked.push(d);
+            } else if (tag.title && tag.title.indexOf("No se aplica en un informe Estático") === 0) {
+                tag.title = "";
+            }
+        });
+        let note = card.querySelector(".static-filter-note");
+        if (!locked.length) { if (note) note.remove(); this._staticLockedSig = ""; return; }
+        const msg = `En informe estático deja de aplicarse el filtro de ${locked.length === 1 ? "la dimensión" : "las dimensiones"} ${locked.join(", ")}: ya se filtra por las líneas del eje.`;
+        if (!note) {
+            note = document.createElement("div");
+            note.className = "static-filter-note";
+            card.appendChild(note);
+        }
+        note.textContent = "ⓘ " + msg;
+        // Aviso en la barra de estado al aparecer (p. ej. al marcar Estático)
+        const sig = locked.join("|");
+        if (announce !== false && sig !== this._staticLockedSig) this.flashZoneWarning("filters", msg);
+        this._staticLockedSig = sig;
+    },
+
     flashZoneWarning(zoneId, message) {
         const card = document.querySelector(`.zone-card[data-zone="${zoneId}"]`);
         if (card) {
@@ -1537,8 +2296,23 @@ const TaskPaneApp = {
         }
         if (!this.draggedElementData) return;
 
-        const { data, sourceTag, sourceZone } = this.draggedElementData;
+        const { data, sourceTag, sourceZone, isMeasureBlock } = this.draggedElementData;
         const targetContent = dropzoneBox.querySelector(".dropzone-content");
+
+        if (isMeasureBlock) {
+            this.draggedElementData = null;
+            if (sourceZone === zoneId) {
+                this.syncStateOrderFromDom(zoneId, targetContent);
+                return;
+            }
+            if (zoneId !== "rows" && zoneId !== "columns") {
+                this.flashZoneWarning(zoneId, "El bloque de medidas solo puede ir a Filas o Columnas.");
+                return;
+            }
+            if (this.isZoneLocked(sourceZone)) return;
+            this.moveMeasureBlock(sourceZone, zoneId);
+            return;
+        }
 
         if (sourceZone === zoneId) {
             // Mismo eje: handleDragOver ya reordenó la tag en el DOM en
@@ -1566,18 +2340,106 @@ const TaskPaneApp = {
             return;
         }
 
+        // Dimensiones entre Filtros y Filas/Columnas: se COPIAN (el campo
+        // sigue donde estaba y además aparece en el destino). Así un filtro
+        // no se pierde al llevar la dimensión a Filas, ni al revés. Las
+        // medidas, y los movimientos entre Filas y Columnas, siguen moviendo.
+        const crossesFilters = !!sourceZone && ((sourceZone === "filters") !== (zoneId === "filters"));
+        if (sourceTag && crossesFilters && !this.isMeasureField(data)) {
+            if (this.listForZone(zoneId).some(x => x.dimension === data.dim && x.name === data.name)) {
+                this.flashZoneWarning(zoneId, "Ese campo ya está en esta zona.");
+            } else {
+                this.addField(targetContent, zoneId, data);
+            }
+            this.draggedElementData = null;
+            return;
+        }
+
         if (sourceTag) {
             sourceTag.remove();
             this.removeFromState(sourceZone, data);
-            if (sourceZone === "rows" || sourceZone === "columns") {
-                const sourceContent = document.querySelector(`.zone-card[data-zone="${sourceZone}"] .dropzone-content`);
-                if (sourceContent) this.cleanupMeasureGroup(sourceContent);
-            }
+            // Caja «Σ Medidas» vacía en la zona de origen (sea cual sea): fuera
+            const sourceContent = document.querySelector(`.zone-card[data-zone="${sourceZone}"] .dropzone-content`);
+            if (sourceContent) this.cleanupMeasureGroup(sourceContent);
         }
 
         this.addField(targetContent, zoneId, data);
 
         this.draggedElementData = null;
+    },
+
+    /**
+     * Mueve TODAS las medidas de un eje al otro (arrastrando el bloque
+     * "Σ Medidas"), en el mismo orden, al final del eje de destino.
+     */
+    moveMeasureBlock(fromZone, toZone) {
+        const fromContent = document.querySelector(`.zone-card[data-zone="${fromZone}"] .dropzone-content`);
+        const toContent = document.querySelector(`.zone-card[data-zone="${toZone}"] .dropzone-content`);
+        if (!fromContent || !toContent) return;
+        const measures = this.listForZone(fromZone)
+            .filter(x => String(x.dimension).toUpperCase() === "MEASURE")
+            .map(x => ({ dim: x.dimension, name: x.name, isHierarchy: x.isHierarchy }));
+        if (!measures.length) return;
+        measures.forEach(m => {
+            const tag = [...fromContent.querySelectorAll(".dropped-tag")]
+                .find(t => t.dataset.dim === m.dim && t.dataset.fieldName === m.name);
+            if (tag) tag.remove();
+            this.removeFromState(fromZone, m);
+        });
+        this.cleanupMeasureGroup(fromContent);
+        measures.forEach(m => this.addField(toContent, toZone, m));
+    },
+
+    /** Vuelve a pintar la zona Filtros a partir de this.state.filters. */
+    rerenderFiltersZone() {
+        const filtersContent = document.querySelector('.zone-card[data-zone="filters"] .dropzone-content');
+        if (!filtersContent) return;
+        filtersContent.innerHTML = "";
+        this.state.filters.forEach(f => this.renderTag(filtersContent, "filters", f));
+        if (this.renderLockedFilterTags) this.renderLockedFilterTags(filtersContent);
+    },
+
+    /**
+     * Doble clic en una dimensión de Filas/Columnas: abre el mismo diálogo
+     * de filtro que en la zona Filtros y guarda la selección EN Filtros
+     * (crea el filtro si no estaba; si ya estaba, lo sustituye). El campo
+     * sigue en Filas/Columnas.
+     */
+    async openFilterForAxisField(entry) {
+        if (typeof FilterModal === "undefined" || !FilterModal.open) return;
+        const same = f => f.dimension === entry.dimension && f.name === entry.name;
+        const existing = this.state.filters.find(same);
+        this._filterDialogOpen = true;
+        let result = null;
+        try {
+            result = await FilterModal.open({
+            dim: entry.dimension,
+            name: entry.name,
+            isHierarchy: entry.isHierarchy,
+            currentFilter: existing ? existing.filter : null
+        });
+        } finally {
+            this._filterDialogOpen = false;
+            this._lastTagDblClickAt = Date.now();
+        }
+        if (!result) return;
+        if (existing) {
+            existing.filter = result;
+            if (!existing.isHierarchy) existing.realAttribute = result.attribute || existing.name;
+            this.rerenderFiltersZone();
+            this.scheduleAutoUpdate();
+        } else {
+            const filtersContent = document.querySelector('.zone-card[data-zone="filters"] .dropzone-content');
+            if (!filtersContent) return;
+            this.addField(filtersContent, "filters", { dim: entry.dimension, name: entry.name, isHierarchy: entry.isHierarchy });
+            const added = this.state.filters.find(same);
+            if (added) {
+                added.filter = result;
+                if (!added.isHierarchy) added.realAttribute = result.attribute || added.name;
+            }
+            this.rerenderFiltersZone();
+            this.scheduleAutoUpdate();
+        }
     },
 
     // Reconstruye this.state.<zona> en el mismo orden en que han quedado
@@ -1596,7 +2458,7 @@ const TaskPaneApp = {
         });
         list.length = 0;
         list.push(...newList);
-        this.scheduleAutoUpdate();
+        this.scheduleAutoUpdate({ saveOnly: zoneId === "filters" }); // el orden de los filtros no cambia el informe
     },
 
     /* -------------------------------------------------------------
@@ -1632,17 +2494,21 @@ const TaskPaneApp = {
         const shouldGrowRange = !isMeasure || isFirstMeasureInZone;
 
         if (shouldGrowRange) {
-            if (zoneId === "rows") RangeAxis.onRowFieldAdded();
-            if (zoneId === "columns") RangeAxis.onColFieldAdded();
+            if (zoneId === "rows") RangeAxis.onRowFieldAdded(this.state.colsStatic && !this.state.rowsStatic);
+            if (zoneId === "columns") RangeAxis.onColFieldAdded(this.state.rowsStatic && !this.state.colsStatic);
         }
+        this.reconcileTextColumns();
         this.refreshRangeLabels();
 
         this.renderTag(container, zoneId, entry);
 
         // Un filtro recién soltado aún no tiene valor (se ignora en el WHERE
-        // hasta que se elija uno), pero añadir/quitar campos de Filas o
-        // Columnas sí cambia el informe de inmediato: autoguardar+actualizar.
-        this.scheduleAutoUpdate();
+        // hasta que se elija uno): el informe no cambia, solo se guarda el
+        // diseño. Añadir campos a Filas o Columnas sí lo cambia: actualizar.
+        // Una MEDIDA en Filtros no es un filtro: es la medida del informe
+        // (applyFilterMeasuresToDynamicReport en commands.js), así que
+        // también cambia el informe y hay que actualizar.
+        this.scheduleAutoUpdate({ saveOnly: zoneId === "filters" && !entry.filter && !isMeasure });
     },
 
     removeFromState(zoneId, data) {
@@ -1663,12 +2529,15 @@ const TaskPaneApp = {
         const shouldShrinkRange = !isMeasure || measureCountLeftInZone === 0;
 
         if (shouldShrinkRange) {
-            if (zoneId === "rows") RangeAxis.onRowFieldRemoved();
-            if (zoneId === "columns") RangeAxis.onColFieldRemoved();
+            if (zoneId === "rows") RangeAxis.onRowFieldRemoved(this.state.colsStatic && !this.state.rowsStatic);
+            if (zoneId === "columns") RangeAxis.onColFieldRemoved(this.state.rowsStatic && !this.state.colsStatic);
         }
+        this.reconcileTextColumns();
         this.refreshRangeLabels();
 
-        this.scheduleAutoUpdate();
+        // Quitar de Filtros un filtro sin valor no cambia el informe (una
+        // medida sí: era la medida del informe)
+        this.scheduleAutoUpdate({ saveOnly: zoneId === "filters" && !!removed && !removed.filter && !isMeasure });
     },
 
     listForZone(zoneId) {
@@ -1684,6 +2553,7 @@ const TaskPaneApp = {
         const tag = document.createElement("div");
         tag.className = "dropped-tag";
         if (isMeasure) tag.classList.add("measure-tag");
+        tag.dataset.dim = String(entry.dimension || "");
         tag.draggable = true;
         tag.dataset.dim = entry.dimension;
         tag.dataset.fieldName = entry.name;
@@ -1709,7 +2579,7 @@ const TaskPaneApp = {
 
         // SEGURIDAD: titleText puede incluir valores de miembro reales
         // (describeFilter -> valores elegidos en memberPicker, que a su vez
-        // provienen de datos de BigQuery/Snowflake, no de código de este
+        // provienen de datos de BigQuery, no de código de este
         // add-in). NUNCA insertar ese texto con innerHTML: si una fila de
         // datos contiene marcado HTML (p.ej. "<img src=x onerror=...>"),
         // se ejecutaría en el contexto del add-in con acceso a
@@ -1746,14 +2616,34 @@ const TaskPaneApp = {
         // dimensión con valores): no se abre el FilterModal para ella.
         if (zoneId === "filters" && !isMeasure) {
             tag.addEventListener("dblclick", async () => {
+                clearTimeout(this._tagClickTimer); this._tagClickTimer = null; // sin abrir propiedades
+                this._lastTagDblClickAt = Date.now();
+                if (this.staticFilterDims().has(String(entry.dimension).toUpperCase())) {
+                    // Filtro anulado por un eje Estático (ver refreshStaticFilterLock):
+                    // aviso visible en el centro de Excel, no solo en la barra de estado
+                    const msg = `El filtro de ${entry.dimension} no se aplica: esa dimensión está en un eje Estático (ya filtran sus líneas).`;
+                    this.flashZoneWarning("filters", msg);
+                    if (typeof window.dracoInfoNotice === "function") window.dracoInfoNotice("Filtro sin efecto", msg, "warn");
+                    return;
+                }
                 if (typeof FilterModal === "undefined" || !FilterModal.open) return;
 
-                const result = await FilterModal.open({
-                    dim: entry.dimension,
-                    name: entry.name,
-                    isHierarchy: entry.isHierarchy,
-                    currentFilter: entry.filter
-                });
+                // Mientras la ventana del filtro está abierta, el panel no abre
+                // las propiedades del campo (si lo hacía, Excel cogía el foco y
+                // la ventana del filtro desaparecía detrás).
+                this._filterDialogOpen = true;
+                let result = null;
+                try {
+                    result = await FilterModal.open({
+                        dim: entry.dimension,
+                        name: entry.name,
+                        isHierarchy: entry.isHierarchy,
+                        currentFilter: entry.filter
+                    });
+                } finally {
+                    this._filterDialogOpen = false;
+                    this._lastTagDblClickAt = Date.now();
+                }
                 if (result) {
                     entry.filter = result;
                     if (!entry.isHierarchy) entry.realAttribute = result.attribute || entry.name;
@@ -1768,15 +2658,63 @@ const TaskPaneApp = {
             e.stopPropagation();
             tag.remove();
             this.removeFromState(zoneId, { dim: entry.dimension, name: entry.name });
-            if (zoneId === "rows" || zoneId === "columns") this.cleanupMeasureGroup(container);
+            this.cleanupMeasureGroup(container);
         });
+
+        // Doble clic en una dimensión de Filas/Columnas: filtro sobre ella
+        // (se guarda en la zona Filtros, ver openFilterForAxisField).
+        if ((zoneId === "rows" || zoneId === "columns") && !isMeasure) {
+            tag.title = "Doble clic: filtrar este campo";
+            tag.addEventListener("dblclick", (e) => {
+                if (e.target.closest(".dropped-tag-remove")) return;
+                e.stopPropagation();
+                clearTimeout(this._tagClickTimer); this._tagClickTimer = null; // sin abrir propiedades
+                this._lastTagDblClickAt = Date.now();
+                this.openFilterForAxisField(entry);
+            });
+        }
+
+        // Clic derecho (Filas/Columnas): Mostrar → ID / ID y descripción, si el
+        // campo es la clave de una dimensión con texto, o una jerarquía.
+        if ((zoneId === "rows" || zoneId === "columns") && !isMeasure) {
+            tag.addEventListener("contextmenu", async (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const x = e.clientX, y = e.clientY;
+                const info = window.ReportStore && window.ReportStore.getDisplayTextInfo
+                    ? window.ReportStore.getDisplayTextInfo(this.currentReportId, entry.dimension, entry.name, !!entry.isHierarchy)
+                    : null;
+                let levels = null;
+                if (entry.isHierarchy) {
+                    try { levels = await window.ExcelService.getHierarchyLevels(entry.dimension, entry.name); }
+                    catch (err) { console.error("Niveles de la jerarquía:", err); }
+                }
+                this.showDisplayModeMenu(x, y, zoneId, entry, info, levels);
+            });
+        }
 
         // Clic (simple) sobre el campo: abre/actualiza el panel "Opciones de
         // campo" con los controles de ESE campo (medida o dimensión).
+        // Si el campo tiene doble clic (filtro), el clic simple espera un
+        // instante: si llega el segundo clic, se cancela y solo se abre el
+        // filtro (antes se abrían las dos cosas y el panel parpadeaba).
         tag.classList.add("clickable-for-options");
+        const hasDblClick = !isMeasure && (zoneId === "filters" || zoneId === "rows" || zoneId === "columns");
         tag.addEventListener("click", (e) => {
             if (e.target.closest(".dropped-tag-remove")) return;
-            this.selectFieldForOptions(zoneId, entry);
+            if (!hasDblClick) { this.selectFieldForOptions(zoneId, entry); return; }
+            if (e.detail > 1) { clearTimeout(this._tagClickTimer); this._tagClickTimer = null; return; } // segundo clic de un doble clic
+            clearTimeout(this._tagClickTimer);
+            // 400 ms: un doble clic algo lento (Windows admite hasta 500 ms)
+            // no llega a abrir las propiedades antes de que llegue el segundo clic.
+            this._tagClickTimer = setTimeout(() => {
+                this._tagClickTimer = null;
+                // Protección explícita: nunca abrir las propiedades durante un
+                // doble clic (aunque el evento llegue tarde o desordenado) ni
+                // con la ventana de un filtro abierta.
+                if (this._filterDialogOpen || (Date.now() - (this._lastTagDblClickAt || 0)) < 1000) return;
+                this.selectFieldForOptions(zoneId, entry);
+            }, 400);
         });
 
         // Las medidas de Filas/Columnas se agrupan en su propia caja
@@ -1969,8 +2907,10 @@ const TaskPaneApp = {
         document.getElementById("propSubtotalsOnTop").checked = !!this.reportProperties.subtotalsOnTop;
         document.getElementById("propHierarchyNodesOnTop").checked = this.reportProperties.hierarchyNodesOnTop !== false;
         document.getElementById("propOverwriteFormats").checked = !!this.reportProperties.overwriteFormats;
+        document.getElementById("propOverwriteStaticFormats").checked = !!this.reportProperties.overwriteStaticFormats;
         document.getElementById("propAutoFitColumns").checked = !!this.reportProperties.autoFitColumns;
         document.getElementById("propPlanningReport").checked = !!this.reportProperties.planningReport;
+        this.applyPlanningGateToProperties();
 
         await this.toggleDimensionsBehaviorSection();
 
@@ -2078,7 +3018,47 @@ const TaskPaneApp = {
     },
 
     openDistributeValuesModal() {
+        if (window.DracoPlanningGate) {
+            const report = window.ReportStore ? window.ReportStore.getReport(window.ReportStore.getActiveReportId()) : null;
+            const gate = DracoPlanningGate.check(report ? report.semanticModelName : "");
+            if (!gate.ok) {
+                alert(gate.reason);
+                return;
+            }
+        }
         if (window.DistributeValuesPanel) window.DistributeValuesPanel.open();
+    },
+
+    /**
+     * Planificación según la sesión (DracoPlanningGate): con un token de solo
+     * lectura no se muestra nada de planificación (botón "Distribuir valores",
+     * casilla "Informe de planificación") y se desactiva "Guardar" en la cinta.
+     * Se llama al iniciar el panel y tras cada inicio de sesión.
+     */
+    applyPlanningGateUI() {
+        if (!window.DracoPlanningGate) return;
+        const canWrite = DracoPlanningGate.canWrite();
+        const btn = document.getElementById("btnDistribuirValores");
+        if (btn) btn.style.display = canWrite ? "" : "none";
+        DracoPlanningGate.syncRibbon();
+    },
+
+    /** Casilla "Informe de planificación" del modal de propiedades según la puerta. */
+    applyPlanningGateToProperties() {
+        const checkbox = document.getElementById("propPlanningReport");
+        if (!checkbox || !window.DracoPlanningGate) return;
+        const row = checkbox.closest("label") || checkbox.parentElement;
+        const modelName = (document.getElementById("propSemanticModel") || {}).value || "";
+        const gate = DracoPlanningGate.check(modelName);
+        // Solo lectura: no se muestra. Modelo que no es de Draco Planning: se ve desactivada, con el motivo.
+        if (row) row.style.display = DracoPlanningGate.canWrite() ? "" : "none";
+        checkbox.disabled = !gate.ok;
+        if (row) row.title = gate.ok ? "" : gate.reason;
+        if (!gate.ok) {
+            checkbox.checked = false;
+            const section = document.getElementById("propDimensionsBehaviorSection");
+            if (section) section.style.display = "none";
+        }
     },
 
     closeReportPropertiesModal() {
@@ -2108,8 +3088,10 @@ const TaskPaneApp = {
             subtotalsOnTop: document.getElementById("propSubtotalsOnTop").checked,
             hierarchyNodesOnTop: document.getElementById("propHierarchyNodesOnTop").checked,
             overwriteFormats: document.getElementById("propOverwriteFormats").checked,
+            overwriteStaticFormats: document.getElementById("propOverwriteStaticFormats").checked,
             autoFitColumns: document.getElementById("propAutoFitColumns").checked,
-            planningReport: document.getElementById("propPlanningReport").checked,
+            planningReport: document.getElementById("propPlanningReport").checked
+                && (!window.DracoPlanningGate || DracoPlanningGate.check(document.getElementById("propSemanticModel").value).ok),
             dimensionsBehavior
         };
 
@@ -2183,7 +3165,12 @@ const TaskPaneApp = {
     setFieldOptionsPanelOpen(open) {
         const container = document.querySelector(".taskpane-container");
         const btn = document.getElementById("btnFieldOptions");
+        const wasOpen = !!(container && container.classList.contains("field-options-open"));
         if (container) container.classList.toggle("field-options-open", open);
+        // Más ancho con las propiedades del campo a la vista; normal al
+        // cerrarlas. Solo cuando cambia: pedirlo en cada clic hacía que el
+        // panel pareciera cerrarse y volver a abrirse.
+        if (wasOpen !== !!open && window.dracoSetTaskpaneWidth) window.dracoSetTaskpaneWidth(open ? "wide" : "normal");
         if (btn) btn.classList.toggle("toggle-active", open);
         if (!open) this.selectedFieldForOptions = null;
         this.updateRibbonToggleLabel("BtnOpcionesCampo", "Opciones de campo", open);
@@ -2201,8 +3188,9 @@ const TaskPaneApp = {
         const key = this.fieldOptionsKey(zoneId, entry);
         const isMeasure = String(entry.dimension).toUpperCase() === "MEASURE";
         const defaults = isMeasure
-            ? { numberFormat: "#,##0.00", decimalSeparator: ",", thousandsSeparator: ".", factor: 1, decimals: 2, aggregation: "SUM" }
-            : { showTotals: false, sortOrder: "none", expandToLevel: null, visibleLevels: null };
+            // aggregation "" = la del modelo semántico (no se sobrescribe).
+            ? { numberFormat: "number", decimals: 2, aggregation: "" }
+            : { showTotals: false, sortOrder: "none", expandToLevel: null, visibleLevels: null, displayMode: "ID" };
         return Object.assign({}, defaults, this.state.fieldOptions[key] || {});
     },
 
@@ -2212,19 +3200,27 @@ const TaskPaneApp = {
     },
 
     async selectFieldForOptions(zoneId, entry) {
+        const prev = this.selectedFieldForOptions;
+        const same = prev && prev.zoneId === zoneId && prev.dimension === entry.dimension && prev.name === entry.name;
         this.selectedFieldForOptions = { zoneId, dimension: entry.dimension, name: entry.name, isHierarchy: entry.isHierarchy };
+        // El mismo campo con el panel ya abierto: no se rehace nada
+        if (same && this.isFieldOptionsPanelOpen && this.isFieldOptionsPanelOpen()) return;
         this.setFieldOptionsPanelOpen(true);
         await this.renderFieldOptionsBody(zoneId, entry);
     },
 
     async renderFieldOptionsBody(zoneId, entry) {
-        const body = document.getElementById("fieldOptionsBody");
-        if (!body) return;
+        const target = document.getElementById("fieldOptionsBody");
+        if (!target) return;
+        // El contenido se monta aparte y se sustituye de una vez (con un
+        // fundido corto): antes se vaciaba el panel y se iba rellenando
+        // mientras se leían los niveles, con un parpadeo visible.
+        const token = (this._foRenderToken = (this._foRenderToken || 0) + 1);
+        const body = document.createElement("div");
+        body.className = "field-options-content";
 
         const isMeasure = String(entry.dimension).toUpperCase() === "MEASURE";
         const options = this.getFieldOptions(zoneId, entry);
-
-        body.innerHTML = "";
 
         const nameEl = document.createElement("div");
         nameEl.className = "field-options-field-name";
@@ -2240,8 +3236,6 @@ const TaskPaneApp = {
             // completa, solo tendrían sentido por atributo individual).
             const levelsBox = document.createElement("div");
             levelsBox.className = "field-options-group";
-            levelsBox.innerHTML = `<div class="field-options-section-title">Jerarquía</div>
-                <div class="field-options-empty" id="fieldOptionsLevelsLoading">Cargando niveles…</div>`;
             body.appendChild(levelsBox);
 
             try {
@@ -2249,11 +3243,225 @@ const TaskPaneApp = {
                 this.renderHierarchyLevelControls(levelsBox, zoneId, entry, options, levels);
             } catch (err) {
                 console.error("Error al leer los niveles de la jerarquía:", err);
-                levelsBox.querySelector("#fieldOptionsLevelsLoading").innerText = "No se pudieron cargar los niveles.";
+                levelsBox.innerHTML = `<div class="field-options-section-title">Jerarquía</div>
+                    <div class="field-options-empty">No se pudieron cargar los niveles.</div>`;
             }
         } else {
             body.appendChild(this.buildDimensionOptionsForm(zoneId, entry, options));
         }
+
+        if (token !== this._foRenderToken) return; // ya se ha pedido otro campo
+        target.replaceChildren(body);
+    },
+
+    /**
+     * Cada "ID y texto" añade una columna (Filas) o fila (Columnas) física:
+     * el rango del eje (RangeAxis) tiene que crecer/encoger igual que al
+     * añadir/quitar un campo, o el texto se solapa con el otro eje.
+     * reset=true: solo toma la cuenta actual como ya incluida en el rango
+     * (al cargar un informe).
+     */
+    reconcileTextColumns(reset) {
+        if (!window.ReportStore || !window.ReportStore.countTextColumns || !this.currentReportId) return;
+        ["rows", "columns"].forEach(zone => {
+            const n = window.ReportStore.countTextColumns(this.currentReportId, zone, this.listForZone(zone), this.state.fieldOptions);
+            let delta = reset ? 0 : n - (this.textExtra[zone] || 0);
+            const rowsFlag = this.state.colsStatic && !this.state.rowsStatic;
+            const colsFlag = this.state.rowsStatic && !this.state.colsStatic;
+            for (; delta > 0; delta--) {
+                if (zone === "rows") RangeAxis.onRowFieldAdded(rowsFlag); else RangeAxis.onColFieldAdded(colsFlag);
+            }
+            for (; delta < 0; delta++) {
+                if (zone === "rows") RangeAxis.onRowFieldRemoved(rowsFlag); else RangeAxis.onColFieldRemoved(colsFlag);
+            }
+            this.textExtra[zone] = n;
+        });
+        this.refreshRangeLabels();
+    },
+
+    /** Cambia "Solo ID" / "ID y texto" de un campo (panel de opciones o menú contextual). */
+    setDisplayMode(zoneId, entry, mode) {
+        const current = this.getFieldOptions(zoneId, entry);
+        current.displayMode = (mode === "ID_TEXT" || mode === "TEXT") ? mode : "ID";
+        this.setFieldOptions(zoneId, entry, current);
+        this.reconcileTextColumns();
+        const sel = this.selectedFieldForOptions;
+        if (sel && sel.zoneId === zoneId && sel.dimension === entry.dimension && sel.name === entry.name) {
+            this.renderFieldOptionsBody(zoneId, entry);
+        }
+        this.scheduleAutoUpdate();
+    },
+
+    /**
+     * Menú de clic derecho sobre un campo de Filas/Columnas (mismas opciones
+     * que "Opciones de campo"): Mostrar (ID / ID y descripción / Descripción),
+     * Totales (atributos) o Jerarquía (niveles a mostrar y expandir hasta).
+     */
+    showDisplayModeMenu(x, y, zoneId, entry, info, levels) {
+        this.hideDisplayModeMenu();
+
+        const menu = document.createElement("div");
+        menu.id = "displayModeMenu";
+        menu.style.cssText = "position:fixed;z-index:100000;min-width:190px;max-height:80vh;overflow:auto;background:#fff;border:1px solid #cbd5e1;border-radius:6px;"
+            + "box-shadow:0 4px 14px rgba(0,0,0,.18);padding:4px 0;font-size:12px;color:#0f172a;font-family:inherit;";
+
+        const addTitle = (text) => {
+            const t = document.createElement("div");
+            t.textContent = text;
+            t.style.cssText = "padding:5px 12px 3px;font-size:10px;font-weight:700;text-transform:uppercase;color:#64748b;";
+            menu.appendChild(t);
+        };
+        const addSep = () => {
+            const h = document.createElement("div");
+            h.style.cssText = "height:1px;background:#e2e8f0;margin:4px 0;";
+            menu.appendChild(h);
+        };
+        // onPick(); keepOpen=true deja el menú abierto (casillas de niveles)
+        const addItem = (label, checked, onPick, opts) => {
+            opts = opts || {};
+            const item = document.createElement("div");
+            const mark = () => (checked ? "\u2713 " : "\u00a0\u00a0\u00a0 ");
+            item.textContent = mark() + label;
+            item.style.cssText = "padding:5px 12px;cursor:" + (opts.disabled ? "not-allowed" : "pointer") + ";" + (opts.disabled ? "color:#94a3b8;" : "");
+            if (opts.title) item.title = opts.title;
+            if (!opts.disabled) {
+                item.addEventListener("mouseenter", () => { item.style.background = "#eff6ff"; });
+                item.addEventListener("mouseleave", () => { item.style.background = ""; });
+                item.addEventListener("click", () => {
+                    if (opts.keepOpen) {
+                        checked = !checked;
+                        item.textContent = mark() + label;
+                    } else {
+                        this.hideDisplayModeMenu();
+                    }
+                    onPick(checked);
+                });
+            }
+            menu.appendChild(item);
+        };
+
+        // --- Mostrar (ID / ID y descripción / Descripción)
+        if (info && info.applicable) {
+            const saved = this.getFieldOptions(zoneId, entry).displayMode;
+            const current = (info.available && (saved === "ID_TEXT" || saved === "TEXT")) ? saved : "ID";
+            addTitle("Mostrar");
+            [["ID", "ID"], ["ID_TEXT", "ID y descripción"], ["TEXT", "Descripción"]].forEach(([mode, label]) => {
+                const disabled = mode !== "ID" && !info.available;
+                addItem(label, current === mode, () => { if (mode !== current) this.setDisplayMode(zoneId, entry, mode); },
+                    { disabled, title: disabled ? info.reason : "" });
+            });
+        }
+
+        const patchOptions = (patch) => {
+            const cur = Object.assign(this.getFieldOptions(zoneId, entry), patch);
+            this.setFieldOptions(zoneId, entry, cur);
+            const sel = this.selectedFieldForOptions;
+            if (sel && sel.zoneId === zoneId && sel.dimension === entry.dimension && sel.name === entry.name) {
+                this.renderFieldOptionsBody(zoneId, entry);
+            }
+            this.scheduleAutoUpdate();
+        };
+
+        if (entry.isHierarchy) {
+            // --- Jerarquía: niveles a mostrar y expandir hasta nivel
+            const opts = this.getFieldOptions(zoneId, entry);
+            if (levels && levels.length) {
+                if (menu.children.length) addSep();
+                addTitle("Jerarquía \u203a Mostrar niveles");
+                const visible = new Set(Array.isArray(opts.visibleLevels) ? opts.visibleLevels : levels.map(l => l.nivel));
+                levels.forEach(l => {
+                    addItem(`Nivel ${l.nivel} \u2014 ${l.attribute}`, visible.has(l.nivel), (checked) => {
+                        if (checked) visible.add(l.nivel); else visible.delete(l.nivel);
+                        patchOptions({ visibleLevels: levels.map(v => v.nivel).filter(n => visible.has(n)) });
+                    }, { keepOpen: true });
+                });
+                addSep();
+                addTitle("Jerarquía \u203a Expandir hasta nivel");
+                const exp = opts.expandToLevel;
+                addItem("(todos)", exp === null || exp === undefined || exp === "", () => patchOptions({ expandToLevel: null }));
+                levels.forEach(l => {
+                    addItem(`Nivel ${l.nivel} \u2014 ${l.attribute}`, String(exp) === String(l.nivel), () => patchOptions({ expandToLevel: Number(l.nivel) }));
+                });
+            } else {
+                if (menu.children.length) addSep();
+                addTitle("Jerarquía");
+                addItem("No se pudieron cargar los niveles", false, () => {}, { disabled: true });
+            }
+        } else {
+            // --- Totales (subtotales) mostrar / ocultar
+            if (menu.children.length) addSep();
+            addTitle("Totales");
+            const showing = !!this.getFieldOptions(zoneId, entry).showTotals;
+            addItem("Mostrar", showing, () => { if (!showing) patchOptions({ showTotals: true }); });
+            addItem("Ocultar", !showing, () => { if (showing) patchOptions({ showTotals: false }); });
+        }
+
+        document.body.appendChild(menu);
+        const r = menu.getBoundingClientRect();
+        menu.style.left = Math.max(0, Math.min(x, window.innerWidth - r.width - 4)) + "px";
+        menu.style.top = Math.max(0, Math.min(y, window.innerHeight - r.height - 4)) + "px";
+
+        this._displayMenuCloser = (ev) => {
+            if (ev.type === "keydown" && ev.key !== "Escape") return;
+            if (ev.type === "mousedown" && menu.contains(ev.target)) return;
+            this.hideDisplayModeMenu();
+        };
+        setTimeout(() => {
+            document.addEventListener("mousedown", this._displayMenuCloser, true);
+            document.addEventListener("keydown", this._displayMenuCloser, true);
+            window.addEventListener("blur", this._displayMenuCloser, true);
+            window.addEventListener("scroll", this._displayMenuCloser, true);
+        }, 0);
+    },
+
+    hideDisplayModeMenu() {
+        const m = document.getElementById("displayModeMenu");
+        if (m) m.remove();
+        if (this._displayMenuCloser) {
+            document.removeEventListener("mousedown", this._displayMenuCloser, true);
+            document.removeEventListener("keydown", this._displayMenuCloser, true);
+            window.removeEventListener("blur", this._displayMenuCloser, true);
+            window.removeEventListener("scroll", this._displayMenuCloser, true);
+            this._displayMenuCloser = null;
+        }
+    },
+
+    /**
+     * "Mostrar como: Solo ID / ID y texto" del campo (clave de dimensión o
+     * jerarquía). El atributo de texto se define en el modelo semántico; aquí
+     * solo se elige el modo. Devuelve null si el campo no admite el modo.
+     */
+    buildDisplayModeBlock(zoneId, entry, options) {
+        if (!window.ReportStore || !window.ReportStore.getDisplayTextInfo) return null;
+        const info = window.ReportStore.getDisplayTextInfo(this.currentReportId, entry.dimension, entry.name, !!entry.isHierarchy);
+        if (!info.applicable) return null;
+
+        const label = document.createElement("label");
+        label.className = "field-options-field-block";
+        const span = document.createElement("span");
+        span.className = "field-options-field-label";
+        span.textContent = "Mostrar como";
+        const select = document.createElement("select");
+        select.id = "optDisplayMode";
+        [["ID", "Solo ID"], ["ID_TEXT", "ID y texto"], ["TEXT", "Solo texto"]].forEach(([v, t]) => {
+            const o = document.createElement("option");
+            o.value = v;
+            o.textContent = t;
+            select.appendChild(o);
+        });
+        select.value = (info.available && (options.displayMode === "ID_TEXT" || options.displayMode === "TEXT")) ? options.displayMode : "ID";
+        select.disabled = !info.available;
+        if (!info.available) select.title = info.reason;
+        select.addEventListener("change", () => this.setDisplayMode(zoneId, entry, select.value));
+        label.appendChild(span);
+        label.appendChild(select);
+        if (!info.available) {
+            const hint = document.createElement("div");
+            hint.className = "field-options-empty";
+            hint.textContent = info.reason;
+            label.appendChild(hint);
+        }
+        return label;
     },
 
     buildDimensionOptionsForm(zoneId, entry, options) {
@@ -2267,9 +3475,12 @@ const TaskPaneApp = {
         // todavía para construir el SQL.
         wrap.innerHTML = `
             <div class="field-options-section-title">General</div>
-            <label class="field-options-checkbox-row">
-                <input type="checkbox" id="optShowTotals" ${options.showTotals ? "checked" : ""}>
-                <span>Subtotales</span>
+            <label class="field-options-field-block">
+                <span class="field-options-field-label">Subtotales</span>
+                <select id="optShowTotals">
+                    <option value="0" ${options.showTotals ? "" : "selected"}>Ocultar</option>
+                    <option value="1" ${options.showTotals ? "selected" : ""}>Mostrar</option>
+                </select>
             </label>
             <label class="field-options-field-block">
                 <span class="field-options-field-label">Ordenar</span>
@@ -2283,7 +3494,7 @@ const TaskPaneApp = {
 
         const persist = () => {
             const current = this.getFieldOptions(zoneId, entry);
-            current.showTotals = wrap.querySelector("#optShowTotals").checked;
+            current.showTotals = wrap.querySelector("#optShowTotals").value === "1";
             current.sortOrder = wrap.querySelector("#optSortOrder").value;
             this.setFieldOptions(zoneId, entry, current);
             this.scheduleAutoUpdate();
@@ -2291,6 +3502,9 @@ const TaskPaneApp = {
 
         wrap.querySelector("#optShowTotals").addEventListener("change", persist);
         wrap.querySelector("#optSortOrder").addEventListener("change", persist);
+
+        const displayBlock = this.buildDisplayModeBlock(zoneId, entry, options);
+        if (displayBlock) wrap.appendChild(displayBlock);
 
         return wrap;
     },
@@ -2304,6 +3518,15 @@ const TaskPaneApp = {
             empty.innerText = "Esta jerarquía no tiene niveles definidos.";
             container.appendChild(empty);
             return;
+        }
+
+        // «Mostrar como» en una jerarquía solo si ya tiene textos por nivel
+        // (el selector de texto por nivel está oculto de momento en el modelo)
+        const hInfo = window.ReportStore && window.ReportStore.getDisplayTextInfo
+            ? window.ReportStore.getDisplayTextInfo(this.currentReportId, entry.dimension, entry.name, true) : null;
+        if (hInfo && hInfo.available) {
+            const displayBlock = this.buildDisplayModeBlock(zoneId, entry, options);
+            if (displayBlock) container.appendChild(displayBlock);
         }
 
         const expandLabel = document.createElement("label");
@@ -2378,53 +3601,97 @@ const TaskPaneApp = {
         const wrap = document.createElement("div");
         wrap.className = "field-options-group";
 
+        // Formato: solo Número (con separador de miles) o Porcentaje, con
+        // el nº de decimales de abajo (ver dracoNumberFormatFromOptions en
+        // commands.js). El separador decimal lo pone Excel según el idioma
+        // del usuario, y el factor de escala ya no existe. Los informes
+        // antiguos traen numberFormat "#,##0.00"/"0.00%"/...: lo que lleva
+        // "%" se muestra como Porcentaje y el resto como Número.
+        const formatKind = (String(options.numberFormat || "").indexOf("%") !== -1 || options.numberFormat === "percent") ? "percent" : "number";
+        // Agregaciones soportadas tal cual por el SQL dinámico (GROUPING
+        // SETS) y por DAX. "" = la definida en el modelo semántico.
+        const AGGREGATIONS = [
+            ["", "Según el modelo"],
+            ["SUM", "Suma (SUM)"],
+            ["AVG", "Media (AVG)"],
+            ["COUNT", "Recuento (COUNT)"],
+            ["COUNT_DISTINCT", "Recuento distinto (COUNT DISTINCT)"],
+            ["MIN", "Mínimo (MIN)"],
+            ["MAX", "Máximo (MAX)"]
+        ];
+        const currentAgg = String(options.aggregation || "").toUpperCase();
+        // Agregación de excepción (ver normalizeDracoExc en commands.js): "" = ninguna
+        const EXC_AGGREGATIONS = [
+            ["", "Ninguna"],
+            ["MIN", "Mínimo (MIN)"],
+            ["MAX", "Máximo (MAX)"],
+            ["AVG", "Media (AVG)"],
+            ["SUM", "Suma (SUM)"],
+            ["COUNT", "Número de valores (COUNT)"]
+        ];
+        const currentExc = String(options.excAggregation || "").toUpperCase();
+        const decimalsValue = Number.isFinite(Number(options.decimals)) ? Number(options.decimals) : 2;
+
         wrap.innerHTML = `
             <div class="field-options-section-title">Formato de número</div>
             <label>
                 Formato
                 <select id="optNumberFormat">
-                    <option value="#,##0" ${options.numberFormat === "#,##0" ? "selected" : ""}>1.234 (sin decimales)</option>
-                    <option value="#,##0.00" ${options.numberFormat === "#,##0.00" ? "selected" : ""}>1.234,00</option>
-                    <option value="0.00%" ${options.numberFormat === "0.00%" ? "selected" : ""}>Porcentaje</option>
-                    <option value="#,##0.00 €" ${options.numberFormat === "#,##0.00 €" ? "selected" : ""}>Moneda (€)</option>
-                </select>
-            </label>
-            <label>
-                Separador decimal
-                <select id="optDecimalSeparator">
-                    <option value="," ${options.decimalSeparator === "," ? "selected" : ""}>Coma (,)</option>
-                    <option value="." ${options.decimalSeparator === "." ? "selected" : ""}>Punto (.)</option>
+                    <option value="number" ${formatKind === "number" ? "selected" : ""}>Número (1.234)</option>
+                    <option value="percent" ${formatKind === "percent" ? "selected" : ""}>Porcentaje (12%)</option>
                 </select>
             </label>
             <label>
                 Nº de decimales
-                <input type="number" id="optDecimals" min="0" max="10" value="${options.decimals}">
+                <input type="number" id="optDecimals" min="0" max="10" value="${decimalsValue}">
             </label>
             <label>
                 Factor de escala
-                <select id="optFactor">
-                    <option value="1" ${Number(options.factor) === 1 ? "selected" : ""}>Unidades</option>
-                    <option value="1000" ${Number(options.factor) === 1000 ? "selected" : ""}>Miles</option>
-                    <option value="1000000" ${Number(options.factor) === 1000000 ? "selected" : ""}>Millones</option>
+                <select id="optScale">
+                    ${[1, 10, 100, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9].map(f =>
+                        `<option value="${f}" ${Number(options.scale || 1) === f ? "selected" : ""}>${f === 1 ? "1 (sin escala)" : "÷ " + f.toLocaleString("es-ES")}</option>`).join("")}
                 </select>
             </label>
+            <div style="font-size:10px; color:#605e5c; margin:2px 0 6px;">
+                Se aplica al actualizar si "Sobrescribir formatos" está activado
+                en las propiedades del informe.
+            </div>
             <div class="field-options-section-title">Agregación</div>
             <label>
                 Función
                 <select id="optAggregation">
-                    ${["SUM", "AVG", "COUNT", "COUNT_DISTINCT", "MIN", "MAX"].map(a =>
-                        `<option value="${a}" ${options.aggregation === a ? "selected" : ""}>${a}</option>`).join("")}
+                    ${AGGREGATIONS.map(([value, label]) =>
+                        `<option value="${value}" ${currentAgg === value ? "selected" : ""}>${label}</option>`).join("")}
                 </select>
             </label>
+            <label>
+                Agregación de excepción
+                <select id="optExcAggregation">
+                    ${EXC_AGGREGATIONS.map(([value, label]) =>
+                        `<option value="${value}" ${currentExc === value ? "selected" : ""}>${label}</option>`).join("")}
+                </select>
+            </label>
+            <div id="optExcSection" style="display:${currentExc ? "block" : "none"};">
+                <div style="font-size:10px; color:#605e5c; margin:2px 0 6px;">
+                    Primero se agrega la medida (con la función de arriba) por cada valor de las dimensiones
+                    de referencia —por todas las demás, como siempre— y después se aplica la agregación de
+                    excepción sobre esos valores. Ej.: mínimo mensual = referencia «mes» + Mínimo.
+                </div>
+                <div style="font-size:11px; font-weight:600; margin-bottom:4px;">Dimensiones de referencia</div>
+                <div id="optExcDims" style="display:flex; flex-direction:column; gap:3px; max-height:180px; overflow-y:auto;"></div>
+            </div>
             <div class="field-options-section-title">Planificación</div>
-            <label class="field-options-checkbox-row">
-                <input type="checkbox" id="optPlanificable" ${options.planificable ? "checked" : ""}>
-                <span>Planificable</span>
+            <label class="field-options-field-block">
+                <span class="field-options-field-label">Planificable</span>
+                <select id="optPlanificable"><option value="0" ${options.planificable ? "" : "selected"}>No</option><option value="1" ${options.planificable ? "selected" : ""}>Sí</option></select>
             </label>
             <div id="optPlanificableSection" style="display:${options.planificable ? "block" : "none"}; margin-top:6px;">
-                <label class="field-options-checkbox-row">
-                    <input type="checkbox" id="optDimensionsBehaviorCustom" ${options.dimensionsBehaviorCustom ? "checked" : ""}>
-                    <span>Personalizar criterio de dimensiones para esta medida</span>
+                <label class="field-options-field-block">
+                    <span class="field-options-field-label">Criterio de dimensiones</span>
+                    <select id="optDimensionsBehaviorCustom">
+                        <option value="0" ${options.dimensionsBehaviorCustom ? "" : "selected"}>El del informe</option>
+                        <option value="1" ${options.dimensionsBehaviorCustom ? "selected" : ""}>Personalizado para esta medida</option>
+                    </select>
                 </label>
                 <div style="font-size:10px; color:#605e5c; margin:4px 0 6px;">
                     Si no se marca, usa el criterio global del informe
@@ -2437,12 +3704,26 @@ const TaskPaneApp = {
         const persist = () => {
             const current = this.getFieldOptions(zoneId, entry);
             current.numberFormat = wrap.querySelector("#optNumberFormat").value;
-            current.decimalSeparator = wrap.querySelector("#optDecimalSeparator").value;
-            current.decimals = Number(wrap.querySelector("#optDecimals").value) || 0;
-            current.factor = Number(wrap.querySelector("#optFactor").value) || 1;
+            const dec = Math.floor(Number(wrap.querySelector("#optDecimals").value));
+            current.decimals = Number.isFinite(dec) ? Math.min(10, Math.max(0, dec)) : 0;
+            // Factor de escala: el valor se divide en la consulta (1 = sin escala)
+            const sc = Number(wrap.querySelector("#optScale").value);
+            if (sc > 1) current.scale = sc; else delete current.scale;
             current.aggregation = wrap.querySelector("#optAggregation").value;
-            current.planificable = wrap.querySelector("#optPlanificable").checked;
-            current.dimensionsBehaviorCustom = wrap.querySelector("#optDimensionsBehaviorCustom").checked;
+            // Agregación de excepción: sin función (o sin dimensiones) no se guarda nada y el SQL no cambia
+            const excAgg = wrap.querySelector("#optExcAggregation").value;
+            const excDims = [];
+            wrap.querySelectorAll("#optExcDims input[type=checkbox]:checked").forEach(cb => {
+                excDims.push({ dim: cb.getAttribute("data-dim"), attr: cb.getAttribute("data-attr") });
+            });
+            if (excAgg) { current.excAggregation = excAgg; current.excDims = excDims; }
+            else { delete current.excAggregation; delete current.excDims; }
+            // Opciones retiradas del panel (ya no se usan en ningún sitio).
+            delete current.decimalSeparator;
+            delete current.thousandsSeparator;
+            delete current.factor;
+            current.planificable = wrap.querySelector("#optPlanificable").value === "1";
+            current.dimensionsBehaviorCustom = wrap.querySelector("#optDimensionsBehaviorCustom").value === "1";
 
             const dimensionsBehavior = {};
             wrap.querySelectorAll("#optDimensionsBehaviorContainer .dim-behavior-row").forEach(row => {
@@ -2460,9 +3741,23 @@ const TaskPaneApp = {
 
         wrap.querySelectorAll("select, input").forEach(el => el.addEventListener("change", persist));
 
+        // Agregación de excepción: lista de atributos del modelo (se rellena al elegir una función)
+        const excBox = wrap.querySelector("#optExcDims");
+        excBox.addEventListener("change", persist);
+        const fillExc = async () => {
+            if (excBox.getAttribute("data-filled")) return;
+            excBox.setAttribute("data-filled", "1");
+            await this.fillExcDimsContainer(excBox, options.excDims || []);
+        };
+        wrap.querySelector("#optExcAggregation").addEventListener("change", async (e) => {
+            wrap.querySelector("#optExcSection").style.display = e.target.value ? "block" : "none";
+            if (e.target.value) await fillExc();
+        });
+        if (currentExc) await fillExc();
+
         // "Planificable" despliega/oculta la sección de personalización.
         wrap.querySelector("#optPlanificable").addEventListener("change", (e) => {
-            wrap.querySelector("#optPlanificableSection").style.display = e.target.checked ? "block" : "none";
+            wrap.querySelector("#optPlanificableSection").style.display = e.target.value === "1" ? "block" : "none";
         });
 
         // "Personalizar..." despliega/oculta y rellena la lista de
@@ -2470,8 +3765,8 @@ const TaskPaneApp = {
         // informe: buildDimensionBehaviorRow).
         const dimsContainer = wrap.querySelector("#optDimensionsBehaviorContainer");
         wrap.querySelector("#optDimensionsBehaviorCustom").addEventListener("change", async (e) => {
-            dimsContainer.style.display = e.target.checked ? "flex" : "none";
-            if (e.target.checked) await this.fillDimensionsBehaviorContainer(dimsContainer, options.dimensionsBehavior || {});
+            dimsContainer.style.display = e.target.value === "1" ? "flex" : "none";
+            if (e.target.value === "1") await this.fillDimensionsBehaviorContainer(dimsContainer, options.dimensionsBehavior || {});
         });
 
         if (options.dimensionsBehaviorCustom) {
@@ -2479,6 +3774,39 @@ const TaskPaneApp = {
         }
 
         return wrap;
+    },
+
+    // Agregación de excepción: una casilla por cada atributo de las dimensiones del modelo del informe
+    async fillExcDimsContainer(container, saved) {
+        container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Cargando dimensiones…</div>";
+        try {
+            const report = (this.currentReportId && window.ReportStore) ? window.ReportStore.getReport(this.currentReportId) : null;
+            const modelName = report ? report.semanticModelName : "";
+            if (!modelName || !window.SemanticModelStore) {
+                container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Este informe no tiene modelo semántico asignado.</div>";
+                return;
+            }
+            const grid = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES", modelName);
+            const values = grid && grid.values ? grid.values : [];
+            const items = [], seen = new Set();
+            for (let r = 1; r < values.length; r++) {
+                const dim = values[r] && values[r][1], attr = values[r] && values[r][2];
+                if (!dim || !attr || seen.has(dim + "|" + attr)) continue;
+                seen.add(dim + "|" + attr);
+                items.push({ dim: String(dim), attr: String(attr), label: String(values[r][7] || attr) });
+            }
+            if (!items.length) {
+                container.innerHTML = "<div style='font-size:11px; color:#605e5c;'>Este modelo no tiene dimensiones.</div>";
+                return;
+            }
+            const isOn = (it) => (saved || []).some(d => String(d.dim).toUpperCase() === it.dim.toUpperCase() && String(d.attr).toUpperCase() === it.attr.toUpperCase());
+            const esc = (t) => String(t).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[c]));
+            container.innerHTML = items.map(it =>
+                `<label class="field-options-checkbox-row"><input type="checkbox" data-dim="${esc(it.dim)}" data-attr="${esc(it.attr)}" ${isOn(it) ? "checked" : ""}><span>${esc(it.dim.toLowerCase())} · ${esc(it.label)}</span></label>`).join("");
+        } catch (err) {
+            console.warn("No se pudieron cargar las dimensiones para la agregación de excepción:", err);
+            container.innerHTML = "<div style='font-size:11px; color:#a80000;'>No se pudieron cargar las dimensiones.</div>";
+        }
     },
 
     // Rellena un contenedor con una fila "Obligatoria + criterio" por cada
@@ -2519,3 +3847,11 @@ const TaskPaneApp = {
         }
     }
 };
+
+// SEGURIDAD (auditoría F-14): todo texto externo (nombres de fichero del
+// repositorio, mensajes de error) se escapa antes de meterlo en innerHTML.
+function draco_escapeHtml(str) {
+    return String(str == null ? "" : str)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}

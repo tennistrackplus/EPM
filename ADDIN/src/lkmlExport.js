@@ -1,0 +1,222 @@
+/**
+ * LkmlExport
+ * ------------------------------------------------------------------------
+ * Genera el contenido LookML (.lkml) de un modelo semántico a partir de su
+ * objeto { fact, fields } (el mismo formato que guarda SemanticModelStore,
+ * ver js/semanticModelStore.js):
+ *
+ *   model.fact   = { project, dataset, table }
+ *   model.fields = [{
+ *       enabled, type: "DIMENSION" | "MEASURE", name,
+ *       // DIMENSION:
+ *       relProject, relDataset, relTable,      // tabla de la dimensión (o la propia fact si está vacío)
+ *       attributes: [{ name, alias, dataType, isKey, enabled }],
+ *       hierarchies: [{ name, levels: [{ attribute, textAttribute }] }],
+ *       textAttribute,                         // atributo de texto de la clave
+ *       // MEASURE:
+ *       aggregation, format
+ *   }]
+ *
+ * Es una función PURA (no toca Excel ni Office.context.document): la usa
+ * tanto el taskpane (con el modelo leído de SemanticModelStore) como el
+ * diálogo independiente "Guardar modelo semántico" (saveSemanticModel.html),
+ * que recibe el modelo ya "aplanado" por querystring porque un diálogo de
+ * Office no tiene acceso al modelo de objetos de Excel.
+ *
+ * Genera:
+ *   - Un "view" con la tabla de hechos y sus measures.
+ *   - Un "view" por cada dimensión, con sus atributos como dimension: y la
+ *     clave marcada con primary_key: yes.
+ *   - Las jerarquías de cada dimensión, documentadas como comentario (LookML
+ *     no tiene un bloque nativo de jerarquía genérica).
+ *   - Un "explore" con el join (relación) de cada dimensión contra la
+ *     tabla de hechos.
+ */
+(function () {
+
+    function sanitize(name) {
+        return String(name || "")
+            .toLowerCase()
+            .replace(/[^a-z0-9_]+/g, "_")
+            .replace(/^_+|_+$/g, "");
+    }
+
+    function qualifiedTable(project, dataset, table) {
+        return [project, dataset, table].filter(Boolean).join(".");
+    }
+
+    function buildContent(modelName, model) {
+
+        const fact = (model && model.fact) || {};
+        const fields = (model && model.fields) || [];
+
+        const modelId = sanitize(modelName) || "modelo";
+        const factViewName = `${modelId}_fact`;
+        const factTable = qualifiedTable(fact.project, fact.dataset, fact.table);
+
+        const dimensions = fields.filter(f => f.enabled && f.type === "DIMENSION");
+        const measures = fields.filter(f => f.enabled && f.type === "MEASURE");
+
+        const lines = [];
+
+        lines.push(`# Modelo semántico: ${modelName}`);
+        lines.push("# Generado automáticamente desde el diseñador de modelos semánticos.");
+        if (model && model.dracoPlanning === true) lines.push("# draco: planning");
+        lines.push("");
+
+        /* ---------------- VIEW: tabla de hechos + measures ---------------- */
+
+        lines.push(`view: ${factViewName} {`);
+        if (factTable) lines.push(`  sql_table_name: \`${factTable}\` ;;`);
+        lines.push("");
+
+        measures.forEach(m => {
+            const measureName = sanitize(m.name);
+            if (!measureName) return;
+
+            lines.push(`  measure: ${measureName} {`);
+            if (m.measureKind === "CALC" || m.measureKind === "FILTERED") {
+                // Medida calculada / filtrada de Draco: la definición va en
+                // un comentario (en base64, sin llaves que confundan al
+                // lector) y se recupera tal cual al importar.
+                const def = JSON.stringify({ name: m.name, alias: m.alias, measureKind: m.measureKind, formula: m.formula || "",
+                    base: m.base || "", conditions: m.conditions || [], aggregation: m.aggregation, format: m.format });
+                lines.push(`    type: number`);
+                lines.push(`    sql: 0 ;;`);
+                lines.push(`    # draco-medida: ${btoa(unescape(encodeURIComponent(def)))}`);
+                if (m.format) lines.push(`    value_format_name: ${sanitize(m.format)}`);
+                lines.push("  }");
+                lines.push("");
+                return;
+            }
+            lines.push(`    type: ${sanitize(m.aggregation) || "sum"}`);
+            lines.push(`    sql: \${TABLE}.${m.name} ;;`);
+            if (m.format) lines.push(`    value_format_name: ${sanitize(m.format)}`);
+            lines.push("  }");
+            lines.push("");
+        });
+
+        lines.push("}");
+        lines.push("");
+
+        /* ---------------- VIEW por cada dimensión (con sus atributos) ---------------- */
+
+        dimensions.forEach(dim => {
+
+            const dimId = sanitize(dim.name);
+            if (!dimId) return;
+
+            const dimTable = qualifiedTable(
+                dim.relProject || fact.project,
+                dim.relDataset || fact.dataset,
+                dim.relTable || fact.table
+            );
+
+            const attributes = (dim.attributes || []).filter(a => a.enabled);
+
+            lines.push(`view: ${dimId} {`);
+            if (dimTable) lines.push(`  sql_table_name: \`${dimTable}\` ;;`);
+            // Dimensión sobre la tabla de hechos (sin JOIN): se marca para
+            // recuperarla igual al importar (nombre exacto de la columna).
+            if (!dim.relTable) lines.push(`  # draco: dimension de hechos: ${dim.name}`);
+            // Miembros calculados del modelo (OIBDA = [Ingresos] - [Gastos]...), en base64
+            if (dim.calcMembers && Object.keys(dim.calcMembers).length) {
+                lines.push(`  # draco-calculos: ${btoa(unescape(encodeURIComponent(JSON.stringify(dim.calcMembers))))}`);
+            }
+            lines.push("");
+
+            if (attributes.length > 0) {
+                attributes.forEach(a => {
+                    const attrId = sanitize(a.alias || a.name);
+                    if (!attrId) return;
+
+                    lines.push(`  dimension: ${attrId} {`);
+                    if (a.isKey) lines.push("    primary_key: yes");
+                    if (a.dataType) lines.push(`    # tipo de origen: ${a.dataType}`);
+                    if (a.calc) {
+                        // Atributo calculado de Draco: la fórmula va en base64 y se recupera al importar
+                        lines.push(`    # draco-atributo: ${btoa(unescape(encodeURIComponent(JSON.stringify({ name: a.name, expression: a.expression || "" }))))}`);
+                    }
+                    lines.push(`    sql: \${TABLE}.${a.name} ;;`);
+                    lines.push("  }");
+                    lines.push("");
+                });
+            } else {
+                // Dimensión sin atributos definidos todavía: al menos su propia clave.
+                lines.push(`  dimension: ${dimId} {`);
+                lines.push("    primary_key: yes");
+                lines.push(`    sql: \${TABLE}.${dim.name} ;;`);
+                lines.push("  }");
+                lines.push("");
+            }
+
+            // "Mostrar ID y texto" de la clave (comentario; se recupera al importar).
+            if (dim.textAttribute) {
+                lines.push(`  # texto de la clave: ${dim.textAttribute}`);
+                lines.push("");
+            }
+
+            // Jerarquías: se documentan como comentario con el orden de niveles
+            // (con su atributo de texto, si lo tiene).
+            (dim.hierarchies || []).forEach(hier => {
+                if (!hier.levels || hier.levels.length === 0) return;
+                const ev = hier.emptyValue ? ` (vacío: "${String(hier.emptyValue).replace(/"/g, "'")}")` : "";
+                lines.push(`  # Jerarquía "${hier.name}"${ev}:`);
+                hier.levels.forEach((lvl, i) => {
+                    const txt = lvl.textAttribute ? ` | texto: ${lvl.textAttribute}` : "";
+                    lines.push(`  #   ${i + 1}. ${lvl.attribute}${txt}`);
+                });
+                lines.push("");
+            });
+
+            lines.push("}");
+            lines.push("");
+        });
+
+        /* ---------------- EXPLORE: relaciones fact-dimensión ---------------- */
+
+        lines.push(`explore: ${modelId} {`);
+        lines.push(`  view_name: ${factViewName}`);
+        lines.push("");
+
+        dimensions.forEach(dim => {
+
+            const dimId = sanitize(dim.name);
+            if (!dimId) return;
+            if (!dim.relTable) return; // dimensión de la tabla de hechos: sin join
+
+            const attributes = (dim.attributes || []).filter(a => a.enabled);
+            const keyAttr = attributes.find(a => a.isKey);
+            const keyId = sanitize(keyAttr ? (keyAttr.alias || keyAttr.name) : dim.name);
+
+            lines.push(`  join: ${dimId} {`);
+            lines.push(`    sql_on: \${${factViewName}.${dim.name}} = \${${dimId}.${keyId}} ;;`);
+            lines.push("    relationship: many_to_one");
+            lines.push("  }");
+            lines.push("");
+        });
+
+        lines.push("}");
+
+        return lines.join("\n");
+    }
+
+    // Descarga "content" como fichero de texto llamado "fileName" en el
+    // equipo del usuario (no requiere backend: Blob + enlace temporal).
+    function downloadTextFile(fileName, content) {
+        const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = fileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        URL.revokeObjectURL(url);
+    }
+
+    window.LkmlExport = { buildContent, downloadTextFile };
+
+})();
