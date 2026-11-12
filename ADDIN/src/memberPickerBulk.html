@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
+    <title>Seleccionar miembro</title>
+    <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+    <script src="js/i18n.js?v=20261029j"></script>
+    <script src="js/i18n/en.js?v=20261029j"></script>
+    <style>
+        * { box-sizing: border-box; }
+        html, body {
+            margin: 0; padding: 0; height: 100%;
+            font-family: "Segoe UI", "Segoe UI Web", Arial, sans-serif;
+            font-size: 13px; color: #201f1e; background: #ffffff;
+        }
+        .header {
+            padding: 10px 12px 8px; border-bottom: 1px solid #edebe9;
+        }
+        .header input {
+            width: 100%; padding: 6px 8px; border: 1px solid #8a8886;
+            border-radius: 2px; font-size: 13px;
+        }
+        .items {
+            overflow-y: auto; height: calc(100% - 146px);
+        }
+        .item {
+            display: flex; align-items: center; gap: 4px;
+            padding: 6px 12px; cursor: pointer; white-space: nowrap;
+        }
+        .item:hover { background: #f3f2f1; }
+        .item .lbl { overflow: hidden; text-overflow: ellipsis; }
+        /* Árbol (jerarquías), como en el diálogo de filtro */
+        .caret {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 16px; height: 16px; flex-shrink: 0; border-radius: 2px;
+            color: #605e5c; font-size: 11px; user-select: none;
+        }
+        .caret:hover { background: #e1dfdd; color: #201f1e; }
+        .caret.leaf { visibility: hidden; }
+        /* ID / Texto / ID y texto (como el diálogo de filtro) */
+        .display-tabs { display: none; margin-top: 6px; border: 1px solid #c8c6c4; border-radius: 4px; overflow: hidden; width: max-content; }
+        .display-tabs.on { display: inline-flex; }
+        .display-tabs button { border: 0; background: #fff; padding: 3px 10px; font-size: 12px; cursor: pointer; color: #323130; }
+        .display-tabs button + button { border-left: 1px solid #c8c6c4; }
+        .display-tabs button.active { background: #0f6cbd; color: #fff; }
+        .tree-tools { display: none; gap: 10px; margin-top: 6px; }
+        .tree-tools.on { display: flex; }
+        .tree-tools button {
+            border: 0; background: none; padding: 0; cursor: pointer;
+            color: #0f6cbd; font-size: 12px;
+        }
+        .tree-tools button:hover { text-decoration: underline; }
+        .empty, .loading, .error {
+            padding: 14px; color: #605e5c;
+        }
+        .error { color: #a80000; }
+        .error .errorMsg { margin-bottom: 10px; }
+        .error button {
+            padding: 6px 14px; border: 1px solid #8a8886; background: #fff;
+            border-radius: 2px; cursor: pointer; color: #201f1e;
+        }
+        .error button:hover { background: #f3f2f1; }
+        .spinner {
+            display: inline-block; width: 14px; height: 14px; margin-right: 8px;
+            border: 2px solid #c8c6c4; border-top-color: #605e5c; border-radius: 50%;
+            vertical-align: -2px; animation: draco-spin 0.8s linear infinite;
+        }
+        @keyframes draco-spin { to { transform: rotate(360deg); } }
+        .footer {
+            padding: 8px 12px; border-top: 1px solid #edebe9; text-align: right;
+        }
+        .footer button {
+            padding: 6px 14px; border: 1px solid #8a8886; background: #fff;
+            border-radius: 2px; cursor: pointer;
+        }
+        .footer button:hover { background: #f3f2f1; }
+            /* --- Reconocimiento masivo --- */
+        .bulk-bar { padding: 8px 12px; background: #f3f2f1; border-bottom: 1px solid #edebe9; font-size: 12px; color: #323130; }
+        .bulk-bar b { color: #201f1e; }
+        .bulk-bar .progress { float: right; color: #605e5c; }
+        .confirm { padding: 16px 14px; line-height: 1.45; }
+        .confirm h3 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+        .confirm p { margin: 0 0 10px; color: #323130; }
+        .confirm .buttons { margin-top: 14px; display: flex; gap: 8px; justify-content: flex-end; }
+        .btn-primary { background: #0f6cbd !important; color: #fff; border-color: #0f6cbd !important; }
+        .btn-primary:hover { background: #115ea3 !important; }
+        .footer { display: flex; gap: 8px; justify-content: flex-end; }
+        .hidden { display: none !important; }
+</style>
+</head>
+<body>
+    <div class="bulk-bar hidden" id="bulkBar"><span class="progress" id="bulkProgress"></span><span id="bulkCell"></span></div>
+    <div class="confirm hidden" id="confirmBox">
+        <h3>Reconocimiento de varios valores</h3>
+        <p id="confirmText"></p>
+        <p>Los que coincidan con un único miembro se sustituirán solos. Para cada valor que no se reconozca se mostrará este buscador, con la celda seleccionada en la hoja, para que elijas el miembro u omitas la celda.</p>
+        <div class="buttons">
+            <button id="btnConfirmNo">Cancelar</button>
+            <button id="btnConfirmYes" class="btn-primary">Continuar</button>
+        </div>
+    </div>
+    <div class="header hidden" id="searchHeader">
+        <input type="text" id="searchInput" placeholder="Buscar por ID o texto…" autocomplete="off" />
+        <div class="display-tabs" id="displayTabs">
+            <button type="button" data-display="ID">ID</button>
+            <button type="button" data-display="TEXT">Texto</button>
+            <button type="button" data-display="ID_TEXT" class="active">ID y texto</button>
+        </div>
+        <div class="tree-tools" id="treeTools">
+            <button type="button" id="btnExpandAll">⊞ Expandir todo</button>
+            <button type="button" id="btnCollapseAll">⊟ Contraer todo</button>
+        </div>
+    </div>
+    <div class="items" id="itemsContainer">
+        <div class="loading" id="loadingMsg"><span class="spinner"></span><span id="loadingText">Cargando…</span></div>
+    </div>
+    <div class="footer hidden" id="askFooter">
+        <button id="btnStop" title="No reconocer ninguno de los valores que quedan">Detener</button>
+        <button id="btnSkip" title="Dejar esta celda como está y seguir con la siguiente">Omitir celda</button>
+    </div>
+
+    <script>
+        // Buscador de miembros para el RECONOCIMIENTO MASIVO (pegar varias
+        // celdas). Es una copia del buscador individual (memberPicker.html),
+        // que NO se toca. Una sola ventana para todo el proceso:
+        //   host -> diálogo: confirm {count, text} | status {text, progress}
+        //                    | begin/chunk {round, fieldKey, title} (miembros de un campo)
+        //                    | ask {seq, fieldKey, initialSearch, cell, progress} | error {message}
+        //   diálogo -> host: ready {build, displayMode} | confirm {ok} | loaded {fieldKey}
+        //                    | resend {fieldKey} | select {seq, value, attribute, display}
+        //                    | skip {seq} | stop | log
+        const PICKER_BUILD = "2026-11-11-bulk-v1";
+        let allItems = [];
+        let itemsKey = "";        // campo cuyos miembros tiene la ventana
+        let rx = null;            // envío en curso de miembros
+        let ask = null;           // pregunta en curso {seq, fieldKey, ...}
+        let pendingAsk = null;    // pregunta que espera a que lleguen sus miembros
+        let anyHostMsg = false;
+        let readyTimer = null;
+        let readyTries = 0;
+
+        document.getElementById("searchInput").disabled = true;
+
+        function send(obj) {
+            try { Office.context.ui.messageParent(JSON.stringify(obj)); }
+            catch (e) { console.error("[BulkPicker] messageParent falló:", e); }
+        }
+        function log(msg) { console.log("[BulkPicker]", msg); send({ type: "log", msg: String(msg) }); }
+        function show(id, on) { document.getElementById(id).classList.toggle("hidden", !on); }
+
+        // ---- Árbol de jerarquía: igual que el buscador individual ----
+        let expanded = new Set();
+        let isTree = false;
+        function indexTree(items) {
+            const stack = [];
+            items.forEach((it, i) => {
+                it._idx = i;
+                if (typeof it.depth !== "number") {
+                    const m = /^ */.exec(String(it.text || ""));
+                    it.depth = Math.floor((m ? m[0].length : 0) / 4);
+                }
+                while (stack.length && items[stack[stack.length - 1]].depth >= it.depth) stack.pop();
+                it._parent = stack.length ? stack[stack.length - 1] : -1;
+                it._kids = false;
+                if (it._parent >= 0) items[it._parent]._kids = true;
+                stack.push(i);
+            });
+            isTree = items.some(it => it._kids);
+            document.getElementById("treeTools").classList.toggle("on", isTree);
+        }
+        function label(it) { return String(it.text || it.value || "").trim(); }
+        const DISPLAY_MODE_KEY = "draco_filter_display_mode";
+        let displayMode = "ID_TEXT";
+        try {
+            const saved = localStorage.getItem(DISPLAY_MODE_KEY);
+            if (saved === "ID" || saved === "TEXT" || saved === "ID_TEXT") displayMode = saved;
+        } catch (e) { /* sin storage */ }
+        function shown(it) {
+            const id = String(it.value), txt = it.label ? String(it.label) : "";
+            if (!txt || displayMode === "ID") return id;
+            if (displayMode === "TEXT") return txt;
+            return id + " - " + txt;
+        }
+        function matches(it, t) {
+            return String(it.value).toLowerCase().indexOf(t) !== -1
+                || (!!it.label && String(it.label).toLowerCase().indexOf(t) !== -1)
+                || label(it).toLowerCase().indexOf(t) !== -1;
+        }
+        function setDisplayMode(mode) {
+            displayMode = mode;
+            try { localStorage.setItem(DISPLAY_MODE_KEY, mode); } catch (e) { /* sin storage */ }
+            document.querySelectorAll("#displayTabs button").forEach(b => b.classList.toggle("active", b.dataset.display === mode));
+            send({ type: "displayMode", displayMode: mode });
+            applySearch(document.getElementById("searchInput").value);
+        }
+        function visibleItems(term) {
+            const t = (term || "").toLowerCase().trim();
+            if (!isTree) return t ? allItems.filter(it => matches(it, t)) : allItems;
+            if (!t) {
+                return allItems.filter(it => {
+                    for (let p = it._parent; p >= 0; p = allItems[p]._parent) if (!expanded.has(p)) return false;
+                    return true;
+                });
+            }
+            const showSet = new Set();
+            allItems.forEach(it => {
+                if (!matches(it, t)) return;
+                showSet.add(it._idx);
+                for (let p = it._parent; p >= 0 && !showSet.has(p); p = allItems[p]._parent) showSet.add(p);
+            });
+            return allItems.filter(it => showSet.has(it._idx));
+        }
+        function render(items, searching) {
+            const container = document.getElementById("itemsContainer");
+            container.innerHTML = "";
+            if (!items.length) { container.innerHTML = "<div class='empty'>Sin resultados.</div>"; return; }
+            const MAX = 2000;
+            const frag = document.createDocumentFragment();
+            for (const it of items.slice(0, MAX)) {
+                const div = document.createElement("div");
+                div.className = "item";
+                if (isTree) {
+                    div.style.paddingLeft = (8 + it.depth * 16) + "px";
+                    const caret = document.createElement("span");
+                    caret.className = "caret" + (it._kids ? "" : " leaf");
+                    if (it._kids) {
+                        const open = searching || expanded.has(it._idx);
+                        caret.textContent = open ? "▾" : "▸";
+                        caret.title = open ? "Contraer" : "Expandir";
+                        caret.addEventListener("click", (e) => {
+                            e.stopPropagation();
+                            if (searching) return;
+                            if (expanded.has(it._idx)) expanded.delete(it._idx); else expanded.add(it._idx);
+                            applySearch(document.getElementById("searchInput").value);
+                        });
+                    }
+                    div.appendChild(caret);
+                }
+                const lbl = document.createElement("span");
+                lbl.className = "lbl";
+                lbl.textContent = shown(it);
+                lbl.title = it.label ? String(it.value) + " - " + it.label : label(it);
+                div.appendChild(lbl);
+                div.addEventListener("click", () => answer({ type: "select", value: it.value, attribute: it.attribute, display: shown(it) }));
+                frag.appendChild(div);
+            }
+            container.appendChild(frag);
+            if (items.length > MAX) {
+                const more = document.createElement("div");
+                more.className = "empty";
+                more.textContent = "Mostrando " + MAX + " de " + items.length + ". Escribe en el buscador para afinar.";
+                container.appendChild(more);
+            }
+        }
+        function applySearch(term) { render(visibleItems(term), !!(term || "").trim()); }
+        function expandAll(open) {
+            expanded = new Set();
+            if (open) allItems.forEach(it => { if (it._kids) expanded.add(it._idx); });
+            applySearch(document.getElementById("searchInput").value);
+        }
+
+        // ---- Estados de la ventana ----
+        function showLoading(text, progress) {
+            ask = null;
+            show("confirmBox", false); show("searchHeader", false); show("askFooter", false);
+            document.getElementById("searchInput").disabled = true;
+            const c = document.getElementById("itemsContainer");
+            c.classList.remove("hidden");
+            c.innerHTML = "<div class='loading'><span class='spinner'></span><span id='loadingText'></span></div>";
+            document.getElementById("loadingText").textContent = text || "Cargando…";
+            setBar("", progress || "");
+        }
+        function setBar(cell, progress) {
+            document.getElementById("bulkCell").innerHTML = "";
+            if (cell) {
+                const b = document.createElement("b");
+                b.textContent = cell;
+                document.getElementById("bulkCell").appendChild(document.createTextNode("Celda "));
+                document.getElementById("bulkCell").appendChild(b);
+            }
+            document.getElementById("bulkProgress").textContent = progress || "";
+            show("bulkBar", !!(cell || progress));
+        }
+        function showConfirm(text) {
+            show("searchHeader", false); show("askFooter", false); show("bulkBar", false);
+            document.getElementById("itemsContainer").classList.add("hidden");
+            document.getElementById("confirmText").textContent = text;
+            show("confirmBox", true);
+            document.getElementById("btnConfirmYes").focus();
+        }
+        function showAsk(a) {
+            ask = a;
+            pendingAsk = null;
+            show("confirmBox", false);
+            show("searchHeader", true);
+            show("askFooter", true);
+            document.getElementById("itemsContainer").classList.remove("hidden");
+            setBar(a.cell + (a.text ? " · «" + a.text + "»" : ""), a.progress || "");
+            const input = document.getElementById("searchInput");
+            input.disabled = false;
+            input.value = a.initialSearch || "";
+            expanded = new Set();
+            applySearch(input.value);
+            input.focus();
+            input.select();
+        }
+        function answer(obj) {
+            if (!ask) return;
+            const seq = ask.seq;
+            showLoading("Guardando…", document.getElementById("bulkProgress").textContent);
+            send(Object.assign({ seq }, obj));
+        }
+        function showError(message) {
+            show("confirmBox", false); show("searchHeader", false); show("askFooter", false);
+            const c = document.getElementById("itemsContainer");
+            c.classList.remove("hidden");
+            c.innerHTML = "";
+            const div = document.createElement("div");
+            div.className = "error";
+            const msg = document.createElement("div");
+            msg.className = "errorMsg";
+            msg.textContent = message;
+            const btn = document.createElement("button");
+            btn.textContent = "Cerrar";
+            btn.addEventListener("click", () => send({ type: "stop" }));
+            div.appendChild(msg); div.appendChild(btn);
+            c.appendChild(div);
+        }
+
+        function onItems(meta, items) {
+            allItems = Array.isArray(items) ? items : [];
+            itemsKey = meta.fieldKey;
+            indexTree(allItems);
+            const hasTexts = allItems.some(it => it.label);
+            document.getElementById("displayTabs").classList.toggle("on", hasTexts);
+            document.querySelectorAll("#displayTabs button").forEach(b => b.classList.toggle("active", b.dataset.display === displayMode));
+            if (meta.title) document.title = meta.title;
+            send({ type: "loaded", fieldKey: itemsKey, count: allItems.length });
+            if (pendingAsk && pendingAsk.fieldKey === itemsKey) showAsk(pendingAsk);
+        }
+
+        function handleHostMessage(arg) {
+            let p;
+            try { p = JSON.parse(arg.message); } catch (err) { log("mensaje del host no es JSON"); return; }
+            if (!p) return;
+            if (!anyHostMsg) { anyHostMsg = true; if (readyTimer) { clearInterval(readyTimer); readyTimer = null; } }
+            switch (p.type) {
+                case "hello": return;
+                case "confirm": showConfirm(p.text || ""); return;
+                case "status": showLoading(p.text, p.progress); return;
+                case "error": showError(p.message || "Error"); return;
+                case "ask":
+                    if (p.fieldKey === itemsKey) showAsk(p);
+                    else { pendingAsk = p; showLoading("Cargando valores…", p.progress); }
+                    return;
+                case "begin":
+                    if (rx && rx.timer) clearTimeout(rx.timer);
+                    rx = { round: p.round, total: p.total, parts: new Array(p.total), got: 0, meta: p };
+                    rx.timer = setTimeout(() => {
+                        if (rx && rx.got < rx.total) { log("miembros incompletos, pido reenvío"); send({ type: "resend", fieldKey: rx.meta.fieldKey }); }
+                    }, 5000);
+                    if (p.total === 0) { clearTimeout(rx.timer); onItems(p, []); }
+                    return;
+                case "chunk":
+                    if (!rx || p.round !== rx.round) return;
+                    if (rx.parts[p.seq] === undefined) { rx.parts[p.seq] = p.part; rx.got++; }
+                    if (rx.got === rx.total) {
+                        clearTimeout(rx.timer);
+                        let items;
+                        try { items = JSON.parse(rx.parts.join("")); }
+                        catch (e) { send({ type: "resend", fieldKey: rx.meta.fieldKey }); return; }
+                        onItems(rx.meta, items);
+                    }
+                    return;
+            }
+        }
+
+        document.getElementById("searchInput").addEventListener("input", (e) => applySearch(e.target.value));
+        document.getElementById("btnSkip").addEventListener("click", () => answer({ type: "skip" }));
+        document.getElementById("btnStop").addEventListener("click", () => send({ type: "stop" }));
+        document.getElementById("btnConfirmYes").addEventListener("click", () => { showLoading("Preparando…"); send({ type: "confirm", ok: true }); });
+        document.getElementById("btnConfirmNo").addEventListener("click", () => send({ type: "confirm", ok: false }));
+        document.querySelectorAll("#displayTabs button").forEach(b => b.addEventListener("click", () => setDisplayMode(b.dataset.display)));
+        document.getElementById("btnExpandAll").addEventListener("click", () => expandAll(true));
+        document.getElementById("btnCollapseAll").addEventListener("click", () => expandAll(false));
+        document.addEventListener("keydown", (e) => {
+            if (e.key !== "Escape") return;
+            if (ask) answer({ type: "skip" });   // Esc = omitir esta celda
+        });
+
+        Office.onReady(() => {
+            Office.context.ui.addHandlerAsync(Office.EventType.DialogParentMessageReceived, handleHostMessage, (res) => {
+                if (res.status === Office.AsyncResultStatus.Failed) {
+                    showError("Esta versión de Excel no permite enviar datos al buscador (DialogApi 1.2).");
+                    return;
+                }
+                const sendReady = () => {
+                    if (anyHostMsg || readyTries >= 40) { if (readyTimer) clearInterval(readyTimer); readyTimer = null; return; }
+                    readyTries++;
+                    send({ type: "ready", build: PICKER_BUILD, displayMode, tries: readyTries });
+                };
+                sendReady();
+                readyTimer = setInterval(sendReady, 1000);
+            });
+        });
+    </script>
+</body>
+</html>
