@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-11-11-niveles-estaticos";
+const DRACO_BUILD = "2026-11-18-errores-visibles";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -6705,6 +6705,34 @@ async function repaintAxisIfHiddenIds(axis) {
     return hasHidden;
 }
 
+/**
+ * ¿Son attrA y attrB niveles de una misma jerarquía de la dimensión dim?
+ * (por nombre o por alias del atributo, sin mayúsculas). Modelo del informe.
+ */
+function dracoSameHierarchy(reportId, dim, attrA, attrB) {
+    try {
+        const report = (window.ReportStore && reportId !== null && reportId !== undefined) ? window.ReportStore.getReport(reportId) : null;
+        const sms = window.SemanticModelStore;
+        const mName = (report && report.semanticModelName) || (sms && sms.getActiveModelName && sms.getActiveModelName()) || "";
+        const model = mName && sms && sms.getModel ? sms.getModel(mName) : null;
+        const f = ((model && model.fields) || []).find(x => x && x.type === "DIMENSION" && String(x.name).toUpperCase() === String(dim).toUpperCase());
+        if (!f) return false;
+        // Nombre real de un atributo dado por nombre o por alias
+        const real = (a) => {
+            const u = String(a || "").toUpperCase();
+            const at = (f.attributes || []).find(x => String(x.name).toUpperCase() === u || String(x.alias || "").toUpperCase() === u);
+            return at ? String(at.name).toUpperCase() : u;
+        };
+        const a = real(attrA), b = real(attrB);
+        return (f.hierarchies || []).some(h => {
+            const lv = (h.levels || []).map(l => String(l.attribute).toUpperCase());
+            return lv.indexOf(a) !== -1 && lv.indexOf(b) !== -1;
+        });
+    } catch (e) {
+        return false;
+    }
+}
+
 async function convertAxisStaticFormulas(axis, makeStatic) {
     await ensureDracoFnMode(); // EPM_VALUE del XLAM o DRACO.EPM_VALUE (una vez por sesión)
     await refreshDracoDiagnosticsFlag(); // Diagnóstico activo en este libro (EDIT_REPORT!AB1)
@@ -6840,11 +6868,18 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
                         // (como en la planificación); si tampoco, el texto visto.
                         const key = (range.rowIndex + r + 1) + "_" + (range.columnIndex + c + 1);
                         const cached = crossCache ? crossCache.get(key) : null;
+                        // Mismo campo, u otro nivel de la MISMA jerarquía: la sangría
+                        // no basta para saber el nivel (si los niveles de arriba
+                        // están vacíos, «Grupo Telefónica» se pinta sin sangría
+                        // pero es del nivel 2). El JSON sí dice de qué nivel es.
                         const same = cached && String(cached.dim).toUpperCase() === String(field.dim).toUpperCase()
-                            && String(cached.attr).toUpperCase() === String(field.attr).toUpperCase();
+                            && (String(cached.attr).toUpperCase() === String(field.attr).toUpperCase()
+                                || dracoSameHierarchy(reportId, field.dim, field.attr, cached.attr));
                         let value = text;
+                        let attr = field.attr;
                         if (same && cached.value !== undefined && cached.value !== null && cached.value !== "") {
                             value = String(cached.value);
+                            attr = cached.attr;
                         } else if (typeof currentValue === "number") {
                             if (!atributesGridForDates) {
                                 try { atributesGridForDates = await window.SemanticModelStore.getModelGrid("MODEL_ATRIBUTES"); }
@@ -6859,7 +6894,7 @@ async function convertAxisStaticFormulas(axis, makeStatic) {
                         }
                         // Lo que se ve se conserva como texto de la celda (salvo «####»)
                         const display = text && !/^#+$/.test(text) && text !== value ? text : undefined;
-                        rowOut.push(buildEpmValueFormula(field.dim, field.attr, value, display));
+                        rowOut.push(buildEpmValueFormula(field.dim, attr, value, display));
                     }
                     changed = true;
                 } else {

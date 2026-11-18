@@ -11,6 +11,19 @@ let currentTreeTarget = "FACT"; // "FACT" o "DIM"
  * Muestra un aviso visual (toast) en la parte superior de la taskpane,
  * en lugar de un alert() nativo del navegador. type: "success" | "error".
  */
+/**
+ * Error visible en el propio explorador (catálogos, esquemas, tablas): antes
+ * solo decía «Error al cargar…» y el motivo real quedaba en la consola, que
+ * desde Excel no se ve. Ahora se pinta el mensaje (p. ej. el de la pasarela
+ * de Databricks o el de BigQuery) en rojo, seleccionable para copiarlo.
+ */
+function smErrorHtml(prefix, err, indent) {
+    const msg = String((err && err.message) || err || "Error desconocido");
+    const esc = (t) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return `<div style="${indent ? "margin-left:20px;" : ""}font-size:11px;color:#a80000;white-space:pre-wrap;word-break:break-word;user-select:text;">`
+        + `<b>${esc(prefix)}</b><br>${esc(msg)}</div>`;
+}
+
 function showToast(message, type = "success", duration = 3500) {
 
     const container = document.getElementById("appToastContainer");
@@ -728,7 +741,7 @@ async function loadProjectsTree(container, autoProject = null, autoDataset = nul
         }
     } catch (err) {
         console.error("Error al cargar árbol de proyectos:", err);
-        container.innerHTML = `Error al cargar ${Provider.level1Label()}s.`;
+        container.innerHTML = smErrorHtml(`Error al cargar ${Provider.level1Label()}s (${Provider.label()}):`, err, false);
     }
 }
 
@@ -796,7 +809,7 @@ async function loadDatasetsTree(projectId, container, autoDataset = null) {
         }
     } catch (err) {
         console.error("Error al cargar datasets:", err);
-        container.innerHTML = `<div style='margin-left:20px; font-size:11px; color:#666;'>Error al cargar ${Provider.level2Label()}s.</div>`;
+        container.innerHTML = smErrorHtml(`Error al cargar ${Provider.level2Label()}s:`, err, true);
     }
 }
 
@@ -835,7 +848,7 @@ async function loadTablesTree(projectId, datasetId, container) {
         }
     } catch (err) {
         console.error("Error al cargar tablas:", err);
-        container.innerHTML = "<div style='margin-left:20px; font-size:11px; color:#666;'>Error al cargar tablas.</div>";
+        container.innerHTML = smErrorHtml("Error al cargar tablas:", err, true);
     }
 }
 
@@ -969,6 +982,7 @@ async function fetchFactFields(isModelLoad = false) {
         }
     } catch (err) {
         console.error("Error al obtener esquema:", err);
+        showToast("Error al leer los campos de la tabla: " + ((err && err.message) || err), "error", 9000);
     }
 }
 
@@ -1252,6 +1266,7 @@ async function fetchDimensionAttributes(forceRefetch = false) {
         }
     } catch (err) {
         console.error("Error al obtener atributos de la dimensión:", err);
+        showToast("Error al leer los atributos: " + ((err && err.message) || err), "error", 9000);
     }
 }
 

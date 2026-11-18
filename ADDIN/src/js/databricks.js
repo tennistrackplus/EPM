@@ -335,7 +335,13 @@ const DBX = {
                 cache: "no-store"
             });
         } catch (e) {
-            throw new Error("No se pudo contactar con la pasarela de Databricks (" + gw + "). Revisa la URL de la conexión o la red.");
+            // Un origen no permitido también llega aquí: la pasarela responde 403
+            // sin cabecera CORS y el navegador lo ve como fallo de red.
+            let origin = "";
+            try { origin = window.location.origin; } catch (x) { /* sin origen */ }
+            throw new Error("No se pudo contactar con la pasarela de Databricks (" + gw + "). Causas posibles: " +
+                "la pasarela no está arrancada o la URL no es correcta; su ALLOWED_ORIGINS no incluye «" + origin + "»; " +
+                "o Excel no deja llamar a esa dirección (p. ej. http://localhost desde una página https). Detalle: " + ((e && e.message) || e));
         }
         const data = await resp.json().catch(() => ({}));
         if (this.isAuthError(resp.status)) {
