@@ -59,18 +59,18 @@ async function loadDbxCatalogs() {
     }
 }
 
-async function loadDbxSchemas() {
-    const cat = document.getElementById("dbxCatalog").value;
-    const sel = document.getElementById("dbxSchema");
-    resetDbxViews("Elige un esquema para ver sus Metric Views.");
-    if (!cat) { sel.disabled = true; sel.innerHTML = "<option value=\"\">— Elige un catálogo —</option>"; return; }
-    sel.disabled = true; sel.innerHTML = "<option value=\"\">Cargando…</option>";
-    try {
-        fillSelect(sel, await dbxAsk("schemas", { catalog: cat }), "— Elige un esquema —");
-    } catch (err) {
-        sel.innerHTML = "<option value=\"\">Error al cargar</option>";
-        showToast(err.message, "error", 6000);
-    }
+// La lista de abajo enseña primero los esquemas del catálogo y, al elegir
+// uno, sus Metric Views (con una fila para volver a los esquemas).
+function dbxRow(icon, text, onPick, extraClass) {
+    const row = document.createElement("div");
+    row.className = "lkml-server-item" + (extraClass ? " " + extraClass : "");
+    row.tabIndex = 0;   // también con teclado: Tab y Enter
+    const i = document.createElement("span"); i.textContent = icon;
+    const l = document.createElement("span"); l.textContent = text;
+    row.appendChild(i); row.appendChild(l);
+    row.addEventListener("click", () => onPick(row));
+    row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onPick(row); } });
+    return row;
 }
 
 function resetDbxViews(hint) {
@@ -80,34 +80,55 @@ function resetDbxViews(hint) {
     if (lkmlSelection && lkmlSelection.source === "dbx") { lkmlSelection = null; updateLkmlConfirmButtonState(); }
 }
 
-async function loadDbxViews() {
-    const catalog = document.getElementById("dbxCatalog").value;
-    const schema = document.getElementById("dbxSchema").value;
-    if (!catalog || !schema) { resetDbxViews("Elige un esquema para ver sus Metric Views."); return; }
-    resetDbxViews("Cargando…");
+function setDbxListLabel(text) {
+    const lab = document.getElementById("dbxListLabel");
+    if (lab) lab.textContent = text;
+}
+
+async function loadDbxSchemas() {
+    const cat = document.getElementById("dbxCatalog").value;
+    setDbxListLabel("Esquema");
+    if (!cat) { resetDbxViews("Elige un catálogo para ver sus esquemas."); return; }
+    resetDbxViews("Cargando esquemas…");
     try {
-        const views = await dbxAsk("views", { catalog, schema });
+        const schemas = await dbxAsk("schemas", { catalog: cat });
+        if (document.getElementById("dbxCatalog").value !== cat) return;   // ya se eligió otro catálogo
+        if (!schemas.length) { resetDbxViews("Este catálogo no tiene esquemas."); return; }
         const list = document.getElementById("dbxViewList");
-        if (!views.length) { resetDbxViews("Este esquema no tiene Metric Views."); return; }
         list.classList.remove("is-empty");
         list.innerHTML = "";
-        views.forEach(view => {
-            const row = document.createElement("div");
-            row.className = "lkml-server-item";
-            const icon = document.createElement("span"); icon.textContent = "📊";
-            const label = document.createElement("span"); label.textContent = view;
-            row.appendChild(icon); row.appendChild(label);
-            row.addEventListener("click", () => {
-                list.querySelectorAll(".lkml-server-item.selected").forEach(el => el.classList.remove("selected"));
-                row.classList.add("selected");
-                lkmlSelection = { source: "dbx", catalog, schema, view };
-                prefillModelName(String(view).replace(/_metrics$/i, ""));
-                updateLkmlConfirmButtonState();
-            });
-            list.appendChild(row);
-        });
+        schemas.forEach(sc => list.appendChild(dbxRow("📁", sc, () => loadDbxViews(cat, sc))));
     } catch (err) {
-        resetDbxViews(err.message || "Error al listar las vistas.");
+        resetDbxViews(err.message || "Error al listar los esquemas.");
+    }
+}
+
+async function loadDbxViews(catalog, schema) {
+    setDbxListLabel("Metric Views de " + schema);
+    resetDbxViews("Cargando Metric Views…");
+    try {
+        const views = await dbxAsk("views", { catalog, schema });
+        if (document.getElementById("dbxCatalog").value !== catalog) return;
+        const list = document.getElementById("dbxViewList");
+        list.classList.remove("is-empty");
+        list.innerHTML = "";
+        list.appendChild(dbxRow("⬅", "Volver a los esquemas de " + catalog, () => loadDbxSchemas(), "dbx-back"));
+        if (!views.length) {
+            const hint = document.createElement("span");
+            hint.className = "lkml-empty-hint";
+            hint.textContent = "Este esquema no tiene Metric Views.";
+            list.appendChild(hint);
+            return;
+        }
+        views.forEach(view => list.appendChild(dbxRow("📊", view, (row) => {
+            list.querySelectorAll(".lkml-server-item.selected").forEach(el => el.classList.remove("selected"));
+            row.classList.add("selected");
+            lkmlSelection = { source: "dbx", catalog, schema, view };
+            prefillModelName(String(view).replace(/_metrics$/i, ""));
+            updateLkmlConfirmButtonState();
+        })));
+    } catch (err) {
+        resetDbxViews(err.message || "Error al listar las Metric Views.");
     }
 }
 
@@ -329,7 +350,6 @@ function initEvents() {
     document.getElementById("lkmlTabLocal").addEventListener("click", () => setLkmlActiveTab("local"));
     document.getElementById("lkmlTabDbx").addEventListener("click", () => setLkmlActiveTab("dbx"));
     document.getElementById("dbxCatalog").addEventListener("change", loadDbxSchemas);
-    document.getElementById("dbxSchema").addEventListener("change", loadDbxViews);
 
     document.getElementById("lkmlServerConnection").addEventListener("change", () => {
         lkmlSelection = null;
