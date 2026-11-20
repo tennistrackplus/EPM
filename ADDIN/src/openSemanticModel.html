@@ -68,10 +68,11 @@
             <div class="lkml-tab-panel" id="lkmlPanelDbx">
                 <label class="lkml-field-label" for="dbxCatalog">Catálogo</label>
                 <select class="lkml-select" id="dbxCatalog"><option value="">Cargando…</option></select>
-                <label class="lkml-field-label" for="dbxSchema">Esquema</label>
-                <select class="lkml-select" id="dbxSchema" disabled><option value="">— Elige un catálogo —</option></select>
+                <!-- Esquemas y Metric Views en una lista (no un desplegable: el desplegable
+                     nativo se abría encima del ratón y elegía el esquema que quedaba debajo) -->
+                <label class="lkml-field-label" id="dbxListLabel">Esquema</label>
                 <div class="lkml-server-list is-empty" id="dbxViewList" data-no-i18n>
-                    <span class="lkml-empty-hint">Elige catálogo y esquema para ver sus Metric Views.</span>
+                    <span class="lkml-empty-hint">Elige un catálogo para ver sus esquemas.</span>
                 </div>
                 <span class="lkml-empty-hint" style="display:block;margin-top:6px;">Las creadas por Draco traen el modelo completo (jerarquías, textos…) y los informes consultan las tablas. Las demás se abren con sus campos y medidas, y los informes consultan la Metric View.</span>
             </div>
@@ -92,6 +93,6 @@
     <script src="js/lkmlImport.js?v=20261104b"></script>
     <script src="js/vendor/js-yaml.min.js?v=4.3.2"></script>
     <script src="js/metricViewImport.js?v=20261120b"></script>
-    <script src="js/openSemanticModelDialog.js?v=20261120mvdb"></script>
+    <script src="js/openSemanticModelDialog.js?v=20261120lst"></script>
 </body>
 </html>
