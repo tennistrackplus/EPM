@@ -60,6 +60,11 @@ const DBX = {
             return "En producción solo se admite el inicio de sesión de Databricks: edita la conexión.";
         }
         const c = this.normalizeConfig(cfg);
+        // Error típico: poner la URL del workspace en vez de la de la pasarela
+        if (/\.(azuredatabricks\.net|cloud\.databricks\.com|gcp\.databricks\.com|databricks\.azure\.cn)(\/|$)/i.test(c.gatewayUrl)) {
+            return "Esa es la URL del workspace de Databricks, no la de la pasarela. Databricks no deja llamarle desde Excel: " +
+                "arranca o despliega DATABRICKS-GATEWAY (con DATABRICKS_HOST = este workspace) y pon aquí SU dirección.";
+        }
         if (!/^https:\/\/[^\s/?#]+(\/[^\s?#]*)?$/i.test(c.gatewayUrl)
             && !/^http:\/\/localhost(:\d+)?(\/[^\s?#]*)?$/i.test(c.gatewayUrl)) {
             return "Indica la URL (https://...) de la pasarela de Databricks del cliente.";

@@ -73,7 +73,7 @@ const GitRepo = {
         const items = Array.isArray(data) ? data : [data];
 
         return items
-            .filter(item => item.type === "dir" || (item.type === "file" && item.name.toLowerCase().endsWith(".lkml")))
+            .filter(item => item.type === "dir" || (item.type === "file" && /\.(lkml|ya?ml)$/i.test(item.name)))
             .map(item => ({ name: item.name, path: item.path, type: item.type === "dir" ? "dir" : "file" }))
             .sort(this._sortDirsFirst);
     },
@@ -99,7 +99,7 @@ const GitRepo = {
         const data = await res.json();
 
         return (Array.isArray(data) ? data : [])
-            .filter(item => item.type === "tree" || (item.type === "blob" && item.name.toLowerCase().endsWith(".lkml")))
+            .filter(item => item.type === "tree" || (item.type === "blob" && /\.(lkml|ya?ml)$/i.test(item.name)))
             .map(item => ({ name: item.name, path: item.path, type: item.type === "tree" ? "dir" : "file" }))
             .sort(this._sortDirsFirst);
     },

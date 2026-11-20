@@ -185,14 +185,14 @@ function prefillModelName(fileName) {
     const nameInput = document.getElementById("lkmlOpenModelName");
     if (!nameInput || nameInput.value.trim() !== "") return;
 
-    const suggested = (fileName || "").replace(/\.lkml$/i, "");
+    const suggested = (fileName || "").replace(/\.(lkml|ya?ml)$/i, "");
     if (suggested) nameInput.value = suggested;
 }
 
 function handleLkmlLocalFile(file) {
     if (!file) return;
-    if (!file.name.toLowerCase().endsWith(".lkml")) {
-        showToast("Selecciona un fichero con extensión .lkml", "error");
+    if (!/\.(lkml|ya?ml)$/i.test(file.name)) {
+        showToast("Selecciona un fichero .lkml o .yaml (Metric View de Databricks)", "error");
         return;
     }
     lkmlSelection = { source: "local", file };
@@ -311,9 +311,30 @@ function initEvents() {
 
             setImporting(true, "Generando modelo…");
 
-            const model = LkmlImport.parseContent(content);
+            // .yaml / .yml: Metric View de Databricks (js/metricViewImport.js); si no, LookML
+            const fileName = lkmlSelection.source === "local" ? lkmlSelection.file.name : (lkmlSelection.name || lkmlSelection.path || "");
+            const isYaml = /\.ya?ml$/i.test(fileName);
+            let model, warnings = [];
+            if (isYaml) {
+                // Sus tablas son catálogo.esquema.tabla de Databricks: con otra conexión no funcionarían
+                const active = (window.Connections && Connections.getActive) ? Connections.getActive() : null;
+                if (!active || active.provider !== "databricks") {
+                    throw new Error("Para abrir una Metric View (.yaml) activa antes una conexión de Databricks en la pestaña Conexión.");
+                }
+                model = MetricViewImport.parseContent(content);
+                warnings = model.warnings || [];
+                delete model.warnings;
+            } else {
+                model = LkmlImport.parseContent(content);
+            }
 
             setImporting(true, "Guardando…");
+
+            if (warnings.length) {
+                // Lo que no se ha podido importar se enseña antes de cerrar el diálogo
+                showToast("Importado con avisos: " + warnings.slice(0, 4).join(" · ") + (warnings.length > 4 ? ` (y ${warnings.length - 4} más)` : ""), "success", 7000);
+                await new Promise(r => setTimeout(r, 4000));
+            }
 
             Office.context.ui.messageParent(JSON.stringify({ modelName, model }));
 
