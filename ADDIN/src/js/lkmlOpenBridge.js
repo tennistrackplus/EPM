@@ -52,6 +52,41 @@
                         payload = null;
                     }
 
+                    // Pestaña Databricks del diálogo: listados de catálogos,
+                    // esquemas y vistas. Se hacen AQUÍ (con la sesión de
+                    // Databricks del panel/cinta): el token nunca va al diálogo.
+                    if (payload && payload.dbxRequest) {
+                        let reply;
+                        try {
+                            reply = { dbxResponse: payload.dbxRequest, result: await dbxList(payload.op, payload.args || {}) };
+                        } catch (err) {
+                            reply = { dbxResponse: payload.dbxRequest, error: (err && err.message) || String(err) };
+                        }
+                        try { dialog.messageChild(JSON.stringify(reply)); } catch (e) { console.error("No se pudo responder al diálogo:", e); }
+                        return;
+                    }
+
+                    // Abrir una Metric View creada por Draco: se lee aquí su
+                    // modelo (propiedad draco.model) y se guarda como cualquier
+                    // otro modelo importado.
+                    if (payload && payload.dbxOpen && payload.modelName) {
+                        try {
+                            const o = payload.dbxOpen;
+                            const r = await window.DracoMetricView.readModel(o.catalog, o.schema, o.view);
+                            payload.model = r.model;
+                            // Lo que no se ha podido traer se enseña en el diálogo antes de cerrarlo
+                            if (r.warnings && r.warnings.length) {
+                                try { dialog.messageChild(JSON.stringify({ info: "Importado con avisos: " + r.warnings.slice(0, 4).join(" · ")
+                                    + (r.warnings.length > 4 ? ` (y ${r.warnings.length - 4} más)` : "") })); } catch (e) { /* sin aviso */ }
+                                await new Promise(res => setTimeout(res, 4000));
+                            }
+                        } catch (err) {
+                            console.error("No se pudo abrir la Metric View:", err);
+                            try { dialog.messageChild(JSON.stringify({ error: (err && err.message) || String(err) })); } catch (e2) { dialog.close(); }
+                            return;
+                        }
+                    }
+
                     if (!payload || !payload.modelName || !payload.model) {
                         dialog.close();
                         return;
@@ -93,6 +128,17 @@
             }
         );
 
+    }
+
+    /** Listados para la pestaña Databricks del diálogo (solo nombres). */
+    async function dbxList(op, args) {
+        if (!window.DBX || !(window.Provider && Provider.isDatabricks && Provider.isDatabricks())) {
+            throw new Error("Activa antes una conexión de Databricks en la pestaña Conexión.");
+        }
+        if (op === "catalogs") return await DBX.listCatalogs();
+        if (op === "schemas") return await DBX.listSchemas(String(args.catalog || ""));
+        if (op === "views") return await DBX.listMetricViews(String(args.catalog || ""), String(args.schema || ""));
+        throw new Error("Operación no válida.");
     }
 
     window.LkmlOpenBridge = { openOpenLkmlDialog };

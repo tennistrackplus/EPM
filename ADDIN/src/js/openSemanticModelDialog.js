@@ -20,7 +20,96 @@
  * que sí tiene ese acceso, quien lo guarda de verdad y cierra el diálogo.
  */
 
-let lkmlSelection = null; // { source: "local"|"server", file?: File, connectionId?, path?, name? }
+let lkmlSelection = null; // { source: "local"|"server"|"dbx", file?: File, connectionId?, path?, name?, catalog?, schema?, view? }
+
+// Peticiones a quien abrió el diálogo (pestaña Databricks): las consultas a
+// Databricks las hace el panel/cinta con su sesión (js/lkmlOpenBridge.js).
+let dbxSeq = 0;
+const dbxPending = new Map();
+function dbxAsk(op, args) {
+    return new Promise((resolve, reject) => {
+        const id = ++dbxSeq;
+        const timer = setTimeout(() => { dbxPending.delete(id); reject(new Error("Databricks no ha respondido a tiempo.")); }, 120000);
+        dbxPending.set(id, { resolve, reject, timer });
+        Office.context.ui.messageParent(JSON.stringify({ dbxRequest: id, op, args: args || {} }));
+    });
+}
+
+function isDatabricksActive() {
+    const active = (typeof Connections !== "undefined" && Connections.getActive) ? Connections.getActive() : null;
+    return !!(active && active.provider === "databricks");
+}
+
+function fillSelect(sel, items, placeholder) {
+    sel.innerHTML = "";
+    const first = document.createElement("option");
+    first.value = ""; first.textContent = placeholder;
+    sel.appendChild(first);
+    items.forEach(v => { const o = document.createElement("option"); o.value = v; o.textContent = v; sel.appendChild(o); });
+    sel.disabled = false;
+}
+
+async function loadDbxCatalogs() {
+    const sel = document.getElementById("dbxCatalog");
+    try {
+        fillSelect(sel, await dbxAsk("catalogs"), "— Elige un catálogo —");
+    } catch (err) {
+        sel.innerHTML = "<option value=\"\">Error al cargar</option>";
+        showToast(err.message, "error", 6000);
+    }
+}
+
+async function loadDbxSchemas() {
+    const cat = document.getElementById("dbxCatalog").value;
+    const sel = document.getElementById("dbxSchema");
+    resetDbxViews("Elige un esquema para ver sus Metric Views.");
+    if (!cat) { sel.disabled = true; sel.innerHTML = "<option value=\"\">— Elige un catálogo —</option>"; return; }
+    sel.disabled = true; sel.innerHTML = "<option value=\"\">Cargando…</option>";
+    try {
+        fillSelect(sel, await dbxAsk("schemas", { catalog: cat }), "— Elige un esquema —");
+    } catch (err) {
+        sel.innerHTML = "<option value=\"\">Error al cargar</option>";
+        showToast(err.message, "error", 6000);
+    }
+}
+
+function resetDbxViews(hint) {
+    const list = document.getElementById("dbxViewList");
+    list.classList.add("is-empty");
+    list.innerHTML = `<span class="lkml-empty-hint">${draco_escapeHtml(hint)}</span>`;
+    if (lkmlSelection && lkmlSelection.source === "dbx") { lkmlSelection = null; updateLkmlConfirmButtonState(); }
+}
+
+async function loadDbxViews() {
+    const catalog = document.getElementById("dbxCatalog").value;
+    const schema = document.getElementById("dbxSchema").value;
+    if (!catalog || !schema) { resetDbxViews("Elige un esquema para ver sus Metric Views."); return; }
+    resetDbxViews("Cargando…");
+    try {
+        const views = await dbxAsk("views", { catalog, schema });
+        const list = document.getElementById("dbxViewList");
+        if (!views.length) { resetDbxViews("Este esquema no tiene Metric Views."); return; }
+        list.classList.remove("is-empty");
+        list.innerHTML = "";
+        views.forEach(view => {
+            const row = document.createElement("div");
+            row.className = "lkml-server-item";
+            const icon = document.createElement("span"); icon.textContent = "📊";
+            const label = document.createElement("span"); label.textContent = view;
+            row.appendChild(icon); row.appendChild(label);
+            row.addEventListener("click", () => {
+                list.querySelectorAll(".lkml-server-item.selected").forEach(el => el.classList.remove("selected"));
+                row.classList.add("selected");
+                lkmlSelection = { source: "dbx", catalog, schema, view };
+                prefillModelName(String(view).replace(/_metrics$/i, ""));
+                updateLkmlConfirmButtonState();
+            });
+            list.appendChild(row);
+        });
+    } catch (err) {
+        resetDbxViews(err.message || "Error al listar las vistas.");
+    }
+}
 
 function showToast(message, type = "success", duration = 3500) {
 
@@ -68,8 +157,12 @@ function closeDialog() {
 function setLkmlActiveTab(tabId) {
     document.getElementById("lkmlTabServer").classList.toggle("active", tabId === "server");
     document.getElementById("lkmlTabLocal").classList.toggle("active", tabId === "local");
+    document.getElementById("lkmlTabDbx").classList.toggle("active", tabId === "dbx");
     document.getElementById("lkmlPanelServer").classList.toggle("active", tabId === "server");
     document.getElementById("lkmlPanelLocal").classList.toggle("active", tabId === "local");
+    document.getElementById("lkmlPanelDbx").classList.toggle("active", tabId === "dbx");
+    // La selección es de la pestaña en la que se hizo
+    if (lkmlSelection && lkmlSelection.source !== tabId) lkmlSelection = null;
     updateLkmlConfirmButtonState();
 }
 
@@ -234,6 +327,9 @@ function initEvents() {
 
     document.getElementById("lkmlTabServer").addEventListener("click", () => setLkmlActiveTab("server"));
     document.getElementById("lkmlTabLocal").addEventListener("click", () => setLkmlActiveTab("local"));
+    document.getElementById("lkmlTabDbx").addEventListener("click", () => setLkmlActiveTab("dbx"));
+    document.getElementById("dbxCatalog").addEventListener("change", loadDbxSchemas);
+    document.getElementById("dbxSchema").addEventListener("change", loadDbxViews);
 
     document.getElementById("lkmlServerConnection").addEventListener("change", () => {
         lkmlSelection = null;
@@ -291,6 +387,15 @@ function initEvents() {
 
         if (!modelName) {
             showToast("Indica el nombre con el que se guardará el modelo semántico.", "error");
+            return;
+        }
+
+        // Metric View creada por Draco: quien abrió el diálogo lee su modelo
+        // (propiedad draco.model) y lo guarda; aquí solo se elige.
+        if (lkmlSelection.source === "dbx") {
+            setImporting(true, "Leyendo Metric View…");
+            Office.context.ui.messageParent(JSON.stringify({ modelName,
+                dbxOpen: { catalog: lkmlSelection.catalog, schema: lkmlSelection.schema, view: lkmlSelection.view } }));
             return;
         }
 
@@ -359,12 +464,24 @@ function initEvents() {
             payload = null;
         }
 
+        // Respuesta a una petición de la pestaña Databricks
+        if (payload && payload.dbxResponse && dbxPending.has(payload.dbxResponse)) {
+            const p = dbxPending.get(payload.dbxResponse);
+            dbxPending.delete(payload.dbxResponse);
+            clearTimeout(p.timer);
+            if (payload.error) p.reject(new Error(payload.error)); else p.resolve(payload.result || []);
+            return;
+        }
+
+        // Aviso informativo (p. ej. campos que no se han podido traer): el diálogo sigue
+        if (payload && payload.info) { showToast(payload.info, "success", 7000); return; }
+
         setImporting(false);
         showToast(
             (payload && payload.error)
-                ? `No se ha podido guardar el modelo semántico: ${payload.error}`
-                : "No se ha podido guardar el modelo semántico.",
-            "error"
+                ? `No se ha podido abrir el modelo semántico: ${payload.error}`
+                : "No se ha podido abrir el modelo semántico.",
+            "error", 8000
         );
 
     });
@@ -376,6 +493,12 @@ Office.onReady(async () => {
     if (window.GitSession) await GitSession.requestFromOpener();
     initEvents();
     setLkmlActiveTab("server");
+    // Con Databricks activo: pestaña Databricks (Metric Views creadas por Draco)
+    if (isDatabricksActive()) {
+        document.getElementById("lkmlTabDbx").style.display = "";
+        setLkmlActiveTab("dbx");
+        loadDbxCatalogs();
+    }
     populateLkmlConnectionSelect();
     updateLkmlServerList();
     updateLkmlConfirmButtonState();

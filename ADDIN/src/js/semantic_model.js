@@ -2632,6 +2632,8 @@ async function generateSemanticModelInExcel() {
             && previous.fact.table === fact.table);
         const toSave = { fact: fact, fields: fieldsState };
         if (previous && previous.dracoPlanning === true && sameFact) toSave.dracoPlanning = true;
+        // Modelo montado sobre una Metric View ajena: se conserva la marca
+        if (previous && previous.metricView && sameFact) toSave.metricView = previous.metricView;
         await window.SemanticModelStore.saveModel(currentModel, toSave);
         smMarkSaved();
 
@@ -2647,9 +2649,34 @@ async function generateSemanticModelInExcel() {
 
         showToast("¡Modelo Semántico generado con éxito!", "success");
 
+        // Databricks: además se crea/actualiza su Metric View (con el modelo de
+        // Draco en sus propiedades) para poder abrirlo desde cualquier Excel.
+        smPublishMetricView(currentModel, toSave);
+
     } catch (err) {
         console.error("Error al guardar el modelo semántico:", err);
         showToast("Error al guardar el modelo: " + err.message, "error");
+    }
+}
+
+/**
+ * Crea o actualiza la Metric View del modelo en Databricks (ver
+ * js/metricViewStore.js). El modelo ya está guardado en el libro: si esto
+ * falla (permisos, pasarela de solo lectura...) solo se avisa.
+ * Se desactiva con DracoConfig.databricksPublishMetricView = false.
+ */
+async function smPublishMetricView(modelName, model) {
+    try {
+        if (!(window.Provider && Provider.isDatabricks && Provider.isDatabricks())) return;
+        if (typeof DracoConfig !== "undefined" && DracoConfig.databricksPublishMetricView === false) return;
+        if (!window.DracoMetricView || model.metricView) return;   // sobre una Metric View no se crea otra
+        if (!model.fact || !model.fact.project || !model.fact.dataset || !model.fact.table) return;
+        showToast("Creando la Metric View en Databricks…", "success", 6000);
+        const full = await window.DracoMetricView.publish(modelName, model);
+        showToast(`Metric View ${full} actualizada en Databricks.`, "success", 6000);
+    } catch (err) {
+        console.error("No se pudo crear la Metric View:", err);
+        showToast("Modelo guardado, pero no se pudo crear la Metric View en Databricks: " + err.message, "error", 9000);
     }
 }
 

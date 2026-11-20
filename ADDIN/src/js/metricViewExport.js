@@ -167,6 +167,7 @@
                 }
                 if (a.alias && a.alias !== a.name) L.push(`    display_name: ${q(a.alias)}`);
                 if (!jn && i === 0) dimMeta(d, 4).forEach(x => L.push(x));   // dimensión de hechos: metadatos en su campo
+                else if (!jn) L.push(`    # draco-dimension: ${d.name}`);   // resto de atributos de esa dimensión de hechos
                 if (a.dataType) L.push(`    # draco-tipo: ${a.dataType}`);
             });
         });

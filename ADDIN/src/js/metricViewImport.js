@@ -296,7 +296,8 @@
                 try {
                     const d = fromB64(def);
                     if (d && (d.measureKind === "CALC" || d.measureKind === "FILTERED") && IDENT_RE.test(d.name || "")) {
-                        measures.push({ enabled: true, type: "MEASURE", name: d.name, alias: d.alias || d.name, dataType: "NUMERIC",
+                        // display_name manda sobre el alias guardado (se puede editar a mano en el YAML)
+                        measures.push({ enabled: true, type: "MEASURE", name: d.name, alias: m.display_name ? String(m.display_name) : (d.alias || d.name), dataType: "NUMERIC",
                             measureKind: d.measureKind, formula: String(d.formula || ""), base: String(d.base || ""),
                             conditions: Array.isArray(d.conditions) ? d.conditions : [],
                             aggregation: d.aggregation || "SUM", format: d.format || "Auto" });

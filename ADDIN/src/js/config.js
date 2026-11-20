@@ -26,6 +26,12 @@ const DracoConfig = {
     // Solo tiene efecto con allowDatabricksPat = true.
     rememberDatabricksPatDays: 30,
 
+    // Databricks: al guardar un modelo semántico, crear/actualizar también su
+    // Metric View (<catálogo>.<esquema>.<modelo>_metrics, con el modelo de
+    // Draco en sus propiedades) para poder abrirlo desde cualquier Excel.
+    // Necesita permiso CREATE TABLE en el esquema y la pasarela sin READ_ONLY.
+    databricksPublishMetricView: true,
+
     // Precio on-demand de BigQuery por TiB facturado (USD) para estimar el
     // coste de cada consulta en el Diagnóstico. 6,25 es el precio de lista
     // en EE. UU.; en otras regiones varía. Con reservas/editions el coste

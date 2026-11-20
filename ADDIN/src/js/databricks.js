@@ -557,6 +557,47 @@ const DBX = {
         return rows.map(r => r[i]).filter(s => s && s !== "information_schema").sort();
     },
 
+    /** Vistas del esquema (incluidas las Metric Views). */
+    async listViews(catalog, schema) {
+        const { columns, rows } = await this._meta("SHOW VIEWS IN " + this.quoteIdent(catalog) + "." + this.quoteIdent(schema));
+        const names = columns.map(c => c.name);
+        const i = this._col(names, ["viewname", "view_name", "tablename"]);
+        const tmp = names.map(n => String(n).toLowerCase()).indexOf("istemporary");
+        return rows.filter(r => tmp === -1 || String(r[tmp]) !== "true").map(r => r[i]).filter(Boolean).sort();
+    },
+
+    /** Metric Views del esquema (information_schema: table_type = 'METRIC_VIEW'). */
+    async listMetricViews(catalog, schema) {
+        const lit = "'" + String(schema).replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
+        const { columns, rows } = await this._meta("SELECT table_name FROM " + this.quoteIdent(catalog)
+            + ".information_schema.tables WHERE table_schema = " + lit + " AND table_type = 'METRIC_VIEW' ORDER BY table_name");
+        const i = this._col(columns.map(c => c.name), ["table_name"]);
+        return rows.map(r => r[i]).filter(Boolean);
+    },
+
+    /**
+     * DESCRIBE TABLE EXTENDED ... AS JSON: tipo (METRIC_VIEW...), columnas
+     * (con is_measure y display_name), view_text (el YAML, sin comentarios)
+     * y table_properties. Devuelve el objeto ya interpretado.
+     */
+    async describeJson(catalog, schema, table) {
+        const ref = this.quoteIdent(catalog) + "." + this.quoteIdent(schema) + "." + this.quoteIdent(table);
+        const { rows } = await this._meta("DESCRIBE TABLE EXTENDED " + ref + " AS JSON");
+        const raw = rows && rows[0] && rows[0][0];
+        try { return JSON.parse(String(raw || "")); } catch (e) { throw new Error("Databricks no ha devuelto la descripción de «" + table + "»."); }
+    },
+
+    /** Propiedades (TBLPROPERTIES) de una tabla o vista: { clave: valor }. */
+    async getTableProperties(catalog, schema, table) {
+        const ref = this.quoteIdent(catalog) + "." + this.quoteIdent(schema) + "." + this.quoteIdent(table);
+        const { columns, rows } = await this._meta("SHOW TBLPROPERTIES " + ref);
+        const names = columns.map(c => c.name);
+        const iKey = this._col(names, ["key"]), iVal = this._col(names, ["value"]);
+        const out = {};
+        rows.forEach(r => { if (r[iKey] != null) out[String(r[iKey])] = r[iVal] == null ? "" : String(r[iVal]); });
+        return out;
+    },
+
     async listTables(catalog, schema) {
         const { columns, rows } = await this._meta("SHOW TABLES IN " + this.quoteIdent(catalog) + "." + this.quoteIdent(schema));
         const names = columns.map(c => c.name);

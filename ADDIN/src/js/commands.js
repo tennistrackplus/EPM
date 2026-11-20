@@ -33,7 +33,7 @@ Office.onReady(() => {
  * El picker (memberPicker.html) también manda sus logs aquí por mensaje.
  * Para desactivarlo: DRACO_LOG_ENABLED = false.
  * ========================================================================== */
-const DRACO_BUILD = "2026-11-20-descripciones";
+const DRACO_BUILD = "2026-11-20-metric-views";
 const DRACO_LOG_ENABLED = true;
 const DRACO_LOG_SHEET = "EDIT_REPORT";
 const DRACO_LOG_COL = "AA";
@@ -1504,14 +1504,16 @@ function buildDracoKpiParts(relGrid, measuresGrid, atributesGrid) {
     if (R === 0) throw new Error(`La medida «${m.Name}» no está en el modelo semántico.`);
     const field = String(cellValue(measuresGrid, R, 6)).trim();
     const modelAgg = String(cellValue(measuresGrid, R, 7)).trim();
-    const agg = normalizeDracoAggregation(m.Aggregation) || normalizeDracoAggregation(modelAgg) || modelAgg || "SUM";
+    const agg = dracoIsMeasureAgg(modelAgg) ? "MEASURE"
+        : (normalizeDracoAggregation(m.Aggregation) || normalizeDracoAggregation(modelAgg) || modelAgg || "SUM");
     const parts = {
         measure: m.Name,
         agg,
         scale: m.Scale || 1,
         fmtKind: m.FmtKind || "",
         decimals: m.FmtDecimals,
-        field: dracoMeasureArgSQL(measuresGrid, m.Name), // "f.CAMPO" o CASE WHEN de una medida filtrada
+        field: dracoIsMeasureAgg(modelAgg) ? dracoMeasureRef(dracoMeasureArgSQL(measuresGrid, m.Name))   // Metric View: MEASURE(nombre)
+            : dracoMeasureArgSQL(measuresGrid, m.Name), // "f.CAMPO" o CASE WHEN de una medida filtrada
         from: buildFrom(measuresGrid, m.Name, relGrid),
         joins: buildJoins(relGrid),
         conds: buildFilterConditions(atributesGrid, relGrid),
@@ -1710,6 +1712,22 @@ const DRACO_SQL_AGGREGATIONS = {
     MIN: field => "MIN(" + field + ")",
     MAX: field => "MAX(" + field + ")"
 };
+
+/** ¿Agregación «MEASURE» (medida de una Metric View de Databricks)? Solo esos modelos la usan. */
+function dracoIsMeasureAgg(value) {
+    return String(value || "").trim().toUpperCase() === "MEASURE";
+}
+
+/** Medida de Metric View: por su nombre, sin el alias de tabla («f.importe» -> «importe»). */
+function dracoMeasureRef(argSql) {
+    return String(argSql || "").replace(/^\s*f\./, "");
+}
+
+/** Agregación base de una medida en los flujos con CTE: SUM, o MEASURE en una Metric View. */
+function dracoBaseAggFn(measuresGrid, name) {
+    const R = name ? buscarMedida(measuresGrid, name) : 0;
+    return (R && dracoIsMeasureAgg(cellValue(measuresGrid, R, 7))) ? "MEASURE" : "SUM";
+}
 
 function normalizeDracoAggregation(value) {
     const v = String(value || "").trim().toUpperCase().replace(/\s+/g, "_");
@@ -2260,7 +2278,7 @@ async function readColumnDefinitions(context, editReportGrid, csvGrid) {
 // ningún sitio, se deja tal cual venga (SUM(f.) sería un SQL claramente
 // inválido, y así se detecta a simple vista en vez de sumar en silencio
 // un campo que no es).
-function buildSelectBase(relGrid, rowsDefs, colDefs, measureField, scale, excCols) {
+function buildSelectBase(relGrid, rowsDefs, colDefs, measureField, scale, excCols, baseAgg) {
     const dict = new Map();
 
     for (const v of rowsDefs) {
@@ -2284,7 +2302,8 @@ function buildSelectBase(relGrid, rowsDefs, colDefs, measureField, scale, excCol
     // agregación de excepción: dimensiones de referencia (DRC_R_j)
     (excCols || []).forEach((c, j) => { sql += "    " + c + " AS DRC_R_" + j + "," + CRLF; });
     // measureField: "f.CAMPO" o la expresión de una medida filtrada (ver dracoMeasureArgSQL)
-    sql += "    " + dracoScaled("SUM(" + (measureField || "") + ")", scale) + " AS IMPORTE";
+    const mArg = baseAgg === "MEASURE" ? dracoMeasureRef(measureField) : (measureField || "");
+    sql += "    " + dracoScaled((baseAgg || "SUM") + "(" + mArg + ")", scale) + " AS IMPORTE";
 
     return sql;
 }
@@ -2588,7 +2607,8 @@ async function buildSQLFixed(context, editReportGrid, relGrid, measuresGrid, atr
 
     // ---- CTE BASE: se escanea la tabla de hechos UNA sola vez ----
     sql += "WITH BASE AS (" + CRLF + CRLF;
-    sql += buildSelectBase(relGrid, rowsDefs, colDefs, measureField, dracoMeasureScale(measureName), excCols) + CRLF + CRLF;
+    sql += buildSelectBase(relGrid, rowsDefs, colDefs, measureField, dracoMeasureScale(measureName), excCols,
+        measureRow ? dracoBaseAggFn(measuresGrid, measureName) : "SUM") + CRLF + CRLF;
     sql += buildFrom(measuresGrid, measureName) + CRLF + CRLF;
     sql += buildJoins(relGrid) + (excRef ? excRef.joins.join("") : "") + CRLF + CRLF;
     sql += buildBaseWhere(atributesGrid, relGrid, rowsDefs, colDefs);
@@ -3729,7 +3749,8 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
     const measureCols = neededMeasures.map((name, k) => {
         const R = buscarMedida(measuresGrid, name);
         if (R === 0) throw new Error(`La medida «${name}» no está en el modelo semántico.`);
-        return { name, alias: "M_" + (k + 1), field: String(cellValue(measuresGrid, R, 6)).trim(), arg: dracoMeasureArgSQL(measuresGrid, name), scale: dracoMeasureScale(name) };
+        return { name, alias: "M_" + (k + 1), field: String(cellValue(measuresGrid, R, 6)).trim(), arg: dracoMeasureArgSQL(measuresGrid, name), scale: dracoMeasureScale(name),
+            agg: dracoBaseAggFn(measuresGrid, name) };
     });
 
     const plan = {
@@ -3787,7 +3808,7 @@ async function buildSQLHybrid(context, editReportGrid, relGrid, measuresGrid, at
 
     let sql = "WITH BASE AS (" + CRLF + CRLF;
     sql += "SELECT" + CRLF;
-    sql += [...[...selectCols.values()].map(c => c.sel), ...rCols.map((c, j) => c + " AS DRC_R_" + j), ...measureCols.map(m => dracoScaled("SUM(" + m.arg + ")", m.scale) + " AS " + m.alias)]
+    sql += [...[...selectCols.values()].map(c => c.sel), ...rCols.map((c, j) => c + " AS DRC_R_" + j), ...measureCols.map(m => dracoScaled((m.agg || "SUM") + "(" + (m.agg === "MEASURE" ? dracoMeasureRef(m.arg) : m.arg) + ")", m.scale) + " AS " + m.alias)]
         .map(x => "    " + x).join("," + CRLF) + CRLF + CRLF;
     sql += buildFrom(measuresGrid, measureCols.length ? measureCols[0].name : null, relGrid) + CRLF + CRLF;
     sql += buildJoins(relGrid) + rJoins.join("") + CRLF + CRLF;
@@ -4667,6 +4688,9 @@ function dracoMeasureDef(measuresGrid, R) {
 }
 
 function dracoAggOf(aggregationOverride, modelAgg, argSql) {
+    // Medida de una Metric View de Databricks: la calcula Databricks con
+    // MEASURE(); no admite otra agregación (SUM sobre ella da error).
+    if (dracoIsMeasureAgg(modelAgg)) return "MEASURE(" + dracoMeasureRef(argSql) + ")";
     const effective = normalizeDracoAggregation(aggregationOverride) || normalizeDracoAggregation(modelAgg);
     // Si la del modelo es una de las conocidas se pasa por el mismo mapeo
     // (COUNT_DISTINCT -> COUNT(DISTINCT ...)); cualquier otra tal cual.
@@ -4704,6 +4728,7 @@ function dracoMeasureArgSQL(measuresGrid, name) {
     if (def.kind === "CALC") throw new Error(`«${name}» es una medida calculada: de momento solo se puede usar en informes dinámicos (sin ejes Estáticos).`);
     const Rb = buscarMedida(measuresGrid, def.base);
     if (Rb === 0 || dracoMeasureDef(measuresGrid, Rb)) throw new Error(`La medida base de «${name}» («${def.base}») no es una medida normal del modelo.`);
+    if (dracoIsMeasureAgg(cellValue(measuresGrid, Rb, 7))) throw new Error(`«${name}» filtra una medida de la Metric View («${def.base}»): en ese caso crea la medida filtrada en la propia Metric View de Databricks.`);
     return "CASE WHEN " + dracoFilteredCondSQL(def.conditions) + " THEN f." + String(cellValue(measuresGrid, Rb, 6)).trim() + " END";
 }
 
