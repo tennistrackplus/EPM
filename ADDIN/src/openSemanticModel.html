@@ -19,7 +19,7 @@
 
         <div class="dialog-header">
             <h3>Abrir modelo semántico</h3>
-            <span class="dialog-subtitle">Importa un modelo desde un repositorio o un fichero local (.lkml)</span>
+            <span class="dialog-subtitle">Importa un modelo desde un repositorio o un fichero local (.lkml, o .yaml de una Metric View de Databricks)</span>
         </div>
 
         <div class="dialog-body">
@@ -54,9 +54,9 @@
             <div class="lkml-tab-panel" id="lkmlPanelLocal">
                 <div class="lkml-dropzone" id="lkmlDropzone">
                     <span class="lkml-file-icon">📄</span>
-                    Arrastra aquí un fichero <strong>.lkml</strong> o haz clic para buscarlo en tu equipo
+                    Arrastra aquí un fichero <strong>.lkml</strong> o <strong>.yaml</strong> (Metric View de Databricks) o haz clic para buscarlo en tu equipo
                 </div>
-                <input type="file" id="lkmlFileInput" accept=".lkml" style="display:none;" />
+                <input type="file" id="lkmlFileInput" accept=".lkml,.yaml,.yml" style="display:none;" />
                 <div class="lkml-selected-file" id="lkmlSelectedFile">
                     <span>📄</span>
                     <span id="lkmlSelectedFileName"></span>
@@ -77,6 +77,8 @@
     <script src="js/gitSession.js?v=20261029j"></script>
     <script src="js/gitRepo.js"></script>
     <script src="js/lkmlImport.js?v=20261104b"></script>
-    <script src="js/openSemanticModelDialog.js?v=20261029j"></script>
+    <script src="js/vendor/js-yaml.min.js?v=4.3.2"></script>
+    <script src="js/metricViewImport.js?v=20261120mv"></script>
+    <script src="js/openSemanticModelDialog.js?v=20261120mv"></script>
 </body>
 </html>
