@@ -30,6 +30,7 @@
             <div class="lkml-tabs">
                 <div class="lkml-tab active" id="lkmlTabServer" data-tab="server">Servidor</div>
                 <div class="lkml-tab" id="lkmlTabLocal" data-tab="local">Local</div>
+                <div class="lkml-tab" id="lkmlTabDbx" data-tab="dbx" style="display:none;">Databricks</div>
             </div>
 
             <!-- PESTAÑA SERVIDOR: repositorio Git (GitHub/GitLab) de la conexión -->
@@ -63,6 +64,18 @@
                 </div>
             </div>
 
+            <!-- PESTAÑA DATABRICKS: Metric View creada por Draco -->
+            <div class="lkml-tab-panel" id="lkmlPanelDbx">
+                <label class="lkml-field-label" for="dbxCatalog">Catálogo</label>
+                <select class="lkml-select" id="dbxCatalog"><option value="">Cargando…</option></select>
+                <label class="lkml-field-label" for="dbxSchema">Esquema</label>
+                <select class="lkml-select" id="dbxSchema" disabled><option value="">— Elige un catálogo —</option></select>
+                <div class="lkml-server-list is-empty" id="dbxViewList" data-no-i18n>
+                    <span class="lkml-empty-hint">Elige catálogo y esquema para ver sus Metric Views.</span>
+                </div>
+                <span class="lkml-empty-hint" style="display:block;margin-top:6px;">Las creadas por Draco traen el modelo completo (jerarquías, textos…) y los informes consultan las tablas. Las demás se abren con sus campos y medidas, y los informes consultan la Metric View.</span>
+            </div>
+
         </div>
 
         <div class="lkml-modal-footer">
@@ -72,13 +85,13 @@
 
     </div>
 
-    <script src="js/config.js?v=20261120pat"></script>
+    <script src="js/config.js?v=20261120mv"></script>
     <script src="js/connections.js?v=20261108dbx"></script>
     <script src="js/gitSession.js?v=20261029j"></script>
     <script src="js/gitRepo.js"></script>
     <script src="js/lkmlImport.js?v=20261104b"></script>
     <script src="js/vendor/js-yaml.min.js?v=4.3.2"></script>
-    <script src="js/metricViewImport.js?v=20261120mv"></script>
-    <script src="js/openSemanticModelDialog.js?v=20261120fix"></script>
+    <script src="js/metricViewImport.js?v=20261120b"></script>
+    <script src="js/openSemanticModelDialog.js?v=20261120mvdb"></script>
 </body>
 </html>
