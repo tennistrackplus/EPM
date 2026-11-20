@@ -317,7 +317,8 @@ function initEvents() {
             let model, warnings = [];
             if (isYaml) {
                 // Sus tablas son catálogo.esquema.tabla de Databricks: con otra conexión no funcionarían
-                const active = (window.Connections && Connections.getActive) ? Connections.getActive() : null;
+                // «Connections» es un const global (js/connections.js): no cuelga de window
+                const active = (typeof Connections !== "undefined" && Connections.getActive) ? Connections.getActive() : null;
                 if (!active || active.provider !== "databricks") {
                     throw new Error("Para abrir una Metric View (.yaml) activa antes una conexión de Databricks en la pestaña Conexión.");
                 }

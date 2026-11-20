@@ -21,16 +21,26 @@ const LoginApp = {
         // Icono oficial de BigQuery (descargado de cloud.google.com/icons y
         // guardado como assets/bigquery.svg). Si falta, se usa el genérico.
         bigquery: "assets/bigquery.svg",
-        // Sin logotipo de marca: icono genérico de origen de datos.
-        databricks: "assets/datasource-db.svg"
+        // Logotipo oficial si se deja en assets/databricks.svg (descargado de
+        // la página de marca de Databricks); si falta, icono genérico embebido.
+        databricks: "assets/databricks.svg"
     },
+
+    // Icono genérico de origen de datos EMBEBIDO: no depende de que el
+    // servidor tenga ningún fichero (antes salía roto si faltaba el .svg).
+    FALLBACK_ICON: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCIgd2lkdGg9IjQ4IiBoZWlnaHQ9IjQ4Ij48ZyBmaWxsPSJub25lIiBzdHJva2U9IiM0Mjg1RjQiIHN0cm9rZS13aWR0aD0iMyI+PGVsbGlwc2UgY3g9IjI0IiBjeT0iMTEiIHJ4PSIxNSIgcnk9IjUuNSIvPjxwYXRoIGQ9Ik05IDExdjI2YzAgMyA2LjcgNS41IDE1IDUuNVMzOSA0MCAzOSAzN1YxMSIvPjxwYXRoIGQ9Ik05IDIwYzAgMyA2LjcgNS41IDE1IDUuNVMzOSAyMyAzOSAyME05IDI4LjVjMCAzIDYuNyA1LjUgMTUgNS41czE1LTIuNSAxNS01LjUiLz48L2c+PC9zdmc+Cg==",
 
     init() {
         // Tokens de Git guardados en disco por versiones anteriores -> a la sesión (F-06).
         if (window.GitSession) GitSession.migrateLegacy();
         // Modo backend: reanuda la renovación automática del token si hay sesión.
         GoogleAuth.resume().finally(() => this.renderList());
-        if (window.DBX) DBX.resume().finally(() => this.renderList());
+        if (window.DBX) {
+            // Conexión activa de Databricks con token recordado: se reconecta sola
+            const act = Connections.getActive();
+            if (act && act.provider === "databricks") DBX.setGateway((act.config || {}).gatewayUrl || "");
+            DBX.resume().finally(() => this.renderList());
+        }
         this.bindStaticEvents();
         this.renderList();
         this.setupBrowserMessageListener();
@@ -95,6 +105,15 @@ const LoginApp = {
                 dbxMode.value = "oauth";
             }
             dbxMode.addEventListener("change", () => this.toggleAuthModeFields());
+            if (!DBX.canRememberPat()) {
+                const row = document.getElementById("dbxPatRememberRow");
+                if (row) row.style.display = "none";
+                const hint = document.getElementById("dbxPatHint");
+                if (hint) hint.textContent = "Solo para pruebas. No se guarda en la conexión: vive en la sesión del panel y se borra al cerrar Excel (máximo 8 horas).";
+            } else {
+                const hint = document.getElementById("dbxPatHint");
+                if (hint) hint.textContent = hint.textContent.replace("30 días", DBX.rememberPatDays() + " días");
+            }
         }
 
         // Selector de origen de datos dentro de la vista "crear"
@@ -164,7 +183,7 @@ const LoginApp = {
             return `
                 <div class="conn-card ${isActive ? "active" : ""}" data-id="${conn.id}">
                     <div class="conn-info">
-                        <div class="conn-icon"><img src="${icon}" alt="${this.getProviderDisplayName(conn.provider)}" onerror="this.onerror=null;this.src='assets/datasource-db.svg'"></div>
+                        <div class="conn-icon"><img src="${icon}" alt="${this.getProviderDisplayName(conn.provider)}" onerror="this.onerror=null;this.src=LoginApp.FALLBACK_ICON"></div>
                         <div class="conn-details">
                             <h3>${this.escapeHtml(conn.name)}</h3>
                             <span>${this.escapeHtml(subtitle)}</span>
@@ -225,6 +244,8 @@ const LoginApp = {
     /** Doble clic de seguridad para borrar: primer clic pide confirmación, segundo clic borra. */
     handleDeleteClick(btn, id) {
         if (btn.dataset.confirm === "1") {
+            const gone = Connections.getById(id);
+            if (gone && gone.provider === "databricks" && window.DBX) DBX.forgetPat((gone.config || {}).gatewayUrl);
             Connections.remove(id);
             this.showAlert("Conexión eliminada.");
             this.renderList();
@@ -281,7 +302,13 @@ const LoginApp = {
                     return;
                 }
                 if (DBX.normalizeConfig(conn.config).authMode === "pat") {
-                    // El token personal no se guarda: hay que volver a pegarlo.
+                    if (await DBX.restoreRememberedPat(DBX.normalizeConfig(conn.config).gatewayUrl)) {
+                        this.pendingConnectionId = null;
+                        this.showAlert("Conectado a Databricks con el token recordado.");
+                        this.renderList({ skipValidate: true });
+                        return;
+                    }
+                    // Sin token recordado: hay que volver a pegarlo.
                     this.showAlert("Esta conexión usa un token personal de pruebas: vuelve a introducirlo.");
                     this.openCreateView(conn.id);
                     return;
@@ -308,7 +335,10 @@ const LoginApp = {
         if (!conn) return;
 
         if (conn.provider === "databricks") {
-            if (window.DBX) DBX.fullLogout();
+            if (window.DBX) {
+                DBX.forgetPat((conn.config || {}).gatewayUrl);   // cerrar sesión = olvidar el token recordado
+                DBX.fullLogout();
+            }
         } else {
             GoogleAuth.logout();
         }
@@ -349,6 +379,7 @@ const LoginApp = {
             dbxMode.value = "oauth";
             document.getElementById("dbxGatewayUrl").value = "";
             document.getElementById("dbxPat").value = "";
+            document.getElementById("dbxPat").placeholder = "Token personal de Databricks (dapi...)";
         }
         document.querySelectorAll("#viewCreate .connector-card").forEach(c => c.classList.remove("selected"));
 
@@ -377,6 +408,10 @@ const LoginApp = {
                 const auth = DBX.normalizeConfig(cfg);
                 dbxMode.value = auth.authMode;
                 document.getElementById("dbxGatewayUrl").value = auth.gatewayUrl;
+                const remembered = DBX.hasRememberedPat(auth.gatewayUrl);
+                document.getElementById("dbxPat").placeholder = remembered
+                    ? "Token recordado en este equipo (déjalo vacío para seguir usándolo)"
+                    : "Token personal de Databricks (dapi...)";
             }
 
             const card = document.querySelector(`#viewCreate .connector-card[data-provider="${conn.provider}"]`);
@@ -448,7 +483,8 @@ const LoginApp = {
         if (provider === "databricks") {
             const err = DBX.validateConfig(config);
             if (err) return err;
-            if (DBX.normalizeConfig(config).authMode === "pat" && !document.getElementById("dbxPat").value.trim()) {
+            if (DBX.normalizeConfig(config).authMode === "pat" && !document.getElementById("dbxPat").value.trim()
+                && !DBX.hasRememberedPat(DBX.normalizeConfig(config).gatewayUrl)) {
                 return "Pega el token personal de Databricks (dapi...).";
             }
         }
@@ -499,10 +535,23 @@ const LoginApp = {
             } else if (conn.provider === "databricks") {
                 if (DBX.normalizeConfig(conn.config).authMode === "pat") {
                     const patEl = document.getElementById("dbxPat");
-                    DBX.connectWithPat(conn.config, patEl.value);
+                    const pat = patEl.value.trim();
+                    const gw = DBX.normalizeConfig(conn.config).gatewayUrl;
+                    const remEl = document.getElementById("dbxPatRemember");
+                    const remember = !!(remEl && remEl.checked && DBX.canRememberPat());
+                    let msg;
+                    if (pat) {
+                        DBX.connectWithPat(conn.config, pat);
+                        if (remember && await DBX.rememberPat(gw, pat)) msg = "Conectado a Databricks. Token recordado en este equipo (cifrado).";
+                        else { DBX.forgetPat(gw); msg = "Conectado a Databricks con token personal (solo pruebas)."; }
+                    } else if (await DBX.restoreRememberedPat(gw)) {
+                        msg = "Conectado a Databricks con el token recordado.";
+                    } else {
+                        throw new Error("Pega el token personal de Databricks (dapi...).");
+                    }
                     patEl.value = "";
                     this.pendingConnectionId = null;
-                    this.showAlert("Conectado a Databricks con token personal (solo pruebas).");
+                    this.showAlert(msg);
                     this.switchView("list");
                 } else {
                     this.startDatabricksAuth(conn);

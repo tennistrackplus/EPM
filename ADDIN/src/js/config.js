@@ -20,6 +20,12 @@ const DracoConfig = {
     // ---------------------------------------------------------
     allowDatabricksPat: true,
 
+    // Días que se puede recordar el token personal de Databricks en el
+    // equipo (casilla «Recordar en este equipo»), cifrado con una clave del
+    // navegador no exportable. 0 = no recordar nunca (se pide en cada sesión).
+    // Solo tiene efecto con allowDatabricksPat = true.
+    rememberDatabricksPatDays: 30,
+
     // Precio on-demand de BigQuery por TiB facturado (USD) para estimar el
     // coste de cada consulta en el Diagnóstico. 6,25 es el precio de lista
     // en EE. UU.; en otras regiones varía. Con reservas/editions el coste

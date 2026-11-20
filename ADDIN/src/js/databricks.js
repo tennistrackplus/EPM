@@ -29,6 +29,8 @@ const DBX = {
     GATEWAY_KEY: "dbx_gateway_url",
     SESSION_KEY: "dbx_auth_session",          // manejador opaco de la pasarela (solo modo oauth)
     PAT_HOURS: 8,
+    PAT_STORE_PREFIX: "dbx_pat_enc:",          // + URL de la pasarela: PAT cifrado (casilla «Recordar»)
+    PAT_IDB: "draco-secure",                   // IndexedDB con la clave AES no exportable
     QUERY_MAX_WAIT_MS: 10 * 60 * 1000,
     _refreshTimer: null,
     _pendingState: null,
@@ -154,6 +156,8 @@ const DBX = {
 
     onSessionExpired(source) {
         const hadToken = !!this._store().getItem(this.TOKEN_KEY);
+        // Databricks ha rechazado el token (caducado o revocado): el recordado tampoco vale
+        if (source === "query" && this._store().getItem(this.MODE_KEY) === "pat") this.forgetPat();
         this.logout();
         this._validatedAt = 0;
         const detail = { source: source || "", hadToken, provider: "databricks" };
@@ -253,6 +257,99 @@ const DBX = {
         this.setToken(t, Date.now() + this.PAT_HOURS * 3600 * 1000, "pat");
     },
 
+    // ---------------------------------------------------------
+    // «Recordar en este equipo» (solo PAT de pruebas)
+    // El token se guarda CIFRADO (AES-GCM 256) en localStorage, por pasarela;
+    // la clave es una CryptoKey NO exportable generada por el navegador y
+    // guardada en IndexedDB: ningún script (ni Draco) puede leerla, solo
+    // usarla para descifrar en este perfil de este equipo. Caduca a los
+    // DracoConfig.rememberDatabricksPatDays días, al cerrar sesión, al borrar
+    // la conexión o cuando Databricks rechaza el token (401).
+    // ---------------------------------------------------------
+    rememberPatDays() {
+        const d = typeof DracoConfig !== "undefined" ? Number(DracoConfig.rememberDatabricksPatDays) : 0;
+        return isFinite(d) && d > 0 ? d : 0;
+    },
+
+    canRememberPat() {
+        return this.patAllowed() && this.rememberPatDays() > 0 && !!(window.crypto && crypto.subtle && window.indexedDB);
+    },
+
+    _patStoreKey(gateway) { return this.PAT_STORE_PREFIX + this.normalizeGateway(gateway); },
+
+    _idb(mode, fn) {
+        return new Promise((resolve, reject) => {
+            const req = indexedDB.open(this.PAT_IDB, 1);
+            req.onupgradeneeded = () => req.result.createObjectStore("keys");
+            req.onerror = () => reject(req.error);
+            req.onsuccess = () => {
+                const db = req.result;
+                const tx = db.transaction("keys", mode);
+                const r = fn(tx.objectStore("keys"));
+                tx.oncomplete = () => { db.close(); resolve(r && "result" in r ? r.result : undefined); };
+                tx.onerror = () => { db.close(); reject(tx.error); };
+            };
+        });
+    },
+
+    async _patKey(create) {
+        let key = await this._idb("readonly", st => st.get("dbx-pat"));
+        if (!key && create) {
+            key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+            await this._idb("readwrite", st => st.put(key, "dbx-pat"));
+        }
+        return key || null;
+    },
+
+    hasRememberedPat(gateway) {
+        try {
+            const rec = JSON.parse(localStorage.getItem(this._patStoreKey(gateway || this.getGateway())) || "null");
+            return !!(rec && rec.ct && Date.now() < Number(rec.exp));
+        } catch (e) { return false; }
+    },
+
+    async rememberPat(gateway, pat) {
+        if (!this.canRememberPat()) return false;
+        try {
+            const key = await this._patKey(true);
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(String(pat).trim()));
+            const b64 = (buf) => btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
+            const exp = Date.now() + this.rememberPatDays() * 86400 * 1000;
+            localStorage.setItem(this._patStoreKey(gateway), JSON.stringify({ v: 1, iv: b64(iv), ct: b64(ct), exp }));
+            return true;
+        } catch (e) {
+            console.warn("[Draco] No se pudo recordar el token de Databricks:", e);
+            return false;
+        }
+    },
+
+    forgetPat(gateway) {
+        try { localStorage.removeItem(this._patStoreKey(gateway || this.getGateway())); } catch (e) { /* sin acceso */ }
+    },
+
+    /** Conecta con el PAT recordado para esa pasarela. true si lo ha conseguido. */
+    async restoreRememberedPat(gateway) {
+        const gw = this.normalizeGateway(gateway || this.getGateway());
+        if (!gw || !this.canRememberPat()) return false;
+        try {
+            const rec = JSON.parse(localStorage.getItem(this._patStoreKey(gw)) || "null");
+            if (!rec || !rec.ct) return false;
+            if (Date.now() >= Number(rec.exp)) { this.forgetPat(gw); return false; }
+            const key = await this._patKey(false);
+            if (!key) { this.forgetPat(gw); return false; }
+            const unb64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+            const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(rec.iv) }, key, unb64(rec.ct));
+            this.connectWithPat({ authMode: "pat", gatewayUrl: gw }, new TextDecoder().decode(pt));
+            this._patFromStore = true;
+            return true;
+        } catch (e) {
+            console.warn("[Draco] Token de Databricks recordado ilegible; se descarta:", e);
+            this.forgetPat(gw);
+            return false;
+        }
+    },
+
     _getSession() {
         try { return JSON.parse(sessionStorage.getItem(this.SESSION_KEY) || "null"); } catch (e) { return null; }
     },
@@ -295,7 +392,10 @@ const DBX = {
     },
 
     async resume() {
-        if (!this._getSession()) return;
+        if (!this._getSession()) {
+            if (!this.getToken() && this.hasRememberedPat()) await this.restoreRememberedPat();
+            return;
+        }
         if (!this.getToken() || this.getExpiresAt() - Date.now() < 5 * 60 * 1000) {
             await this.refresh();
         } else {
@@ -324,6 +424,7 @@ const DBX = {
     // Consultas
     // ---------------------------------------------------------
     async _call(method, path, body) {
+        if (!this.getToken() && this.hasRememberedPat()) await this.restoreRememberedPat();
         const token = this.getToken();
         const gw = this.getGateway();
         if (!token || !gw) {
