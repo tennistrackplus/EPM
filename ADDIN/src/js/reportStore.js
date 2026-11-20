@@ -640,6 +640,20 @@
         return { model: active ? store.getModel(active) : null, name: undefined };
     }
 
+    // MODEL_HIER guarda en ATRIBUTO el nombre visible (alias) del nivel, pero
+    // el motor necesita el nombre del atributo (la columna). Si el alias
+    // coincide con el nombre —lo normal en los modelos de BigQuery— no cambia
+    // nada; solo se traduce cuando ningún atributo se llama así y un único
+    // atributo tiene ese alias (p. ej. «Level 1 ID» -> nivel_01_id en una
+    // Metric View con display_name).
+    function _hierLevelAttrName(model, dimension, attr) {
+        const field = _dimensionField(model, dimension);
+        const atts = (field && field.attributes) || [];
+        if (!atts.length || atts.some(a => _up(a.name) === _up(attr))) return attr;
+        const byAlias = atts.filter(a => _up(a.alias) === _up(attr));
+        return byAlias.length === 1 ? byAlias[0].name : attr;
+    }
+
     function _dimensionField(model, dimension) {
         if (!model || !Array.isArray(model.fields)) return null;
         return model.fields.find(f => f.enabled && f.type === "DIMENSION" && _up(f.name) === _up(dimension)) || null;
@@ -727,7 +741,7 @@
                         && String(cellValue(hierGrid, R, 2)).toUpperCase() === item.name.toUpperCase()) {
                         const nivel = Number(cellValue(hierGrid, R, 3));
                         if (!levelIsVisible(visibleLevels, nivel)) continue;
-                        defs.push({ nivel, dim: cellValue(hierGrid, R, 4), attr: cellValue(hierGrid, R, 5), hier: cellValue(hierGrid, R, 2) });
+                        defs.push({ nivel, dim: cellValue(hierGrid, R, 4), attr: _hierLevelAttrName(model, cellValue(hierGrid, R, 4), cellValue(hierGrid, R, 5)), hier: cellValue(hierGrid, R, 2) });
                     }
                 }
                 defs.sort((a, b) => a.nivel - b.nivel);

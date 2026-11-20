@@ -1297,7 +1297,7 @@ const TaskPaneApp = {
                     dim.attributes.forEach(attr => {
                         const opt = document.createElement("option");
                         opt.value = JSON.stringify({ dim: dim.dimension, name: attr, isHierarchy: false });
-                        opt.textContent = attr;
+                        opt.textContent = (dim.labels || {})[attr] || attr;
                         group.appendChild(opt);
                     });
                     dim.hierarchies.forEach(hier => {
@@ -1882,6 +1882,11 @@ const TaskPaneApp = {
 
             const dimensions = result.data || [];
             container.innerHTML = "";
+            // Descripciones (DIM|NOMBRE -> descripción) para las etiquetas de las zonas
+            this._fieldLabels = {};
+            dimensions.forEach(d => Object.keys(d.labels || {}).forEach(a => {
+                this._fieldLabels[String(d.dimension).toUpperCase() + "|" + String(a).toUpperCase()] = d.labels[a];
+            }));
 
             if (dimensions.length === 0) {
                 container.innerHTML = "<div style='color: #605e5c; padding: 4px;'>No se encontraron campos</div>";
@@ -1924,7 +1929,7 @@ const TaskPaneApp = {
                 });
 
                 dim.attributes.forEach(att => {
-                    group.appendChild(this.createFieldElement(dim.dimension, att, false, dim.attributes));
+                    group.appendChild(this.createFieldElement(dim.dimension, att, false, dim.attributes, (dim.labels || {})[att]));
                 });
 
                 container.appendChild(group);
@@ -1982,7 +1987,9 @@ const TaskPaneApp = {
         });
     },
 
-    createFieldElement(dim, name, isHierarchy, dimAttributes) {
+    // label: descripción del atributo/medida en el modelo (solo si es distinta
+    // del nombre); si no hay, se muestra el nombre en minúsculas como siempre.
+    createFieldElement(dim, name, isHierarchy, dimAttributes, label) {
         const div = document.createElement("div");
         div.className = "field-item";
         div.draggable = true;
@@ -1997,7 +2004,11 @@ const TaskPaneApp = {
         iconSpan.textContent = iconSymbol;
         const labelSpan = document.createElement("span");
         labelSpan.className = "field-label";
-        labelSpan.textContent = name.toLowerCase();
+        labelSpan.textContent = label || name.toLowerCase();
+        if (label) {
+            div.title = label + " (" + name + ")";
+            div.dataset.search = (label + " " + name).toLowerCase();   // la búsqueda encuentra por los dos
+        }
         div.appendChild(iconSpan);
         div.appendChild(labelSpan);
         if (!isHierarchy) div.appendChild(this.createCalcButton(dim, name, [name]));
@@ -2035,7 +2046,7 @@ const TaskPaneApp = {
                 if (!item.classList || !item.classList.contains("field-item")) return;
                 if (q === "") { item.style.display = ""; return; }
                 const labelEl = item.querySelector(".field-label");
-                const label = (labelEl ? labelEl.textContent : item.textContent || "").toLowerCase();
+                const label = item.dataset.search || (labelEl ? labelEl.textContent : item.textContent || "").toLowerCase();
                 const ok = label.includes(q);
                 item.style.display = ok ? "flex" : "none";
                 if (ok) matches++;
@@ -2592,7 +2603,9 @@ const TaskPaneApp = {
         // Una medida se muestra solo con su nombre ("Importe"), sin el
         // prefijo de la pseudo-dimensión ("MEASURE.Importe"); el resto de
         // campos sigue mostrando "dimensión.nombre" como hasta ahora.
-        const fieldLabel = isMeasure ? entry.name : `${entry.dimension}.${entry.name}`;
+        const desc = (this._fieldLabels || {})[String(entry.dimension).toUpperCase() + "|" + String(entry.name).toUpperCase()];
+        const fieldLabel = isMeasure ? (desc || entry.name) : `${entry.dimension}.${desc || entry.name}`;
+        if (desc) tag.title = `${entry.dimension}.${entry.name}`;
 
         // Filtro sin valor seleccionado todavía: se muestra vacío (no se
         // añade al WHERE de la consulta hasta que el usuario elija algo con

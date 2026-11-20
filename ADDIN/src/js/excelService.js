@@ -483,12 +483,15 @@ const ExcelService = {
                     if (!dimName || !attrName) continue;
 
                     if (!dimensionsMap[dimName]) {
-                        dimensionsMap[dimName] = { dimension: dimName, hierarchies: [], attributes: [] };
+                        dimensionsMap[dimName] = { dimension: dimName, hierarchies: [], attributes: [], labels: {} };
                         order.push(dimName);
                     }
                     if (!dimensionsMap[dimName].attributes.includes(attrName)) {
                         dimensionsMap[dimName].attributes.push(attrName);
                     }
+                    // H: DISPLAY_NAME (descripción). Vacío si coincide con el nombre.
+                    const display = String(cellValue(atribGrid, R, 8) || "").trim();
+                    if (display) dimensionsMap[dimName].labels[attrName] = display;
                 }
 
                 // Nombres de jerarquía (MODEL_HIER, columna B), solo el nivel 1 marca el nombre único
@@ -500,7 +503,7 @@ const ExcelService = {
                     if (!dimName || !hierName || nivel !== 1) continue;
 
                     if (!dimensionsMap[dimName]) {
-                        dimensionsMap[dimName] = { dimension: dimName, hierarchies: [], attributes: [] };
+                        dimensionsMap[dimName] = { dimension: dimName, hierarchies: [], attributes: [], labels: {} };
                         order.push(dimName);
                     }
                     if (!dimensionsMap[dimName].hierarchies.includes(hierName)) {
@@ -516,8 +519,20 @@ const ExcelService = {
                     if (name) measureNames.push(name);
                 }
 
+                // Descripción de las medidas (alias del modelo), si es distinta del nombre
+                const measureLabels = {};
+                try {
+                    const mName = modelNameOverride || window.SemanticModelStore.getActiveModelName();
+                    const model = mName ? window.SemanticModelStore.getModel(mName) : null;
+                    ((model && model.fields) || []).forEach(f => {
+                        if (f && f.type === "MEASURE" && f.alias && String(f.alias).trim() && String(f.alias).trim() !== f.name) {
+                            measureLabels[f.name] = String(f.alias).trim();
+                        }
+                    });
+                } catch (e) { /* sin descripciones: se muestran los nombres */ }
+
                 const dimensionsList = order.map(d => dimensionsMap[d]);
-                dimensionsList.push({ dimension: "MEASURE", hierarchies: [], attributes: measureNames });
+                dimensionsList.push({ dimension: "MEASURE", hierarchies: [], attributes: measureNames, labels: measureLabels });
 
                 return { data: dimensionsList };
             }
